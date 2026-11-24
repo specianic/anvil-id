@@ -169,12 +169,96 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
+| FND-01 | Phase 1 | Pending |
+| FND-02 | Phase 1 | Pending |
+| FND-03 | Phase 1 | Pending |
+| FND-04 | Phase 1 | Pending |
+| FND-05 | Phase 1 | Pending |
+| OIDC-01 | Phase 2 | Pending |
+| OIDC-02 | Phase 2 | Pending |
+| OIDC-03 | Phase 2 | Pending |
+| OIDC-04 | Phase 2 | Pending |
+| OIDC-05 | Phase 2 | Pending |
+| OIDC-06 | Phase 2 | Pending |
+| OIDC-07 | Phase 2 | Pending |
+| OIDC-08 | Phase 2 | Pending |
+| OIDC-09 | Phase 2 | Pending |
+| OIDC-10 | Phase 3 | Pending |
+| OIDC-11 | Phase 3 | Pending |
+| OIDC-12 | Phase 4 | Pending |
+| OIDC-13 | Phase 3 | Pending |
+| OIDC-14 | Phase 4 | Pending |
+| OIDC-15 | Phase 3 | Pending |
+| OIDC-16 | Phase 4 | Pending |
+| OIDC-17 | Phase 5 | Pending |
+| OIDC-18 | Phase 7 | Pending |
+| OIDC-23 | Phase 7 | Pending |
+| OIDC-24 | Phase 2 | Pending |
+| OIDC-25 | Phase 3 | Pending |
+| AUTH-01 | Phase 2 | Pending |
+| AUTH-02 | Phase 2 | Pending |
+| AUTH-03 | Phase 2 | Pending |
+| AUTH-04 | Phase 3 | Pending |
+| AUTH-05 | Phase 3 | Pending |
+| AUTH-06 | Phase 4 | Pending |
+| AUTH-07 | Phase 4 | Pending |
+| AUTH-08 | Phase 4 | Pending |
+| AUTH-09 | Phase 3 | Pending |
+| AUTH-10 | Phase 3 | Pending |
+| AUTH-11 | Phase 4 | Pending |
+| AUTH-13 | Phase 4 | Pending |
+| AUTH-14 | Phase 5 | Pending |
+| UI-01 | Phase 2 | Pending |
+| UI-02 | Phase 3 | Pending |
+| UI-03 | Phase 4 | Pending |
+| UI-04 | Phase 4 | Pending |
+| UI-05 | Phase 7 | Pending |
+| UI-07 | Phase 3 | Pending |
+| ORG-01 | Phase 5 | Pending |
+| ORG-02 | Phase 6 | Pending |
+| ORG-03 | Phase 6 | Pending |
+| ORG-04 | Phase 6 | Pending |
+| ORG-05 | Phase 5 | Pending |
+| ADM-01 | Phase 2 | Pending |
+| ADM-02 | Phase 6 | Pending |
+| ADM-03 | Phase 2 | Pending |
+| ADM-04 | Phase 3 | Pending |
+| ADM-05 | Phase 5 | Pending |
+| ADM-06 | Phase 5 | Pending |
+| ADM-07 | Phase 5 | Pending |
+| ADM-08 | Phase 7 | Pending |
+| ADM-09 | Phase 7 | Pending |
+| AGT-01 | Phase 5 | Pending |
+| AGT-02 | Phase 5 | Pending |
+| AGT-03 | Phase 7 | Pending |
+| OPS-01 | Phase 2 | Pending |
+| OPS-02 | Phase 2 | Pending |
+| OPS-03 | Phase 5 | Pending |
+| OPS-04 | Phase 3 | Pending |
+| OPS-05 | Phase 2 | Pending |
+| OPS-06 | Phase 3 | Pending |
+| OPS-07 | Phase 5 | Pending |
+| OPS-08 | Phase 5 | Pending |
+| OPS-09 | Phase 5 | Pending |
+| SEC-01 | Phase 2 | Pending |
+| SEC-02 | Phase 3 | Pending |
+| SEC-03 | Phase 4 | Pending |
+| SEC-04 | Phase 2 | Pending |
+| SEC-05 | Phase 3 | Pending |
+| SEC-06 | Phase 2 | Pending |
+| SEC-07 | Phase 2 | Pending |
+| SEC-08 | Phase 7 | Pending |
+| QUAL-01 | Phase 2 | Pending |
+| QUAL-02 | Phase 2 | Pending |
+| QUAL-03 | Phase 7 | Pending |
+| QUAL-04 | Phase 2 | Pending |
+| QUAL-05 | Phase 5 | Pending |
 
 **Coverage:**
 - v1 requirements: 84 total
-- Mapped to phases: 0
-- Unmapped: 84 ⚠️
+- Mapped to phases: 84
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-11-25*
-*Last updated: 2026-11-25 after initial definition*
+*Last updated: 2026-11-25 after roadmap creation*
