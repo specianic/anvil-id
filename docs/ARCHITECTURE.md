@@ -47,7 +47,7 @@ Versions are the latest stable releases as of the date above. Pin them in the wo
 | TOTP | totp-rs 6 | Last-used time step stored to prevent replay |
 | Email | lettre 0.11 (rustls) | Outbox table + background sender |
 | Templates | minijinja 3 | Login pages: embedded defaults, overridable from a theme directory at runtime |
-| Admin UI | SvelteKit (static adapter), embedded with rust-embed | Talks only to the public management API |
+| Admin UI | React + TypeScript, built with Vite as a static single-page app; TanStack Router and Query; shadcn/ui (Radix) components; TanStack Table. Embedded with rust-embed | Talks only to the public management API. TypeScript types and API client generated from the OpenAPI spec (`openapi-typescript`), so API drift fails the build. No server-side rendering (no Next.js) |
 | Config | figment (TOML file + `ANVILID_*` env vars + CLI flags) | |
 | CLI | clap 4 | |
 | Observability | tracing, tracing-subscriber (JSON), metrics + Prometheus exporter; OpenTelemetry behind the `otel` feature | |
@@ -109,7 +109,7 @@ crates/
   anvil-web/               axum routers, extractors, middleware, templates, embedded assets.
   anvil-mail/              Email rendering + SMTP transport + outbox worker.
   anvilid/                 The binary: config, CLI, wiring, background scheduler.
-admin-ui/                  SvelteKit admin console (built separately, embedded at release).
+admin-ui/                  React admin console (built separately with Vite, embedded at release).
 themes/default/            Default login templates and CSS (embedded; overridable).
 tests/
   conformance/             OpenID conformance suite harness (CI).
@@ -350,7 +350,23 @@ plus `/ui/assets/*` (hashed, immutable static files). The headless API mirrors t
 - The admin console SPA (`/console/`) is a public OAuth client of the `system` tenant and only calls
   this API.
 
-### 10.4 Operational endpoints (installation-wide)
+### 10.4 How frontend assets ship in the binary
+
+- **Admin console:** `admin-ui/` is built with `npm run build` into static files with content-hashed
+  names. `anvil-web` embeds them at compile time with rust-embed (pre-compressed with brotli and gzip)
+  and serves them from memory at `/console/*`: hashed files with immutable cache headers, every other
+  path under `/console/` falls back to `index.html` for client-side routing.
+- **Login UI:** templates and CSS in `themes/default/` are embedded the same way. At runtime minijinja
+  loads templates from the operator's theme directory first (if configured) and falls back to the
+  embedded defaults, so theming never requires recompiling.
+- **Development:** run `anvilid serve` alongside the Vite dev server, which hot-reloads the console and
+  proxies API calls to the Rust server. Debug builds can read assets from disk instead of the embedded
+  copy.
+- **Builds without Node:** if `admin-ui/dist` is missing, `cargo build` embeds a placeholder page that
+  explains how to build the console. CI and release builds always build the console first and fail if
+  it is missing.
+
+### 10.5 Operational endpoints (installation-wide)
 
 `/health/live`, `/health/ready` (checks the database), `/metrics` (can be bound to a separate
 listener).
@@ -540,7 +556,7 @@ These are designed in from the start so later modules don't require rewrites:
 |---|---|---|---|
 | D1 | Path-based vs host-based tenants by default (PRD Q1) | **Decided 2026-11-25:** path-based default, host mapping optional (§12) | ✓ |
 | D2 | Opaque vs JWT access tokens by default | **Decided 2026-11-25:** JWT (RFC 9068) by default; opaque per client | ✓ |
-| D3 | Admin console stack: SvelteKit SPA vs server-rendered htmx | SvelteKit SPA (better admin UX; dogfoods the API) | M2 start |
+| D3 | Admin console stack | **Decided 2026-11-25:** React + Vite static SPA embedded in the binary (best component ecosystem and contributor pool; dogfoods the API). Login pages remain server-rendered. Rust/WebAssembly frameworks (Leptos, Dioxus) were considered and rejected for now: young component ecosystems and a small contributor pool | ✓ |
 | D4 | SAML stack: pure-Rust XML-DSig (saml-rs/bergshamra) vs alternatives | Evaluate against a signature-wrapping attack corpus; experimental flag until it passes | before M5 |
 | D5 | Permissions engine: embedded tuple store vs integrating OpenFGA/SpiceDB | Decide at the 3.0 addendum | 3.0 |
 | D6 | Embedded HA without Postgres (replicated SQLite) | Not planned; revisit on user demand | post-1.0 |
