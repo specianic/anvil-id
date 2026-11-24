@@ -538,8 +538,8 @@ These are designed in from the start so later modules don't require rewrites:
 
 | ID | Decision | Default proposal | Resolve by |
 |---|---|---|---|
-| D1 | Path-based vs host-based tenants by default (PRD Q1) | Path-based default, host mapping optional (§12) | M1 start |
-| D2 | Opaque vs JWT access tokens by default | JWT (RFC 9068) by default; opaque per client | M1 |
+| D1 | Path-based vs host-based tenants by default (PRD Q1) | **Decided 2026-11-25:** path-based default, host mapping optional (§12) | ✓ |
+| D2 | Opaque vs JWT access tokens by default | **Decided 2026-11-25:** JWT (RFC 9068) by default; opaque per client | ✓ |
 | D3 | Admin console stack: SvelteKit SPA vs server-rendered htmx | SvelteKit SPA (better admin UX; dogfoods the API) | M2 start |
 | D4 | SAML stack: pure-Rust XML-DSig (saml-rs/bergshamra) vs alternatives | Evaluate against a signature-wrapping attack corpus; experimental flag until it passes | before M5 |
 | D5 | Permissions engine: embedded tuple store vs integrating OpenFGA/SpiceDB | Decide at the 3.0 addendum | 3.0 |

@@ -334,5 +334,5 @@ Detailed milestones, exit criteria and dependencies are in [ARCHITECTURE.md](ARC
 | R3 | SAML is notoriously hard to implement safely (XML signature wrapping) | SAML SP in 1.0 uses a vetted library and a dedicated test corpus of known attacks; SAML IdP deferred to 2.0 |
 | R4 | Supporting SQLite and Postgres from one codebase limits SQL features | Restrict queries to a portable subset; both backends tested in CI (see ARCHITECTURE.md) |
 | R5 | Embedded SQLite cannot be shared across instances | Documented: SQLite is single-instance; HA requires Postgres |
-| Q1 | Should tenants be path-based (`/t/{tenant}`) or host-based by default? | Proposed: path-based by default, host-based optional. Decide in the 0.1 design |
+| Q1 | Should tenants be path-based (`/t/{tenant}`) or host-based by default? | Decided: path-based by default, host-based optional (ARCHITECTURE.md D1) |
 | Q2 | Should we file additional certification profiles (Dynamic OP after DCR, FAPI 2.0 later) beyond the 1.0 set? | Decide after the 1.0 certification |
