@@ -1,0 +1,21 @@
+# Rust
+/target
+**/target
+**/*.rs.bk
+
+# Local environment & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+/data/
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Internal research notes (unverified third-party claims; not published)
+/docs/research/
