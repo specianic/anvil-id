@@ -182,6 +182,16 @@ async fn consume(app: &TestApp, user: UserId, code: &str) -> bool {
         .expect("consume")
 }
 
+/// Events recorded by signing in (the `signed_in` helpers register and log in users). The account
+/// tests assert their own events exactly and ignore only these.
+fn is_sign_in_event(action: AuditAction) -> bool {
+    matches!(
+        action,
+        AuditAction::UserRegistered | AuditAction::LoginSucceeded | AuditAction::LoginFailed
+    )
+}
+
+/// The audit log of the default tenant, newest first, without the sign-in events of the helpers.
 async fn audit_actions(app: &TestApp) -> Vec<(AuditAction, ActorKind)> {
     app.storage()
         .audit()
@@ -196,6 +206,7 @@ async fn audit_actions(app: &TestApp) -> Vec<(AuditAction, ActorKind)> {
         .expect("audit query")
         .items
         .into_iter()
+        .filter(|e| !is_sign_in_event(e.action))
         .map(|e| (e.action, e.actor.kind))
         .collect()
 }
@@ -1309,7 +1320,10 @@ async fn admin_list_and_remove_audit_with_an_admin_actor() {
         )
         .await
         .expect("audit")
-        .items;
+        .items
+        .into_iter()
+        .filter(|e| !is_sign_in_event(e.action))
+        .collect::<Vec<_>>();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].action, AuditAction::PasskeyRemoved);
     assert_eq!(events[0].actor.kind, ActorKind::Admin);
