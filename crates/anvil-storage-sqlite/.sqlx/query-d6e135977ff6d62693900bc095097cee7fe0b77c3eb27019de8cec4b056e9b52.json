@@ -1,0 +1,158 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id AS \"id!: uuid::Uuid\", tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      at AS \"at!\", actor_kind AS \"actor_kind!\", actor_id AS \"actor_id?\",\n                      action AS \"action!\", target AS \"target?\", outcome AS \"outcome!\",\n                      ip AS \"ip?\", user_agent AS \"user_agent?\", trace_id AS \"trace_id?\",\n                      details AS \"details!\"\n                 FROM audit_event\n                WHERE tenant_id = ?1\n                  AND (?2 IS NULL OR at >= ?2)\n                  AND (?3 IS NULL OR at < ?3)\n                  AND (?4 IS NULL OR actor_id = ?4)\n                  AND (?5 IS NULL OR action = ?5)\n                  AND (?6 IS NULL OR outcome = ?6)\n                  AND (?7 IS NULL OR target = ?7)\n                  AND (?8 IS NULL OR id < ?8)\n                ORDER BY id DESC\n                LIMIT ?9",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: uuid::Uuid",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "audit_event",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "tenant_id!: uuid::Uuid",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "audit_event",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "name": "at!",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "audit_event",
+            "name": "at"
+          }
+        }
+      },
+      {
+        "name": "actor_kind!",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "audit_event",
+            "name": "actor_kind"
+          }
+        }
+      },
+      {
+        "name": "actor_id?",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "audit_event",
+            "name": "actor_id"
+          }
+        }
+      },
+      {
+        "name": "action!",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "audit_event",
+            "name": "action"
+          }
+        }
+      },
+      {
+        "name": "target?",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "audit_event",
+            "name": "target"
+          }
+        }
+      },
+      {
+        "name": "outcome!",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "audit_event",
+            "name": "outcome"
+          }
+        }
+      },
+      {
+        "name": "ip?",
+        "ordinal": 8,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "audit_event",
+            "name": "ip"
+          }
+        }
+      },
+      {
+        "name": "user_agent?",
+        "ordinal": 9,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "audit_event",
+            "name": "user_agent"
+          }
+        }
+      },
+      {
+        "name": "trace_id?",
+        "ordinal": 10,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "audit_event",
+            "name": "trace_id"
+          }
+        }
+      },
+      {
+        "name": "details!",
+        "ordinal": 11,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "audit_event",
+            "name": "details"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 9
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      false,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "d6e135977ff6d62693900bc095097cee7fe0b77c3eb27019de8cec4b056e9b52"
+}

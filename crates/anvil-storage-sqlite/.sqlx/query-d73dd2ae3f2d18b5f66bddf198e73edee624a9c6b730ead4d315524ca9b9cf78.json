@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM smtp_settings WHERE tenant_id = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "d73dd2ae3f2d18b5f66bddf198e73edee624a9c6b730ead4d315524ca9b9cf78"
+}

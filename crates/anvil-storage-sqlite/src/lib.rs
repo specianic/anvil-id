@@ -3,16 +3,22 @@
 //! File databases use WAL with a single writer connection and a separate read-only reader pool.
 //! All writes (including the atomic `consume_code` UPDATE) go through the one writer, so SQLite
 //! never sees concurrent writers. Every multi-row intent method (`create_code`, `rotate_refresh`,
-//! `UserRepo::create`, `complete_recovery`, `install`, `complete_setup`, ...) runs as one
-//! transaction on that writer.
+//! `UserRepo::create`, `complete_recovery`, `install`, `complete_setup`, `create_totp`,
+//! `revoke_consent`, `revoke_with_families`, `KeyRepo::promote`, ...) runs as one transaction on
+//! that writer. Compare-and-swap methods (`update_passkey`, `advance_totp_step`,
+//! `consume_recovery_code`, `swap_state`, `try_lease`) are single conditional statements.
 
+mod audit;
 mod clients;
+mod consent;
 mod convert;
+mod credentials;
 mod flows;
 mod grants;
+mod jobs;
 mod keys;
+mod mail_settings;
 mod outbox;
-mod pending;
 mod sessions;
 mod setup;
 mod tenants;
@@ -28,11 +34,14 @@ use anvil_core::ports::{
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 
+use crate::audit::SqliteAudit;
 use crate::clients::SqliteClients;
 use crate::convert::{map_err, odt_to_ms};
 use crate::flows::SqliteFlows;
 use crate::grants::SqliteGrants;
+use crate::jobs::SqliteJobs;
 use crate::keys::SqliteKeys;
+use crate::mail_settings::SqliteMailSettings;
 use crate::outbox::SqliteOutbox;
 use crate::sessions::SqliteSessions;
 use crate::setup::SqliteSetup;
@@ -58,6 +67,9 @@ pub struct SqliteStorage {
     grants: SqliteGrants,
     setup: SqliteSetup,
     outbox: SqliteOutbox,
+    audit: SqliteAudit,
+    mail_settings: SqliteMailSettings,
+    jobs: SqliteJobs,
 }
 
 fn is_memory_url(url: &str) -> bool {
@@ -134,6 +146,17 @@ impl SqliteStorage {
                 writer: writer.clone(),
                 reader: reader.clone(),
             },
+            audit: SqliteAudit {
+                writer: writer.clone(),
+                reader: reader.clone(),
+            },
+            mail_settings: SqliteMailSettings {
+                writer: writer.clone(),
+                reader: reader.clone(),
+            },
+            jobs: SqliteJobs {
+                writer: writer.clone(),
+            },
             setup: SqliteSetup {
                 writer: writer.clone(),
                 reader,
@@ -183,15 +206,14 @@ impl Storage for SqliteStorage {
     fn outbox(&self) -> &dyn OutboxRepo {
         &self.outbox
     }
-    // TRANSITIONAL: explicit Unsupported until the 0003 migration (see `pending`).
     fn audit(&self) -> &dyn AuditRepo {
-        &pending::Pending
+        &self.audit
     }
     fn mail_settings(&self) -> &dyn MailSettingsRepo {
-        &pending::Pending
+        &self.mail_settings
     }
     fn jobs(&self) -> &dyn JobRepo {
-        &pending::Pending
+        &self.jobs
     }
 
     async fn purge_expired(&self, now: time::OffsetDateTime) -> Result<u64, StorageError> {
@@ -237,6 +259,10 @@ impl Storage for SqliteStorage {
         total += purge!(
             "DELETE FROM refresh_token WHERE rowid IN
                (SELECT rowid FROM refresh_token WHERE expires_at <= ?1 LIMIT ?2)"
+        );
+        total += purge!(
+            "DELETE FROM access_token WHERE rowid IN
+               (SELECT rowid FROM access_token WHERE expires_at <= ?1 LIMIT ?2)"
         );
         total += purge!(
             "DELETE FROM replay_guard WHERE rowid IN
@@ -381,7 +407,10 @@ mod tests {
                 .unwrap_or_else(|e| panic!("seed failed: {e}: {sql}"));
         }
 
-        storage.migrate().await.expect("0003 + 0004 apply on 0.1 data");
+        storage
+            .migrate()
+            .await
+            .expect("0003 + 0004 apply on 0.1 data");
 
         let count = |sql: &'static str| {
             let w = storage.writer.clone();
@@ -420,7 +449,10 @@ mod tests {
         // Foreign keys are on again on the migrating connection, and the references from codes
         // and refresh tokens now point at the rebuilt table.
         assert_eq!(count("PRAGMA foreign_keys").await, 1);
-        assert_eq!(count("SELECT count(*) FROM pragma_foreign_key_check").await, 0);
+        assert_eq!(
+            count("SELECT count(*) FROM pragma_foreign_key_check").await,
+            0
+        );
         let dangling = sqlx::query(
             "INSERT INTO refresh_token (token_hash, tenant_id, family_id, scope, created_at,
                                         expires_at)

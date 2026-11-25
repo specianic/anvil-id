@@ -13,6 +13,7 @@ use time::OffsetDateTime;
 use crate::convert::{
     from_json, into_page, map_err, ms_to_odt, now_ms, odt_to_ms, opt_ms_to_odt, parse_enum, to_json,
 };
+use crate::credentials;
 use crate::outbox::insert_email;
 
 #[derive(Debug, Clone)]
@@ -21,7 +22,7 @@ pub(crate) struct SqliteUsers {
     pub(crate) reader: SqlitePool,
 }
 
-/// The only credential kind of 0.1.
+/// Credential kind of password rows.
 pub(crate) const PASSWORD_KIND: &str = "password";
 
 pub(crate) struct UserRow {
@@ -104,15 +105,17 @@ pub(crate) async fn insert_password(
     user: UserId,
     password: &NewPasswordCredential,
 ) -> Result<(), StorageError> {
+    let id = CredentialId::new_v7();
     let created_at = odt_to_ms(password.created_at);
     sqlx::query!(
-        "INSERT INTO credential (tenant_id, user_id, kind, secret, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+        "INSERT INTO credential (id, tenant_id, user_id, kind, secret, created_at, updated_at)
+         VALUES (?6, ?1, ?2, ?3, ?4, ?5, ?5)",
         tenant.0,
         user.0,
         PASSWORD_KIND,
         password.phc,
         created_at,
+        id.0,
     )
     .execute(conn)
     .await
@@ -521,116 +524,115 @@ impl UserRepo for SqliteUsers {
         Ok(Some(recovered))
     }
 
-    // TRANSITIONAL(03-05): Phase 3 methods, implemented with the 0003 migration.
     async fn list_credentials(
         &self,
-        _tenant: TenantId,
-        _user: UserId,
+        tenant: TenantId,
+        user: UserId,
     ) -> Result<Vec<CredentialSummary>, StorageError> {
-        crate::pending::unsupported("UserRepo::list_credentials")
+        credentials::list(&self.reader, tenant, user).await
     }
 
     async fn create_passkey(
         &self,
-        _tenant: TenantId,
-        _user: UserId,
-        _passkey: &NewPasskey,
+        tenant: TenantId,
+        user: UserId,
+        passkey: &NewPasskey,
     ) -> Result<(), StorageError> {
-        crate::pending::unsupported("UserRepo::create_passkey")
+        credentials::create_passkey(&self.writer, tenant, user, passkey).await
     }
 
     async fn passkeys(
         &self,
-        _tenant: TenantId,
-        _user: UserId,
+        tenant: TenantId,
+        user: UserId,
     ) -> Result<Vec<PasskeyCredential>, StorageError> {
-        crate::pending::unsupported("UserRepo::passkeys")
+        credentials::passkeys(&self.reader, tenant, user).await
     }
 
     async fn find_passkey(
         &self,
-        _tenant: TenantId,
-        _credential_id: &[u8],
+        tenant: TenantId,
+        credential_id: &[u8],
     ) -> Result<Option<PasskeyCredential>, StorageError> {
-        crate::pending::unsupported("UserRepo::find_passkey")
+        credentials::find_passkey(&self.reader, tenant, credential_id).await
     }
 
     async fn update_passkey(
         &self,
-        _tenant: TenantId,
-        _id: CredentialId,
-        _passkey_json: &str,
-        _counter: u32,
-        _now: OffsetDateTime,
+        tenant: TenantId,
+        id: CredentialId,
+        passkey_json: &str,
+        counter: u32,
+        now: OffsetDateTime,
     ) -> Result<CounterOutcome, StorageError> {
-        crate::pending::unsupported("UserRepo::update_passkey")
+        credentials::update_passkey(&self.writer, tenant, id, passkey_json, counter, now).await
     }
 
     async fn totp(
         &self,
-        _tenant: TenantId,
-        _user: UserId,
+        tenant: TenantId,
+        user: UserId,
     ) -> Result<Option<TotpCredential>, StorageError> {
-        crate::pending::unsupported("UserRepo::totp")
+        credentials::totp(&self.reader, tenant, user).await
     }
 
     async fn create_totp(
         &self,
-        _tenant: TenantId,
-        _user: UserId,
-        _totp: &NewTotp,
-        _codes: &[RecoveryCodeHash],
-        _now: OffsetDateTime,
+        tenant: TenantId,
+        user: UserId,
+        totp: &NewTotp,
+        codes: &[RecoveryCodeHash],
+        now: OffsetDateTime,
     ) -> Result<(), StorageError> {
-        crate::pending::unsupported("UserRepo::create_totp")
+        credentials::create_totp(&self.writer, tenant, user, totp, codes, now).await
     }
 
     async fn advance_totp_step(
         &self,
-        _tenant: TenantId,
-        _user: UserId,
-        _step: u64,
-        _now: OffsetDateTime,
+        tenant: TenantId,
+        user: UserId,
+        step: u64,
+        now: OffsetDateTime,
     ) -> Result<CounterOutcome, StorageError> {
-        crate::pending::unsupported("UserRepo::advance_totp_step")
+        credentials::advance_totp_step(&self.writer, tenant, user, step, now).await
     }
 
     async fn delete_credential(
         &self,
-        _tenant: TenantId,
-        _user: UserId,
-        _id: CredentialId,
+        tenant: TenantId,
+        user: UserId,
+        id: CredentialId,
     ) -> Result<bool, StorageError> {
-        crate::pending::unsupported("UserRepo::delete_credential")
+        credentials::delete(&self.writer, tenant, user, id).await
     }
 
     async fn replace_recovery_codes(
         &self,
-        _tenant: TenantId,
-        _user: UserId,
-        _codes: &[RecoveryCodeHash],
-        _now: OffsetDateTime,
+        tenant: TenantId,
+        user: UserId,
+        codes: &[RecoveryCodeHash],
+        now: OffsetDateTime,
     ) -> Result<(), StorageError> {
-        crate::pending::unsupported("UserRepo::replace_recovery_codes")
+        credentials::replace_recovery_codes(&self.writer, tenant, user, codes, now).await
     }
 
     async fn consume_recovery_code(
         &self,
-        _tenant: TenantId,
-        _user: UserId,
-        _hash: &RecoveryCodeHash,
-        _now: OffsetDateTime,
-        _notice: Option<&NewEmail>,
+        tenant: TenantId,
+        user: UserId,
+        hash: &RecoveryCodeHash,
+        now: OffsetDateTime,
+        notice: Option<&NewEmail>,
     ) -> Result<bool, StorageError> {
-        crate::pending::unsupported("UserRepo::consume_recovery_code")
+        credentials::consume_recovery_code(&self.writer, tenant, user, hash, now, notice).await
     }
 
     async fn recovery_codes_remaining(
         &self,
-        _tenant: TenantId,
-        _user: UserId,
+        tenant: TenantId,
+        user: UserId,
     ) -> Result<u32, StorageError> {
-        crate::pending::unsupported("UserRepo::recovery_codes_remaining")
+        credentials::recovery_codes_remaining(&self.reader, tenant, user).await
     }
 }
 
@@ -644,17 +646,20 @@ async fn upsert_password(
     now: OffsetDateTime,
 ) -> Result<bool, StorageError> {
     let now_ms = odt_to_ms(now);
-    // `WHERE` before `ON CONFLICT` resolves SQLite's INSERT ... SELECT upsert ambiguity.
+    let id = CredentialId::new_v7();
+    // `WHERE` before `ON CONFLICT` resolves SQLite's INSERT ... SELECT upsert ambiguity. The
+    // conflict target is the partial unique index of password rows (one per user).
     let done = sqlx::query!(
-        "INSERT INTO credential (tenant_id, user_id, kind, secret, created_at, updated_at)
-         SELECT tenant_id, id, ?3, ?4, ?5, ?5 FROM user WHERE tenant_id = ?1 AND id = ?2
-         ON CONFLICT (tenant_id, user_id, kind)
+        "INSERT INTO credential (id, tenant_id, user_id, kind, secret, created_at, updated_at)
+         SELECT ?6, tenant_id, id, ?3, ?4, ?5, ?5 FROM user WHERE tenant_id = ?1 AND id = ?2
+         ON CONFLICT (tenant_id, user_id) WHERE kind = 'password'
          DO UPDATE SET secret = excluded.secret, updated_at = excluded.updated_at",
         tenant.0,
         user.0,
         PASSWORD_KIND,
         phc,
         now_ms,
+        id.0,
     )
     .execute(conn)
     .await

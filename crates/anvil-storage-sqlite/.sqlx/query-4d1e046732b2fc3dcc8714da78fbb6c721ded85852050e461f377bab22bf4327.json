@@ -1,0 +1,86 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id AS \"id!: uuid::Uuid\", user_id AS \"user_id!: uuid::Uuid\",\n                  secret AS \"secret!\", counter AS \"counter?\", created_at AS \"created_at!\",\n                  last_used_at AS \"last_used_at?\"\n             FROM credential WHERE tenant_id = ?1 AND user_id = ?2 AND kind = 'totp'",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: uuid::Uuid",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "credential",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "user_id!: uuid::Uuid",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "credential",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "name": "secret!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "credential",
+            "name": "secret"
+          }
+        }
+      },
+      {
+        "name": "counter?",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "credential",
+            "name": "counter"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "credential",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "last_used_at?",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "credential",
+            "name": "last_used_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "4d1e046732b2fc3dcc8714da78fbb6c721ded85852050e461f377bab22bf4327"
+}

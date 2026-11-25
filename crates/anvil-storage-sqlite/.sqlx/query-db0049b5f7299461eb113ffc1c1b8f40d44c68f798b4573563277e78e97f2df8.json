@@ -1,0 +1,122 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id AS \"id!: uuid::Uuid\", user_id AS \"user_id!: uuid::Uuid\",\n                  external_id AS \"external_id!\", secret AS \"secret!\", counter AS \"counter!\",\n                  backup_eligible AS \"backup_eligible!: bool\", label AS \"label!\",\n                  created_at AS \"created_at!\", last_used_at AS \"last_used_at?\"\n             FROM credential\n            WHERE tenant_id = ?1 AND external_id = ?2 AND kind = 'webauthn'",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: uuid::Uuid",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "credential",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "user_id!: uuid::Uuid",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "credential",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "name": "external_id!",
+        "ordinal": 2,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "credential",
+            "name": "external_id"
+          }
+        }
+      },
+      {
+        "name": "secret!",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "credential",
+            "name": "secret"
+          }
+        }
+      },
+      {
+        "name": "counter!",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "credential",
+            "name": "counter"
+          }
+        }
+      },
+      {
+        "name": "backup_eligible!: bool",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "credential",
+            "name": "backup_eligible"
+          }
+        }
+      },
+      {
+        "name": "label!",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "credential",
+            "name": "label"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "credential",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "last_used_at?",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "credential",
+            "name": "last_used_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      true,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "db0049b5f7299461eb113ffc1c1b8f40d44c68f798b4573563277e78e97f2df8"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE access_token SET revoked_at = ?3\n              WHERE tenant_id = ?1 AND token_hash = ?2 AND revoked_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "f9612b8139ef5d7beb428f1128af20ca1c9929e3188248cc34b1828341ef82c4"
+}

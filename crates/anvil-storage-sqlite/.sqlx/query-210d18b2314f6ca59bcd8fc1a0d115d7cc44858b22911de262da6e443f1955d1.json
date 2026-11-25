@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM credential\n            WHERE tenant_id = ?1 AND user_id = ?2 AND id = ?3 AND kind IN ('webauthn', 'totp')\n        RETURNING kind AS \"kind!\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "kind!",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "credential",
+            "name": "kind"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "210d18b2314f6ca59bcd8fc1a0d115d7cc44858b22911de262da6e443f1955d1"
+}

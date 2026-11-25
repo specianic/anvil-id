@@ -1,0 +1,182 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id AS \"id!: uuid::Uuid\", tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      user_id AS \"user_id!: uuid::Uuid\", token_hash AS \"token_hash!\",\n                      auth_time AS \"auth_time!\", acr AS \"acr!\", amr AS \"amr!\",\n                      created_at AS \"created_at!\", last_seen_at AS \"last_seen_at!\",\n                      expires_at AS \"expires_at!\", idle_expires_at AS \"idle_expires_at!\",\n                      revoked_at AS \"revoked_at?\", ip AS \"ip?\", user_agent AS \"user_agent?\"\n                 FROM browser_session\n                WHERE tenant_id = ?1 AND token_hash = ?2 AND revoked_at IS NULL\n                  AND expires_at > ?3 AND idle_expires_at > ?3",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: uuid::Uuid",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "browser_session",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "tenant_id!: uuid::Uuid",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "browser_session",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "name": "user_id!: uuid::Uuid",
+        "ordinal": 2,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "browser_session",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "name": "token_hash!",
+        "ordinal": 3,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "browser_session",
+            "name": "token_hash"
+          }
+        }
+      },
+      {
+        "name": "auth_time!",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "browser_session",
+            "name": "auth_time"
+          }
+        }
+      },
+      {
+        "name": "acr!",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "browser_session",
+            "name": "acr"
+          }
+        }
+      },
+      {
+        "name": "amr!",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "browser_session",
+            "name": "amr"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "browser_session",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "last_seen_at!",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "browser_session",
+            "name": "last_seen_at"
+          }
+        }
+      },
+      {
+        "name": "expires_at!",
+        "ordinal": 9,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "browser_session",
+            "name": "expires_at"
+          }
+        }
+      },
+      {
+        "name": "idle_expires_at!",
+        "ordinal": 10,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "browser_session",
+            "name": "idle_expires_at"
+          }
+        }
+      },
+      {
+        "name": "revoked_at?",
+        "ordinal": 11,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "browser_session",
+            "name": "revoked_at"
+          }
+        }
+      },
+      {
+        "name": "ip?",
+        "ordinal": 12,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "browser_session",
+            "name": "ip"
+          }
+        }
+      },
+      {
+        "name": "user_agent?",
+        "ordinal": 13,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "browser_session",
+            "name": "user_agent"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "21b5387a86f5e7c162270a75a3c71efaeb6dde18ef14d9a5027f3b5d2287494a"
+}

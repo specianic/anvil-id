@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT kind AS \"kind!\", subject AS \"subject!\", body_html AS \"body_html!\",\n                      body_text AS \"body_text!\", updated_at AS \"updated_at!\"\n                 FROM email_template WHERE tenant_id = ?1 AND kind = ?2",
+  "describe": {
+    "columns": [
+      {
+        "name": "kind!",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "email_template",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "name": "subject!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "email_template",
+            "name": "subject"
+          }
+        }
+      },
+      {
+        "name": "body_html!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "email_template",
+            "name": "body_html"
+          }
+        }
+      },
+      {
+        "name": "body_text!",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "email_template",
+            "name": "body_text"
+          }
+        }
+      },
+      {
+        "name": "updated_at!",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "email_template",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "5667cb7f034882a9f1b227609f3a27e51772f69bfdbb3474d9ee52ac23aa1aac"
+}

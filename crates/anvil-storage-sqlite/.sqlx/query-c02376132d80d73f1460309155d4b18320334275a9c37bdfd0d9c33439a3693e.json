@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO job_lease (name, owner, leased_until) VALUES (?1, ?2, ?3)\n             ON CONFLICT (name)\n             DO UPDATE SET owner = excluded.owner, leased_until = excluded.leased_until\n                     WHERE job_lease.leased_until <= ?4 OR job_lease.owner = excluded.owner",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "c02376132d80d73f1460309155d4b18320334275a9c37bdfd0d9c33439a3693e"
+}

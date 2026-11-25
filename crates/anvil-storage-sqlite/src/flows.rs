@@ -113,15 +113,29 @@ impl FlowRepo for SqliteFlows {
         Ok(done.rows_affected() > 0)
     }
 
-    // TRANSITIONAL(03-05): Phase 3 methods, implemented with the 0003 migration.
     async fn swap_state(
         &self,
-        _tenant: TenantId,
-        _id: FlowId,
-        _expected: &str,
-        _new: &str,
-        _now: OffsetDateTime,
+        tenant: TenantId,
+        id: FlowId,
+        expected: &str,
+        new: &str,
+        now: OffsetDateTime,
     ) -> Result<bool, StorageError> {
-        crate::pending::unsupported("FlowRepo::swap_state")
+        let now_ms = odt_to_ms(now);
+        // One conditional UPDATE: of concurrent callers with the same `expected`, only the first
+        // still matches the stored state.
+        let done = sqlx::query!(
+            "UPDATE flow SET state = ?4
+              WHERE tenant_id = ?1 AND id = ?2 AND state = ?3 AND expires_at > ?5",
+            tenant.0,
+            id.0,
+            expected,
+            new,
+            now_ms,
+        )
+        .execute(&self.writer)
+        .await
+        .map_err(map_err)?;
+        Ok(done.rows_affected() > 0)
     }
 }

@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "UPDATE client\n                  SET name = COALESCE(?3, name),\n                      redirect_uris = COALESCE(?4, redirect_uris),\n                      grant_types = COALESCE(?5, grant_types),\n                      scopes = COALESCE(?6, scopes),\n                      require_pkce = COALESCE(?7, require_pkce),\n                      jwks = CASE WHEN ?8 THEN ?9 ELSE jwks END,\n                      updated_at = ?10\n                WHERE tenant_id = ?1 AND client_id = ?2\n            RETURNING id AS \"id!: uuid::Uuid\", tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      client_id AS \"client_id!\", name AS \"name!\", client_type AS \"client_type!\",\n                      application_type AS \"application_type!\", auth_method AS \"auth_method!\",\n                      secret_hash AS \"secret_hash?\", jwks AS \"jwks?\",\n                      redirect_uris AS \"redirect_uris!\", grant_types AS \"grant_types!\",\n                      scopes AS \"scopes!\", require_pkce AS \"require_pkce!: bool\",\n                      created_at AS \"created_at!\", updated_at AS \"updated_at!\"",
+  "query": "UPDATE client\n                  SET name = COALESCE(?3, name),\n                      redirect_uris = COALESCE(?4, redirect_uris),\n                      grant_types = COALESCE(?5, grant_types),\n                      scopes = COALESCE(?6, scopes),\n                      require_pkce = COALESCE(?7, require_pkce),\n                      jwks = CASE WHEN ?8 THEN ?9 ELSE jwks END,\n                      updated_at = ?10,\n                      token_format = COALESCE(?11, token_format),\n                      consent_mode = COALESCE(?12, consent_mode),\n                      id_token_signed_response_alg =\n                        CASE WHEN ?13 THEN ?14 ELSE id_token_signed_response_alg END,\n                      can_introspect = COALESCE(?15, can_introspect)\n                WHERE tenant_id = ?1 AND client_id = ?2\n            RETURNING id AS \"id!: uuid::Uuid\", tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      client_id AS \"client_id!\", name AS \"name!\", client_type AS \"client_type!\",\n                      application_type AS \"application_type!\", auth_method AS \"auth_method!\",\n                      secret_hash AS \"secret_hash?\", jwks AS \"jwks?\",\n                      redirect_uris AS \"redirect_uris!\", grant_types AS \"grant_types!\",\n                      scopes AS \"scopes!\", require_pkce AS \"require_pkce!: bool\",\n                      token_format AS \"token_format!\", consent_mode AS \"consent_mode!\",\n                      id_token_signed_response_alg AS \"id_token_signed_response_alg?\",\n                      can_introspect AS \"can_introspect!: bool\",\n                      created_at AS \"created_at!\", updated_at AS \"updated_at!\"",
   "describe": {
     "columns": [
       {
@@ -147,8 +147,52 @@
         }
       },
       {
-        "name": "created_at!",
+        "name": "token_format!",
         "ordinal": 13,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "token_format"
+          }
+        }
+      },
+      {
+        "name": "consent_mode!",
+        "ordinal": 14,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "consent_mode"
+          }
+        }
+      },
+      {
+        "name": "id_token_signed_response_alg?",
+        "ordinal": 15,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "id_token_signed_response_alg"
+          }
+        }
+      },
+      {
+        "name": "can_introspect!: bool",
+        "ordinal": 16,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "can_introspect"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 17,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -159,7 +203,7 @@
       },
       {
         "name": "updated_at!",
-        "ordinal": 14,
+        "ordinal": 18,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -170,7 +214,7 @@
       }
     ],
     "parameters": {
-      "Right": 10
+      "Right": 15
     },
     "nullable": [
       false,
@@ -187,8 +231,12 @@
       false,
       false,
       false,
+      false,
+      true,
+      false,
+      false,
       false
     ]
   },
-  "hash": "260c8c0a9d1c9794d86cbbe0f334e241662bd4cf0a15de78279ae9f9c0178eef"
+  "hash": "3b795bd5e3e321478266c6ce16652423339a7cb4cd13f4e00e07ab08018fdb0d"
 }

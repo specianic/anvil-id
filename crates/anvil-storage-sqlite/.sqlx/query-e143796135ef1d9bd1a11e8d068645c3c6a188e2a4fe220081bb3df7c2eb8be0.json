@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE consent_grant SET revoked_at = ?4\n          WHERE tenant_id = ?1 AND user_id = ?2 AND client_id = ?3 AND revoked_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "e143796135ef1d9bd1a11e8d068645c3c6a188e2a4fe220081bb3df7c2eb8be0"
+}

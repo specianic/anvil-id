@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE signing_key SET state = 'active', activated_at = ?3\n              WHERE tenant_id = ?1 AND id = ?2 AND state = 'next'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "c24026df8ebe27433d145391382ee5ad5d91365dac2aa3228ddd5520f13d3837"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM job_lease WHERE name = ?1 AND owner = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "1aa40c7b113139ac8583231d005d55e5dbbeaf7316f8ec2bfb7a2d17494bd1da"
+}

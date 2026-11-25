@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id AS \"id!: uuid::Uuid\", tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      client_id AS \"client_id!\", name AS \"name!\", client_type AS \"client_type!\",\n                      application_type AS \"application_type!\", auth_method AS \"auth_method!\",\n                      secret_hash AS \"secret_hash?\", jwks AS \"jwks?\",\n                      redirect_uris AS \"redirect_uris!\", grant_types AS \"grant_types!\",\n                      scopes AS \"scopes!\", require_pkce AS \"require_pkce!: bool\",\n                      created_at AS \"created_at!\", updated_at AS \"updated_at!\"\n                 FROM client WHERE tenant_id = ?1 AND client_id = ?2",
+  "query": "SELECT id AS \"id!: uuid::Uuid\", tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      client_id AS \"client_id!\", name AS \"name!\", client_type AS \"client_type!\",\n                      application_type AS \"application_type!\", auth_method AS \"auth_method!\",\n                      secret_hash AS \"secret_hash?\", jwks AS \"jwks?\",\n                      redirect_uris AS \"redirect_uris!\", grant_types AS \"grant_types!\",\n                      scopes AS \"scopes!\", require_pkce AS \"require_pkce!: bool\",\n                      token_format AS \"token_format!\", consent_mode AS \"consent_mode!\",\n                      id_token_signed_response_alg AS \"id_token_signed_response_alg?\",\n                      can_introspect AS \"can_introspect!: bool\",\n                      created_at AS \"created_at!\", updated_at AS \"updated_at!\"\n                 FROM client WHERE tenant_id = ?1 AND client_id = ?2",
   "describe": {
     "columns": [
       {
@@ -147,8 +147,52 @@
         }
       },
       {
-        "name": "created_at!",
+        "name": "token_format!",
         "ordinal": 13,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "token_format"
+          }
+        }
+      },
+      {
+        "name": "consent_mode!",
+        "ordinal": 14,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "consent_mode"
+          }
+        }
+      },
+      {
+        "name": "id_token_signed_response_alg?",
+        "ordinal": 15,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "id_token_signed_response_alg"
+          }
+        }
+      },
+      {
+        "name": "can_introspect!: bool",
+        "ordinal": 16,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "can_introspect"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 17,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -159,7 +203,7 @@
       },
       {
         "name": "updated_at!",
-        "ordinal": 14,
+        "ordinal": 18,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -187,8 +231,12 @@
       false,
       false,
       false,
+      false,
+      true,
+      false,
+      false,
       false
     ]
   },
-  "hash": "c5205d0e441a0fec9d3f8de18e39b7ff319042f47dd15a8821fd653d3eea6f66"
+  "hash": "167c2d8ddbed538337643586adfc9d06baffc6abc35a18da0beeb68461d7132b"
 }

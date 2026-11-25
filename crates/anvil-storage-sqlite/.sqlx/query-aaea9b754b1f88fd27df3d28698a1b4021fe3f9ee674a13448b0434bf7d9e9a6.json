@@ -1,0 +1,122 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT token_hash AS \"token_hash!\", tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      family_id AS \"family_id?: uuid::Uuid\", client_id AS \"client_id!\",\n                      user_id AS \"user_id?: uuid::Uuid\", scope AS \"scope!\",\n                      created_at AS \"created_at!\", expires_at AS \"expires_at!\",\n                      revoked_at AS \"revoked_at?\"\n                 FROM access_token WHERE tenant_id = ?1 AND token_hash = ?2",
+  "describe": {
+    "columns": [
+      {
+        "name": "token_hash!",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "access_token",
+            "name": "token_hash"
+          }
+        }
+      },
+      {
+        "name": "tenant_id!: uuid::Uuid",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "access_token",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "name": "family_id?: uuid::Uuid",
+        "ordinal": 2,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "access_token",
+            "name": "family_id"
+          }
+        }
+      },
+      {
+        "name": "client_id!",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "access_token",
+            "name": "client_id"
+          }
+        }
+      },
+      {
+        "name": "user_id?: uuid::Uuid",
+        "ordinal": 4,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "access_token",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "name": "scope!",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "access_token",
+            "name": "scope"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "access_token",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "expires_at!",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "access_token",
+            "name": "expires_at"
+          }
+        }
+      },
+      {
+        "name": "revoked_at?",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "access_token",
+            "name": "revoked_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      true,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "aaea9b754b1f88fd27df3d28698a1b4021fe3f9ee674a13448b0434bf7d9e9a6"
+}

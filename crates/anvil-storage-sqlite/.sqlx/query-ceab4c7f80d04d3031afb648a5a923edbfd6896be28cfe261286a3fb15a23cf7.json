@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM email_template WHERE tenant_id = ?1 AND kind = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "ceab4c7f80d04d3031afb648a5a923edbfd6896be28cfe261286a3fb15a23cf7"
+}

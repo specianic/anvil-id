@@ -13,32 +13,6 @@ use crate::convert::{
     to_json,
 };
 
-// TRANSITIONAL(03-05): the Phase 3 client columns (token_format, consent_mode,
-// id_token_signed_response_alg, can_introspect) do not exist yet. Records read back with the
-// defaults; a non-default value is refused explicitly instead of being dropped silently.
-fn ensure_phase3_defaults(c: &NewClient) -> Result<(), StorageError> {
-    if c.token_format != TokenFormat::Jwt
-        || c.consent_mode != ConsentMode::Required
-        || c.id_token_signed_response_alg.is_some()
-        || c.can_introspect
-    {
-        return Err(StorageError::Unsupported("phase 3 client fields"));
-    }
-    Ok(())
-}
-
-// TRANSITIONAL(03-05): see `ensure_phase3_defaults`.
-fn ensure_phase3_update_absent(u: &ClientUpdate) -> Result<(), StorageError> {
-    if u.token_format.is_some()
-        || u.consent_mode.is_some()
-        || u.id_token_signed_response_alg.is_some()
-        || u.can_introspect.is_some()
-    {
-        return Err(StorageError::Unsupported("phase 3 client fields"));
-    }
-    Ok(())
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct SqliteClients {
     pub(crate) writer: SqlitePool,
@@ -59,6 +33,10 @@ pub(crate) struct ClientRow {
     grant_types: String,
     scopes: String,
     require_pkce: bool,
+    token_format: String,
+    consent_mode: String,
+    id_token_signed_response_alg: Option<String>,
+    can_introspect: bool,
     created_at: i64,
     updated_at: i64,
 }
@@ -85,11 +63,10 @@ impl TryFrom<ClientRow> for Client {
             grant_types: from_json(&r.grant_types, "client.grant_types")?,
             scopes: from_json(&r.scopes, "client.scopes")?,
             require_pkce: r.require_pkce,
-            // TRANSITIONAL(03-05): columns arrive with the 0003 migration.
-            token_format: TokenFormat::Jwt,
-            consent_mode: ConsentMode::Required,
-            id_token_signed_response_alg: None,
-            can_introspect: false,
+            token_format: parse_enum(&r.token_format, TokenFormat::parse, "token_format")?,
+            consent_mode: parse_enum(&r.consent_mode, ConsentMode::parse, "consent_mode")?,
+            id_token_signed_response_alg: r.id_token_signed_response_alg,
+            can_introspect: r.can_introspect,
             created_at: ms_to_odt(r.created_at)?,
             updated_at: ms_to_odt(r.updated_at)?,
         })
@@ -103,7 +80,6 @@ pub(crate) async fn insert_client(
     tenant: TenantId,
     client: &NewClient,
 ) -> Result<Client, StorageError> {
-    ensure_phase3_defaults(client)?;
     let client_type = client.client_type.as_str();
     let application_type = client.application_type.as_str();
     let auth_method = client.auth_method.as_str();
@@ -111,13 +87,17 @@ pub(crate) async fn insert_client(
     let redirect_uris = to_json(&client.redirect_uris, "client.redirect_uris")?;
     let grant_types = to_json(&client.grant_types, "client.grant_types")?;
     let scopes = to_json(&client.scopes, "client.scopes")?;
+    let token_format = client.token_format.as_str();
+    let consent_mode = client.consent_mode.as_str();
     let created_at = odt_to_ms(client.created_at);
     sqlx::query!(
         "INSERT INTO client
              (id, tenant_id, client_id, name, client_type, application_type, auth_method,
               secret_hash, jwks, redirect_uris, grant_types, scopes, require_pkce, created_at,
-              updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14)",
+              updated_at, token_format, consent_mode, id_token_signed_response_alg,
+              can_introspect)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14, ?15, ?16, ?17,
+                 ?18)",
         client.id.0,
         tenant.0,
         client.client_id,
@@ -132,6 +112,10 @@ pub(crate) async fn insert_client(
         scopes,
         client.require_pkce,
         created_at,
+        token_format,
+        consent_mode,
+        client.id_token_signed_response_alg,
+        client.can_introspect,
     )
     .execute(conn)
     .await
@@ -150,11 +134,10 @@ pub(crate) async fn insert_client(
         grant_types: client.grant_types.clone(),
         scopes: client.scopes.clone(),
         require_pkce: client.require_pkce,
-        // TRANSITIONAL(03-05): columns arrive with the 0003 migration.
-        token_format: TokenFormat::Jwt,
-        consent_mode: ConsentMode::Required,
-        id_token_signed_response_alg: None,
-        can_introspect: false,
+        token_format: client.token_format,
+        consent_mode: client.consent_mode,
+        id_token_signed_response_alg: client.id_token_signed_response_alg.clone(),
+        can_introspect: client.can_introspect,
         created_at: client.created_at,
         updated_at: client.created_at,
     })
@@ -176,6 +159,9 @@ impl ClientRepo for SqliteClients {
                       secret_hash AS "secret_hash?", jwks AS "jwks?",
                       redirect_uris AS "redirect_uris!", grant_types AS "grant_types!",
                       scopes AS "scopes!", require_pkce AS "require_pkce!: bool",
+                      token_format AS "token_format!", consent_mode AS "consent_mode!",
+                      id_token_signed_response_alg AS "id_token_signed_response_alg?",
+                      can_introspect AS "can_introspect!: bool",
                       created_at AS "created_at!", updated_at AS "updated_at!"
                  FROM client WHERE tenant_id = ?1 AND client_id = ?2"#,
             tenant.0,
@@ -203,6 +189,9 @@ impl ClientRepo for SqliteClients {
                       secret_hash AS "secret_hash?", jwks AS "jwks?",
                       redirect_uris AS "redirect_uris!", grant_types AS "grant_types!",
                       scopes AS "scopes!", require_pkce AS "require_pkce!: bool",
+                      token_format AS "token_format!", consent_mode AS "consent_mode!",
+                      id_token_signed_response_alg AS "id_token_signed_response_alg?",
+                      can_introspect AS "can_introspect!: bool",
                       created_at AS "created_at!", updated_at AS "updated_at!"
                  FROM client
                 WHERE tenant_id = ?1 AND (?2 IS NULL OR id > ?2)
@@ -229,7 +218,6 @@ impl ClientRepo for SqliteClients {
         update: &ClientUpdate,
         now: OffsetDateTime,
     ) -> Result<Option<Client>, StorageError> {
-        ensure_phase3_update_absent(update)?;
         let redirect_uris = update
             .redirect_uris
             .as_ref()
@@ -247,6 +235,10 @@ impl ClientRepo for SqliteClients {
             .transpose()?;
         let set_jwks = update.jwks.is_some();
         let jwks = update.jwks.clone().flatten();
+        let token_format = update.token_format.map(|f| f.as_str());
+        let consent_mode = update.consent_mode.map(|m| m.as_str());
+        let set_alg = update.id_token_signed_response_alg.is_some();
+        let alg = update.id_token_signed_response_alg.clone().flatten();
         let now_ms = odt_to_ms(now);
         sqlx::query_as!(
             ClientRow,
@@ -257,7 +249,12 @@ impl ClientRepo for SqliteClients {
                       scopes = COALESCE(?6, scopes),
                       require_pkce = COALESCE(?7, require_pkce),
                       jwks = CASE WHEN ?8 THEN ?9 ELSE jwks END,
-                      updated_at = ?10
+                      updated_at = ?10,
+                      token_format = COALESCE(?11, token_format),
+                      consent_mode = COALESCE(?12, consent_mode),
+                      id_token_signed_response_alg =
+                        CASE WHEN ?13 THEN ?14 ELSE id_token_signed_response_alg END,
+                      can_introspect = COALESCE(?15, can_introspect)
                 WHERE tenant_id = ?1 AND client_id = ?2
             RETURNING id AS "id!: uuid::Uuid", tenant_id AS "tenant_id!: uuid::Uuid",
                       client_id AS "client_id!", name AS "name!", client_type AS "client_type!",
@@ -265,6 +262,9 @@ impl ClientRepo for SqliteClients {
                       secret_hash AS "secret_hash?", jwks AS "jwks?",
                       redirect_uris AS "redirect_uris!", grant_types AS "grant_types!",
                       scopes AS "scopes!", require_pkce AS "require_pkce!: bool",
+                      token_format AS "token_format!", consent_mode AS "consent_mode!",
+                      id_token_signed_response_alg AS "id_token_signed_response_alg?",
+                      can_introspect AS "can_introspect!: bool",
                       created_at AS "created_at!", updated_at AS "updated_at!""#,
             tenant.0,
             client_id,
@@ -276,6 +276,11 @@ impl ClientRepo for SqliteClients {
             set_jwks,
             jwks,
             now_ms,
+            token_format,
+            consent_mode,
+            set_alg,
+            alg,
+            update.can_introspect,
         )
         .fetch_optional(&self.writer)
         .await

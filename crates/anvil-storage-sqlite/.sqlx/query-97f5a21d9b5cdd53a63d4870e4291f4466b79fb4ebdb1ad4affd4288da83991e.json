@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM signing_key\n              WHERE tenant_id = ?1 AND state = 'retired' AND expires_at IS NOT NULL\n                AND expires_at <= ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "97f5a21d9b5cdd53a63d4870e4291f4466b79fb4ebdb1ad4affd4288da83991e"
+}

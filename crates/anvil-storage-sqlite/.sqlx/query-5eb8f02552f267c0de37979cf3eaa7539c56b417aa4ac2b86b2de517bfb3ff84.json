@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM recovery_code WHERE tenant_id = ?1 AND user_id = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "5eb8f02552f267c0de37979cf3eaa7539c56b417aa4ac2b86b2de517bfb3ff84"
+}

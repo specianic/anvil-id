@@ -89,6 +89,52 @@ pub(crate) fn i64_to_u32(value: i64, what: &str) -> Result<u32, StorageError> {
     u32::try_from(value).map_err(|_| StorageError::Corrupt(format!("{what} {value} out of range")))
 }
 
+const B64URL: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+/// Bytes → unpadded base64url (RFC 4648 §5), the TEXT format of sealed values in TEXT columns.
+pub(crate) fn b64url_encode(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [
+            chunk[0],
+            chunk.get(1).copied().unwrap_or(0),
+            chunk.get(2).copied().unwrap_or(0),
+        ];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        let chars = chunk.len() + 1;
+        for i in 0..chars {
+            let idx = (n >> (18 - 6 * i)) & 0x3f;
+            out.push(char::from(B64URL[idx as usize]));
+        }
+    }
+    out
+}
+
+/// Unpadded base64url → bytes. Anything that is not canonical base64url is corrupt data.
+pub(crate) fn b64url_decode(text: &str, what: &str) -> Result<Vec<u8>, StorageError> {
+    let corrupt = || StorageError::Corrupt(format!("{what}: not base64url"));
+    let value = |c: u8| -> Option<u32> { B64URL.iter().position(|&x| x == c).map(|p| p as u32) };
+    let input = text.as_bytes();
+    if input.len() % 4 == 1 {
+        return Err(corrupt());
+    }
+    let mut out = Vec::with_capacity(input.len() / 4 * 3 + 2);
+    for chunk in input.chunks(4) {
+        let mut n = 0u32;
+        for (i, &c) in chunk.iter().enumerate() {
+            n |= value(c).ok_or_else(corrupt)? << (18 - 6 * i);
+        }
+        let bytes = [(n >> 16) as u8, (n >> 8) as u8, n as u8];
+        let keep = chunk.len() - 1;
+        // Non-canonical trailing bits would make two texts decode to the same bytes.
+        if bytes[keep..].iter().any(|&b| b != 0) && chunk.len() < 4 {
+            return Err(corrupt());
+        }
+        out.extend_from_slice(&bytes[..keep]);
+    }
+    Ok(out)
+}
+
 /// Maps a driver error: unique/primary-key violations become `Conflict`, everything else
 /// `Backend`.
 pub(crate) fn map_err(err: sqlx::Error) -> StorageError {
@@ -153,6 +199,30 @@ mod tests {
         ));
         assert!(matches!(
             i64_to_u32(-1, "attempts"),
+            Err(StorageError::Corrupt(_))
+        ));
+    }
+
+    #[test]
+    fn b64url_round_trip_and_rejects_garbage() {
+        for len in 0..10usize {
+            let bytes: Vec<u8> = (0..len as u8).map(|b| b.wrapping_mul(37) ^ 0xA5).collect();
+            let text = b64url_encode(&bytes);
+            assert!(!text.contains('='));
+            assert_eq!(b64url_decode(&text, "x").unwrap(), bytes, "len {len}");
+        }
+        assert_eq!(b64url_encode(b"\xfb\xff"), "-_8");
+        assert_eq!(b64url_encode(b"foobar"), "Zm9vYmFy");
+        assert!(matches!(
+            b64url_decode("Zm9v+mFy", "x"),
+            Err(StorageError::Corrupt(_))
+        ));
+        assert!(matches!(
+            b64url_decode("Zm9vY", "x"),
+            Err(StorageError::Corrupt(_))
+        ));
+        assert!(matches!(
+            b64url_decode("Zh", "x"),
             Err(StorageError::Corrupt(_))
         ));
     }

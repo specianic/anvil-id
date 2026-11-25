@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO credential (id, tenant_id, user_id, kind, secret, created_at, updated_at)\n         SELECT ?6, tenant_id, id, ?3, ?4, ?5, ?5 FROM user WHERE tenant_id = ?1 AND id = ?2\n         ON CONFLICT (tenant_id, user_id) WHERE kind = 'password'\n         DO UPDATE SET secret = excluded.secret, updated_at = excluded.updated_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "a775ab04b45c3ba82025d5ac2f9cb2fbff55e9f2767b0731dbbb14ff13138032"
+}

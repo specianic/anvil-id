@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE credential\n            SET secret = ?3, counter = ?4, last_used_at = ?5, updated_at = ?5\n          WHERE id = ?2 AND tenant_id = ?1 AND kind = 'webauthn'\n            AND (counter < ?4 OR (?4 = 0 AND counter = 0))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "3a17a404557ca8df973d7c69701b0a3ebc1850178fe30bbff18a284b749b305b"
+}

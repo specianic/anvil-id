@@ -1,0 +1,98 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT host AS \"host!\", port AS \"port!\", username AS \"username?\",\n                      password_enc AS \"password_enc?\", from_address AS \"from_address!\",\n                      tls AS \"tls!\", updated_at AS \"updated_at!\"\n                 FROM smtp_settings WHERE tenant_id = ?1",
+  "describe": {
+    "columns": [
+      {
+        "name": "host!",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "smtp_settings",
+            "name": "host"
+          }
+        }
+      },
+      {
+        "name": "port!",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "smtp_settings",
+            "name": "port"
+          }
+        }
+      },
+      {
+        "name": "username?",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "smtp_settings",
+            "name": "username"
+          }
+        }
+      },
+      {
+        "name": "password_enc?",
+        "ordinal": 3,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "smtp_settings",
+            "name": "password_enc"
+          }
+        }
+      },
+      {
+        "name": "from_address!",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "smtp_settings",
+            "name": "from_address"
+          }
+        }
+      },
+      {
+        "name": "tls!",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "smtp_settings",
+            "name": "tls"
+          }
+        }
+      },
+      {
+        "name": "updated_at!",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "smtp_settings",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "57be558ff7fbd3a6f40f3fc8b62e4beae9c5593aebc268921f30e01b53a9eee5"
+}

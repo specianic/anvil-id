@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM access_token WHERE rowid IN\n               (SELECT rowid FROM access_token WHERE expires_at <= ?1 LIMIT ?2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "67a0ca2262d3531f927435a3c916468cff50d12dd88e0e27857575ed253d548e"
+}

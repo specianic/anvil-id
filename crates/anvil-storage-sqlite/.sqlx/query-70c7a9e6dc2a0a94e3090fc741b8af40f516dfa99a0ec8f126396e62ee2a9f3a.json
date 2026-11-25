@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE flow SET state = ?4\n              WHERE tenant_id = ?1 AND id = ?2 AND state = ?3 AND expires_at > ?5",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "70c7a9e6dc2a0a94e3090fc741b8af40f516dfa99a0ec8f126396e62ee2a9f3a"
+}
