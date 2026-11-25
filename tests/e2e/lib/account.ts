@@ -212,14 +212,16 @@ const b64url = (buf: Buffer) => buf.toString('base64url');
 
 /**
  * Runs an authorization request in `page`, lets `signIn` complete the hosted login, exchanges
- * the code and returns the ID token claims (nonce checked).
+ * the code and returns the ID token claims (nonce checked). `issuer` defaults to the default
+ * tenant; pass `{ANVIL_URL}/t/{slug}` for a client of another tenant.
  */
 export async function signInForIdToken(
   page: Page,
   client: CodeClient,
   signIn: (page: Page) => Promise<void>,
+  issuer: string = anvilUrl(),
 ): Promise<Record<string, unknown>> {
-  const discoveryRes = await fetch(`${anvilUrl()}/.well-known/openid-configuration`);
+  const discoveryRes = await fetch(`${issuer}/.well-known/openid-configuration`);
   const discovery = (await discoveryRes.json()) as Discovery;
   const verifier = b64url(randomBytes(32));
   const challenge = b64url(createHash('sha256').update(verifier).digest());
