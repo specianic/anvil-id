@@ -108,3 +108,13 @@ security-tests-selftest:
 # Regenerate the committed OpenAPI document (plan 02-16).
 openapi-update:
     UPDATE_OPENAPI=1 cargo test -p anvil-web --test openapi_drift
+
+# --- Admin console (admin-ui/, Node >= 22.12). Not part of `ci` yet; CI runs it in the `console` job. ---
+
+# Install locked dependencies and build the console into admin-ui/dist (with .br/.gz sidecars).
+console-build:
+    cd admin-ui && npm ci && npm run build
+
+# Check the generated API types against docs/openapi/admin-v1.json, then type-check the console.
+console-check:
+    cd admin-ui && npm ci && npm run check:api && npm run typecheck

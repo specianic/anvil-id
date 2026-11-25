@@ -1,0 +1,43 @@
+{
+  "name": "anvilid-admin-ui",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build && node scripts/compress.mjs",
+    "typecheck": "tsc --noEmit",
+    "gen:api": "openapi-typescript ../docs/openapi/admin-v1.json -o src/api/schema.d.ts",
+    "check:api": "openapi-typescript ../docs/openapi/admin-v1.json -o node_modules/.schema-check.d.ts && diff -u src/api/schema.d.ts node_modules/.schema-check.d.ts && echo 'src/api/schema.d.ts is up to date'",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.108.4",
+    "@tanstack/react-router": "^1.170.46",
+    "@tanstack/react-table": "^9.3.1",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "oidc-client-ts": "^3.5.0",
+    "openapi-fetch": "^0.17.0",
+    "radix-ui": "^1.8.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "tailwind-merge": "^3.7.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.5",
+    "@tanstack/router-plugin": "^1.169.0",
+    "@types/node": "^22.20.5",
+    "@types/react": "^19.3.1",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "openapi-typescript": "^7.13.0",
+    "tailwindcss": "^4.3.5",
+    "typescript": "5.9.3",
+    "vite": "^8.3.8"
+  }
+}
