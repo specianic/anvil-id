@@ -14,7 +14,10 @@
 //!    did not run yet, and renders the form it returns. A failure never triggers further I/O.
 //!
 //! The last effect of every list is terminal: [`Effect::Render`], [`Effect::Message`],
-//! [`Effect::CreateSession`] or [`Effect::SubmitSetup`].
+//! [`Effect::CreateSession`], [`Effect::SubmitSetup`] or (only through
+//! `FlowService::passkey_options`) [`Effect::StartPasskey`]. [`Effect::CheckSecondFactor`] can
+//! end a list early by moving the login to its second-factor step
+//! ([`second_factor_required`]).
 //!
 //! # Forms
 //!
@@ -29,14 +32,17 @@ use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
 use super::form::{FieldKind, FormDescription, FormField, FormMessage, MessageLevel};
-pub use super::login::LoginState;
+pub use super::login::{LoginState, LoginStep, SecondFactorMethods, second_factor_required};
 pub use super::recovery::RecoveryState;
 pub use super::registration::RegistrationState;
 pub use super::setup::SetupState;
 pub use super::verification::VerificationState;
 use super::{login, recovery, registration, setup, verification};
 use crate::error::CoreError;
-use crate::model::{FlowKind, RegistrationMode, normalize_email};
+use crate::model::{
+    ACR_MFA, ACR_PWD, AMR_HWK, AMR_MFA, AMR_OTP, AMR_PWD, AMR_SWK, AMR_USER, FlowKind,
+    RegistrationMode, UserId, normalize_email,
+};
 use crate::policy::{PasswordPolicy, check_password};
 
 /// Placeholder for the CSRF token in forms produced by the engine. The service replaces it with
@@ -143,13 +149,31 @@ pub enum FlowInput {
         email: String,
         password: String,
     },
+    /// Request options for a usernameless passkey sign-in (login, identify step).
+    PasskeyOptions,
+    /// A WebAuthn assertion response (`PublicKeyCredential.toJSON()`) for the stored challenge.
+    PasskeyAssertion {
+        response_json: String,
+    },
+    /// A TOTP code (login, second-factor step).
+    Totp {
+        code: String,
+    },
+    /// A recovery code (login, second-factor step).
+    RecoveryCode {
+        code: String,
+    },
 }
 
 impl FlowInput {
     /// The flow kind this input belongs to.
     pub fn kind(&self) -> FlowKind {
         match self {
-            Self::Login { .. } => FlowKind::Login,
+            Self::Login { .. }
+            | Self::PasskeyOptions
+            | Self::PasskeyAssertion { .. }
+            | Self::Totp { .. }
+            | Self::RecoveryCode { .. } => FlowKind::Login,
             Self::Register { .. } => FlowKind::Registration,
             Self::ConfirmVerification { .. } => FlowKind::Verification,
             Self::RequestRecovery { .. } | Self::ResetPassword { .. } => FlowKind::Recovery,
@@ -192,6 +216,50 @@ impl std::fmt::Debug for FlowInput {
                 .field("email", email)
                 .field("password", &REDACTED)
                 .finish(),
+            Self::PasskeyOptions => f.write_str("PasskeyOptions"),
+            Self::PasskeyAssertion { response_json } => f
+                .debug_struct("PasskeyAssertion")
+                .field("response_len", &response_json.len())
+                .finish(),
+            Self::Totp { .. } => f.debug_struct("Totp").field("code", &REDACTED).finish(),
+            Self::RecoveryCode { .. } => f
+                .debug_struct("RecoveryCode")
+                .field("code", &REDACTED)
+                .finish(),
+        }
+    }
+}
+
+/// How the user of a [`Effect::CreateSession`] authenticated; determines the session's `acr`
+/// and `amr` ([`session_acr_amr`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionAuth {
+    /// Password only (also the sign-in right after self-registration).
+    Password,
+    /// Password, then a TOTP code or a recovery code.
+    SecondFactor,
+    /// A user-verified passkey (counts as multi-factor).
+    Passkey,
+}
+
+/// `(acr, amr)` of a session: password `[pwd]` + pwd ACR; password plus TOTP or recovery code
+/// `[pwd, otp, mfa]` + MFA ACR; passkey `[hwk|swk, user, mfa]` + MFA ACR, `swk` when the
+/// passkey is backup eligible (synced), `hwk` otherwise.
+pub fn session_acr_amr(
+    auth: SessionAuth,
+    passkey_backup_eligible: bool,
+) -> (&'static str, Vec<String>) {
+    let v = |xs: &[&str]| xs.iter().map(|x| (*x).to_owned()).collect::<Vec<_>>();
+    match auth {
+        SessionAuth::Password => (ACR_PWD, v(&[AMR_PWD])),
+        SessionAuth::SecondFactor => (ACR_MFA, v(&[AMR_PWD, AMR_OTP, AMR_MFA])),
+        SessionAuth::Passkey => {
+            let key = if passkey_backup_eligible {
+                AMR_SWK
+            } else {
+                AMR_HWK
+            };
+            (ACR_MFA, v(&[key, AMR_USER, AMR_MFA]))
         }
     }
 }
@@ -225,9 +293,30 @@ pub enum Effect {
     },
     /// Enqueue an email (see [`EmailKind`] for where each kind is valid).
     EnqueueEmail(EmailKind),
+    /// After a successful [`Effect::VerifyPassword`]: if the established user has a TOTP
+    /// credential, the login moves to its second-factor step ([`second_factor_required`]) and
+    /// the remaining effects are dropped; otherwise nothing happens.
+    CheckSecondFactor,
+    /// Terminal for `FlowService::passkey_options`: create a discoverable WebAuthn challenge and
+    /// store its server-side state in [`LoginState::passkey_challenge`].
+    StartPasskey,
+    /// Take the challenge out of the stored flow state (compare-and-swap, so it is single-use),
+    /// then verify the assertion against the tenant-scoped passkey of the asserted user handle
+    /// and advance its counter. Establishes the user. Fails with `PasskeyInvalid` (or
+    /// `EmailNotVerified`).
+    FinishPasskey {
+        response_json: String,
+        challenge: String,
+    },
+    /// Verify a TOTP code of `user_id` and accept its time step at most once. Establishes the
+    /// user. Fails with `SecondFactorInvalid`.
+    VerifyTotp { user_id: UserId, code: SecretString },
+    /// Consume a recovery code of `user_id` (atomically, with the notification email).
+    /// Establishes the user. Fails with `SecondFactorInvalid`.
+    ConsumeRecoveryCode { user_id: UserId, code: SecretString },
     /// Terminal: sign the established user in (rotating any current session) and finish the
     /// flow.
-    CreateSession,
+    CreateSession(SessionAuth),
     /// Look the address up; if an active user has it, issue a recovery token and email it.
     /// Never fails visibly: the outcome is the same whether or not the account exists.
     IssueRecovery { email: String },
@@ -270,7 +359,23 @@ impl std::fmt::Debug for Effect {
                 .field("password", &REDACTED)
                 .finish(),
             Self::EnqueueEmail(k) => f.debug_tuple("EnqueueEmail").field(k).finish(),
-            Self::CreateSession => f.write_str("CreateSession"),
+            Self::CheckSecondFactor => f.write_str("CheckSecondFactor"),
+            Self::StartPasskey => f.write_str("StartPasskey"),
+            Self::FinishPasskey { response_json, .. } => f
+                .debug_struct("FinishPasskey")
+                .field("response_len", &response_json.len())
+                .finish_non_exhaustive(),
+            Self::VerifyTotp { user_id, .. } => f
+                .debug_struct("VerifyTotp")
+                .field("user_id", user_id)
+                .field("code", &REDACTED)
+                .finish(),
+            Self::ConsumeRecoveryCode { user_id, .. } => f
+                .debug_struct("ConsumeRecoveryCode")
+                .field("user_id", user_id)
+                .field("code", &REDACTED)
+                .finish(),
+            Self::CreateSession(auth) => f.debug_tuple("CreateSession").field(auth).finish(),
             Self::IssueRecovery { email } => f
                 .debug_struct("IssueRecovery")
                 .field("email", email)
@@ -305,6 +410,10 @@ pub enum Failure {
     EmailTaken,
     InvalidToken,
     Overloaded,
+    /// Wrong, replayed or malformed TOTP or recovery code.
+    SecondFactorInvalid,
+    /// Rejected passkey assertion (any reason; one generic failure).
+    PasskeyInvalid,
 }
 
 /// The pure transition: plans the effects of `input` on `state`. An input of another flow kind
@@ -318,6 +427,12 @@ pub fn transition(state: FlowState, input: FlowInput, env: &FlowEnv) -> (FlowSta
                 password,
             },
         ) => login::transition(s, identifier, password, env),
+        (FlowState::Login(s), FlowInput::PasskeyOptions) => login::passkey_options(s),
+        (FlowState::Login(s), FlowInput::PasskeyAssertion { response_json }) => {
+            login::passkey_assertion(s, response_json)
+        }
+        (FlowState::Login(s), FlowInput::Totp { code }) => login::totp(s, code),
+        (FlowState::Login(s), FlowInput::RecoveryCode { code }) => login::recovery_code(s, code),
         (
             FlowState::Registration(s),
             FlowInput::Register {
@@ -381,7 +496,7 @@ pub fn current_form(
     env: &FlowEnv,
 ) -> FormDescription {
     match state {
-        FlowState::Login(s) => login::form(s, messages),
+        FlowState::Login(s) => login::current_form(s, messages),
         FlowState::Registration(s) => registration::form(s, messages, Vec::new(), Vec::new(), env),
         FlowState::Verification(_) => verification::form(None, messages),
         FlowState::Recovery(s) => recovery::current_form(s, messages),
@@ -394,6 +509,13 @@ pub fn message_text(key: &str) -> &'static str {
     match key {
         "login.invalid_credentials" => "The email address or password is incorrect.",
         "login.email_not_verified" => "Please confirm your email address before signing in.",
+        "login.second_factor_invalid" => "That code is not valid. Please try again.",
+        "login.passkey_failed" => {
+            "Signing in with a passkey did not work. Please try again or use your password."
+        }
+        "login.recovery_code_used" => {
+            "You signed in with a recovery code. Each code works only once; consider generating new codes."
+        }
         "registration.disabled" => "Self-registration is not available.",
         "registration.email_taken" => "An account with this email address already exists.",
         "registration.check_email" => {
@@ -526,8 +648,9 @@ pub(super) fn secret(s: String) -> SecretString {
 pub(crate) mod test_support {
     use super::super::form::{FieldKind, FormDescription};
 
-    pub const IDS: [&str; 6] = [
+    pub const IDS: [&str; 7] = [
         "login",
+        "second-factor",
         "registration",
         "verification",
         "recovery",
@@ -617,6 +740,15 @@ mod tests {
                 email: "a@b.c".into(),
                 password: "hunter2-secret".into(),
             },
+            FlowInput::Totp {
+                code: "secret-123456".into(),
+            },
+            FlowInput::RecoveryCode {
+                code: "secret-code".into(),
+            },
+            FlowInput::PasskeyAssertion {
+                response_json: "{\"secret\":1}".into(),
+            },
         ];
         for i in &inputs {
             let d = format!("{i:?}");
@@ -649,6 +781,18 @@ mod tests {
             Effect::SubmitSetup {
                 email: "a@b.c".into(),
                 password: secret("pw-secret".into()),
+            },
+            Effect::VerifyTotp {
+                user_id: UserId::new_v7(),
+                code: secret("secret-123456".into()),
+            },
+            Effect::ConsumeRecoveryCode {
+                user_id: UserId::new_v7(),
+                code: secret("secret-code".into()),
+            },
+            Effect::FinishPasskey {
+                response_json: "{\"secret\":1}".into(),
+                challenge: "challenge-secret".into(),
             },
         ];
         for e in &effects {
@@ -696,6 +840,9 @@ mod tests {
     fn every_listed_key_has_text() {
         for key in [
             "login.invalid_credentials",
+            "login.second_factor_invalid",
+            "login.passkey_failed",
+            "login.recovery_code_used",
             "registration.disabled",
             "registration.email_taken",
             "password.too_short",
@@ -710,6 +857,27 @@ mod tests {
         ] {
             assert_ne!(message_text(key), message_text("unknown.key"), "{key}");
         }
+    }
+
+    #[test]
+    fn session_acr_amr_per_method() {
+        let s = |xs: &[&str]| xs.iter().map(|x| (*x).to_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            session_acr_amr(SessionAuth::Password, true),
+            (ACR_PWD, s(&["pwd"]))
+        );
+        assert_eq!(
+            session_acr_amr(SessionAuth::SecondFactor, false),
+            (ACR_MFA, s(&["pwd", "otp", "mfa"]))
+        );
+        assert_eq!(
+            session_acr_amr(SessionAuth::Passkey, false),
+            (ACR_MFA, s(&["hwk", "user", "mfa"]))
+        );
+        assert_eq!(
+            session_acr_amr(SessionAuth::Passkey, true),
+            (ACR_MFA, s(&["swk", "user", "mfa"]))
+        );
     }
 
     #[test]

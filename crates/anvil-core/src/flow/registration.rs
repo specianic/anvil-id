@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::engine::{
-    Effect, EmailKind, Failure, FlowEnv, FlowState, error, field, form as build_form,
+    Effect, EmailKind, Failure, FlowEnv, FlowState, SessionAuth, error, field, form as build_form,
     password_field, secret, validate_credentials,
 };
 use super::form::{FieldKind, FormDescription, FormMessage};
@@ -79,7 +79,7 @@ pub(super) fn transition(
             effects.push(if env.require_verified_email {
                 Effect::Message("registration.check_email")
             } else {
-                Effect::CreateSession
+                Effect::CreateSession(SessionAuth::Password)
             });
             (FlowState::Registration(state), effects)
         }
@@ -113,7 +113,11 @@ pub(super) fn on_failure(
             Vec::new(),
             env,
         ),
-        Failure::InvalidCredentials | Failure::EmailNotVerified | Failure::InvalidToken => form(
+        Failure::InvalidCredentials
+        | Failure::EmailNotVerified
+        | Failure::InvalidToken
+        | Failure::SecondFactorInvalid
+        | Failure::PasskeyInvalid => form(
             state,
             vec![error("flow.invalid_input")],
             Vec::new(),
@@ -248,7 +252,10 @@ mod tests {
             effects[2],
             Effect::EnqueueEmail(EmailKind::Verification)
         ));
-        assert!(matches!(effects[3], Effect::CreateSession));
+        assert!(matches!(
+            effects[3],
+            Effect::CreateSession(SessionAuth::Password)
+        ));
     }
 
     #[test]

@@ -125,9 +125,11 @@ pub(super) fn on_failure(
                 request_form(&state, vec![error(key)], Vec::new())
             }
         }
-        Failure::InvalidCredentials | Failure::EmailNotVerified | Failure::EmailTaken => {
-            current_form(&state, vec![error("flow.invalid_input")])
-        }
+        Failure::InvalidCredentials
+        | Failure::EmailNotVerified
+        | Failure::EmailTaken
+        | Failure::SecondFactorInvalid
+        | Failure::PasskeyInvalid => current_form(&state, vec![error("flow.invalid_input")]),
     };
     (FlowState::Recovery(state), f)
 }

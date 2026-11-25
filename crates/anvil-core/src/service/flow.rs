@@ -36,9 +36,9 @@ use crate::flow::engine::{
 };
 use crate::flow::form::{FormDescription, FormMessage, MessageLevel};
 use crate::model::{
-    ACR_PWD, AMR_PWD, AuthRequestId, Flow, FlowId, FlowKind, NewEmail, NewFlow,
-    NewPasswordCredential, NewSelfServiceToken, NewUser, OutboxId, SecretHash, SelfServiceKind,
-    SessionId, StandardClaims, Tenant, User, UserId, UserStatus, seal_payload,
+    AuthRequestId, Flow, FlowId, FlowKind, NewEmail, NewFlow, NewPasswordCredential,
+    NewSelfServiceToken, NewUser, OutboxId, SecretHash, SelfServiceKind, SessionId, StandardClaims,
+    Tenant, User, UserId, UserStatus, seal_payload,
 };
 use crate::policy::PasswordPolicy;
 use crate::ports::{BreachChecker, Clock, PasswordCheck, PasswordHasher, Storage, StorageError};
@@ -467,7 +467,28 @@ impl FlowService {
             Effect::EnqueueEmail(kind) => Err(CoreError::Internal(format!(
                 "EnqueueEmail({kind:?}) is only valid directly after CreateUser"
             ))),
-            Effect::CreateSession => {
+            Effect::CheckSecondFactor => {
+                // Fails closed until the second-factor step is executed (next commit).
+                let Some(user) = subject.as_ref() else {
+                    return Err(CoreError::Internal(
+                        "CheckSecondFactor without an established user".into(),
+                    ));
+                };
+                if users.totp(tenant, user.id).await?.is_some() {
+                    return Err(CoreError::Internal(
+                        "second-factor login is not executed yet".into(),
+                    ));
+                }
+                Ok(Step::Continue)
+            }
+            Effect::StartPasskey
+            | Effect::FinishPasskey { .. }
+            | Effect::VerifyTotp { .. }
+            | Effect::ConsumeRecoveryCode { .. } => Err(CoreError::Internal(
+                "passkey and second-factor effects are not executed yet".into(),
+            )),
+            Effect::CreateSession(auth) => {
+                let (acr, amr) = crate::flow::engine::session_acr_amr(*auth, false);
                 let Some(user) = subject.take() else {
                     return Err(CoreError::Internal(
                         "CreateSession without an established user".into(),
@@ -475,13 +496,7 @@ impl FlowService {
                 };
                 let cookie = self
                     .sessions()
-                    .create(
-                        tenant,
-                        user.id,
-                        ACR_PWD,
-                        &[AMR_PWD.to_owned()],
-                        current_session,
-                    )
+                    .create(tenant, user.id, acr, &amr, current_session)
                     .await?;
                 users
                     .record_login(tenant, user.id, self.clock.now())
@@ -749,12 +764,20 @@ mod tests {
         ];
         let state = FlowState::Login(LoginState {
             identifier: Some("alice@example.com".into()),
+            ..LoginState::default()
         });
         let mut forms = Vec::new();
         for r in cases {
             let failure = r.expect_err("must fail");
             assert_eq!(failure, Failure::InvalidCredentials);
-            let (_, form) = on_failure(state.clone(), &[Effect::CreateSession], failure, &env);
+            let (_, form) = on_failure(
+                state.clone(),
+                &[Effect::CreateSession(
+                    crate::flow::engine::SessionAuth::Password,
+                )],
+                failure,
+                &env,
+            );
             forms.push(form);
         }
         assert!(forms.windows(2).all(|w| w[0] == w[1]));
