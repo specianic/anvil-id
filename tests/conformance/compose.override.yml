@@ -1,5 +1,5 @@
-# Lets the suite's server container reach anvilid listening on the host (0.0.0.0:9090)
-# under the name used as the issuer in config-m0.json.
+# Lets the suite's server container (including its HtmlUnit browser) reach anvilid listening on the
+# host (0.0.0.0:9443, TLS) under the name used as the issuer: https://host.docker.internal:9443.
 services:
   server:
     extra_hosts:
