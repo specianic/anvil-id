@@ -1,3 +1,19 @@
+---
+gsd_state_version: 1.0
+milestone: v1.0
+milestone_name: milestone
+status: planning
+stopped_at: Completed 01-01-PLAN.md
+last_updated: "2026-11-25T00:49:23.155Z"
+last_activity: 2026-11-25 — Roadmap created (7 phases, 84/84 v1 requirements mapped)
+progress:
+  total_phases: 7
+  completed_phases: 0
+  total_plans: 8
+  completed_plans: 1
+  percent: 13
+---
+
 # Project State
 
 ## Project Reference
@@ -10,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 ## Current Position
 
 Phase: 1 of 7 (Foundations and Spikes (M0))
-Plan: 0 of TBD in current phase
-Status: Ready to plan
-Last activity: 2026-11-25 — Roadmap created (7 phases, 84/84 v1 requirements mapped)
+Plan: 1 of 8 in current phase
+Status: In progress
+Last activity: 2026-11-25 — Completed 01-01 (workspace skeleton, ports in anvil-core, just entry point)
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [█░░░░░░░░░] 13%
 
 ## Performance Metrics
 
@@ -34,6 +50,7 @@ Progress: [░░░░░░░░░░] 0%
 - Trend: -
 
 *Updated after each plan completion*
+| Phase 01 P01 | 15min | 3 tasks | 28 files |
 
 ## Accumulated Context
 
@@ -45,6 +62,8 @@ Recent decisions affecting current work:
 - [Roadmap]: One phase per ARCHITECTURE.md §18 milestone; M5 (1.0) split into Phase 6 (organizations and SSO) and Phase 7 (certification and release)
 - [Roadmap]: Cross-cutting requirements mapped to the phase where they are first fully delivered (e.g. ORG-01 and ADM-07 to Phase 5, ADM-02 to Phase 6), even though parts land earlier
 - [Roadmap]: QUAL-01 (negative test per security control) is mapped to Phase 2 but remains a gate for every later phase
+- [Phase 01]: Storage ports live in anvil_core::ports; backends normal-depend on anvil-core only, anvil-storage (contract suite) is a dev-dependency
+- [Phase 01]: ConsumeOutcome::Consumed holds AuthorizationCode unboxed (documented clippy expect)
 
 ### Pending Todos
 
@@ -58,6 +77,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-25
-Stopped at: Roadmap and state initialized; ready for /gsd:plan-phase 1
+Last session: 2026-11-25T00:49:23.154Z
+Stopped at: Completed 01-01-PLAN.md
 Resume file: None
