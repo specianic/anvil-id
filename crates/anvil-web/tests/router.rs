@@ -14,11 +14,20 @@ fn app(issuer: &str) -> axum::Router {
     })
 }
 
-async fn send(app: axum::Router, req: Request<Body>) -> (StatusCode, axum::http::HeaderMap, Vec<u8>) {
+async fn send(
+    app: axum::Router,
+    req: Request<Body>,
+) -> (StatusCode, axum::http::HeaderMap, Vec<u8>) {
     let resp = app.oneshot(req).await.expect("infallible service");
     let status = resp.status();
     let headers = resp.headers().clone();
-    let body = resp.into_body().collect().await.expect("body").to_bytes().to_vec();
+    let body = resp
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes()
+        .to_vec();
     (status, headers, body)
 }
 
@@ -37,14 +46,29 @@ async fn discovery(issuer: &str) -> serde_json::Value {
 async fn discovery_endpoints_derive_from_issuer() {
     let doc = discovery("http://example.test:9090").await;
     assert_eq!(doc["issuer"], "http://example.test:9090");
-    assert_eq!(doc["authorization_endpoint"], "http://example.test:9090/authorize");
+    assert_eq!(
+        doc["authorization_endpoint"],
+        "http://example.test:9090/authorize"
+    );
     assert_eq!(doc["token_endpoint"], "http://example.test:9090/token");
     assert_eq!(doc["jwks_uri"], "http://example.test:9090/jwks");
     assert_eq!(doc["response_types_supported"], serde_json::json!(["code"]));
-    assert_eq!(doc["subject_types_supported"], serde_json::json!(["public"]));
-    assert_eq!(doc["id_token_signing_alg_values_supported"], serde_json::json!(["ES256"]));
-    assert_eq!(doc["code_challenge_methods_supported"], serde_json::json!(["S256"]));
-    assert_eq!(doc["grant_types_supported"], serde_json::json!(["authorization_code"]));
+    assert_eq!(
+        doc["subject_types_supported"],
+        serde_json::json!(["public"])
+    );
+    assert_eq!(
+        doc["id_token_signing_alg_values_supported"],
+        serde_json::json!(["ES256"])
+    );
+    assert_eq!(
+        doc["code_challenge_methods_supported"],
+        serde_json::json!(["S256"])
+    );
+    assert_eq!(
+        doc["grant_types_supported"],
+        serde_json::json!(["authorization_code"])
+    );
     assert_eq!(
         doc["token_endpoint_auth_methods_supported"],
         serde_json::json!(["client_secret_basic"])
@@ -63,7 +87,10 @@ async fn discovery_trims_trailing_slash() {
 async fn discovery_keeps_issuer_path() {
     let doc = discovery("https://example.test/t/acme").await;
     assert_eq!(doc["issuer"], "https://example.test/t/acme");
-    assert_eq!(doc["authorization_endpoint"], "https://example.test/t/acme/authorize");
+    assert_eq!(
+        doc["authorization_endpoint"],
+        "https://example.test/t/acme/authorize"
+    );
     assert_eq!(doc["token_endpoint"], "https://example.test/t/acme/token");
     assert_eq!(doc["jwks_uri"], "https://example.test/t/acme/jwks");
 
@@ -81,7 +108,11 @@ async fn healthz_ok() {
 
 #[tokio::test]
 async fn unimplemented_endpoints_return_501_never_success() {
-    for (method, path) in [(Method::GET, "/authorize"), (Method::POST, "/token"), (Method::GET, "/jwks")] {
+    for (method, path) in [
+        (Method::GET, "/authorize"),
+        (Method::POST, "/token"),
+        (Method::GET, "/jwks"),
+    ] {
         let req = Request::builder()
             .method(method.clone())
             .uri(path)
@@ -119,7 +150,10 @@ async fn asset_served_with_etag_and_content_type() {
     let (status, headers, body) = send(app("http://example.test"), get("/assets/anvil.css")).await;
     assert_eq!(status, StatusCode::OK);
     assert!(
-        headers[header::CONTENT_TYPE].to_str().expect("ascii").starts_with("text/css"),
+        headers[header::CONTENT_TYPE]
+            .to_str()
+            .expect("ascii")
+            .starts_with("text/css"),
         "{:?}",
         headers[header::CONTENT_TYPE]
     );
@@ -138,7 +172,10 @@ async fn asset_if_none_match_returns_304() {
         .expect("request");
     let (status, headers, body) = send(app("http://example.test"), req).await;
     assert_eq!(status, StatusCode::NOT_MODIFIED);
-    assert_eq!(headers[header::ETAG].to_str().expect("ascii"), expected_etag());
+    assert_eq!(
+        headers[header::ETAG].to_str().expect("ascii"),
+        expected_etag()
+    );
     assert!(body.is_empty());
 }
 
@@ -155,7 +192,11 @@ async fn asset_stale_if_none_match_returns_200() {
 
 #[tokio::test]
 async fn missing_asset_is_404() {
-    let (status, _, _) = send(app("http://example.test"), get("/assets/does-not-exist.css")).await;
+    let (status, _, _) = send(
+        app("http://example.test"),
+        get("/assets/does-not-exist.css"),
+    )
+    .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
