@@ -350,7 +350,7 @@ fn resolve_social(s: &SocialConfig, trust: bool) -> Result<ResolvedProvider, Cor
             .then(|| preset_api_base(o.api_base_url.as_deref())),
         apple_audience: apple.then(|| issuer_override.unwrap_or_else(|| APPLE_ISSUER.into())),
         allowed_tenants: if kind == ConnectionKind::Microsoft {
-            lowercase(&s.allowed_tenants)
+            microsoft_allowed_tenants(s)?
         } else {
             vec![]
         },
@@ -383,6 +383,24 @@ fn microsoft_tenant(t: Option<&str>) -> Result<String, CoreError> {
             "microsoft_tenant",
             "must be common, organizations, consumers or a tenant UUID",
         )),
+    }
+}
+
+/// The accepted `tid` values of a Microsoft connection (lowercase; empty = any). A
+/// single-tenant connection (`microsoft_tenant` is a tenant UUID) accepts only that tenant: its
+/// exact issuer pins the `iss` string, and this pins `tid` to the same tenant, so a token whose
+/// `tid` names another tenant is refused (and never recorded in the link metadata). An
+/// allow-list that excludes the connection's own tenant is kept as is (it refuses everything).
+fn microsoft_allowed_tenants(s: &SocialConfig) -> Result<Vec<String>, CoreError> {
+    let allowed = lowercase(&s.allowed_tenants);
+    let tenant = microsoft_tenant(s.microsoft_tenant.as_deref())?;
+    if matches!(tenant.as_str(), "common" | "organizations" | "consumers") {
+        return Ok(allowed);
+    }
+    if allowed.is_empty() || allowed.contains(&tenant) {
+        Ok(vec![tenant])
+    } else {
+        Ok(allowed)
     }
 }
 
@@ -645,6 +663,23 @@ mod tests {
             )))
         );
         assert_eq!(r.allowed_tenants, [tid]);
+    }
+
+    #[test]
+    fn microsoft_single_tenant_pins_tid_to_its_tenant() {
+        // Found by the Microsoft mock suite (04-26): without this a single-tenant connection
+        // accepted a token whose `tid` named another tenant next to its own exact `iss`.
+        let tid = "72f988bf-86f1-41af-91ab-2d7cd011db47";
+        let mut s = social(SocialProvider::Microsoft);
+        s.microsoft_tenant = Some(tid.into());
+        assert_eq!(resolved_social(s.clone()).allowed_tenants, [tid]);
+        // An allow-list without the connection's tenant stays (and refuses every token).
+        let other = "3f6b0c2e-5d1a-4e8f-9b7c-2a1d0e9f8c7b";
+        s.allowed_tenants = vec![other.into()];
+        assert_eq!(resolved_social(s).allowed_tenants, [other]);
+        // Multi-tenant connections keep their (possibly empty) allow-list.
+        let s = social(SocialProvider::Microsoft);
+        assert!(resolved_social(s).allowed_tenants.is_empty());
     }
 
     #[test]

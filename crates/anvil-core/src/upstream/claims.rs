@@ -730,6 +730,9 @@ mod tests {
         let mut c = c;
         c.insert("tid".into(), json!(TID));
         assert!(check(&k, &r, &c).is_ok());
+        // Its own exact `iss` with the `tid` of another tenant is refused (04-26).
+        c.insert("tid".into(), json!("3f6b0c2e-5d1a-4e8f-9b7c-2a1d0e9f8c7b"));
+        assert_eq!(check(&k, &r, &c), Err(UpstreamTokenError::Issuer));
     }
 
     #[test]

@@ -13,6 +13,14 @@
 //! | `/token` | all | configurable reply; every request is recorded |
 //! | `/userinfo` | all but Github | needs `Authorization: Bearer`; configurable JSON |
 //! | `/user`, `/user/emails` | Github | need Bearer and the GitHub REST headers |
+//! | `/api/v3/user`, `/api/v3/user/emails` | Github | the same, under a GitHub Enterprise Server API base |
+//!
+//! Provider quirks (04-26): Google tokens carry `iss` = `accounts.google.com`-style values (see
+//! [`MockProvider::token_issuer`]); Apple tokens carry `email_verified` as a string and no name
+//! claims, the token endpoint can verify Apple's ES256 client-secret JWT
+//! ([`MockProvider::expect_apple_client_secret`]) and the authorization response carries the
+//! `user` JSON on the first authorization only ([`MockProvider::apple_authorization_response`]).
+//! [`MockProvider::attack_tokens`] builds the shared ID-token attack cases.
 //!
 //! Test keys are generated per provider at runtime (nothing is committed). ID tokens are built
 //! with [`MockProvider::id_token`] (RS256) or [`MockProvider::id_token_es256`] from default
@@ -26,7 +34,7 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use anvil_jose::encoding::b64url;
-use anvil_jose::{Alg, Jwk, SigningKey, generate_es256, generate_rs256};
+use anvil_jose::{Alg, Jwk, Jwks, SigningKey, generate_es256, generate_rs256, verify_jwt};
 use anvil_web::adapters::outbound::{OutboundClient, OutboundPolicy};
 use anvil_web::adapters::upstream::UpstreamHttp;
 use serde_json::{Map, Value, json};
@@ -62,6 +70,13 @@ pub const MOCK_TENANT_ID: &str = "9188040d-6c67-4c5b-b112-36a304b66dad";
 pub const MOCK_ACCESS_TOKEN: &str = "mock-access-token";
 /// GitHub numeric user id of the default `/user` document.
 pub const MOCK_GITHUB_ID: u64 = 4242;
+/// The `iss` of Google tokens: the scheme-less form Google documents next to the https one
+/// (an expected-issuer string, never a network destination).
+pub const GOOGLE_TOKEN_ISSUER: &str = "accounts.google.com";
+/// GitHub Enterprise Server style API path prefix served by the Github mock.
+pub const GHES_API_PREFIX: &str = "/api/v3";
+/// Apple accepts client secrets valid for at most six months (seconds).
+pub const APPLE_SECRET_MAX_LIFETIME: i64 = 15_777_000;
 
 struct TestKey {
     signer: SigningKey,
@@ -108,6 +123,28 @@ impl Reply {
     }
 }
 
+/// What the Apple token endpoint expects of the ES256 client-secret JWT.
+#[derive(Clone)]
+pub struct AppleSecretCheck {
+    /// The public key of the team's `.p8` key.
+    pub public_jwk: Jwk,
+    /// Expected header `kid` (the key id).
+    pub key_id: String,
+    /// Expected `iss` (the team id).
+    pub team_id: String,
+    /// Expected `sub` and form `client_id` (the services id).
+    pub services_id: String,
+    /// Expected `aud`.
+    pub audience: String,
+}
+
+/// One shared ID-token attack: the token and the audit reason its rejection must record.
+pub struct AttackToken {
+    pub label: &'static str,
+    pub id_token: String,
+    pub reason: &'static str,
+}
+
 struct State {
     rs256: TestKey,
     es256: TestKey,
@@ -119,6 +156,11 @@ struct State {
     github_user: Value,
     github_emails: Value,
     now: Option<i64>,
+    apple_check: Option<AppleSecretCheck>,
+    /// Claims of every client secret the Apple token endpoint accepted, oldest first.
+    apple_secrets: Vec<Map<String, Value>>,
+    /// Subjects that already authorized (Apple sends the `user` JSON once).
+    apple_authorized: Vec<String>,
 }
 
 /// A running mock upstream provider. Dropping it stops the server.
@@ -151,6 +193,71 @@ fn jwks_response(st: &State) -> ResponseTemplate {
     t
 }
 
+/// `POST /token`: the configured reply, after the Apple client-secret check when one is set.
+struct TokenEndpoint {
+    state: Arc<Mutex<State>>,
+}
+
+impl Respond for TokenEndpoint {
+    fn respond(&self, req: &Request) -> ResponseTemplate {
+        let mut st = self.state.lock().expect("mock state");
+        if let Some(check) = st.apple_check.clone() {
+            let now = st
+                .now
+                .unwrap_or_else(|| time::OffsetDateTime::now_utc().unix_timestamp());
+            match check_apple_secret(&check, req, now) {
+                Ok(claims) => st.apple_secrets.push(claims),
+                Err(_why) => {
+                    return Reply::json(400, &json!({ "error": "invalid_client" })).template();
+                }
+            }
+        }
+        st.token_reply.template()
+    }
+}
+
+/// Apple's token-endpoint rules for the client secret (`client_secret_post`): an ES256 JWT with
+/// the key id in the header, `iss` = team id, `sub` = services id (= `client_id`), `aud` = the
+/// expected audience, `iat` not in the future and `exp` after now, at most six months after
+/// `iat`. Returns the verified claims or what was wrong.
+fn check_apple_secret(
+    check: &AppleSecretCheck,
+    req: &Request,
+    now: i64,
+) -> Result<Map<String, Value>, &'static str> {
+    let field = |name: &str| form_field(req, name);
+    if field("client_id").as_deref() != Some(check.services_id.as_str()) {
+        return Err("client_id");
+    }
+    let secret = field("client_secret").ok_or("no client_secret")?;
+    let mut jwk = check.public_jwk.clone();
+    jwk.kid = Some(check.key_id.clone());
+    let verified =
+        verify_jwt(&secret, &Jwks { keys: vec![jwk] }, &[Alg::ES256]).map_err(|_| "signature")?;
+    if verified.header.alg != "ES256" || verified.header.kid.as_deref() != Some(&check.key_id) {
+        return Err("header");
+    }
+    let c = verified.claims;
+    let s = |k: &str| c.get(k).and_then(Value::as_str).map(str::to_owned);
+    let n = |k: &str| c.get(k).and_then(Value::as_i64);
+    if s("iss").as_deref() != Some(check.team_id.as_str()) {
+        return Err("iss");
+    }
+    if s("sub").as_deref() != Some(check.services_id.as_str()) {
+        return Err("sub");
+    }
+    if s("aud").as_deref() != Some(check.audience.as_str()) {
+        return Err("aud");
+    }
+    let (Some(iat), Some(exp)) = (n("iat"), n("exp")) else {
+        return Err("iat/exp");
+    };
+    if iat > now + 60 || exp <= now || exp - iat > APPLE_SECRET_MAX_LIFETIME {
+        return Err("lifetime");
+    }
+    Ok(c)
+}
+
 impl MockProvider {
     /// Starts a mock of `kind` on 127.0.0.1 with fresh RS256 and ES256 test keys.
     pub async fn start(kind: MockKind) -> Self {
@@ -178,6 +285,9 @@ impl MockProvider {
                 { "email": MOCK_EMAIL, "primary": true, "verified": true },
             ]),
             now: None,
+            apple_check: None,
+            apple_secrets: Vec::new(),
+            apple_authorized: Vec::new(),
         }));
         let mock = Self {
             server,
@@ -235,27 +345,37 @@ impl MockProvider {
             .await;
         Mock::given(method("POST"))
             .and(path("/token"))
-            .respond_with(dynamic(|st| st.token_reply.template()))
+            .respond_with(TokenEndpoint {
+                state: Arc::clone(&self.state),
+            })
             .mount(&self.server)
             .await;
         if self.kind == MockKind::Github {
-            for (p, what) in [
-                (
-                    "/user",
-                    (|st: &State| ResponseTemplate::new(200).set_body_json(&st.github_user))
-                        as fn(&State) -> ResponseTemplate,
-                ),
-                ("/user/emails", |st: &State| {
-                    ResponseTemplate::new(200).set_body_json(&st.github_emails)
-                }),
-            ] {
+            let api_paths = [
+                "/user".to_owned(),
+                "/user/emails".to_owned(),
+                format!("{GHES_API_PREFIX}/user"),
+                format!("{GHES_API_PREFIX}/user/emails"),
+            ];
+            for p in api_paths {
+                let what: fn(&State) -> ResponseTemplate = if p.ends_with("/emails") {
+                    |st: &State| ResponseTemplate::new(200).set_body_json(&st.github_emails)
+                } else {
+                    |st: &State| ResponseTemplate::new(200).set_body_json(&st.github_user)
+                };
                 Mock::given(method("GET"))
-                    .and(path(p))
+                    .and(path(p.as_str()))
                     .and(header_regex("authorization", "^Bearer .+"))
                     .and(header("accept", "application/vnd.github+json"))
                     .and(header("x-github-api-version", "2022-11-28"))
                     .and(header_regex("user-agent", ".+"))
                     .respond_with(dynamic(what))
+                    .mount(&self.server)
+                    .await;
+                Mock::given(method("GET"))
+                    .and(path(p.as_str()))
+                    .respond_with(ResponseTemplate::new(401))
+                    .with_priority(10)
                     .mount(&self.server)
                     .await;
             }
@@ -268,22 +388,18 @@ impl MockProvider {
                 }))
                 .mount(&self.server)
                 .await;
+            for p in ["/user", "/user/emails"] {
+                Mock::given(method("GET"))
+                    .and(path(p))
+                    .respond_with(ResponseTemplate::new(401))
+                    .with_priority(10)
+                    .mount(&self.server)
+                    .await;
+            }
         }
         // Anything else (wrong headers, no bearer): 401 so a missing header is visible.
         Mock::given(method("GET"))
             .and(path("/userinfo"))
-            .respond_with(ResponseTemplate::new(401))
-            .with_priority(10)
-            .mount(&self.server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/user"))
-            .respond_with(ResponseTemplate::new(401))
-            .with_priority(10)
-            .mount(&self.server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/user/emails"))
             .respond_with(ResponseTemplate::new(401))
             .with_priority(10)
             .mount(&self.server)
@@ -334,6 +450,15 @@ impl MockProvider {
         }
     }
 
+    /// The `iss` of tokens this mock signs: [`GOOGLE_TOKEN_ISSUER`] for Google (whose preset
+    /// issuer rule is fixed), [`Self::issuer`] otherwise.
+    pub fn token_issuer(&self) -> String {
+        match self.kind {
+            MockKind::Google => GOOGLE_TOKEN_ISSUER.to_owned(),
+            _ => self.issuer(),
+        }
+    }
+
     /// Microsoft only: the issuer template (`{base}/{tenantid}/v2.0`).
     pub fn issuer_template(&self) -> String {
         format!("{}/{{tenantid}}/v2.0", self.base_url())
@@ -378,12 +503,13 @@ impl MockProvider {
             .unwrap_or_else(|| time::OffsetDateTime::now_utc().unix_timestamp())
     }
 
-    /// The default ID-token claims: iss, sub, aud = [`MOCK_CLIENT_ID`], iat, exp (+5 min),
-    /// email (verified), name; Microsoft adds `tid`/`oid`.
+    /// The default ID-token claims: iss ([`Self::token_issuer`]), sub, aud = [`MOCK_CLIENT_ID`],
+    /// iat, exp (+5 min), email (verified), names; Microsoft adds `tid`/`oid`; Apple has
+    /// `email_verified: "true"` and no names.
     pub fn default_claims(&self) -> Map<String, Value> {
         let now = self.now();
         let mut c = json!({
-            "iss": self.issuer(),
+            "iss": self.token_issuer(),
             "sub": MOCK_SUBJECT,
             "aud": MOCK_CLIENT_ID,
             "iat": now,
@@ -397,6 +523,15 @@ impl MockProvider {
         if self.kind == MockKind::Microsoft {
             c["tid"] = json!(MOCK_TENANT_ID);
             c["oid"] = json!("00000000-0000-0000-66f3-3332eca7ea81");
+        }
+        if self.kind == MockKind::Apple {
+            // Apple: `email_verified` is a string and the ID token never carries names.
+            c["email_verified"] = json!("true");
+            if let Value::Object(m) = &mut c {
+                for k in ["name", "given_name", "family_name"] {
+                    m.remove(k);
+                }
+            }
         }
         match c {
             Value::Object(m) => m,
@@ -440,28 +575,98 @@ impl MockProvider {
 
     /// An unsigned token (`alg: none`, empty signature) with the default claims and the RS256 kid.
     pub fn id_token_with_alg_none(&self) -> String {
+        self.alg_none_with(json!({}))
+    }
+
+    fn alg_none_with(&self, overrides: Value) -> String {
         let header = json!({ "alg": "none", "typ": "JWT", "kid": self.rs256_kid() });
         format!(
             "{}.{}.",
             b64url(&serde_json::to_vec(&header).expect("json")),
-            b64url(&serde_json::to_vec(&self.default_claims()).expect("json")),
+            b64url(&serde_json::to_vec(&self.claims_with(overrides)).expect("json")),
         )
     }
 
     /// Algorithm confusion: an HS256 token keyed with the RS256 public key (its JWK JSON and,
     /// separately, the raw modulus are both plausible attacker choices; this uses the JWK JSON).
     pub fn id_token_hs256_with_public_key(&self) -> String {
+        self.hs256_with(json!({}))
+    }
+
+    fn hs256_with(&self, overrides: Value) -> String {
         use aws_lc_rs::hmac;
         let jwk = serde_json::to_vec(&self.lock().rs256.jwk).expect("json");
         let header = json!({ "alg": "HS256", "typ": "JWT", "kid": self.rs256_kid() });
         let input = format!(
             "{}.{}",
             b64url(&serde_json::to_vec(&header).expect("json")),
-            b64url(&serde_json::to_vec(&self.default_claims()).expect("json")),
+            b64url(&serde_json::to_vec(&self.claims_with(overrides)).expect("json")),
         );
         let key = hmac::Key::new(hmac::HMAC_SHA256, &jwk);
         let tag = hmac::sign(&key, input.as_bytes());
         format!("{input}.{}", b64url(tag.as_ref()))
+    }
+
+    /// An RS256 token signed with a fresh key the JWKS never publishes (an unknown `kid`).
+    pub fn id_token_with_unknown_kid(&self, overrides: Value) -> String {
+        rs256_key()
+            .signer
+            .sign_jwt(Some("JWT"), &self.claims_with(overrides))
+            .expect("sign RS256")
+    }
+
+    /// The shared ID-token attacks for a flow with `nonce`, each with the audit reason of its
+    /// rejection: `alg: none`, HS256 keyed with the public key, ES256 (a published key, but not
+    /// on the presets' RS256 allow-list), a `kid` the JWKS does not have (also after the one
+    /// forced refresh), expired, another audience, another nonce. Every token carries `nonce`
+    /// except the wrong-nonce one, so each fails for its own reason only.
+    pub fn attack_tokens(&self, nonce: &str) -> Vec<AttackToken> {
+        let with_nonce = json!({ "nonce": nonce });
+        let merged = |extra: Value| {
+            let mut v = with_nonce.clone();
+            if let (Value::Object(a), Value::Object(b)) = (&mut v, extra) {
+                a.extend(b);
+            }
+            v
+        };
+        let now = self.now();
+        vec![
+            AttackToken {
+                label: "alg none",
+                id_token: self.alg_none_with(with_nonce.clone()),
+                reason: "id_token_signature",
+            },
+            AttackToken {
+                label: "HS256 keyed with the public key",
+                id_token: self.hs256_with(with_nonce.clone()),
+                reason: "id_token_signature",
+            },
+            AttackToken {
+                label: "ES256 outside the allow-list",
+                id_token: self.id_token_es256(with_nonce.clone()),
+                reason: "id_token_signature",
+            },
+            AttackToken {
+                label: "unknown kid",
+                id_token: self.id_token_with_unknown_kid(with_nonce.clone()),
+                reason: "id_token_signature",
+            },
+            AttackToken {
+                label: "expired",
+                id_token: self.id_token(merged(json!({ "iat": now - 7200, "exp": now - 3600 }))),
+                reason: "id_token_time",
+            },
+            AttackToken {
+                label: "wrong audience",
+                id_token: self.id_token(merged(json!({ "aud": "another-client" }))),
+                reason: "id_token_audience",
+            },
+            AttackToken {
+                label: "wrong nonce",
+                id_token: self.id_token(json!({ "nonce": "nonce-of-another-sign-in" })),
+                reason: "nonce_mismatch",
+            },
+        ]
     }
 
     /// The kid of the current RS256 key.
@@ -546,6 +751,44 @@ impl MockProvider {
             body,
             content_type,
         };
+    }
+
+    // ----- Apple -----------------------------------------------------------------------------
+
+    /// From now on the token endpoint accepts a request only with a client secret that passes
+    /// `check` (else `400 {"error":"invalid_client"}`, like Apple), and records its claims.
+    pub fn expect_apple_client_secret(&self, check: AppleSecretCheck) {
+        self.lock().apple_check = Some(check);
+    }
+
+    /// Claims of every client secret the token endpoint accepted, oldest first.
+    pub fn apple_client_secrets(&self) -> Vec<Map<String, Value>> {
+        self.lock().apple_secrets.clone()
+    }
+
+    /// The form fields Apple posts to the redirect URI (`response_mode=form_post`) for `state`:
+    /// `code`, `state` and, on the first authorization of [`MOCK_SUBJECT`] only, the `user` JSON
+    /// with `first`/`last` as names.
+    pub fn apple_authorization_response(
+        &self,
+        state: &str,
+        first: &str,
+        last: &str,
+    ) -> Vec<(String, String)> {
+        let mut fields = vec![
+            ("code".to_owned(), "apple-code".to_owned()),
+            ("state".to_owned(), state.to_owned()),
+        ];
+        let mut st = self.lock();
+        if !st.apple_authorized.iter().any(|s| s == MOCK_SUBJECT) {
+            st.apple_authorized.push(MOCK_SUBJECT.to_owned());
+            let user = json!({
+                "name": { "firstName": first, "lastName": last },
+                "email": MOCK_EMAIL,
+            });
+            fields.push(("user".to_owned(), user.to_string()));
+        }
+        fields
     }
 
     // ----- API knobs --------------------------------------------------------------------------
