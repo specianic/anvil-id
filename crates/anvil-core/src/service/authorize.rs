@@ -438,6 +438,8 @@ mod tests {
             expires_at: auth + Duration::days(1),
             idle_expires_at: auth + Duration::hours(1),
             revoked_at: None,
+            ip: None,
+            user_agent: None,
         }
     }
 

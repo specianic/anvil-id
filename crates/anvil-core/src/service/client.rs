@@ -265,6 +265,10 @@ impl ClientService {
             scopes: normalized_list(&input.scopes),
             require_pkce: input.require_pkce.unwrap_or(true),
             created_at: now,
+            token_format: crate::model::TokenFormat::Jwt,
+            consent_mode: crate::model::ConsentMode::Required,
+            id_token_signed_response_alg: None,
+            can_introspect: false,
         };
         // A client_id collision is astronomically unlikely; retry once with a fresh id.
         let client = match self.storage.clients().create(tenant, &new).await {
@@ -350,6 +354,7 @@ impl ClientService {
             scopes: patch.scopes.as_deref().map(normalized_list),
             require_pkce: patch.require_pkce,
             jwks: patch.jwks,
+            ..ClientUpdate::default()
         };
         self.storage
             .clients()

@@ -27,12 +27,80 @@ str_enum!(RegistrationMode {
     Disabled => "disabled",
 });
 
-/// Per-tenant settings. Backends store them as JSON.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+/// The signing algorithm every tenant always offers (OIDC Core default; certification needs it).
+pub const DEFAULT_SIGNING_ALG: &str = "RS256";
+
+/// KEK purpose for a sealed CAPTCHA secret (AAD = tenant id bytes).
+pub const CAPTCHA_SECRET_PURPOSE: &str = "anvilid/captcha-secret/v1";
+
+/// Per-tenant settings. Backends store them as JSON; every field has a serde default so settings
+/// written by 0.1 still parse.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TenantSettings {
     pub registration: RegistrationMode,
     pub require_verified_email: bool,
+    /// Enabled signing algorithms (`RS256`, `ES256`, `Ed25519`). RS256 is always effective, see
+    /// [`TenantSettings::effective_signing_algs`].
+    pub signing_algs: Vec<String>,
+    /// CAPTCHA on registration and after repeated failed sign-ins; `None` = disabled.
+    pub captcha: Option<CaptchaSettings>,
+}
+
+impl Default for TenantSettings {
+    fn default() -> Self {
+        Self {
+            registration: RegistrationMode::default(),
+            require_verified_email: false,
+            signing_algs: vec![DEFAULT_SIGNING_ALG.to_owned()],
+            captcha: None,
+        }
+    }
+}
+
+impl TenantSettings {
+    /// The enabled signing algorithms, always including RS256 (first), without duplicates.
+    pub fn effective_signing_algs(&self) -> Vec<String> {
+        let mut algs = vec![DEFAULT_SIGNING_ALG.to_owned()];
+        for alg in &self.signing_algs {
+            if !algs.contains(alg) {
+                algs.push(alg.clone());
+            }
+        }
+        algs
+    }
+}
+
+/// CAPTCHA provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptchaProvider {
+    Turnstile,
+    Hcaptcha,
+}
+
+str_enum!(CaptchaProvider {
+    Turnstile => "turnstile",
+    Hcaptcha => "hcaptcha",
+});
+
+/// CAPTCHA configuration of a tenant. The secret is stored sealed only.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CaptchaSettings {
+    pub provider: CaptchaProvider,
+    pub site_key: String,
+    /// base64url of `Kek::seal(CAPTCHA_SECRET_PURPOSE, tenant id bytes, secret)`.
+    pub secret_sealed: String,
+}
+
+impl std::fmt::Debug for CaptchaSettings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CaptchaSettings")
+            .field("provider", &self.provider)
+            .field("site_key", &self.site_key)
+            .field("secret_sealed", &"<redacted>")
+            .finish()
+    }
 }
 
 /// A persisted tenant.
@@ -336,5 +404,47 @@ mod tests {
             RegistrationMode::Open
         );
         assert!(!TenantSettings::default().require_verified_email);
+    }
+
+    #[test]
+    fn settings_written_by_0_1_still_parse() {
+        let v01 = r#"{"registration":"invite_only","require_verified_email":true}"#;
+        let s: TenantSettings = serde_json::from_str(v01).unwrap();
+        assert_eq!(s.registration, RegistrationMode::InviteOnly);
+        assert!(s.require_verified_email);
+        assert_eq!(s.signing_algs, vec!["RS256".to_owned()]);
+        assert_eq!(s.captcha, None);
+        let empty: TenantSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(empty, TenantSettings::default());
+    }
+
+    #[test]
+    fn settings_round_trip_with_captcha() {
+        let s = TenantSettings {
+            signing_algs: vec!["ES256".into()],
+            captcha: Some(CaptchaSettings {
+                provider: CaptchaProvider::Turnstile,
+                site_key: "site".into(),
+                secret_sealed: "c2VhbGVk".into(),
+            }),
+            ..TenantSettings::default()
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        assert_eq!(serde_json::from_str::<TenantSettings>(&json).unwrap(), s);
+        assert!(!format!("{s:?}").contains("c2VhbGVk"));
+    }
+
+    #[test]
+    fn effective_signing_algs_always_include_rs256() {
+        let mut s = TenantSettings {
+            signing_algs: vec![],
+            ..TenantSettings::default()
+        };
+        assert_eq!(s.effective_signing_algs(), vec!["RS256"]);
+        s.signing_algs = vec!["ES256".into(), "RS256".into(), "ES256".into()];
+        assert_eq!(s.effective_signing_algs(), vec!["RS256", "ES256"]);
+        for p in CaptchaProvider::ALL {
+            assert_eq!(CaptchaProvider::parse(p.as_str()), Some(*p));
+        }
     }
 }

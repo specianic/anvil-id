@@ -20,3 +20,12 @@ pub mod bootstrap;
 pub mod client;
 pub mod tenant;
 pub mod user;
+
+// Phase 3 (pre-declared by plan 03-02; the owning plans fill them in)
+pub mod account;
+pub mod audit;
+pub mod consent;
+pub mod introspect;
+pub mod key_rotation;
+pub mod mail_settings;
+pub mod revoke;

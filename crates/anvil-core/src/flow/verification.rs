@@ -78,7 +78,8 @@ mod tests {
             FlowKind::Verification,
             Some("tok123".into()),
             &FlowEnv::default(),
-        );
+        )
+        .unwrap();
         assert_eq!(state, FlowState::Verification(VerificationState {}));
         assert!(!serde_json::to_string(&state).unwrap().contains("tok123"));
         let t = f.fields.iter().find(|x| x.name == "token").unwrap();

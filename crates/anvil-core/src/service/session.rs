@@ -80,6 +80,8 @@ impl SessionService {
             created_at: now,
             expires_at,
             idle_expires_at,
+            ip: None,
+            user_agent: None,
         };
         self.storage.sessions().create(tenant, &new).await?;
         let session = BrowserSession {
@@ -95,6 +97,8 @@ impl SessionService {
             expires_at,
             idle_expires_at,
             revoked_at: None,
+            ip: None,
+            user_agent: None,
         };
         Ok(NewSessionCookie {
             token: SecretString::from(token),
@@ -187,6 +191,8 @@ mod tests {
                 expires_at: now,
                 idle_expires_at: now,
                 revoked_at: None,
+                ip: None,
+                user_agent: None,
             },
         };
         assert!(!format!("{c:?}").contains("cookie-secret"));

@@ -21,6 +21,32 @@ pub struct NewEmail {
     pub expires_at: OffsetDateTime,
 }
 
+/// A notice enqueued by `UserRepo::complete_recovery` inside the recovery transaction. The
+/// recipient is not known before the token is consumed, so storage fills it in from the consumed
+/// token's `email`. `payload` is sealed with [`seal_payload`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecoveryNotice {
+    pub id: OutboxId,
+    pub template: String,
+    pub payload: BTreeMap<String, String>,
+    pub created_at: OffsetDateTime,
+    pub expires_at: OffsetDateTime,
+}
+
+impl RecoveryNotice {
+    /// The email to enqueue once the recipient is known.
+    pub fn to_email(&self, to: &str) -> NewEmail {
+        NewEmail {
+            id: self.id,
+            to: to.to_owned(),
+            template: self.template.clone(),
+            payload: self.payload.clone(),
+            created_at: self.created_at,
+            expires_at: self.expires_at,
+        }
+    }
+}
+
 /// A stored outbox email.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutboxEmail {

@@ -9,12 +9,13 @@ use std::time::Duration as StdDuration;
 
 use anvil_core::model::{
     Address, ApplicationType, AuthRequestId, AuthorizationCode, AuthorizationParams, ClaimsRequest,
-    Client, ClientAuthMethod, ClientId, ClientType, FlowId, FlowKind, GrantType, KeyState,
-    NewAuthorizationCode, NewAuthorizationRequest, NewBrowserSession, NewClient, NewEmail, NewFlow,
-    NewPasswordCredential, NewRefreshToken, NewSelfServiceToken, NewSetupToken, NewSigningKey,
-    NewTenant, NewTokenFamily, NewUser, OutboxId, RefreshToken, RegistrationMode, RequestedClaim,
-    SecretHash, SelfServiceKind, SessionId, SigningKeyId, StandardClaims, TenantId, TenantSettings,
-    TokenFamily, TokenFamilyId, User, UserId, UserStatus, truncate_to_ms,
+    Client, ClientAuthMethod, ClientId, ClientType, ConsentMode, FlowId, FlowKind, GrantType,
+    KeyState, NewAuthorizationCode, NewAuthorizationRequest, NewBrowserSession, NewClient,
+    NewEmail, NewFlow, NewPasswordCredential, NewRefreshToken, NewSelfServiceToken, NewSetupToken,
+    NewSigningKey, NewTenant, NewTokenFamily, NewUser, OutboxId, RefreshToken, RegistrationMode,
+    RequestedClaim, SecretHash, SelfServiceKind, SessionId, SigningKeyId, StandardClaims, TenantId,
+    TenantSettings, TokenFamily, TokenFamilyId, TokenFormat, User, UserId, UserStatus,
+    truncate_to_ms,
 };
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
@@ -61,6 +62,7 @@ pub fn new_tenant() -> NewTenant {
         settings: TenantSettings {
             registration: RegistrationMode::InviteOnly,
             require_verified_email: true,
+            ..TenantSettings::default()
         },
         created_at: now_ms(),
     }
@@ -214,6 +216,12 @@ pub fn new_client() -> NewClient {
         grant_types: vec![GrantType::AuthorizationCode, GrantType::RefreshToken],
         scopes: vec!["openid".into(), "profile".into(), "email".into()],
         require_pkce: true,
+        // Defaults until both backends store the Phase 3 client columns (03-05/03-06); the
+        // dedicated client_phase3_fields_round_trip test covers non-default values.
+        token_format: TokenFormat::Jwt,
+        consent_mode: ConsentMode::Required,
+        id_token_signed_response_alg: None,
+        can_introspect: false,
         created_at: now_ms(),
     }
 }
@@ -234,6 +242,10 @@ pub fn expected_client(tenant: TenantId, c: &NewClient) -> Client {
         grant_types: c.grant_types.clone(),
         scopes: c.scopes.clone(),
         require_pkce: c.require_pkce,
+        token_format: c.token_format,
+        consent_mode: c.consent_mode,
+        id_token_signed_response_alg: c.id_token_signed_response_alg.clone(),
+        can_introspect: c.can_introspect,
         created_at: c.created_at,
         updated_at: c.created_at,
     }
@@ -285,6 +297,8 @@ pub fn new_session(user: UserId, expires_in: Duration, idle_in: Duration) -> New
         created_at: now,
         expires_at: now + expires_in,
         idle_expires_at: now + idle_in,
+        ip: None,
+        user_agent: None,
     }
 }
 

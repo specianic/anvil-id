@@ -14,6 +14,15 @@ pub(crate) struct PgSessions {
     pub(crate) pool: PgPool,
 }
 
+// TRANSITIONAL(03-06): browser_session has no ip/user_agent columns yet. Sessions read back
+// with `None`; a value is refused explicitly instead of being dropped silently.
+fn ensure_no_request_context(s: &NewBrowserSession) -> Result<(), StorageError> {
+    if s.ip.is_some() || s.user_agent.is_some() {
+        return Err(StorageError::Unsupported("browser session ip/user_agent"));
+    }
+    Ok(())
+}
+
 #[async_trait::async_trait]
 impl SessionRepo for PgSessions {
     async fn create(
@@ -21,6 +30,7 @@ impl SessionRepo for PgSessions {
         tenant: TenantId,
         session: &NewBrowserSession,
     ) -> Result<(), StorageError> {
+        ensure_no_request_context(session)?;
         sqlx::query!(
             "INSERT INTO browser_session
                  (id, tenant_id, user_id, token_hash, auth_time, acr, amr, created_at,
@@ -76,6 +86,9 @@ impl SessionRepo for PgSessions {
                 expires_at: r.expires_at,
                 idle_expires_at: r.idle_expires_at,
                 revoked_at: r.revoked_at,
+                // TRANSITIONAL(03-06): columns arrive with the 0003 migration.
+                ip: None,
+                user_agent: None,
             })
         })
         .transpose()

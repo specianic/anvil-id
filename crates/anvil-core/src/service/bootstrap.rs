@@ -85,6 +85,7 @@ fn bootstrap_tenant(
         settings: TenantSettings {
             registration,
             require_verified_email: false,
+            ..TenantSettings::default()
         },
         created_at: now,
     }
@@ -145,6 +146,10 @@ pub fn build_mgmt_client(now: OffsetDateTime) -> (NewClient, SecretString) {
         // Irrelevant for client_credentials; kept at the secure default.
         require_pkce: true,
         created_at: now,
+        token_format: crate::model::TokenFormat::Jwt,
+        consent_mode: crate::model::ConsentMode::Required,
+        id_token_signed_response_alg: None,
+        can_introspect: false,
     };
     (client, secret)
 }
@@ -410,6 +415,10 @@ mod tests {
             require_pkce: true,
             created_at: NOW,
             updated_at: NOW,
+            token_format: crate::model::TokenFormat::Jwt,
+            consent_mode: crate::model::ConsentMode::Required,
+            id_token_signed_response_alg: None,
+            can_introspect: false,
         };
         let expected_secret = secret.expose_secret().to_owned();
         let r = setup_outcome(SetupOutcome::Completed { user, client }, secret).unwrap();

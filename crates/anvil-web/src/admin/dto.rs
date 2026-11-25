@@ -166,6 +166,9 @@ impl From<TenantSettings> for CoreTenantSettings {
         Self {
             registration: s.registration.into(),
             require_verified_email: s.require_verified_email,
+            // Phase 3 settings (signing algorithms, CAPTCHA) get wire fields in 03-23; until then
+            // the wire type cannot set them and they keep their defaults.
+            ..CoreTenantSettings::default()
         }
     }
 }

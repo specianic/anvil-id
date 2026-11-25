@@ -158,6 +158,10 @@ pub async fn register(app: &TestApp, tenant: TenantId, input: ClientInput) -> Rp
                 scopes: input.scopes,
                 require_pkce: input.require_pkce.unwrap_or(true),
                 created_at: app.clock_now(),
+                token_format: anvil_core::model::TokenFormat::Jwt,
+                consent_mode: anvil_core::model::ConsentMode::Required,
+                id_token_signed_response_alg: None,
+                can_introspect: false,
             },
         )
         .await
@@ -241,6 +245,8 @@ pub async fn seed_session(app: &TestApp, tenant: TenantId, user: &User) -> Brows
         created_at: now,
         expires_at: now + time::Duration::hours(12),
         idle_expires_at: now + time::Duration::hours(1),
+        ip: None,
+        user_agent: None,
     };
     app.storage()
         .sessions()

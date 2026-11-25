@@ -76,6 +76,8 @@ mod tests {
             expires_at: auth_time + Duration::days(1),
             idle_expires_at: auth_time + Duration::hours(1),
             revoked_at: None,
+            ip: None,
+            user_agent: None,
         }
     }
 

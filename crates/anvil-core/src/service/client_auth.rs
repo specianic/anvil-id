@@ -470,6 +470,10 @@ pub(crate) mod tests {
             require_pkce: true,
             created_at: now,
             updated_at: now,
+            token_format: crate::model::TokenFormat::Jwt,
+            consent_mode: crate::model::ConsentMode::Required,
+            id_token_signed_response_alg: None,
+            can_introspect: false,
         }
     }
 

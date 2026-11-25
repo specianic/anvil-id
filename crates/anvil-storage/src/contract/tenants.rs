@@ -1,6 +1,9 @@
 //! TenantRepo contract.
 
-use anvil_core::model::{PageRequest, RegistrationMode, TenantId, TenantSettings, TenantUpdate};
+use anvil_core::model::{
+    CaptchaProvider, CaptchaSettings, PageRequest, RegistrationMode, TenantId, TenantSettings,
+    TenantUpdate,
+};
 use anvil_core::ports::StorageError;
 use time::Duration;
 
@@ -170,6 +173,12 @@ pub async fn tenant_update_settings_round_trip(s: &TestStorage) {
     let settings = TenantSettings {
         registration: RegistrationMode::Disabled,
         require_verified_email: false,
+        signing_algs: vec!["RS256".into(), "ES256".into()],
+        captcha: Some(CaptchaSettings {
+            provider: CaptchaProvider::Hcaptcha,
+            site_key: "site-key".into(),
+            secret_sealed: "c2VhbGVkLXNlY3JldA".into(),
+        }),
     };
     let updated = repo
         .update(

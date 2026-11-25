@@ -98,6 +98,7 @@ async fn disabled_registration_shows_the_disabled_page() {
         TenantSettings {
             registration: RegistrationMode::Disabled,
             require_verified_email: false,
+            ..TenantSettings::default()
         },
     )
     .await;
@@ -122,6 +123,7 @@ async fn system_tenant_registration_is_disabled() {
         TenantSettings {
             registration: RegistrationMode::Disabled,
             require_verified_email: false,
+            ..TenantSettings::default()
         },
     )
     .await;

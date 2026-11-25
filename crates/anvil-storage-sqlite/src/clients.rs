@@ -1,8 +1,8 @@
 //! `ClientRepo` on SQLite.
 
 use anvil_core::model::{
-    ApplicationType, Client, ClientAuthMethod, ClientId, ClientType, ClientUpdate, NewClient, Page,
-    PageRequest, RevokeReason, SecretHash, TenantId,
+    ApplicationType, Client, ClientAuthMethod, ClientId, ClientType, ClientUpdate, ConsentMode,
+    NewClient, Page, PageRequest, RevokeReason, SecretHash, TenantId, TokenFormat,
 };
 use anvil_core::ports::{ClientRepo, StorageError};
 use sqlx::{SqliteConnection, SqlitePool};
@@ -12,6 +12,32 @@ use crate::convert::{
     from_json, into_page, map_err, ms_to_odt, now_ms, odt_to_ms, opt_blob_to_hash, parse_enum,
     to_json,
 };
+
+// TRANSITIONAL(03-05): the Phase 3 client columns (token_format, consent_mode,
+// id_token_signed_response_alg, can_introspect) do not exist yet. Records read back with the
+// defaults; a non-default value is refused explicitly instead of being dropped silently.
+fn ensure_phase3_defaults(c: &NewClient) -> Result<(), StorageError> {
+    if c.token_format != TokenFormat::Jwt
+        || c.consent_mode != ConsentMode::Required
+        || c.id_token_signed_response_alg.is_some()
+        || c.can_introspect
+    {
+        return Err(StorageError::Unsupported("phase 3 client fields"));
+    }
+    Ok(())
+}
+
+// TRANSITIONAL(03-05): see `ensure_phase3_defaults`.
+fn ensure_phase3_update_absent(u: &ClientUpdate) -> Result<(), StorageError> {
+    if u.token_format.is_some()
+        || u.consent_mode.is_some()
+        || u.id_token_signed_response_alg.is_some()
+        || u.can_introspect.is_some()
+    {
+        return Err(StorageError::Unsupported("phase 3 client fields"));
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct SqliteClients {
@@ -59,6 +85,11 @@ impl TryFrom<ClientRow> for Client {
             grant_types: from_json(&r.grant_types, "client.grant_types")?,
             scopes: from_json(&r.scopes, "client.scopes")?,
             require_pkce: r.require_pkce,
+            // TRANSITIONAL(03-05): columns arrive with the 0003 migration.
+            token_format: TokenFormat::Jwt,
+            consent_mode: ConsentMode::Required,
+            id_token_signed_response_alg: None,
+            can_introspect: false,
             created_at: ms_to_odt(r.created_at)?,
             updated_at: ms_to_odt(r.updated_at)?,
         })
@@ -72,6 +103,7 @@ pub(crate) async fn insert_client(
     tenant: TenantId,
     client: &NewClient,
 ) -> Result<Client, StorageError> {
+    ensure_phase3_defaults(client)?;
     let client_type = client.client_type.as_str();
     let application_type = client.application_type.as_str();
     let auth_method = client.auth_method.as_str();
@@ -118,6 +150,11 @@ pub(crate) async fn insert_client(
         grant_types: client.grant_types.clone(),
         scopes: client.scopes.clone(),
         require_pkce: client.require_pkce,
+        // TRANSITIONAL(03-05): columns arrive with the 0003 migration.
+        token_format: TokenFormat::Jwt,
+        consent_mode: ConsentMode::Required,
+        id_token_signed_response_alg: None,
+        can_introspect: false,
         created_at: client.created_at,
         updated_at: client.created_at,
     })
@@ -192,6 +229,7 @@ impl ClientRepo for SqliteClients {
         update: &ClientUpdate,
         now: OffsetDateTime,
     ) -> Result<Option<Client>, StorageError> {
+        ensure_phase3_update_absent(update)?;
         let redirect_uris = update
             .redirect_uris
             .as_ref()

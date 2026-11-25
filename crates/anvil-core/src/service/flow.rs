@@ -201,7 +201,7 @@ impl FlowService {
         auth_request: Option<AuthRequestId>,
         token: Option<String>,
     ) -> Result<StartedFlow, CoreError> {
-        let (state, form) = FlowState::initial(kind, token, &self.env(cx));
+        let (state, form) = FlowState::initial(kind, token, &self.env(cx))?;
         self.create_flow(cx, &state, form, auth_request).await
     }
 
@@ -239,7 +239,7 @@ impl FlowService {
         kind: FlowKind,
         auth_request: Option<AuthRequestId>,
     ) -> Result<FlowOutcome, CoreError> {
-        let (state, mut form) = FlowState::initial(kind, None, &self.env(cx));
+        let (state, mut form) = FlowState::initial(kind, None, &self.env(cx))?;
         form.messages.insert(
             0,
             FormMessage {
@@ -790,7 +790,7 @@ mod tests {
             issuer: "https://id.example.test/t/acme",
             ui_base: "https://id.example.test/t/acme/ui",
         };
-        let (_, form) = FlowState::initial(FlowKind::Login, None, &FlowEnv::default());
+        let (_, form) = FlowState::initial(FlowKind::Login, None, &FlowEnv::default()).unwrap();
         let id = FlowId::new_v7();
         let bound = bind_form(form, &cx, id, "csrf-tok");
         assert_eq!(

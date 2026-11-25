@@ -12,6 +12,10 @@ pub enum FlowKind {
     Verification,
     Recovery,
     Setup,
+    /// Account settings (passkeys, TOTP, recovery codes, password change).
+    Settings,
+    /// OAuth consent screen.
+    Consent,
 }
 
 str_enum!(FlowKind {
@@ -20,6 +24,8 @@ str_enum!(FlowKind {
     Verification => "verification",
     Recovery => "recovery",
     Setup => "setup",
+    Settings => "settings",
+    Consent => "consent",
 });
 
 /// A persisted flow. `state` is opaque to storage (JSON produced by the flow engine).

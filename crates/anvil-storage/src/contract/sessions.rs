@@ -20,6 +20,8 @@ fn expected_session(tenant: TenantId, n: &NewBrowserSession) -> BrowserSession {
         expires_at: n.expires_at,
         idle_expires_at: n.idle_expires_at,
         revoked_at: None,
+        ip: n.ip.clone(),
+        user_agent: n.user_agent.clone(),
     }
 }
 

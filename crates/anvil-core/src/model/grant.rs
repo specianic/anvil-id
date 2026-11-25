@@ -192,6 +192,9 @@ pub enum RevokeReason {
     ClientDeleted,
     UserDeleted,
     Admin,
+    ConsentRevoked,
+    SessionRevoked,
+    TokenRevoked,
 }
 
 str_enum!(RevokeReason {
@@ -201,6 +204,9 @@ str_enum!(RevokeReason {
     ClientDeleted => "client_deleted",
     UserDeleted => "user_deleted",
     Admin => "admin",
+    ConsentRevoked => "consent_revoked",
+    SessionRevoked => "session_revoked",
+    TokenRevoked => "token_revoked",
 });
 
 /// A token family: every token issued from one authorization (code or client credentials). It
@@ -260,6 +266,33 @@ pub struct NewRefreshToken {
     pub token_hash: SecretHash,
     pub family_id: TokenFamilyId,
     pub parent_hash: Option<SecretHash>,
+    pub scope: String,
+    pub created_at: OffsetDateTime,
+    pub expires_at: OffsetDateTime,
+}
+
+/// A stored opaque access token (looked up by hash). Client-credentials tokens may have no
+/// family; tokens of an authorization have one, and revoking the family invalidates them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccessTokenRecord {
+    pub token_hash: SecretHash,
+    pub tenant_id: TenantId,
+    pub family_id: Option<TokenFamilyId>,
+    pub client_id: String,
+    pub user_id: Option<UserId>,
+    pub scope: String,
+    pub created_at: OffsetDateTime,
+    pub expires_at: OffsetDateTime,
+    pub revoked_at: Option<OffsetDateTime>,
+}
+
+/// An opaque access token to be stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewAccessToken {
+    pub token_hash: SecretHash,
+    pub family_id: Option<TokenFamilyId>,
+    pub client_id: String,
+    pub user_id: Option<UserId>,
     pub scope: String,
     pub created_at: OffsetDateTime,
     pub expires_at: OffsetDateTime,

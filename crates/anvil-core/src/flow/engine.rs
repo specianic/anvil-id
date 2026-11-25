@@ -35,6 +35,7 @@ pub use super::registration::RegistrationState;
 pub use super::setup::SetupState;
 pub use super::verification::VerificationState;
 use super::{login, recovery, registration, setup, verification};
+use crate::error::CoreError;
 use crate::model::{FlowKind, RegistrationMode, normalize_email};
 use crate::policy::{PasswordPolicy, check_password};
 
@@ -85,12 +86,15 @@ impl FlowState {
 
     /// The initial state and form of a new flow. For verification and recovery, `token` (from
     /// the emailed link) goes into a hidden field unvalidated; it is only consumed on POST.
+    ///
+    /// `Settings` and `Consent` flows are declared in the model (plan 03-02) but not implemented
+    /// by this engine yet: starting one is an explicit error.
     pub fn initial(
         kind: FlowKind,
         token: Option<String>,
         env: &FlowEnv,
-    ) -> (FlowState, FormDescription) {
-        match kind {
+    ) -> Result<(FlowState, FormDescription), CoreError> {
+        Ok(match kind {
             FlowKind::Login => {
                 let s = LoginState::default();
                 let f = login::form(&s, Vec::new());
@@ -104,7 +108,13 @@ impl FlowState {
                 let f = setup::form(&s, Vec::new(), Vec::new(), Vec::new());
                 (Self::Setup(s), f)
             }
-        }
+            FlowKind::Settings | FlowKind::Consent => {
+                return Err(CoreError::Internal(format!(
+                    "the {} flow is not implemented",
+                    kind.as_str()
+                )));
+            }
+        })
     }
 }
 
@@ -559,7 +569,10 @@ mod tests {
         let env = FlowEnv::default();
         for kind in FlowKind::ALL {
             for token in [None, Some("tok".to_owned())] {
-                let (state, _) = FlowState::initial(*kind, token, &env);
+                let Ok((state, _)) = FlowState::initial(*kind, token, &env) else {
+                    assert!(matches!(kind, FlowKind::Settings | FlowKind::Consent));
+                    continue;
+                };
                 let json = serde_json::to_string(&state).unwrap();
                 let back: FlowState = serde_json::from_str(&json).unwrap();
                 assert_eq!(back, state);
@@ -649,7 +662,10 @@ mod tests {
         let env = FlowEnv::default();
         for kind in FlowKind::ALL {
             for token in [None, Some("tok".to_owned())] {
-                let (_, form) = FlowState::initial(*kind, token, &env);
+                let Ok((_, form)) = FlowState::initial(*kind, token, &env) else {
+                    assert!(matches!(kind, FlowKind::Settings | FlowKind::Consent));
+                    continue;
+                };
                 assert_form_invariants(&form, &[]);
                 assert_eq!(form.csrf_token, CSRF_PLACEHOLDER);
             }
@@ -659,7 +675,7 @@ mod tests {
     #[test]
     fn mismatched_input_rerenders_without_effects() {
         let env = FlowEnv::default();
-        let (state, _) = FlowState::initial(FlowKind::Login, None, &env);
+        let (state, _) = FlowState::initial(FlowKind::Login, None, &env).unwrap();
         let (next, effects) = transition(
             state.clone(),
             FlowInput::ConfirmVerification { token: "x".into() },

@@ -55,6 +55,10 @@ pub async fn system_client(app: &TestApp, scopes: &[&str]) -> String {
                 scopes: scopes.iter().map(|s| (*s).to_owned()).collect(),
                 require_pkce: true,
                 created_at: now,
+                token_format: anvil_core::model::TokenFormat::Jwt,
+                consent_mode: anvil_core::model::ConsentMode::Required,
+                id_token_signed_response_alg: None,
+                can_introspect: false,
             },
         )
         .await

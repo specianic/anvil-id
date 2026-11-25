@@ -63,6 +63,39 @@ str_enum!(GrantType {
     ClientCredentials => "client_credentials",
 });
 
+/// Format of the access tokens issued to a client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TokenFormat {
+    /// Signed JWT (RFC 9068 profile).
+    #[default]
+    Jwt,
+    /// Random reference token, validated by introspection.
+    Opaque,
+}
+
+str_enum!(TokenFormat {
+    Jwt => "jwt",
+    Opaque => "opaque",
+});
+
+/// When the consent screen is shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConsentMode {
+    /// Ask for every scope the user has not granted yet. Secure default; 0.1 clients get it on
+    /// upgrade.
+    #[default]
+    Required,
+    /// Skip the consent screen (first-party clients only).
+    SkipFirstParty,
+}
+
+str_enum!(ConsentMode {
+    Required => "required",
+    SkipFirstParty => "skip_first_party",
+});
+
 /// A persisted client. `client_id` (the OAuth identifier) is unique per tenant.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Client {
@@ -81,6 +114,13 @@ pub struct Client {
     pub grant_types: Vec<GrantType>,
     pub scopes: Vec<String>,
     pub require_pkce: bool,
+    pub token_format: TokenFormat,
+    pub consent_mode: ConsentMode,
+    /// ID token signing algorithm; `None` = RS256.
+    pub id_token_signed_response_alg: Option<String>,
+    /// May introspect any token of the tenant. A confidential client may always introspect
+    /// tokens issued to itself.
+    pub can_introspect: bool,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
 }
@@ -100,6 +140,10 @@ pub struct NewClient {
     pub grant_types: Vec<GrantType>,
     pub scopes: Vec<String>,
     pub require_pkce: bool,
+    pub token_format: TokenFormat,
+    pub consent_mode: ConsentMode,
+    pub id_token_signed_response_alg: Option<String>,
+    pub can_introspect: bool,
     pub created_at: OffsetDateTime,
 }
 
@@ -113,6 +157,11 @@ pub struct ClientUpdate {
     pub scopes: Option<Vec<String>>,
     pub require_pkce: Option<bool>,
     pub jwks: Option<Option<String>>,
+    pub token_format: Option<TokenFormat>,
+    pub consent_mode: Option<ConsentMode>,
+    /// `Some(None)` resets to RS256.
+    pub id_token_signed_response_alg: Option<Option<String>>,
+    pub can_introspect: Option<bool>,
 }
 
 #[cfg(test)]
@@ -134,5 +183,13 @@ mod tests {
             assert_eq!(GrantType::parse(v.as_str()), Some(*v));
         }
         assert_eq!(GrantType::parse("password"), None);
+        for v in TokenFormat::ALL {
+            assert_eq!(TokenFormat::parse(v.as_str()), Some(*v));
+        }
+        for v in ConsentMode::ALL {
+            assert_eq!(ConsentMode::parse(v.as_str()), Some(*v));
+        }
+        assert_eq!(TokenFormat::default(), TokenFormat::Jwt);
+        assert_eq!(ConsentMode::default(), ConsentMode::Required);
     }
 }

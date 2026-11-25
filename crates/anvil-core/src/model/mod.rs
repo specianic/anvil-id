@@ -3,25 +3,36 @@
 //! Pure data. Callers generate identifiers and timestamps (truncated with [`truncate_to_ms`]);
 //! repositories only persist them.
 
+mod audit;
 mod client;
+mod consent;
+mod credential;
 mod flow;
 mod grant;
 mod ids;
+mod job;
 mod key;
+mod mail_settings;
 mod outbox;
 mod session;
 mod setup;
 mod tenant;
 mod user;
 
+pub use audit::*;
 pub use client::*;
+pub use consent::*;
+pub use credential::*;
 pub use flow::*;
 pub use grant::*;
 pub use ids::{
-    AuthRequestId, ClientId, CodeHash, FlowId, InvalidLength, OutboxId, Page, PageRequest,
-    SecretHash, SessionId, SigningKeyId, TenantId, TokenFamilyId, UserId,
+    AuditEventId, AuthRequestId, ClientId, CodeHash, ConsentId, CredentialId, FlowId,
+    InvalidLength, OutboxId, Page, PageRequest, SecretHash, SessionId, SigningKeyId, TenantId,
+    TokenFamilyId, UserId,
 };
+pub use job::*;
 pub use key::*;
+pub use mail_settings::*;
 pub use outbox::*;
 pub use session::*;
 pub use setup::*;

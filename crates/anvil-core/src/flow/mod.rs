@@ -8,3 +8,7 @@ pub mod recovery;
 pub mod registration;
 pub mod setup;
 pub mod verification;
+
+// Phase 3 (pre-declared by plan 03-02; the owning plans fill them in)
+pub mod consent;
+pub mod settings;

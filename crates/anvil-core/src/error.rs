@@ -33,6 +33,12 @@ pub enum CoreError {
     LoginRequired,
     #[error("interaction_required")]
     InteractionRequired,
+    /// `prompt=none` but the user has not consented to the requested scopes (OIDC Core §3.1.2.6).
+    #[error("consent_required")]
+    ConsentRequired,
+    /// RFC 7009 §2.2.1: the server does not support revoking this token type.
+    #[error("unsupported_token_type")]
+    UnsupportedTokenType,
     #[error("request_not_supported")]
     RequestNotSupported,
     #[error("request_uri_not_supported")]
@@ -80,6 +86,8 @@ impl CoreError {
             Self::AccessDenied(_) => "access_denied",
             Self::LoginRequired => "login_required",
             Self::InteractionRequired => "interaction_required",
+            Self::ConsentRequired => "consent_required",
+            Self::UnsupportedTokenType => "unsupported_token_type",
             Self::RequestNotSupported => "request_not_supported",
             Self::RequestUriNotSupported => "request_uri_not_supported",
             Self::InvalidToken(_) => "invalid_token",
@@ -112,6 +120,8 @@ impl CoreError {
             | Self::AccessDenied(_)
             | Self::LoginRequired
             | Self::InteractionRequired
+            | Self::ConsentRequired
+            | Self::UnsupportedTokenType
             | Self::RequestNotSupported
             | Self::RequestUriNotSupported => 400,
         }
@@ -135,6 +145,8 @@ impl CoreError {
             Self::UnsupportedResponseType => "the response type is not supported".to_owned(),
             Self::LoginRequired => "the user must sign in".to_owned(),
             Self::InteractionRequired => "user interaction is required".to_owned(),
+            Self::ConsentRequired => "the user must consent to the requested scopes".to_owned(),
+            Self::UnsupportedTokenType => "the token type is not supported".to_owned(),
             Self::RequestNotSupported => "the request parameter is not supported".to_owned(),
             Self::RequestUriNotSupported => "the request_uri parameter is not supported".to_owned(),
             Self::NotFound => "not found".to_owned(),
@@ -185,6 +197,12 @@ mod tests {
             (CoreError::AccessDenied(s("x")), "access_denied", 400),
             (CoreError::LoginRequired, "login_required", 400),
             (CoreError::InteractionRequired, "interaction_required", 400),
+            (CoreError::ConsentRequired, "consent_required", 400),
+            (
+                CoreError::UnsupportedTokenType,
+                "unsupported_token_type",
+                400,
+            ),
             (CoreError::RequestNotSupported, "request_not_supported", 400),
             (
                 CoreError::RequestUriNotSupported,

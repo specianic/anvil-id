@@ -68,6 +68,10 @@ pub async fn client(app: &TestApp, tenant: &Tenant, input: ClientInput) -> Clien
         scopes: input.scopes.clone(),
         require_pkce: input.require_pkce.unwrap_or(true),
         created_at: app.clock().now(),
+        token_format: anvil_core::model::TokenFormat::Jwt,
+        consent_mode: anvil_core::model::ConsentMode::Required,
+        id_token_signed_response_alg: None,
+        can_introspect: false,
     };
     app.storage()
         .clients()
@@ -187,6 +191,8 @@ pub async fn session(app: &TestApp, tenant: &Tenant, user: UserId) -> String {
                 created_at: now,
                 expires_at: now + time::Duration::days(14),
                 idle_expires_at: now + time::Duration::hours(12),
+                ip: None,
+                user_agent: None,
             },
         )
         .await

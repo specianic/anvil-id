@@ -202,6 +202,7 @@ async fn login_page_hides_the_registration_link_when_registration_is_disabled() 
         TenantSettings {
             registration: RegistrationMode::Disabled,
             require_verified_email: false,
+            ..TenantSettings::default()
         },
     )
     .await;

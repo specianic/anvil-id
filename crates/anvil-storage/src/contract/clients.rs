@@ -85,6 +85,7 @@ pub async fn client_update(s: &TestStorage) {
                 scopes: Some(vec!["api".into()]),
                 require_pkce: Some(false),
                 jwks: Some(None),
+                ..ClientUpdate::default()
             },
             later,
         )

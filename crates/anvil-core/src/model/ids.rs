@@ -61,6 +61,19 @@ v7_id!(
     /// Identifier of an outbox email.
     OutboxId
 );
+v7_id!(
+    /// Identifier of a credential row (password, passkey or TOTP). Generated before a TOTP seed
+    /// is sealed, because the seal's AAD binds the id ([`super::credential_aad`]).
+    CredentialId
+);
+v7_id!(
+    /// Identifier of a consent grant.
+    ConsentId
+);
+v7_id!(
+    /// Identifier of an audit event. UUIDv7, so id order is time order (audit query cursor).
+    AuditEventId
+);
 
 /// SHA-256 hash of a secret (authorization code, refresh token, session cookie, flow CSRF token,
 /// self-service token, setup token, client secret digest). Secrets are stored and looked up only
@@ -167,6 +180,9 @@ mod tests {
         assert_eq!(TokenFamilyId::new_v7().0.get_version_num(), 7);
         assert_eq!(UserId::new_v7().0.get_version_num(), 7);
         assert_eq!(OutboxId::new_v7().0.get_version_num(), 7);
+        assert_eq!(CredentialId::new_v7().0.get_version_num(), 7);
+        assert_eq!(ConsentId::new_v7().0.get_version_num(), 7);
+        assert_eq!(AuditEventId::new_v7().0.get_version_num(), 7);
     }
 
     #[test]
