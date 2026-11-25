@@ -1,0 +1,23 @@
+{#- Recovery codes, shown once (plan 03-14). Variables: message {level, key, text}, codes,
+    codes_text (one code per line), security_url.
+    Selectors: recovery-codes (list), recovery-codes-text (copyable textarea). -#}
+{% extends "account_base.html" %}
+{% block account %}
+<div aria-live="polite">
+<p class="anvil-message anvil-message-{{ message.level }}" id="account-msg-1" data-message-key="{{ message.key }}">{{ message.text }}</p>
+</div>
+<h2 id="recovery-codes-heading">Save your recovery codes</h2>
+<p id="recovery-codes-help">If you lose your authenticator app, each code lets you sign in once. Store them somewhere safe: they are shown only now.</p>
+<ol class="anvil-recovery-codes" id="recovery-codes" aria-labelledby="recovery-codes-heading">
+{% for c in codes %}
+<li><code>{{ c }}</code></li>
+{% endfor %}
+</ol>
+<div class="anvil-field">
+<label for="recovery-codes-text">All codes, for copying</label>
+<textarea id="recovery-codes-text" readonly autocomplete="off" spellcheck="false" rows="10" cols="24">{{ codes_text }}</textarea>
+</div>
+<nav class="anvil-links" aria-label="Next steps">
+<a id="link-account-security" href="{{ security_url }}">I have saved my codes</a>
+</nav>
+{% endblock %}

@@ -1,0 +1,79 @@
+{#- Account security page (plan 03-14). Variables (besides page/account_base/account_nav):
+      csrf_token, messages [{level, key, text}], recent_auth, login_url,
+      passkeys [{id, label, created, created_iso, last_used, last_used_iso, delete_url}],
+      totp (same shape or none), recovery_codes_remaining,
+      passkey_url, passkey_options_url, totp_url, recovery_codes_url
+    Selectors: forms passkey-register, totp-begin, recovery-codes-regenerate and
+    credential-delete-{id}; submit buttons "{form id}-submit". -#}
+{% extends "account_base.html" %}
+{% block account %}
+{% macro csrf() %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endmacro %}
+<div class="anvil-form-messages" id="account-messages" aria-live="polite">
+{% for m in messages %}
+<p class="anvil-message anvil-message-{{ m.level }}" id="account-msg-{{ loop.index }}" data-message-key="{{ m.key }}"{% if m.level == "error" %} role="alert"{% endif %}>{{ m.text }}</p>
+{% endfor %}
+</div>
+{% if not recent_auth %}
+<p class="anvil-message anvil-message-info" id="account-reauth">To change how you sign in, <a id="link-reauth" href="{{ login_url }}">sign in again</a> first.</p>
+{% endif %}
+
+<section class="anvil-account-section" id="passkeys" aria-labelledby="passkeys-heading">
+<h2 id="passkeys-heading">Passkeys</h2>
+{% if passkeys %}
+<table class="anvil-table" id="passkey-list">
+<thead><tr><th scope="col">Name</th><th scope="col">Added</th><th scope="col">Last used</th><th scope="col">Action</th></tr></thead>
+<tbody>
+{% for p in passkeys %}
+<tr id="passkey-{{ p.id }}">
+<td class="anvil-credential-label">{{ p.label }}</td>
+<td><time datetime="{{ p.created_iso }}">{{ p.created }}</time></td>
+<td>{% if p.last_used %}<time datetime="{{ p.last_used_iso }}">{{ p.last_used }}</time>{% else %}Never{% endif %}</td>
+<td>
+<form id="credential-delete-{{ p.id }}" method="post" action="{{ p.delete_url }}">
+{{ csrf() }}
+<button type="submit" id="credential-delete-{{ p.id }}-submit" aria-label="Remove passkey {{ p.label }}">Remove</button>
+</form>
+</td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+{% else %}
+<p id="passkeys-empty">You have no passkeys yet.</p>
+{% endif %}
+<form id="passkey-register" method="post" action="{{ passkey_url }}" data-webauthn="register" data-options-url="{{ passkey_options_url }}" data-webauthn-msg-cancelled="Adding the passkey was cancelled." data-webauthn-msg-failed="The passkey could not be added. Please try again." novalidate>
+{{ csrf() }}
+<input type="hidden" id="response" name="response" value="">
+<div class="anvil-field">
+<label for="label">Passkey name <span class="anvil-optional">(optional)</span></label>
+<input id="label" name="label" type="text" maxlength="64" autocomplete="off">
+</div>
+<button type="button" id="passkey-register-submit" data-webauthn-trigger hidden>Add a passkey</button>
+<p class="anvil-muted" id="passkey-register-status" data-webauthn-status aria-live="polite"></p>
+<noscript><p class="anvil-muted" id="passkey-register-nojs">Adding a passkey needs JavaScript and a browser that supports passkeys.</p></noscript>
+</form>
+</section>
+
+<section class="anvil-account-section" id="totp" aria-labelledby="totp-heading">
+<h2 id="totp-heading">Authenticator app</h2>
+{% if totp %}
+<p id="totp-status">Set up on <time datetime="{{ totp.created_iso }}">{{ totp.created }}</time>. Last used: {% if totp.last_used %}<time datetime="{{ totp.last_used_iso }}">{{ totp.last_used }}</time>{% else %}never{% endif %}.</p>
+<p id="recovery-codes-remaining">Recovery codes left: <strong id="recovery-codes-count">{{ recovery_codes_remaining }}</strong></p>
+<form id="recovery-codes-regenerate" method="post" action="{{ recovery_codes_url }}">
+{{ csrf() }}
+<button type="submit" id="recovery-codes-regenerate-submit">Create new recovery codes</button>
+</form>
+<form id="credential-delete-{{ totp.id }}" method="post" action="{{ totp.delete_url }}">
+{{ csrf() }}
+<button type="submit" id="credential-delete-{{ totp.id }}-submit">Remove authenticator app</button>
+</form>
+{% else %}
+<p id="totp-status">Not set up. Use an authenticator app for a one-time code at sign-in.</p>
+<form id="totp-begin" method="post" action="{{ totp_url }}">
+{{ csrf() }}
+<button type="submit" id="totp-begin-submit">Set up an authenticator app</button>
+</form>
+{% endif %}
+</section>
+<script src="{{ page.asset_base }}/webauthn.js" defer></script>
+{% endblock %}
