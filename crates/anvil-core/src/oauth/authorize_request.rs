@@ -11,11 +11,12 @@
 //! parameters → response_type →
 //! request / request_uri → PKCE (public clients and `require_pkce` clients only; opted-out
 //! confidential clients may omit both PKCE and nonce) → scope → redirect_uri required for OpenID
-//! requests → prompt / max_age → claims → resource (the only parameter that may repeat;
+//! requests → prompt (values supported by the tenant: `create` only with open registration;
+//! `none` and `create`/`select_account` exclusive) / max_age → claims → resource (the only parameter that may repeat;
 //! RFC 8707 §2.1, errors are `invalid_target`).
 
 use crate::error::CoreError;
-use crate::model::{AuthorizationParams, Client, ClientType, Scope};
+use crate::model::{AuthorizationParams, Client, ClientType, RegistrationMode, Scope};
 use crate::oauth::claims_request::parse_claims;
 use crate::oauth::redirect::redirect_matches;
 use crate::oauth::response_mode::ResponseMode;
@@ -124,15 +125,30 @@ fn page(error_key: &'static str, detail: &str) -> AuthorizeError {
     }
 }
 
-/// Supported `prompt` values. `consent` and `select_account` are accepted and have no effect in
-/// 0.1 (no consent screen, one account per session).
-const PROMPT_VALUES: [&str; 4] = ["none", "login", "consent", "select_account"];
+/// `prompt` values every tenant supports (OIDC Core §3.1.2.1).
+pub const PROMPT_VALUES: [&str; 4] = ["none", "login", "consent", "select_account"];
+
+/// `prompt=create` (Initiating User Registration 1.0): supported only by tenants whose
+/// registration is open.
+pub const PROMPT_CREATE: &str = "create";
+
+/// The `prompt` values a tenant with `registration` supports: [`PROMPT_VALUES`], plus
+/// [`PROMPT_CREATE`] when registration is open. Validation and discovery both use this.
+pub fn supported_prompt_values(registration: RegistrationMode) -> Vec<&'static str> {
+    let mut values = PROMPT_VALUES.to_vec();
+    if registration == RegistrationMode::Open {
+        values.push(PROMPT_CREATE);
+    }
+    values
+}
 
 /// Validates an authorization request. `client` is the client looked up by the request's
-/// `client_id` (`None` when unknown).
+/// `client_id` (`None` when unknown); `registration` is the tenant's registration mode, which
+/// decides whether `prompt=create` is supported.
 pub fn validate(
     raw: &RawParams,
     client: Option<&Client>,
+    registration: RegistrationMode,
 ) -> Result<ValidatedAuthorize, AuthorizeError> {
     // 1. client_id
     if raw.count("client_id") > 1 {
@@ -296,11 +312,18 @@ pub fn validate(
         .get("prompt")
         .map(|p| p.split_whitespace().map(str::to_owned).collect())
         .unwrap_or_default();
-    if let Some(bad) = prompt.iter().find(|p| !PROMPT_VALUES.contains(&p.as_str())) {
+    let supported = supported_prompt_values(registration);
+    if let Some(bad) = prompt.iter().find(|p| !supported.contains(&p.as_str())) {
         return Err(invalid(&format!("unsupported prompt value {bad}")));
     }
     if prompt.iter().any(|p| p == "none") && prompt.len() > 1 {
         return Err(invalid("prompt=none cannot be combined with other values"));
+    }
+    // Creating an account and choosing an existing one contradict each other.
+    if prompt.iter().any(|p| p == PROMPT_CREATE) && prompt.iter().any(|p| p == "select_account") {
+        return Err(invalid(
+            "prompt=create cannot be combined with select_account",
+        ));
     }
     let max_age = match raw.get("max_age") {
         None => None,
@@ -530,19 +553,34 @@ pub(crate) mod tests {
     #[test]
     fn response_mode_parsing() {
         let c = client();
-        let v = validate(&raw(&base()), Some(&c)).unwrap();
+        let v = validate(&raw(&base()), Some(&c), RegistrationMode::Open).unwrap();
         assert_eq!(v.params.response_mode, ResponseMode::Query);
-        let v = validate(&with(&[("response_mode", Some("query"))]), Some(&c)).unwrap();
+        let v = validate(
+            &with(&[("response_mode", Some("query"))]),
+            Some(&c),
+            RegistrationMode::Open,
+        )
+        .unwrap();
         assert_eq!(v.params.response_mode, ResponseMode::Query);
-        let v = validate(&with(&[("response_mode", Some("form_post"))]), Some(&c)).unwrap();
+        let v = validate(
+            &with(&[("response_mode", Some("form_post"))]),
+            Some(&c),
+            RegistrationMode::Open,
+        )
+        .unwrap();
         assert_eq!(v.params.response_mode, ResponseMode::FormPost);
         // An empty value is treated as omitted (RFC 6749 §3.1).
-        let v = validate(&with(&[("response_mode", Some(""))]), Some(&c)).unwrap();
+        let v = validate(
+            &with(&[("response_mode", Some(""))]),
+            Some(&c),
+            RegistrationMode::Open,
+        )
+        .unwrap();
         assert_eq!(v.params.response_mode, ResponseMode::Query);
         for bad in ["fragment", "FORM_POST", "x"] {
             let r = with(&[("response_mode", Some(bad))]);
             assert_eq!(
-                redirect_mode(validate(&r, Some(&c))),
+                redirect_mode(validate(&r, Some(&c), RegistrationMode::Open)),
                 ("invalid_request", ResponseMode::Query),
                 "{bad}"
             );
@@ -557,7 +595,7 @@ pub(crate) mod tests {
             p.push(("response_mode", "form_post"));
             p.push(("response_mode", second));
             assert_eq!(
-                redirect_mode(validate(&raw(&p), Some(&c))),
+                redirect_mode(validate(&raw(&p), Some(&c), RegistrationMode::Open)),
                 ("invalid_request", ResponseMode::Query)
             );
         }
@@ -571,7 +609,7 @@ pub(crate) mod tests {
             ("response_type", Some("token")),
         ]);
         assert_eq!(
-            redirect_mode(validate(&r, Some(&c))),
+            redirect_mode(validate(&r, Some(&c), RegistrationMode::Open)),
             ("unsupported_response_type", ResponseMode::FormPost)
         );
         let r = with(&[
@@ -579,14 +617,14 @@ pub(crate) mod tests {
             ("scope", Some("profile")),
         ]);
         assert_eq!(
-            redirect_mode(validate(&r, Some(&c))),
+            redirect_mode(validate(&r, Some(&c), RegistrationMode::Open)),
             ("invalid_scope", ResponseMode::FormPost)
         );
         let mut p = base();
         p.push(("response_mode", "form_post"));
         p.push(("scope", "openid"));
         assert_eq!(
-            redirect_mode(validate(&raw(&p), Some(&c))),
+            redirect_mode(validate(&raw(&p), Some(&c), RegistrationMode::Open)),
             ("invalid_request", ResponseMode::FormPost)
         );
     }
@@ -598,18 +636,24 @@ pub(crate) mod tests {
             ("redirect_uri", Some("https://evil.example.test/cb")),
             ("response_mode", Some("form_post")),
         ]);
-        assert_eq!(page_key(validate(&r, Some(&c))), "redirect_uri_mismatch");
+        assert_eq!(
+            page_key(validate(&r, Some(&c), RegistrationMode::Open)),
+            "redirect_uri_mismatch"
+        );
         let r = with(&[
             ("response_mode", Some("fragment")),
             ("client_id", Some("nope")),
         ]);
-        assert_eq!(page_key(validate(&r, Some(&c))), "unknown_client");
+        assert_eq!(
+            page_key(validate(&r, Some(&c), RegistrationMode::Open)),
+            "unknown_client"
+        );
     }
 
     #[test]
     fn valid_request() {
         let c = client();
-        let v = validate(&raw(&base()), Some(&c)).unwrap();
+        let v = validate(&raw(&base()), Some(&c), RegistrationMode::Open).unwrap();
         assert_eq!(v.params.redirect_uri, RP);
         assert_eq!(v.params.scope, "openid profile");
         assert_eq!(v.params.state.as_deref(), Some("st"));
@@ -619,16 +663,27 @@ pub(crate) mod tests {
 
     #[test]
     fn unknown_client_is_error_page() {
-        assert_eq!(page_key(validate(&raw(&base()), None)), "unknown_client");
+        assert_eq!(
+            page_key(validate(&raw(&base()), None, RegistrationMode::Open)),
+            "unknown_client"
+        );
         let mut other = client();
         other.client_id = "someone-else".into();
         assert_eq!(
-            page_key(validate(&raw(&base()), Some(&other))),
+            page_key(validate(
+                &raw(&base()),
+                Some(&other),
+                RegistrationMode::Open
+            )),
             "unknown_client"
         );
         let c = client();
         assert_eq!(
-            page_key(validate(&with(&[("client_id", None)]), Some(&c))),
+            page_key(validate(
+                &with(&[("client_id", None)]),
+                Some(&c),
+                RegistrationMode::Open,
+            )),
             "invalid_request"
         );
     }
@@ -640,9 +695,15 @@ pub(crate) mod tests {
             ("redirect_uri", Some("https://evil.example.test/cb")),
             ("response_type", Some("token")),
         ]);
-        assert_eq!(page_key(validate(&r, Some(&c))), "redirect_uri_mismatch");
+        assert_eq!(
+            page_key(validate(&r, Some(&c), RegistrationMode::Open)),
+            "redirect_uri_mismatch"
+        );
         let r = with(&[("redirect_uri", Some("https://rp.example.test/cb/"))]);
-        assert_eq!(page_key(validate(&r, Some(&c))), "redirect_uri_mismatch");
+        assert_eq!(
+            page_key(validate(&r, Some(&c), RegistrationMode::Open)),
+            "redirect_uri_mismatch"
+        );
     }
 
     #[test]
@@ -650,17 +711,27 @@ pub(crate) mod tests {
         let c = client();
         let mut p = base();
         p.push(("redirect_uri", RP));
-        assert_eq!(page_key(validate(&raw(&p), Some(&c))), "invalid_request");
+        assert_eq!(
+            page_key(validate(&raw(&p), Some(&c), RegistrationMode::Open)),
+            "invalid_request"
+        );
         let mut p = base();
         p.push(("client_id", "rp"));
-        assert_eq!(page_key(validate(&raw(&p), Some(&c))), "invalid_request");
+        assert_eq!(
+            page_key(validate(&raw(&p), Some(&c), RegistrationMode::Open)),
+            "invalid_request"
+        );
     }
 
     #[test]
     fn missing_redirect_with_several_registered_is_error_page() {
         let c = client();
         assert_eq!(
-            page_key(validate(&with(&[("redirect_uri", None)]), Some(&c))),
+            page_key(validate(
+                &with(&[("redirect_uri", None)]),
+                Some(&c),
+                RegistrationMode::Open,
+            )),
             "invalid_request"
         );
     }
@@ -671,10 +742,13 @@ pub(crate) mod tests {
         c.redirect_uris = vec![RP.to_owned()];
         // Trusted for error reporting, but an OpenID request must name it explicitly.
         let r = with(&[("redirect_uri", None)]);
-        assert_eq!(redirect_err(validate(&r, Some(&c))).0, "invalid_request");
+        assert_eq!(
+            redirect_err(validate(&r, Some(&c), RegistrationMode::Open)).0,
+            "invalid_request"
+        );
         let r = with(&[("redirect_uri", None), ("response_type", Some("token"))]);
         assert_eq!(
-            redirect_err(validate(&r, Some(&c))).0,
+            redirect_err(validate(&r, Some(&c), RegistrationMode::Open)).0,
             "unsupported_response_type"
         );
     }
@@ -683,13 +757,17 @@ pub(crate) mod tests {
     fn response_type_errors_redirect() {
         let c = client();
         assert_eq!(
-            redirect_err(validate(&with(&[("response_type", None)]), Some(&c))),
+            redirect_err(validate(
+                &with(&[("response_type", None)]),
+                Some(&c),
+                RegistrationMode::Open,
+            )),
             ("invalid_request", Some("st".to_owned()))
         );
         for rt in ["token", "id_token", "code id_token", "code token"] {
             let r = with(&[("response_type", Some(rt))]);
             assert_eq!(
-                redirect_err(validate(&r, Some(&c))).0,
+                redirect_err(validate(&r, Some(&c), RegistrationMode::Open)).0,
                 "unsupported_response_type",
                 "{rt}"
             );
@@ -701,12 +779,12 @@ pub(crate) mod tests {
         let c = client();
         let r = with(&[("request", Some("eyJ.x.y"))]);
         assert_eq!(
-            redirect_err(validate(&r, Some(&c))).0,
+            redirect_err(validate(&r, Some(&c), RegistrationMode::Open)).0,
             "request_not_supported"
         );
         let r = with(&[("request_uri", Some("https://rp.example.test/r"))]);
         assert_eq!(
-            redirect_err(validate(&r, Some(&c))).0,
+            redirect_err(validate(&r, Some(&c), RegistrationMode::Open)).0,
             "request_uri_not_supported"
         );
     }
@@ -753,7 +831,7 @@ pub(crate) mod tests {
         let jwt = unsigned_jwt(r#"{"response_mode":"form_post","state":"obj-st"}"#);
         let r = with_owned(&["state"], &[("request", jwt)]);
         assert_eq!(
-            rejected(validate(&r, Some(&c))),
+            rejected(validate(&r, Some(&c), RegistrationMode::Open)),
             (ResponseMode::FormPost, Some("obj-st".to_owned()))
         );
     }
@@ -767,7 +845,7 @@ pub(crate) mod tests {
             &[("response_mode", "query".to_owned()), ("request", jwt)],
         );
         assert_eq!(
-            rejected(validate(&r, Some(&c))),
+            rejected(validate(&r, Some(&c), RegistrationMode::Open)),
             (ResponseMode::Query, Some("st".to_owned()))
         );
         let jwt = unsigned_jwt(r#"{"response_mode":"query"}"#);
@@ -776,7 +854,7 @@ pub(crate) mod tests {
             &[("response_mode", "form_post".to_owned()), ("request", jwt)],
         );
         assert_eq!(
-            rejected(validate(&r, Some(&c))),
+            rejected(validate(&r, Some(&c), RegistrationMode::Open)),
             (ResponseMode::FormPost, Some("st".to_owned()))
         );
     }
@@ -794,7 +872,7 @@ pub(crate) mod tests {
         ] {
             let r = with_owned(&["state"], &[("request", unsigned_jwt(payload))]);
             assert_eq!(
-                rejected(validate(&r, Some(&c))),
+                rejected(validate(&r, Some(&c), RegistrationMode::Open)),
                 (ResponseMode::Query, Some("obj-st".to_owned())),
                 "{payload}"
             );
@@ -803,7 +881,7 @@ pub(crate) mod tests {
         let jwt = unsigned_jwt(r#"{"response_mode":"form_post","state":42}"#);
         let r = with_owned(&["state"], &[("request", jwt)]);
         assert_eq!(
-            rejected(validate(&r, Some(&c))),
+            rejected(validate(&r, Some(&c), RegistrationMode::Open)),
             (ResponseMode::FormPost, None)
         );
     }
@@ -832,7 +910,7 @@ pub(crate) mod tests {
             // Outer state present: echoed; outer mode absent: query.
             let r = with_owned(&[], &[("request", jwt.clone())]);
             assert_eq!(
-                rejected(validate(&r, Some(&c))),
+                rejected(validate(&r, Some(&c), RegistrationMode::Open)),
                 (ResponseMode::Query, Some("st".to_owned())),
                 "{jwt:.40}"
             );
@@ -841,13 +919,19 @@ pub(crate) mod tests {
                 &[],
                 &[("response_mode", "form_post".to_owned()), ("request", jwt)],
             );
-            assert_eq!(rejected(validate(&r, Some(&c))).0, ResponseMode::FormPost);
+            assert_eq!(
+                rejected(validate(&r, Some(&c), RegistrationMode::Open)).0,
+                ResponseMode::FormPost
+            );
         }
         // Just under the cap is still read.
         let jwt = unsigned_jwt(fp);
         assert!(jwt.len() <= 8 * 1024);
         let r = with_owned(&["state"], &[("request", jwt)]);
-        assert_eq!(rejected(validate(&r, Some(&c))).0, ResponseMode::FormPost);
+        assert_eq!(
+            rejected(validate(&r, Some(&c), RegistrationMode::Open)).0,
+            ResponseMode::FormPost
+        );
     }
 
     #[test]
@@ -863,17 +947,26 @@ pub(crate) mod tests {
                 ("request", jwt.clone()),
             ],
         );
-        assert_eq!(page_key(validate(&r, Some(&c))), "redirect_uri_mismatch");
+        assert_eq!(
+            page_key(validate(&r, Some(&c), RegistrationMode::Open)),
+            "redirect_uri_mismatch"
+        );
         // No outer redirect_uri with several registered: still the page, even though the object
         // names one.
         let r = with_owned(&["redirect_uri"], &[("request", jwt.clone())]);
-        assert_eq!(page_key(validate(&r, Some(&c))), "invalid_request");
+        assert_eq!(
+            page_key(validate(&r, Some(&c), RegistrationMode::Open)),
+            "invalid_request"
+        );
         // Unknown client.
         let r = with_owned(
             &["client_id"],
             &[("client_id", "x".to_owned()), ("request", jwt)],
         );
-        assert_eq!(page_key(validate(&r, Some(&c))), "unknown_client");
+        assert_eq!(
+            page_key(validate(&r, Some(&c), RegistrationMode::Open)),
+            "unknown_client"
+        );
     }
 
     #[test]
@@ -887,7 +980,7 @@ pub(crate) mod tests {
             ],
         );
         assert_eq!(
-            redirect_mode(validate(&r, Some(&c))),
+            redirect_mode(validate(&r, Some(&c), RegistrationMode::Open)),
             ("request_uri_not_supported", ResponseMode::FormPost)
         );
     }
@@ -898,13 +991,13 @@ pub(crate) mod tests {
         let mut p = base();
         p.push(("state", "again"));
         assert_eq!(
-            redirect_err(validate(&raw(&p), Some(&c))),
+            redirect_err(validate(&raw(&p), Some(&c), RegistrationMode::Open)),
             ("invalid_request", None)
         );
         let mut p = base();
         p.push(("scope", "openid"));
         assert_eq!(
-            redirect_err(validate(&raw(&p), Some(&c))),
+            redirect_err(validate(&raw(&p), Some(&c), RegistrationMode::Open)),
             ("invalid_request", Some("st".to_owned()))
         );
     }
@@ -925,7 +1018,7 @@ pub(crate) mod tests {
         ];
         for r in cases {
             assert_eq!(
-                redirect_err(validate(&r, Some(&c))).0,
+                redirect_err(validate(&r, Some(&c), RegistrationMode::Open)).0,
                 "invalid_request",
                 "{r:?}"
             );
@@ -937,12 +1030,12 @@ pub(crate) mod tests {
         let mut c = client();
         c.require_pkce = false;
         let no_pkce = [("code_challenge", None), ("code_challenge_method", None)];
-        let v = validate(&with(&no_pkce), Some(&c)).unwrap();
+        let v = validate(&with(&no_pkce), Some(&c), RegistrationMode::Open).unwrap();
         assert!(v.params.nonce.is_none());
         assert!(v.params.code_challenge.is_none());
         let mut changes = no_pkce.to_vec();
         changes.push(("nonce", Some("n-123")));
-        let v = validate(&with(&changes), Some(&c)).unwrap();
+        let v = validate(&with(&changes), Some(&c), RegistrationMode::Open).unwrap();
         assert_eq!(v.params.nonce.as_deref(), Some("n-123"));
         // Opting out does not relax the S256-only rule or partial PKCE parameters.
         for bad in [
@@ -951,7 +1044,7 @@ pub(crate) mod tests {
             vec![("code_challenge", None)],
         ] {
             assert_eq!(
-                redirect_err(validate(&with(&bad), Some(&c))).0,
+                redirect_err(validate(&with(&bad), Some(&c), RegistrationMode::Open)).0,
                 "invalid_request",
                 "{bad:?}"
             );
@@ -967,7 +1060,10 @@ pub(crate) mod tests {
             ("code_challenge_method", None),
             ("nonce", Some("n")),
         ]);
-        assert_eq!(redirect_err(validate(&r, Some(&c))).0, "invalid_request");
+        assert_eq!(
+            redirect_err(validate(&r, Some(&c), RegistrationMode::Open)).0,
+            "invalid_request"
+        );
     }
 
     #[test]
@@ -980,43 +1076,125 @@ pub(crate) mod tests {
             ("code_challenge_method", None),
             ("nonce", Some("n")),
         ]);
-        assert_eq!(redirect_err(validate(&r, Some(&c))).0, "invalid_request");
+        assert_eq!(
+            redirect_err(validate(&r, Some(&c), RegistrationMode::Open)).0,
+            "invalid_request"
+        );
         let r = with(&[("code_challenge", None), ("code_challenge_method", None)]);
-        assert_eq!(redirect_err(validate(&r, Some(&c))).0, "invalid_request");
+        assert_eq!(
+            redirect_err(validate(&r, Some(&c), RegistrationMode::Open)).0,
+            "invalid_request"
+        );
     }
 
     #[test]
     fn scope_filtering_and_openid_requirement() {
         let c = client();
         let r = with(&[("scope", Some("openid admin email"))]);
-        assert_eq!(validate(&r, Some(&c)).unwrap().params.scope, "email openid");
+        assert_eq!(
+            validate(&r, Some(&c), RegistrationMode::Open)
+                .unwrap()
+                .params
+                .scope,
+            "email openid"
+        );
         let r = with(&[("scope", Some("profile"))]);
-        assert_eq!(redirect_err(validate(&r, Some(&c))).0, "invalid_scope");
+        assert_eq!(
+            redirect_err(validate(&r, Some(&c), RegistrationMode::Open)).0,
+            "invalid_scope"
+        );
         let r = with(&[("scope", None)]);
-        assert_eq!(redirect_err(validate(&r, Some(&c))).0, "invalid_scope");
+        assert_eq!(
+            redirect_err(validate(&r, Some(&c), RegistrationMode::Open)).0,
+            "invalid_scope"
+        );
         let r = with(&[("scope", Some("openid  profile"))]);
-        assert_eq!(redirect_err(validate(&r, Some(&c))).0, "invalid_scope");
+        assert_eq!(
+            redirect_err(validate(&r, Some(&c), RegistrationMode::Open)).0,
+            "invalid_scope"
+        );
     }
 
     #[test]
     fn prompt_and_max_age() {
         let c = client();
         let r = with(&[("prompt", Some("none login"))]);
-        assert_eq!(redirect_err(validate(&r, Some(&c))).0, "invalid_request");
+        assert_eq!(
+            redirect_err(validate(&r, Some(&c), RegistrationMode::Open)).0,
+            "invalid_request"
+        );
         let r = with(&[("prompt", Some("bogus"))]);
-        assert_eq!(redirect_err(validate(&r, Some(&c))).0, "invalid_request");
+        assert_eq!(
+            redirect_err(validate(&r, Some(&c), RegistrationMode::Open)).0,
+            "invalid_request"
+        );
         for bad in ["-1", "abc", "+5", "1.5", "99999999999"] {
             let r = with(&[("max_age", Some(bad))]);
             assert_eq!(
-                redirect_err(validate(&r, Some(&c))).0,
+                redirect_err(validate(&r, Some(&c), RegistrationMode::Open)).0,
                 "invalid_request",
                 "{bad}"
             );
         }
         let r = with(&[("prompt", Some("login consent")), ("max_age", Some("0"))]);
-        let v = validate(&r, Some(&c)).unwrap();
+        let v = validate(&r, Some(&c), RegistrationMode::Open).unwrap();
         assert_eq!(v.params.prompt, vec!["login", "consent"]);
         assert_eq!(v.params.max_age, Some(0));
+        let r = with(&[("prompt", Some("select_account"))]);
+        let v = validate(&r, Some(&c), RegistrationMode::Disabled).unwrap();
+        assert_eq!(v.params.prompt, vec!["select_account"]);
+        let r = with(&[("prompt", Some("none select_account"))]);
+        assert_eq!(
+            redirect_err(validate(&r, Some(&c), RegistrationMode::Open)),
+            ("invalid_request", Some("st".to_owned()))
+        );
+    }
+
+    #[test]
+    fn prompt_create_needs_open_registration() {
+        let c = client();
+        let r = with(&[("prompt", Some("create"))]);
+        let v = validate(&r, Some(&c), RegistrationMode::Open).unwrap();
+        assert_eq!(v.params.prompt, vec!["create"]);
+        for closed in [RegistrationMode::InviteOnly, RegistrationMode::Disabled] {
+            let Err(AuthorizeError::Redirect { error, state, .. }) = validate(&r, Some(&c), closed)
+            else {
+                panic!("create must be rejected for {closed:?}");
+            };
+            assert_eq!(error.oauth_error(), "invalid_request");
+            assert_eq!(state.as_deref(), Some("st"));
+            assert!(
+                error
+                    .to_string()
+                    .contains("unsupported prompt value create")
+            );
+        }
+        // Never combined with none or select_account, even on an open tenant.
+        for bad in ["create none", "none create", "create select_account"] {
+            let r = with(&[("prompt", Some(bad))]);
+            assert_eq!(
+                redirect_err(validate(&r, Some(&c), RegistrationMode::Open)).0,
+                "invalid_request",
+                "{bad}"
+            );
+        }
+        // Combining with login or consent is allowed (not recommended by the spec).
+        let r = with(&[("prompt", Some("create consent"))]);
+        assert!(validate(&r, Some(&c), RegistrationMode::Open).is_ok());
+    }
+
+    #[test]
+    fn supported_prompt_values_follow_the_registration_mode() {
+        assert_eq!(
+            supported_prompt_values(RegistrationMode::Open),
+            ["none", "login", "consent", "select_account", "create"]
+        );
+        for closed in [RegistrationMode::InviteOnly, RegistrationMode::Disabled] {
+            assert_eq!(
+                supported_prompt_values(closed),
+                ["none", "login", "consent", "select_account"]
+            );
+        }
     }
 
     #[test]
@@ -1031,7 +1209,7 @@ pub(crate) mod tests {
             ("unknown", Some("x")),
             ("id_token_hint", Some("a.b.c")),
         ]);
-        let v = validate(&r, Some(&c)).unwrap();
+        let v = validate(&r, Some(&c), RegistrationMode::Open).unwrap();
         assert_eq!(v.params.ui_locales.as_deref(), Some("de en"));
         assert_eq!(v.params.login_hint.as_deref(), Some("alice@example.test"));
         assert_eq!(v.params.acr_values, vec!["urn:anvilid:acr:pwd", "other"]);
@@ -1045,17 +1223,20 @@ pub(crate) mod tests {
             "claims",
             Some(r#"{"userinfo":{"name":{"essential":true}}}"#),
         )]);
-        let v = validate(&r, Some(&c)).unwrap();
+        let v = validate(&r, Some(&c), RegistrationMode::Open).unwrap();
         assert!(v.params.claims.unwrap().userinfo[0].essential);
         let r = with(&[("claims", Some("{not json"))]);
-        assert_eq!(redirect_err(validate(&r, Some(&c))).0, "invalid_request");
+        assert_eq!(
+            redirect_err(validate(&r, Some(&c), RegistrationMode::Open)).0,
+            "invalid_request"
+        );
     }
 
     #[test]
     fn empty_values_are_treated_as_omitted() {
         let c = client();
         let r = with(&[("request", Some("")), ("prompt", Some(""))]);
-        assert!(validate(&r, Some(&c)).is_ok());
+        assert!(validate(&r, Some(&c), RegistrationMode::Open).is_ok());
     }
 
     #[test]
@@ -1102,16 +1283,21 @@ pub(crate) mod tests {
         p.push(("resource", API));
         p.push(("resource", MCP));
         p.push(("resource", ""));
-        let ok = validate(&raw(&p), Some(&c)).unwrap();
+        let ok = validate(&raw(&p), Some(&c), RegistrationMode::Open).unwrap();
         assert_eq!(ok.params.resource, vec![MCP.to_owned(), API.to_owned()]);
     }
 
     #[test]
     fn no_resource_is_empty() {
         let c = resource_client();
-        let ok = validate(&raw(&base()), Some(&c)).unwrap();
+        let ok = validate(&raw(&base()), Some(&c), RegistrationMode::Open).unwrap();
         assert!(ok.params.resource.is_empty());
-        let ok = validate(&with(&[("resource", Some(""))]), Some(&c)).unwrap();
+        let ok = validate(
+            &with(&[("resource", Some(""))]),
+            Some(&c),
+            RegistrationMode::Open,
+        )
+        .unwrap();
         assert!(ok.params.resource.is_empty());
     }
 
@@ -1123,7 +1309,7 @@ pub(crate) mod tests {
         p.push(("resource", MCP));
         p.push(("scope", "openid"));
         assert_eq!(
-            redirect_err(validate(&raw(&p), Some(&c))),
+            redirect_err(validate(&raw(&p), Some(&c), RegistrationMode::Open)),
             ("invalid_request", Some("st".to_owned()))
         );
     }
@@ -1143,7 +1329,7 @@ pub(crate) mod tests {
             p.push(("resource", API));
             p.push(("resource", bad));
             assert_eq!(
-                redirect_err(validate(&raw(&p), Some(&c))),
+                redirect_err(validate(&raw(&p), Some(&c), RegistrationMode::Open)),
                 ("invalid_target", Some("st".to_owned())),
                 "{bad}"
             );
@@ -1152,7 +1338,7 @@ pub(crate) mod tests {
         let mut p = base();
         p.push(("resource", API));
         assert_eq!(
-            redirect_err(validate(&raw(&p), Some(&client()))).0,
+            redirect_err(validate(&raw(&p), Some(&client()), RegistrationMode::Open)).0,
             "invalid_target"
         );
     }
@@ -1165,7 +1351,7 @@ pub(crate) mod tests {
         p.push(("redirect_uri", "https://evil.example.test/cb"));
         p.push(("resource", "https://other.example.test"));
         assert_eq!(
-            page_key(validate(&raw(&p), Some(&c))),
+            page_key(validate(&raw(&p), Some(&c), RegistrationMode::Open)),
             "redirect_uri_mismatch"
         );
     }

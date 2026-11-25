@@ -10,6 +10,9 @@
 //! - `Login` → `303` to `{issuer}/ui/login?request={id}`;
 //! - `Consent` → `303` to `{issuer}/ui/consent?request={id}` (the consent screen, which continues
 //!   the request through [`AppState::authorize_response`]);
+//! - `SelectAccount` → `303` to `{issuer}/ui/select-account?request={id}` (the account chooser);
+//! - `Register` → `303` to `{issuer}/ui/registration?request={id}` (`prompt=create`; the
+//!   registration resumes the request through `/authorize/continue`);
 //! - `ErrorPage` → the themed `400` error page, never a redirect (unknown client, unregistered
 //!   redirect URI, malformed request before the redirect URI is trusted, expired request).
 //!
@@ -169,6 +172,12 @@ fn respond(state: &AppState, tenant: &ResolvedTenant, outcome: AuthorizeOutcome)
         }
         AuthorizeOutcome::Consent { request_id } => {
             see_other(&tenant.ui_url(&format!("/ui/consent?request={request_id}")))
+        }
+        AuthorizeOutcome::SelectAccount { request_id } => {
+            see_other(&tenant.ui_url(&format!("/ui/select-account?request={request_id}")))
+        }
+        AuthorizeOutcome::Register { request_id } => {
+            see_other(&tenant.ui_url(&format!("/ui/registration?request={request_id}")))
         }
         AuthorizeOutcome::ErrorPage { error_key, detail } => error_page(
             state,

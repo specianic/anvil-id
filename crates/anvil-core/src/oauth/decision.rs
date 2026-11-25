@@ -17,6 +17,18 @@
 //!
 //! Under `Off`/`Optional` without an `acr` request an existing single-factor session is used as
 //! it is: `Optional` prompts at sign-in, not on every authorization request.
+//!
+//! # Account chooser and registration (OIDC-14)
+//!
+//! `prompt=select_account` with a usable session that was not signed in during this request
+//! answers [`SessionDecision::SelectAccount`] (the chooser: continue as the session's user or
+//! sign in as someone else). Without a usable session it is `RequireLogin`, as before. After the
+//! chooser the caller decides again without `select_account`; after a sign-in during the request
+//! the session is fresh, so the chooser is not shown twice.
+//!
+//! `prompt=create` is answered by the service before [`decide`] (registration page). When the
+//! request is resumed, `create` needs a session signed in during the request, like `login`: an
+//! older session never answers a request that asked for a new account.
 
 use time::{Duration, OffsetDateTime};
 
@@ -84,19 +96,23 @@ pub enum SessionDecision {
     /// The session's user is signed in but must add a second factor (or enrol one) first: the
     /// login flow starts at that step and upgrades the session in place.
     StepUp,
+    /// `prompt=select_account` with a usable session: show the account chooser.
+    SelectAccount,
     /// The request cannot be answered without interaction (`prompt=none`): `LoginRequired`.
     Fail(CoreError),
 }
 
 /// Decides whether `session` satisfies the request.
 ///
-/// - `prompt=login`: the session is usable only if `auth_time >= request_created_at`, that is, the
-///   user signed in during this request. This is what lets `resume` succeed after the forced
-///   login.
+/// - `prompt=login` (and `prompt=create`): the session is usable only if
+///   `auth_time >= request_created_at`, that is, the user signed in during this request. This is
+///   what lets `resume` succeed after the forced login.
 /// - `max_age`: usable only if `now - auth_time <= max_age`, or if the user signed in during this
 ///   request (so `max_age=0` behaves like `prompt=login` and cannot loop).
 /// - `hint_sub` (the verified `id_token_hint` subject): a different session user is not usable.
 /// - Not usable: `Fail(LoginRequired)` with `prompt=none`, else `RequireLogin`.
+/// - Usable and `prompt=select_account` without a sign-in during this request: `SelectAccount`
+///   (before any step-up: the chooser decides whose session is stepped up).
 /// - Usable but single-factor while MFA is wanted: the step-up table in the module docs.
 ///
 /// `prompt=none` combined with other values is rejected earlier, in validation.
@@ -110,7 +126,8 @@ pub fn decide(
     mfa: MfaContext,
 ) -> SessionDecision {
     let none = prompt.iter().any(|p| p == "none");
-    let login = prompt.iter().any(|p| p == "login");
+    let login = prompt.iter().any(|p| p == "login" || p == "create");
+    let select = prompt.iter().any(|p| p == "select_account");
     let usable = session.is_some_and(|s| {
         let fresh = s.auth_time >= request_created_at;
         let hint_ok = hint_sub.is_none_or(|sub| s.user_id.to_string() == sub);
@@ -120,6 +137,7 @@ pub fn decide(
     });
     if usable {
         match session {
+            Some(s) if select && s.auth_time < request_created_at => SessionDecision::SelectAccount,
             Some(s) if !session_is_mfa(s) && mfa.wants_mfa() => step_up_decision(mfa, none),
             _ => SessionDecision::UseSession,
         }
@@ -455,6 +473,125 @@ mod tests {
                 NOW,
                 ctx(MfaPolicy::Optional, AcrRequest::Voluntary, true)
             ),
+            SessionDecision::RequireLogin
+        ));
+    }
+
+    #[test]
+    fn select_account_with_a_session_shows_the_chooser() {
+        let s = session(NOW - Duration::hours(1));
+        assert!(matches!(
+            decide(&p(&["select_account"]), None, Some(&s), None, NOW, NOW, N),
+            SessionDecision::SelectAccount
+        ));
+        // Combined with consent or login-satisfied max_age: still the chooser first.
+        assert!(matches!(
+            decide(
+                &p(&["select_account", "consent"]),
+                Some(10_000),
+                Some(&s),
+                None,
+                NOW,
+                NOW,
+                N
+            ),
+            SessionDecision::SelectAccount
+        ));
+        // The chooser comes before a step-up: it decides whose session is stepped up.
+        assert!(matches!(
+            decide(
+                &p(&["select_account"]),
+                None,
+                Some(&s),
+                None,
+                NOW,
+                NOW,
+                ctx(MfaPolicy::Required, AcrRequest::Voluntary, true)
+            ),
+            SessionDecision::SelectAccount
+        ));
+    }
+
+    #[test]
+    fn select_account_without_a_usable_session_requires_login() {
+        assert!(matches!(
+            decide(&p(&["select_account"]), None, None, None, NOW, NOW, N),
+            SessionDecision::RequireLogin
+        ));
+        let old = session(NOW - Duration::hours(1));
+        assert!(matches!(
+            decide(
+                &p(&["select_account"]),
+                Some(1),
+                Some(&old),
+                None,
+                NOW,
+                NOW,
+                N
+            ),
+            SessionDecision::RequireLogin
+        ));
+        let other = UserId::new_v7().to_string();
+        assert!(matches!(
+            decide(
+                &p(&["select_account"]),
+                None,
+                Some(&old),
+                Some(&other),
+                NOW,
+                NOW,
+                N
+            ),
+            SessionDecision::RequireLogin
+        ));
+    }
+
+    #[test]
+    fn select_account_is_satisfied_by_a_sign_in_during_the_request() {
+        let created = NOW - Duration::seconds(30);
+        let fresh = session(created + Duration::seconds(5));
+        assert!(matches!(
+            decide(
+                &p(&["select_account"]),
+                None,
+                Some(&fresh),
+                None,
+                created,
+                NOW,
+                N
+            ),
+            SessionDecision::UseSession
+        ));
+        // A fresh single-factor session still steps up when MFA is wanted.
+        assert!(matches!(
+            decide(
+                &p(&["select_account"]),
+                None,
+                Some(&fresh),
+                None,
+                created,
+                NOW,
+                ctx(MfaPolicy::Optional, AcrRequest::Voluntary, true)
+            ),
+            SessionDecision::StepUp
+        ));
+    }
+
+    #[test]
+    fn create_needs_a_sign_in_during_the_request() {
+        let created = NOW - Duration::seconds(30);
+        let old = session(created - Duration::seconds(1));
+        assert!(matches!(
+            decide(&p(&["create"]), None, Some(&old), None, created, NOW, N),
+            SessionDecision::RequireLogin
+        ));
+        let fresh = session(created + Duration::seconds(3));
+        assert!(matches!(
+            decide(&p(&["create"]), None, Some(&fresh), None, created, NOW, N),
+            SessionDecision::UseSession
+        ));
+        assert!(matches!(
+            decide(&p(&["create"]), None, None, None, created, NOW, N),
             SessionDecision::RequireLogin
         ));
     }

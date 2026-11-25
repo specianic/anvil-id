@@ -15,6 +15,22 @@
 //! essential `acr` that is still unmet answers `unmet_authentication_requirements` through the
 //! response mode, and a voluntary one issues the lower `acr` truthfully.
 //!
+//! Account chooser and registration (OIDC-14): `prompt=select_account` with a usable session
+//! answers [`AuthorizeOutcome::SelectAccount`]; the chooser page opens a bound flow with
+//! [`AuthorizeService::start_select_account`] and submits [`AuthorizeService::choose_account`]
+//! (continue as the session's user, or sign in as someone else). `prompt=create` (Initiating
+//! User Registration 1.0, only for tenants with open registration, see
+//! [`crate::oauth::authorize_request::supported_prompt_values`]) answers
+//! [`AuthorizeOutcome::Register`] whether or not a session exists; registering signs the user in
+//! and the request resumes through [`AuthorizeService::resume`]. When the tenant requires email
+//! verification before sign-in, the request cannot resume: the RP gets no answer until the user
+//! verifies and signs in, and the stored request expires normally.
+//!
+//! The chooser flow is a `FlowKind::Consent` flow in its connected-apps form (bound to the
+//! user, no pending consent), additionally bound to the request through the flow's
+//! `auth_request_id`. That state can never approve a consent (the consent screen refuses a flow
+//! without a pending request), and it grants nothing beyond what the same user's own pages allow.
+//!
 //! The protocol decisions live in pure functions ([`crate::oauth::authorize_request::validate`],
 //! [`crate::oauth::decision::decide`], [`build_code`], [`AuthorizationResponse`]);
 //! this service only orchestrates the ports. It is tested end to end over HTTP on both backends.
@@ -25,15 +41,19 @@ use anvil_jose::{ExpiryCheck, Jwks, verify_op_token_algs};
 use secrecy::{ExposeSecret, SecretString};
 use time::{Duration, OffsetDateTime};
 
-use super::consent::ConsentService;
+use anvil_jose::encoding::{random_token, secret_hash};
+
+use super::consent::{ConsentService, StartedConsentFlow};
+use super::flow::{BindingError, FLOW_LIFETIME, check_binding};
 use super::key_rotation::enabled_algs;
 use crate::error::CoreError;
-use crate::flow::consent::{ConsentDecision, requested_scopes};
+use crate::flow::consent::{ConsentDecision, ConsentState, requested_scopes};
 use crate::model::{
-    AuthRequestId, AuthorizationParams, BrowserSession, Client, GrantType, NewAuthorizationCode,
-    NewAuthorizationRequest, NewTokenFamily, SecretHash, Tenant, TokenFamilyId, UserStatus,
+    AuthRequestId, AuthorizationParams, BrowserSession, Client, FlowId, FlowKind, GrantType,
+    NewAuthorizationCode, NewAuthorizationRequest, NewFlow, NewTokenFamily, SecretHash, Tenant,
+    TokenFamilyId, UserStatus,
 };
-use crate::oauth::authorize_request::{AuthorizeError, RawParams, validate};
+use crate::oauth::authorize_request::{AuthorizeError, PROMPT_CREATE, RawParams, validate};
 use crate::oauth::decision::{MfaContext, SessionDecision, decide, requested_acr, session_is_mfa};
 use crate::oauth::redirect::redirect_matches;
 use crate::oauth::response_mode::AuthorizationResponse;
@@ -60,6 +80,12 @@ pub enum AuthorizeOutcome {
     /// Send the signed-in user to the consent screen for the stored request, then call
     /// [`AuthorizeService::finish_consent`] with the decision.
     Consent { request_id: AuthRequestId },
+    /// `prompt=select_account` with a session: send the user to the account chooser, which calls
+    /// [`AuthorizeService::choose_account`].
+    SelectAccount { request_id: AuthRequestId },
+    /// `prompt=create`: send the user to the registration page for the stored request; the
+    /// request resumes through [`AuthorizeService::resume`] once the new account is signed in.
+    Register { request_id: AuthRequestId },
     /// Show an error page; never redirect. `error_key` is one of `invalid_request`,
     /// `unknown_client`, `redirect_uri_mismatch`, `flow_expired`.
     ErrorPage {
@@ -110,6 +136,45 @@ pub(crate) async fn mfa_context(
     Ok(ctx)
 }
 
+/// The account chooser's answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountChoice {
+    /// Continue as the session's user (consent and step-up still apply).
+    Continue,
+    /// Sign in as someone else: the login page for the request. Signing in as another user
+    /// revokes the current session (session switch).
+    Other,
+}
+
+/// A chooser submission's binding to its flow (`?flow=`, flow cookie, `csrf_token` field).
+#[derive(Debug, Clone, Copy)]
+pub struct AccountChoiceBinding<'a> {
+    pub flow_id: FlowId,
+    pub cookie_token: Option<&'a str>,
+    pub csrf_token: &'a str,
+}
+
+/// What the account chooser shows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectAccountPage {
+    pub request_id: AuthRequestId,
+    pub client_name: String,
+    /// The session user's name, if set.
+    pub user_name: Option<String>,
+    pub user_email: String,
+}
+
+/// Result of opening the account chooser.
+#[derive(Debug)]
+pub enum SelectAccountStart {
+    Started {
+        flow: StartedConsentFlow,
+        page: SelectAccountPage,
+    },
+    /// The request expired, was used, or its client is gone.
+    RequestExpired,
+}
+
 /// Builds a code and its pre-created token family. Returns the plaintext code (sent to the
 /// client only) and the records to store; only the code's hash is stored.
 pub fn build_code(
@@ -157,12 +222,37 @@ pub fn build_code(
 
 /// Where a stored authorization request continues from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::enum_variant_names,
+    reason = "each stage names the step the request continues after"
+)]
 enum Stage {
     /// After the login flow: decide on the session, then on consent.
     AfterLogin,
     /// After the consent screen: `approved` (Allow) issues the code once the stored grant
     /// covers the request; Deny answers `access_denied`.
     AfterConsent { approved: bool },
+    /// After "Continue as …" on the account chooser: decide again without `select_account`.
+    AfterAccountChosen,
+}
+
+impl Stage {
+    /// The prompt values the decision honours at this stage. The chooser comes before consent,
+    /// so `select_account` is answered once the user chose; `consent` is answered after the
+    /// consent screen.
+    fn prompt(self, prompt: &[String]) -> Vec<String> {
+        prompt
+            .iter()
+            .filter(|p| match self {
+                Self::AfterLogin => true,
+                Self::AfterAccountChosen => p.as_str() != "select_account",
+                Self::AfterConsent { .. } => {
+                    p.as_str() != "select_account" && p.as_str() != "consent"
+                }
+            })
+            .cloned()
+            .collect()
+    }
 }
 
 /// Authorization endpoint service.
@@ -239,7 +329,7 @@ impl AuthorizeService {
             }
             _ => None,
         };
-        let validated = match validate(&raw, client.as_ref()) {
+        let validated = match validate(&raw, client.as_ref(), tenant.settings.registration) {
             Ok(v) => v,
             Err(AuthorizeError::ErrorPage { error_key, detail }) => {
                 return Ok(AuthorizeOutcome::ErrorPage { error_key, detail });
@@ -283,6 +373,12 @@ impl AuthorizeService {
             },
         };
 
+        // The user asked to create an account: registration, whether or not a session exists.
+        if params.prompt.iter().any(|p| p == PROMPT_CREATE) {
+            let request_id = self.store_request(tenant, &client, &params, now).await?;
+            return Ok(AuthorizeOutcome::Register { request_id });
+        }
+
         let session = self.usable_session(tenant, session).await?;
         let mfa = mfa_context(
             self.storage.as_ref(),
@@ -323,6 +419,10 @@ impl AuthorizeService {
             SessionDecision::RequireLogin | SessionDecision::StepUp => {
                 let request_id = self.store_request(tenant, &client, &params, now).await?;
                 Ok(AuthorizeOutcome::Login { request_id })
+            }
+            SessionDecision::SelectAccount => {
+                let request_id = self.store_request(tenant, &client, &params, now).await?;
+                Ok(AuthorizeOutcome::SelectAccount { request_id })
             }
             SessionDecision::Fail(error) => Ok(fail(error)),
         }
@@ -437,8 +537,11 @@ impl AuthorizeService {
             session.as_ref(),
         )
         .await?;
+        // After an Allow the stored grant decides (`prompt=consent` was just honoured); after
+        // the chooser `select_account` was.
+        let prompt = stage.prompt(&params.prompt);
         match decide(
-            &params.prompt,
+            &prompt,
             params.max_age,
             session.as_ref(),
             None,
@@ -450,16 +553,6 @@ impl AuthorizeService {
                 let session = session.ok_or_else(|| {
                     CoreError::Internal("UseSession decided without a session".to_owned())
                 })?;
-                // After an Allow the stored grant decides; `prompt=consent` was just honoured.
-                let prompt: Vec<String> = match stage {
-                    Stage::AfterLogin => params.prompt.clone(),
-                    Stage::AfterConsent { .. } => params
-                        .prompt
-                        .iter()
-                        .filter(|p| p.as_str() != "consent")
-                        .cloned()
-                        .collect(),
-                };
                 match self
                     .consent_needed(tenant, &client, &params, &session, &prompt)
                     .await?
@@ -491,12 +584,148 @@ impl AuthorizeService {
             SessionDecision::RequireLogin | SessionDecision::StepUp => {
                 Ok(AuthorizeOutcome::Login { request_id })
             }
+            SessionDecision::SelectAccount => Ok(AuthorizeOutcome::SelectAccount { request_id }),
             SessionDecision::Fail(error) => {
                 self.storage
                     .grants()
                     .delete_authorization_request(tenant.id, request_id)
                     .await?;
                 Ok(error_response(&params, &error, issuer))
+            }
+        }
+    }
+
+    /// Opens the account chooser for a stored request: a flow bound to the session's user and
+    /// to the request, and what the page shows.
+    pub async fn start_select_account(
+        &self,
+        tenant: &Tenant,
+        session: &BrowserSession,
+        request_id: AuthRequestId,
+    ) -> Result<SelectAccountStart, CoreError> {
+        if session.tenant_id != tenant.id {
+            return Err(CoreError::Forbidden);
+        }
+        let now = self.clock.now();
+        let Some(request) = self
+            .storage
+            .grants()
+            .get_authorization_request(tenant.id, request_id, now)
+            .await?
+        else {
+            return Ok(SelectAccountStart::RequestExpired);
+        };
+        let Some(client) = self
+            .storage
+            .clients()
+            .get(tenant.id, &request.client_id)
+            .await?
+        else {
+            return Ok(SelectAccountStart::RequestExpired);
+        };
+        let Some(user) = self.storage.users().get(tenant.id, session.user_id).await? else {
+            return Err(CoreError::Forbidden);
+        };
+        let cookie = random_token();
+        let csrf = random_token();
+        let new = NewFlow {
+            id: FlowId::new_v7(),
+            kind: FlowKind::Consent,
+            state: ConsentState::for_apps(session.user_id).to_json(),
+            csrf_hash: SecretHash(secret_hash(&csrf)),
+            cookie_hash: SecretHash(secret_hash(&cookie)),
+            auth_request_id: Some(request_id),
+            created_at: now,
+            expires_at: now + FLOW_LIFETIME,
+        };
+        self.storage.flows().create(tenant.id, &new).await?;
+        Ok(SelectAccountStart::Started {
+            flow: StartedConsentFlow {
+                flow_id: new.id,
+                cookie_token: SecretString::from(cookie),
+                csrf_token: SecretString::from(csrf),
+            },
+            page: SelectAccountPage {
+                request_id,
+                client_name: client.name,
+                user_name: user.claims.name.filter(|n| !n.trim().is_empty()),
+                user_email: user.email,
+            },
+        })
+    }
+
+    /// Applies the account chooser's answer for `request_id`. The submission must carry the
+    /// chooser flow's cookie and CSRF token, and the flow must belong to the session's user and
+    /// to this request; otherwise [`CoreError::Forbidden`]. The flow is used up first, so a
+    /// page answers once. `Ok(None)` when the flow expired or was already used (show the
+    /// chooser again).
+    ///
+    /// - [`AccountChoice::Continue`]: the request continues as if the session had been used
+    ///   (consent and step-up still apply), without `select_account`.
+    /// - [`AccountChoice::Other`]: [`AuthorizeOutcome::Login`]; the stored request answers only
+    ///   to a sign-in during the request or to a later "Continue" on the chooser.
+    pub async fn choose_account(
+        &self,
+        tenant: &Tenant,
+        issuer: &str,
+        request_id: AuthRequestId,
+        session: BrowserSession,
+        binding: &AccountChoiceBinding<'_>,
+        choice: AccountChoice,
+    ) -> Result<Option<AuthorizeOutcome>, CoreError> {
+        let now = self.clock.now();
+        if session.tenant_id != tenant.id {
+            return Err(CoreError::Forbidden);
+        }
+        let Some(flow) = self
+            .storage
+            .flows()
+            .get(tenant.id, binding.flow_id, now)
+            .await?
+        else {
+            return Ok(None);
+        };
+        if flow.kind != FlowKind::Consent {
+            return Err(CoreError::Forbidden);
+        }
+        match check_binding(&flow, binding.cookie_token, binding.csrf_token, now) {
+            Ok(()) => {}
+            Err(BindingError::Expired) => return Ok(None),
+            Err(BindingError::Forbidden) => return Err(CoreError::Forbidden),
+        }
+        let state =
+            ConsentState::from_json(&flow.state).map_err(|e| CoreError::Internal(e.to_string()))?;
+        if state.user != session.user_id
+            || state.request.is_some()
+            || flow.auth_request_id != Some(request_id)
+        {
+            return Err(CoreError::Forbidden);
+        }
+        if !self.storage.flows().delete(tenant.id, flow.id).await? {
+            return Ok(None);
+        }
+        match choice {
+            AccountChoice::Continue => self
+                .continue_request(
+                    tenant,
+                    issuer,
+                    request_id,
+                    Some(session),
+                    Stage::AfterAccountChosen,
+                )
+                .await
+                .map(Some),
+            AccountChoice::Other => {
+                if self
+                    .storage
+                    .grants()
+                    .get_authorization_request(tenant.id, request_id, now)
+                    .await?
+                    .is_none()
+                {
+                    return Ok(Some(flow_expired()));
+                }
+                Ok(Some(AuthorizeOutcome::Login { request_id }))
             }
         }
     }
@@ -672,6 +901,44 @@ mod tests {
         let (other, _, other_family) = build_code(&c, &p, &s, NOW);
         assert_ne!(other.expose_secret(), plain);
         assert_ne!(other_family.id, family.id);
+    }
+
+    fn prompts(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn each_stage_drops_the_prompt_values_already_answered() {
+        let all = prompts(&["login", "consent", "select_account", "create"]);
+        assert_eq!(Stage::AfterLogin.prompt(&all), all);
+        assert_eq!(
+            Stage::AfterAccountChosen.prompt(&all),
+            prompts(&["login", "consent", "create"])
+        );
+        for approved in [true, false] {
+            assert_eq!(
+                Stage::AfterConsent { approved }.prompt(&all),
+                prompts(&["login", "create"])
+            );
+        }
+    }
+
+    #[test]
+    fn after_the_chooser_the_old_session_is_used_once_more() {
+        // "Continue as …": the session predates the request, yet the decision without
+        // select_account uses it (no second chooser, no forced login).
+        let s = session();
+        let created = NOW - Duration::seconds(10);
+        let p = prompts(&["select_account"]);
+        assert!(matches!(
+            decide(&p, None, Some(&s), None, created, NOW, MfaContext::NONE),
+            SessionDecision::SelectAccount
+        ));
+        let p = Stage::AfterAccountChosen.prompt(&p);
+        assert!(matches!(
+            decide(&p, None, Some(&s), None, created, NOW, MfaContext::NONE),
+            SessionDecision::UseSession
+        ));
     }
 
     #[test]
