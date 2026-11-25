@@ -112,7 +112,10 @@ async fn default_tenant_discovery() {
     assert_eq!(doc["request_parameter_supported"], false);
     assert_eq!(strings(&doc["prompt_values_supported"]), ["none", "login"]);
     assert_eq!(strings(&doc["response_types_supported"]), ["code"]);
-    assert_eq!(strings(&doc["response_modes_supported"]), ["query"]);
+    assert_eq!(
+        strings(&doc["response_modes_supported"]),
+        ["query", "form_post"]
+    );
     assert_eq!(
         strings(&doc["acr_values_supported"]),
         [anvil_core::model::ACR_PWD]
@@ -132,9 +135,88 @@ async fn issuer_has_no_trailing_slash_and_no_none_alg() {
     for field in [
         "id_token_signing_alg_values_supported",
         "token_endpoint_auth_signing_alg_values_supported",
+        "introspection_endpoint_auth_signing_alg_values_supported",
+        "revocation_endpoint_auth_signing_alg_values_supported",
     ] {
         assert!(!strings(&doc[field]).contains(&"none"), "{field}");
     }
+}
+
+#[tokio::test]
+async fn introspection_and_revocation_are_advertised() {
+    let app = TestApp::new().await;
+    let doc = json(&app.get("/.well-known/openid-configuration").await);
+    assert_eq!(doc["introspection_endpoint"], "https://op.test/introspect");
+    assert_eq!(doc["revocation_endpoint"], "https://op.test/revoke");
+    let token_methods = strings(&doc["token_endpoint_auth_methods_supported"]);
+    assert_eq!(
+        token_methods,
+        [
+            "client_secret_basic",
+            "client_secret_post",
+            "private_key_jwt",
+            "none"
+        ]
+    );
+    // Revocation accepts every token-endpoint method (public clients revoke their own tokens).
+    assert_eq!(
+        strings(&doc["revocation_endpoint_auth_methods_supported"]),
+        token_methods
+    );
+    // Introspection refuses public clients, so `none` is not advertised.
+    assert_eq!(
+        strings(&doc["introspection_endpoint_auth_methods_supported"]),
+        [
+            "client_secret_basic",
+            "client_secret_post",
+            "private_key_jwt"
+        ]
+    );
+    for field in [
+        "introspection_endpoint_auth_signing_alg_values_supported",
+        "revocation_endpoint_auth_signing_alg_values_supported",
+    ] {
+        assert_eq!(
+            doc[field], doc["token_endpoint_auth_signing_alg_values_supported"],
+            "{field}"
+        );
+    }
+    // The advertised endpoints exist (POST only).
+    for path in ["/introspect", "/revoke"] {
+        assert_eq!(app.get(path).await.status, 405, "{path}");
+    }
+}
+
+#[tokio::test]
+async fn id_token_algs_follow_the_tenant_settings() {
+    let app = TestApp::new().await;
+    app.storage()
+        .tenants()
+        .create(&NewTenant {
+            id: TenantId::new_v7(),
+            slug: "acme".into(),
+            display_name: "Acme".into(),
+            host: None,
+            settings: TenantSettings {
+                signing_algs: vec!["ES256".into(), "Ed25519".into()],
+                ..TenantSettings::default()
+            },
+            created_at: app.clock().now(),
+        })
+        .await
+        .expect("create the acme tenant");
+    let doc = json(&app.get("/t/acme/.well-known/openid-configuration").await);
+    // RS256 is always enabled.
+    assert_eq!(
+        strings(&doc["id_token_signing_alg_values_supported"]),
+        ["RS256", "ES256", "Ed25519"]
+    );
+    // The default tenant still publishes RS256 only.
+    let root = json(&app.get("/.well-known/openid-configuration").await);
+    assert_eq!(
+        strings(&root["id_token_signing_alg_values_supported"]),
+        ["RS256"]
+    );
 }
 
 #[tokio::test]

@@ -356,7 +356,10 @@ mod tests {
         old.absolute_expires_at = now();
         assert!(!refresh_active(&rt(&f), &old, now()));
 
-        assert!(!refresh_active(&rt(&f), &family("rp"), now()), "other family");
+        assert!(
+            !refresh_active(&rt(&f), &family("rp"), now()),
+            "other family"
+        );
     }
 
     #[test]
@@ -371,8 +374,8 @@ mod tests {
             iat: Some(now()),
             jti: Some("j1".into()),
         };
-        let v = serde_json::to_value(IntrospectionResponse::access(claims, "https://op.test"))
-            .unwrap();
+        let v =
+            serde_json::to_value(IntrospectionResponse::access(claims, "https://op.test")).unwrap();
         assert_eq!(v["active"], true);
         assert_eq!(v["scope"], "email openid");
         assert_eq!(v["client_id"], "rp");

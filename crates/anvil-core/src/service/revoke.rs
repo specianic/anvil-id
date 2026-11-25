@@ -187,7 +187,12 @@ impl RevocationService {
     ) -> Result<(), CoreError> {
         self.storage
             .grants()
-            .revoke_family(tenant.id, family, RevokeReason::TokenRevoked, self.clock.now())
+            .revoke_family(
+                tenant.id,
+                family,
+                RevokeReason::TokenRevoked,
+                self.clock.now(),
+            )
             .await?;
         self.audit(tenant, caller, Some(family), kind, ctx).await
     }
