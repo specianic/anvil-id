@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM job_lease WHERE name = $1 AND owner = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "08d8b2d28ef3611d5a9f6304994cbf65ae961782416eea53fc2e36e88f0d8f3d"
+}

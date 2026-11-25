@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO credential\n             (id, tenant_id, user_id, kind, data, external_id, counter, backup_eligible, label,\n              created_at, updated_at)\n         SELECT $1, $2, $3, 'webauthn', $4, $5, $6, $7, $8, $9, $9\n          WHERE EXISTS (SELECT 1 FROM \"user\" WHERE tenant_id = $2 AND id = $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Bytea",
+        "Int8",
+        "Bool",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f344f0bac0d7f42144e9b3d41afde5147309d068e91aa01af5b610f0bb53e7ff"
+}

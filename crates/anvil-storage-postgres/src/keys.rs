@@ -128,26 +128,83 @@ impl KeyRepo for PgKeys {
         .collect()
     }
 
-    // TRANSITIONAL(03-06): Phase 3 methods, implemented with the 0003 migration.
-    async fn list(&self, _tenant: TenantId) -> Result<Vec<SigningKey>, StorageError> {
-        crate::pending::unsupported("KeyRepo::list")
+    async fn list(&self, tenant: TenantId) -> Result<Vec<SigningKey>, StorageError> {
+        sqlx::query_as!(
+            KeyRow,
+            "SELECT id, tenant_id, kid, alg, state, private_key_enc, public_jwk, created_at,
+                    activated_at, retired_at, expires_at
+               FROM signing_key
+              WHERE tenant_id = $1
+              ORDER BY id",
+            tenant.0,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_err)?
+        .into_iter()
+        .map(KeyRow::into_model)
+        .collect()
     }
 
     async fn promote(
         &self,
-        _tenant: TenantId,
-        _retire: Option<(SigningKeyId, OffsetDateTime)>,
-        _activate: SigningKeyId,
-        _now: OffsetDateTime,
+        tenant: TenantId,
+        retire: Option<(SigningKeyId, OffsetDateTime)>,
+        activate: SigningKeyId,
+        now: OffsetDateTime,
     ) -> Result<bool, StorageError> {
-        crate::pending::unsupported("KeyRepo::promote")
+        // `signing_key_one_active` is a non-deferrable partial unique index, checked per row: the
+        // old key is retired first, then the next key activated, in one transaction. Returning
+        // early drops `tx`, which rolls back.
+        let mut tx = self.pool.begin().await.map_err(map_err)?;
+        if let Some((old, expires_at)) = retire {
+            let retired = sqlx::query!(
+                "UPDATE signing_key SET state = 'retired', retired_at = $3, expires_at = $4
+                  WHERE tenant_id = $1 AND id = $2 AND state = 'active'",
+                tenant.0,
+                old.0,
+                now,
+                expires_at,
+            )
+            .execute(&mut *tx)
+            .await
+            .map_err(map_err)?;
+            if retired.rows_affected() != 1 {
+                return Ok(false);
+            }
+        }
+        // A second active key of the same alg is a unique violation: `Conflict`, rolled back.
+        let activated = sqlx::query!(
+            "UPDATE signing_key SET state = 'active', activated_at = $3
+              WHERE tenant_id = $1 AND id = $2 AND state = 'next'",
+            tenant.0,
+            activate.0,
+            now,
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(map_err)?;
+        if activated.rows_affected() != 1 {
+            return Ok(false);
+        }
+        tx.commit().await.map_err(map_err)?;
+        Ok(true)
     }
 
     async fn delete_expired(
         &self,
-        _tenant: TenantId,
-        _now: OffsetDateTime,
+        tenant: TenantId,
+        now: OffsetDateTime,
     ) -> Result<u64, StorageError> {
-        crate::pending::unsupported("KeyRepo::delete_expired")
+        let done = sqlx::query!(
+            "DELETE FROM signing_key
+              WHERE tenant_id = $1 AND state = 'retired' AND expires_at <= $2",
+            tenant.0,
+            now,
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(map_err)?;
+        Ok(done.rows_affected())
     }
 }

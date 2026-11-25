@@ -1,5 +1,5 @@
 //! `GrantRepo` on Postgres: authorization requests, codes, token families, refresh tokens and
-//! replay guards.
+//! replay guards; opaque access tokens; consent (delegated to `consent`).
 //!
 //! Concurrency (READ COMMITTED): every race is decided by one conditional statement. Competing
 //! `UPDATE … WHERE consumed_at IS NULL` statements block on the row lock and re-evaluate the
@@ -17,6 +17,7 @@ use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+use crate::consent;
 use crate::convert::{enum_from, from_json, hash, map_err, opt_from_json, opt_hash, to_json};
 
 #[derive(Debug, Clone)]
@@ -88,6 +89,44 @@ where
     .map_err(map_err)?
     .map(FamilyRow::into_model)
     .transpose()
+}
+
+/// Inserts a token family on any executor. `Conflict` on a duplicate id.
+async fn insert_family<'e, E>(
+    exec: E,
+    tenant: TenantId,
+    family: &NewTokenFamily,
+) -> Result<(), StorageError>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    let claims = family
+        .claims
+        .as_ref()
+        .map(|c| to_json("token_family.claims", c))
+        .transpose()?;
+    sqlx::query!(
+        "INSERT INTO token_family
+             (id, tenant_id, client_id, user_id, scope, auth_time, acr, amr, session_id,
+              claims, created_at, absolute_expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+        family.id.0,
+        tenant.0,
+        family.client_id,
+        family.user_id.map(|u| u.0),
+        family.scope,
+        family.auth_time,
+        family.acr,
+        &family.amr,
+        family.session_id.map(|s| s.0),
+        claims,
+        family.created_at,
+        family.absolute_expires_at,
+    )
+    .execute(exec)
+    .await
+    .map_err(map_err)?;
+    Ok(())
 }
 
 async fn insert_refresh<'e, E>(
@@ -199,34 +238,9 @@ impl GrantRepo for PgGrants {
                 "authorization code token_family_id does not match the family".to_owned(),
             ));
         }
-        let claims = family
-            .claims
-            .as_ref()
-            .map(|c| to_json("token_family.claims", c))
-            .transpose()?;
         // Family first, then the code, in one transaction: a conflict on either rolls back both.
         let mut tx = self.pool.begin().await.map_err(map_err)?;
-        sqlx::query!(
-            "INSERT INTO token_family
-                 (id, tenant_id, client_id, user_id, scope, auth_time, acr, amr, session_id,
-                  claims, created_at, absolute_expires_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
-            family.id.0,
-            tenant.0,
-            family.client_id,
-            family.user_id.map(|u| u.0),
-            family.scope,
-            family.auth_time,
-            family.acr,
-            &family.amr,
-            family.session_id.map(|s| s.0),
-            claims,
-            family.created_at,
-            family.absolute_expires_at,
-        )
-        .execute(&mut *tx)
-        .await
-        .map_err(map_err)?;
+        insert_family(&mut *tx, tenant, family).await?;
         sqlx::query!(
             "INSERT INTO authorization_code
                  (code_hash, tenant_id, client_id, user_id, session_id, redirect_uri, scope,
@@ -503,73 +517,131 @@ impl GrantRepo for PgGrants {
         })
     }
 
-    // TRANSITIONAL(03-06): Phase 3 methods, implemented with the 0003 migration.
     async fn create_family(
         &self,
-        _tenant: TenantId,
-        _family: &NewTokenFamily,
+        tenant: TenantId,
+        family: &NewTokenFamily,
     ) -> Result<(), StorageError> {
-        crate::pending::unsupported("GrantRepo::create_family")
+        insert_family(&self.pool, tenant, family).await
     }
 
     async fn create_access_token(
         &self,
-        _tenant: TenantId,
-        _token: &NewAccessToken,
+        tenant: TenantId,
+        token: &NewAccessToken,
     ) -> Result<(), StorageError> {
-        crate::pending::unsupported("GrantRepo::create_access_token")
+        sqlx::query!(
+            "INSERT INTO access_token
+                 (token_hash, tenant_id, family_id, client_id, user_id, scope, created_at,
+                  expires_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            token.token_hash.as_bytes().as_slice(),
+            tenant.0,
+            token.family_id.map(|f| f.0),
+            token.client_id,
+            token.user_id.map(|u| u.0),
+            token.scope,
+            token.created_at,
+            token.expires_at,
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(map_err)?;
+        Ok(())
     }
 
     async fn find_access_token(
         &self,
-        _tenant: TenantId,
-        _token_hash: &SecretHash,
+        tenant: TenantId,
+        token_hash: &SecretHash,
     ) -> Result<Option<(AccessTokenRecord, Option<TokenFamily>)>, StorageError> {
-        crate::pending::unsupported("GrantRepo::find_access_token")
+        let Some(r) = sqlx::query!(
+            "SELECT token_hash, tenant_id, family_id, client_id, user_id, scope, created_at,
+                    expires_at, revoked_at
+               FROM access_token
+              WHERE tenant_id = $1 AND token_hash = $2",
+            tenant.0,
+            token_hash.as_bytes().as_slice(),
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_err)?
+        else {
+            return Ok(None);
+        };
+        let family = match r.family_id {
+            // The family FK (ON DELETE CASCADE) guarantees the family exists.
+            Some(id) => Some(fetch_family(&self.pool, tenant, id).await?.ok_or_else(|| {
+                StorageError::Corrupt("access_token.family_id: family missing".to_owned())
+            })?),
+            None => None,
+        };
+        let token = AccessTokenRecord {
+            token_hash: hash("access_token.token_hash", &r.token_hash)?,
+            tenant_id: TenantId(r.tenant_id),
+            family_id: r.family_id.map(TokenFamilyId),
+            client_id: r.client_id,
+            user_id: r.user_id.map(UserId),
+            scope: r.scope,
+            created_at: r.created_at,
+            expires_at: r.expires_at,
+            revoked_at: r.revoked_at,
+        };
+        Ok(Some((token, family)))
     }
 
     async fn revoke_access_token(
         &self,
-        _tenant: TenantId,
-        _token_hash: &SecretHash,
-        _now: OffsetDateTime,
+        tenant: TenantId,
+        token_hash: &SecretHash,
+        now: OffsetDateTime,
     ) -> Result<bool, StorageError> {
-        crate::pending::unsupported("GrantRepo::revoke_access_token")
+        let done = sqlx::query!(
+            "UPDATE access_token SET revoked_at = $3
+              WHERE tenant_id = $1 AND token_hash = $2 AND revoked_at IS NULL",
+            tenant.0,
+            token_hash.as_bytes().as_slice(),
+            now,
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(map_err)?;
+        Ok(done.rows_affected() > 0)
     }
 
     async fn consent(
         &self,
-        _tenant: TenantId,
-        _user: UserId,
-        _client_id: &str,
+        tenant: TenantId,
+        user: UserId,
+        client_id: &str,
     ) -> Result<Option<ConsentGrant>, StorageError> {
-        crate::pending::unsupported("GrantRepo::consent")
+        consent::consent(&self.pool, tenant, user, client_id).await
     }
 
     async fn list_consents(
         &self,
-        _tenant: TenantId,
-        _user: UserId,
+        tenant: TenantId,
+        user: UserId,
     ) -> Result<Vec<ConsentGrant>, StorageError> {
-        crate::pending::unsupported("GrantRepo::list_consents")
+        consent::list_consents(&self.pool, tenant, user).await
     }
 
     async fn upsert_consent(
         &self,
-        _tenant: TenantId,
-        _consent: &NewConsent,
-        _now: OffsetDateTime,
+        tenant: TenantId,
+        consent: &NewConsent,
+        now: OffsetDateTime,
     ) -> Result<ConsentGrant, StorageError> {
-        crate::pending::unsupported("GrantRepo::upsert_consent")
+        consent::upsert_consent(&self.pool, tenant, consent, now).await
     }
 
     async fn revoke_consent(
         &self,
-        _tenant: TenantId,
-        _user: UserId,
-        _client_id: &str,
-        _now: OffsetDateTime,
+        tenant: TenantId,
+        user: UserId,
+        client_id: &str,
+        now: OffsetDateTime,
     ) -> Result<bool, StorageError> {
-        crate::pending::unsupported("GrantRepo::revoke_consent")
+        consent::revoke_consent(&self.pool, tenant, user, client_id, now).await
     }
 }

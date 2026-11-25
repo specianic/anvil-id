@@ -1,0 +1,186 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, tenant_id, user_id, token_hash, auth_time, acr, amr, created_at,\n                    last_seen_at, expires_at, idle_expires_at, revoked_at, ip, user_agent\n               FROM browser_session\n              WHERE tenant_id = $1 AND token_hash = $2 AND revoked_at IS NULL\n                AND expires_at > $3 AND idle_expires_at > $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "browser_session",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "tenant_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "browser_session",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "user_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "browser_session",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "token_hash",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "browser_session",
+            "name": "token_hash"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "auth_time",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "browser_session",
+            "name": "auth_time"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "acr",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "browser_session",
+            "name": "acr"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "amr",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "browser_session",
+            "name": "amr"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "browser_session",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "last_seen_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "browser_session",
+            "name": "last_seen_at"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "expires_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "browser_session",
+            "name": "expires_at"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "idle_expires_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "browser_session",
+            "name": "idle_expires_at"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "revoked_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "browser_session",
+            "name": "revoked_at"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "ip",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "browser_session",
+            "name": "ip"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "user_agent",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "browser_session",
+            "name": "user_agent"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bytea",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "e6ebd640f6942c2cc5071e3411abae5a32e1eb6243a0414e17b5d06bd8d77ef5"
+}

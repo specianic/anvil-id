@@ -1,4 +1,5 @@
-//! `UserRepo` on Postgres: users, password credentials and self-service tokens.
+//! `UserRepo` on Postgres: users, password credentials and self-service tokens. Passkey, TOTP
+//! and recovery-code methods live in `credentials`.
 
 use anvil_core::model::{
     CounterOutcome, CredentialId, CredentialSummary, NewEmail, NewPasskey, NewPasswordCredential,
@@ -12,6 +13,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::convert::{enum_from, fetch_limit, from_json, into_page, map_err, to_json};
+use crate::credentials;
 use crate::outbox::enqueue_email;
 
 #[derive(Debug, Clone)]
@@ -107,12 +109,13 @@ where
     E: sqlx::PgExecutor<'e>,
 {
     sqlx::query!(
-        "INSERT INTO credential (tenant_id, user_id, kind, data, created_at, updated_at)
-         VALUES ($1, $2, 'password', $3, $4, $4)",
+        "INSERT INTO credential (id, tenant_id, user_id, kind, data, created_at, updated_at)
+         VALUES ($5, $1, $2, 'password', $3, $4, $4)",
         tenant.0,
         user.0,
         p.phc,
         p.created_at,
+        CredentialId::new_v7().0,
     )
     .execute(exec)
     .await
@@ -444,7 +447,7 @@ impl UserRepo for PgUsers {
             "UPDATE self_service_token SET consumed_at = $3
               WHERE tenant_id = $1 AND token_hash = $2 AND kind = ANY($4)
                 AND consumed_at IS NULL AND expires_at > $3
-          RETURNING user_id",
+          RETURNING user_id, email",
             tenant.0,
             token_hash.as_bytes().as_slice(),
             now,
@@ -499,132 +502,121 @@ impl UserRepo for PgUsers {
         .map_err(map_err)?;
         if let Some(notice) = notice {
             // The recipient is the address the consumed token was sent to.
-            // TRANSITIONAL(03-06): a runtime-checked query until the consuming UPDATE returns
-            // the email (needs regenerated .sqlx metadata, done with the 0003 migration).
-            let token_email: String = sqlx::query_scalar(
-                "SELECT email FROM self_service_token WHERE tenant_id = $1 AND token_hash = $2",
-            )
-            .bind(tenant.0)
-            .bind(token_hash.as_bytes().as_slice())
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(map_err)?;
-            enqueue_email(&mut *tx, tenant, &notice.to_email(&token_email)).await?;
+            enqueue_email(&mut *tx, tenant, &notice.to_email(&token.email)).await?;
         }
         tx.commit().await.map_err(map_err)?;
         user.into_model().map(Some)
     }
 
-    // TRANSITIONAL(03-06): Phase 3 methods, implemented with the 0003 migration.
     async fn list_credentials(
         &self,
-        _tenant: TenantId,
-        _user: UserId,
+        tenant: TenantId,
+        user: UserId,
     ) -> Result<Vec<CredentialSummary>, StorageError> {
-        crate::pending::unsupported("UserRepo::list_credentials")
+        credentials::list_credentials(&self.pool, tenant, user).await
     }
 
     async fn create_passkey(
         &self,
-        _tenant: TenantId,
-        _user: UserId,
-        _passkey: &NewPasskey,
+        tenant: TenantId,
+        user: UserId,
+        passkey: &NewPasskey,
     ) -> Result<(), StorageError> {
-        crate::pending::unsupported("UserRepo::create_passkey")
+        credentials::create_passkey(&self.pool, tenant, user, passkey).await
     }
 
     async fn passkeys(
         &self,
-        _tenant: TenantId,
-        _user: UserId,
+        tenant: TenantId,
+        user: UserId,
     ) -> Result<Vec<PasskeyCredential>, StorageError> {
-        crate::pending::unsupported("UserRepo::passkeys")
+        credentials::passkeys(&self.pool, tenant, user).await
     }
 
     async fn find_passkey(
         &self,
-        _tenant: TenantId,
-        _credential_id: &[u8],
+        tenant: TenantId,
+        credential_id: &[u8],
     ) -> Result<Option<PasskeyCredential>, StorageError> {
-        crate::pending::unsupported("UserRepo::find_passkey")
+        credentials::find_passkey(&self.pool, tenant, credential_id).await
     }
 
     async fn update_passkey(
         &self,
-        _tenant: TenantId,
-        _id: CredentialId,
-        _passkey_json: &str,
-        _counter: u32,
-        _now: OffsetDateTime,
+        tenant: TenantId,
+        id: CredentialId,
+        passkey_json: &str,
+        counter: u32,
+        now: OffsetDateTime,
     ) -> Result<CounterOutcome, StorageError> {
-        crate::pending::unsupported("UserRepo::update_passkey")
+        credentials::update_passkey(&self.pool, tenant, id, passkey_json, counter, now).await
     }
 
     async fn totp(
         &self,
-        _tenant: TenantId,
-        _user: UserId,
+        tenant: TenantId,
+        user: UserId,
     ) -> Result<Option<TotpCredential>, StorageError> {
-        crate::pending::unsupported("UserRepo::totp")
+        credentials::totp(&self.pool, tenant, user).await
     }
 
     async fn create_totp(
         &self,
-        _tenant: TenantId,
-        _user: UserId,
-        _totp: &NewTotp,
-        _codes: &[RecoveryCodeHash],
-        _now: OffsetDateTime,
+        tenant: TenantId,
+        user: UserId,
+        totp: &NewTotp,
+        codes: &[RecoveryCodeHash],
+        now: OffsetDateTime,
     ) -> Result<(), StorageError> {
-        crate::pending::unsupported("UserRepo::create_totp")
+        credentials::create_totp(&self.pool, tenant, user, totp, codes, now).await
     }
 
     async fn advance_totp_step(
         &self,
-        _tenant: TenantId,
-        _user: UserId,
-        _step: u64,
-        _now: OffsetDateTime,
+        tenant: TenantId,
+        user: UserId,
+        step: u64,
+        now: OffsetDateTime,
     ) -> Result<CounterOutcome, StorageError> {
-        crate::pending::unsupported("UserRepo::advance_totp_step")
+        credentials::advance_totp_step(&self.pool, tenant, user, step, now).await
     }
 
     async fn delete_credential(
         &self,
-        _tenant: TenantId,
-        _user: UserId,
-        _id: CredentialId,
+        tenant: TenantId,
+        user: UserId,
+        id: CredentialId,
     ) -> Result<bool, StorageError> {
-        crate::pending::unsupported("UserRepo::delete_credential")
+        credentials::delete_credential(&self.pool, tenant, user, id).await
     }
 
     async fn replace_recovery_codes(
         &self,
-        _tenant: TenantId,
-        _user: UserId,
-        _codes: &[RecoveryCodeHash],
-        _now: OffsetDateTime,
+        tenant: TenantId,
+        user: UserId,
+        codes: &[RecoveryCodeHash],
+        now: OffsetDateTime,
     ) -> Result<(), StorageError> {
-        crate::pending::unsupported("UserRepo::replace_recovery_codes")
+        credentials::replace_recovery_codes(&self.pool, tenant, user, codes, now).await
     }
 
     async fn consume_recovery_code(
         &self,
-        _tenant: TenantId,
-        _user: UserId,
-        _hash: &RecoveryCodeHash,
-        _now: OffsetDateTime,
-        _notice: Option<&NewEmail>,
+        tenant: TenantId,
+        user: UserId,
+        hash: &RecoveryCodeHash,
+        now: OffsetDateTime,
+        notice: Option<&NewEmail>,
     ) -> Result<bool, StorageError> {
-        crate::pending::unsupported("UserRepo::consume_recovery_code")
+        credentials::consume_recovery_code(&self.pool, tenant, user, hash, now, notice).await
     }
 
     async fn recovery_codes_remaining(
         &self,
-        _tenant: TenantId,
-        _user: UserId,
+        tenant: TenantId,
+        user: UserId,
     ) -> Result<u32, StorageError> {
-        crate::pending::unsupported("UserRepo::recovery_codes_remaining")
+        credentials::recovery_codes_remaining(&self.pool, tenant, user).await
     }
 }
 
@@ -641,15 +633,16 @@ where
     E: sqlx::PgExecutor<'e>,
 {
     let done = sqlx::query!(
-        "INSERT INTO credential (tenant_id, user_id, kind, data, created_at, updated_at)
-         SELECT $1, $2, 'password', $3, $4, $4
+        "INSERT INTO credential (id, tenant_id, user_id, kind, data, created_at, updated_at)
+         SELECT $5, $1, $2, 'password', $3, $4, $4
           WHERE EXISTS (SELECT 1 FROM \"user\" WHERE tenant_id = $1 AND id = $2)
-         ON CONFLICT (user_id, kind) DO UPDATE SET data = EXCLUDED.data,
-                                                   updated_at = EXCLUDED.updated_at",
+         ON CONFLICT (tenant_id, user_id) WHERE kind = 'password'
+         DO UPDATE SET data = EXCLUDED.data, updated_at = EXCLUDED.updated_at",
         tenant.0,
         user.0,
         phc,
         now,
+        CredentialId::new_v7().0,
     )
     .execute(exec)
     .await

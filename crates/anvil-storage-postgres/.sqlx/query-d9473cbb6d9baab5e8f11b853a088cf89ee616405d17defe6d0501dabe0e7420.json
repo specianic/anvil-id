@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE token_family SET revoked_at = $3, revoked_reason = $4\n          WHERE tenant_id = $1 AND session_id = ANY($2) AND revoked_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray",
+        "Timestamptz",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d9473cbb6d9baab5e8f11b853a088cf89ee616405d17defe6d0501dabe0e7420"
+}

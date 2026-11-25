@@ -1,0 +1,76 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT kind, subject, body_html, body_text, updated_at\n               FROM email_template\n              WHERE tenant_id = $1\n              ORDER BY kind COLLATE \"C\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "kind",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "email_template",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "subject",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "email_template",
+            "name": "subject"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "body_html",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "email_template",
+            "name": "body_html"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "body_text",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "email_template",
+            "name": "body_text"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "email_template",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "bde50e44f57fdf7d05ebc00f8ad043477c8c4fdd89457309236bae8bd51e45c7"
+}

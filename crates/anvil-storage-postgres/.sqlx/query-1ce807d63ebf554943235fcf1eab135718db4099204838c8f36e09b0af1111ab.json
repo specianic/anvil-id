@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE access_token SET revoked_at = $3\n              WHERE tenant_id = $1 AND token_hash = $2 AND revoked_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bytea",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1ce807d63ebf554943235fcf1eab135718db4099204838c8f36e09b0af1111ab"
+}

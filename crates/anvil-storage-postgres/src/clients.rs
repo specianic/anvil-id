@@ -13,32 +13,6 @@ use crate::convert::{
     enum_from, enum_names, enums_from, fetch_limit, into_page, map_err, opt_hash,
 };
 
-// TRANSITIONAL(03-06): the Phase 3 client columns (token_format, consent_mode,
-// id_token_signed_response_alg, can_introspect) do not exist yet. Records read back with the
-// defaults; a non-default value is refused explicitly instead of being dropped silently.
-fn ensure_phase3_defaults(c: &NewClient) -> Result<(), StorageError> {
-    if c.token_format != TokenFormat::Jwt
-        || c.consent_mode != ConsentMode::Required
-        || c.id_token_signed_response_alg.is_some()
-        || c.can_introspect
-    {
-        return Err(StorageError::Unsupported("phase 3 client fields"));
-    }
-    Ok(())
-}
-
-// TRANSITIONAL(03-06): see `ensure_phase3_defaults`.
-fn ensure_phase3_update_absent(u: &ClientUpdate) -> Result<(), StorageError> {
-    if u.token_format.is_some()
-        || u.consent_mode.is_some()
-        || u.id_token_signed_response_alg.is_some()
-        || u.can_introspect.is_some()
-    {
-        return Err(StorageError::Unsupported("phase 3 client fields"));
-    }
-    Ok(())
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct PgClients {
     pub(crate) pool: PgPool,
@@ -58,6 +32,10 @@ pub(crate) struct ClientRow {
     grant_types: Vec<String>,
     scopes: Vec<String>,
     require_pkce: bool,
+    token_format: String,
+    consent_mode: String,
+    id_token_signed_response_alg: Option<String>,
+    can_introspect: bool,
     created_at: OffsetDateTime,
     updated_at: OffsetDateTime,
 }
@@ -86,11 +64,18 @@ impl ClientRow {
             grant_types: enums_from("client.grant_types", &self.grant_types, GrantType::parse)?,
             scopes: self.scopes,
             require_pkce: self.require_pkce,
-            // TRANSITIONAL(03-06): columns arrive with the 0003 migration.
-            token_format: TokenFormat::Jwt,
-            consent_mode: ConsentMode::Required,
-            id_token_signed_response_alg: None,
-            can_introspect: false,
+            token_format: enum_from(
+                "client.token_format",
+                &self.token_format,
+                TokenFormat::parse,
+            )?,
+            consent_mode: enum_from(
+                "client.consent_mode",
+                &self.consent_mode,
+                ConsentMode::parse,
+            )?,
+            id_token_signed_response_alg: self.id_token_signed_response_alg,
+            can_introspect: self.can_introspect,
             created_at: self.created_at,
             updated_at: self.updated_at,
         })
@@ -113,11 +98,10 @@ pub(crate) fn client_from_new(tenant: TenantId, c: &NewClient) -> Client {
         grant_types: c.grant_types.clone(),
         scopes: c.scopes.clone(),
         require_pkce: c.require_pkce,
-        // TRANSITIONAL(03-06): columns arrive with the 0003 migration.
-        token_format: TokenFormat::Jwt,
-        consent_mode: ConsentMode::Required,
-        id_token_signed_response_alg: None,
-        can_introspect: false,
+        token_format: c.token_format,
+        consent_mode: c.consent_mode,
+        id_token_signed_response_alg: c.id_token_signed_response_alg.clone(),
+        can_introspect: c.can_introspect,
         created_at: c.created_at,
         updated_at: c.created_at,
     }
@@ -132,15 +116,16 @@ pub(crate) async fn insert_client<'e, E>(
 where
     E: sqlx::PgExecutor<'e>,
 {
-    ensure_phase3_defaults(c)?;
     let secret_hash = c.secret_hash.as_ref().map(|h| h.as_bytes().as_slice());
     let grant_types = enum_names(&c.grant_types, GrantType::as_str);
     sqlx::query!(
         "INSERT INTO client
              (id, tenant_id, client_id, name, client_type, application_type, auth_method,
               secret_hash, jwks, redirect_uris, grant_types, scopes, require_pkce,
+              token_format, consent_mode, id_token_signed_response_alg, can_introspect,
               created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14)",
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
+                 $18, $18)",
         c.id.0,
         tenant.0,
         c.client_id,
@@ -154,6 +139,10 @@ where
         &grant_types,
         &c.scopes,
         c.require_pkce,
+        c.token_format.as_str(),
+        c.consent_mode.as_str(),
+        c.id_token_signed_response_alg,
+        c.can_introspect,
         c.created_at,
     )
     .execute(exec)
@@ -174,6 +163,7 @@ impl ClientRepo for PgClients {
             ClientRow,
             "SELECT id, tenant_id, client_id, name, client_type, application_type, auth_method,
                     secret_hash, jwks, redirect_uris, grant_types, scopes, require_pkce,
+                    token_format, consent_mode, id_token_signed_response_alg, can_introspect,
                     created_at, updated_at
                FROM client
               WHERE tenant_id = $1 AND client_id = $2",
@@ -197,6 +187,7 @@ impl ClientRepo for PgClients {
             ClientRow,
             "SELECT id, tenant_id, client_id, name, client_type, application_type, auth_method,
                     secret_hash, jwks, redirect_uris, grant_types, scopes, require_pkce,
+                    token_format, consent_mode, id_token_signed_response_alg, can_introspect,
                     created_at, updated_at
                FROM client
               WHERE tenant_id = $1 AND ($2::uuid IS NULL OR id > $2)
@@ -223,13 +214,16 @@ impl ClientRepo for PgClients {
         update: &ClientUpdate,
         now: OffsetDateTime,
     ) -> Result<Option<Client>, StorageError> {
-        ensure_phase3_update_absent(update)?;
         let grant_types = update
             .grant_types
             .as_ref()
             .map(|g| enum_names(g, GrantType::as_str));
         let (set_jwks, jwks) = match &update.jwks {
             Some(j) => (true, j.clone()),
+            None => (false, None),
+        };
+        let (set_alg, alg) = match &update.id_token_signed_response_alg {
+            Some(a) => (true, a.clone()),
             None => (false, None),
         };
         sqlx::query_as!(
@@ -241,10 +235,16 @@ impl ClientRepo for PgClients {
                     scopes = COALESCE($6, scopes),
                     require_pkce = COALESCE($7, require_pkce),
                     jwks = CASE WHEN $8 THEN $9 ELSE jwks END,
+                    token_format = COALESCE($11, token_format),
+                    consent_mode = COALESCE($12, consent_mode),
+                    id_token_signed_response_alg =
+                      CASE WHEN $13 THEN $14 ELSE id_token_signed_response_alg END,
+                    can_introspect = COALESCE($15, can_introspect),
                     updated_at = $10
               WHERE tenant_id = $1 AND client_id = $2
           RETURNING id, tenant_id, client_id, name, client_type, application_type, auth_method,
                     secret_hash, jwks, redirect_uris, grant_types, scopes, require_pkce,
+                    token_format, consent_mode, id_token_signed_response_alg, can_introspect,
                     created_at, updated_at",
             tenant.0,
             client_id,
@@ -256,6 +256,11 @@ impl ClientRepo for PgClients {
             set_jwks,
             jwks,
             now,
+            update.token_format.map(|f| f.as_str()),
+            update.consent_mode.map(|m| m.as_str()),
+            set_alg,
+            alg,
+            update.can_introspect,
         )
         .fetch_optional(&self.pool)
         .await

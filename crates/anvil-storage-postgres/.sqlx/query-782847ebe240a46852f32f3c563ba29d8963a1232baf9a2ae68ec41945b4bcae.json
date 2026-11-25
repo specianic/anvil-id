@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE signing_key SET state = 'retired', retired_at = $3, expires_at = $4\n                  WHERE tenant_id = $1 AND id = $2 AND state = 'active'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "782847ebe240a46852f32f3c563ba29d8963a1232baf9a2ae68ec41945b4bcae"
+}

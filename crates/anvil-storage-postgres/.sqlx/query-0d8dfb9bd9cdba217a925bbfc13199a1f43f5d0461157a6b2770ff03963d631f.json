@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE recovery_code SET used_at = $4\n          WHERE tenant_id = $1 AND user_id = $2 AND code_hash = $3 AND used_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Bytea",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0d8dfb9bd9cdba217a925bbfc13199a1f43f5d0461157a6b2770ff03963d631f"
+}

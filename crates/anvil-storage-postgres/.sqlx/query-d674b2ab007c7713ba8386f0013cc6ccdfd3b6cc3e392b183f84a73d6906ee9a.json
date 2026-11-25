@@ -1,0 +1,106 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO consent_grant\n             (id, tenant_id, user_id, client_id, scopes, created_at, updated_at)\n         SELECT $1, $2, $3, $4, $5, $6, $7\n          WHERE EXISTS (SELECT 1 FROM \"user\" WHERE tenant_id = $2 AND id = $3)\n         ON CONFLICT (tenant_id, user_id, client_id) DO UPDATE\n            SET scopes = CASE\n                  WHEN consent_grant.revoked_at IS NULL THEN COALESCE(\n                    (SELECT jsonb_agg(u.s ORDER BY u.s)\n                       FROM (SELECT DISTINCT e COLLATE \"C\" AS s\n                               FROM jsonb_array_elements_text(\n                                      consent_grant.scopes || EXCLUDED.scopes) AS e) AS u),\n                    '[]'::jsonb)\n                  ELSE EXCLUDED.scopes\n                END,\n                updated_at = EXCLUDED.updated_at,\n                revoked_at = NULL\n      RETURNING id, user_id, client_id, scopes, created_at, updated_at, revoked_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "consent_grant",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "consent_grant",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "client_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "consent_grant",
+            "name": "client_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "scopes",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "consent_grant",
+            "name": "scopes"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "consent_grant",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "consent_grant",
+            "name": "updated_at"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "revoked_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "consent_grant",
+            "name": "revoked_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Jsonb",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "d674b2ab007c7713ba8386f0013cc6ccdfd3b6cc3e392b183f84a73d6906ee9a"
+}

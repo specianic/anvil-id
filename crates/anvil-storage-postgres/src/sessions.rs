@@ -1,25 +1,80 @@
 //! `SessionRepo` on Postgres.
 
 use anvil_core::model::{
-    BrowserSession, NewBrowserSession, Page, PageRequest, SecretHash, SessionId, TenantId, UserId,
+    BrowserSession, NewBrowserSession, Page, PageRequest, RevokeReason, SecretHash, SessionId,
+    TenantId, UserId,
 };
 use anvil_core::ports::{SessionRepo, StorageError};
 use sqlx::PgPool;
 use time::OffsetDateTime;
+use uuid::Uuid;
 
-use crate::convert::{hash, map_err};
+use crate::convert::{fetch_limit, hash, into_page, map_err};
 
 #[derive(Debug, Clone)]
 pub(crate) struct PgSessions {
     pub(crate) pool: PgPool,
 }
 
-// TRANSITIONAL(03-06): browser_session has no ip/user_agent columns yet. Sessions read back
-// with `None`; a value is refused explicitly instead of being dropped silently.
-fn ensure_no_request_context(s: &NewBrowserSession) -> Result<(), StorageError> {
-    if s.ip.is_some() || s.user_agent.is_some() {
-        return Err(StorageError::Unsupported("browser session ip/user_agent"));
+struct SessionRow {
+    id: Uuid,
+    tenant_id: Uuid,
+    user_id: Uuid,
+    token_hash: Vec<u8>,
+    auth_time: OffsetDateTime,
+    acr: String,
+    amr: Vec<String>,
+    created_at: OffsetDateTime,
+    last_seen_at: OffsetDateTime,
+    expires_at: OffsetDateTime,
+    idle_expires_at: OffsetDateTime,
+    revoked_at: Option<OffsetDateTime>,
+    ip: Option<String>,
+    user_agent: Option<String>,
+}
+
+impl SessionRow {
+    fn into_model(self) -> Result<BrowserSession, StorageError> {
+        Ok(BrowserSession {
+            id: SessionId(self.id),
+            tenant_id: TenantId(self.tenant_id),
+            user_id: UserId(self.user_id),
+            token_hash: hash("browser_session.token_hash", &self.token_hash)?,
+            auth_time: self.auth_time,
+            acr: self.acr,
+            amr: self.amr,
+            created_at: self.created_at,
+            last_seen_at: self.last_seen_at,
+            expires_at: self.expires_at,
+            idle_expires_at: self.idle_expires_at,
+            revoked_at: self.revoked_at,
+            ip: self.ip,
+            user_agent: self.user_agent,
+        })
     }
+}
+
+/// Revokes the unrevoked token families of `sessions` (reason `SessionRevoked`) on any executor.
+async fn revoke_session_families<'e, E>(
+    exec: E,
+    tenant: TenantId,
+    sessions: &[Uuid],
+    now: OffsetDateTime,
+) -> Result<(), StorageError>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    sqlx::query!(
+        "UPDATE token_family SET revoked_at = $3, revoked_reason = $4
+          WHERE tenant_id = $1 AND session_id = ANY($2) AND revoked_at IS NULL",
+        tenant.0,
+        sessions,
+        now,
+        RevokeReason::SessionRevoked.as_str(),
+    )
+    .execute(exec)
+    .await
+    .map_err(map_err)?;
     Ok(())
 }
 
@@ -30,12 +85,11 @@ impl SessionRepo for PgSessions {
         tenant: TenantId,
         session: &NewBrowserSession,
     ) -> Result<(), StorageError> {
-        ensure_no_request_context(session)?;
         sqlx::query!(
             "INSERT INTO browser_session
                  (id, tenant_id, user_id, token_hash, auth_time, acr, amr, created_at,
-                  last_seen_at, expires_at, idle_expires_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9, $10)",
+                  last_seen_at, expires_at, idle_expires_at, ip, user_agent)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9, $10, $11, $12)",
             session.id.0,
             tenant.0,
             session.user_id.0,
@@ -46,6 +100,8 @@ impl SessionRepo for PgSessions {
             session.created_at,
             session.expires_at,
             session.idle_expires_at,
+            session.ip,
+            session.user_agent,
         )
         .execute(&self.pool)
         .await
@@ -59,9 +115,10 @@ impl SessionRepo for PgSessions {
         token_hash: &SecretHash,
         now: OffsetDateTime,
     ) -> Result<Option<BrowserSession>, StorageError> {
-        let row = sqlx::query!(
+        sqlx::query_as!(
+            SessionRow,
             "SELECT id, tenant_id, user_id, token_hash, auth_time, acr, amr, created_at,
-                    last_seen_at, expires_at, idle_expires_at, revoked_at
+                    last_seen_at, expires_at, idle_expires_at, revoked_at, ip, user_agent
                FROM browser_session
               WHERE tenant_id = $1 AND token_hash = $2 AND revoked_at IS NULL
                 AND expires_at > $3 AND idle_expires_at > $3",
@@ -71,26 +128,8 @@ impl SessionRepo for PgSessions {
         )
         .fetch_optional(&self.pool)
         .await
-        .map_err(map_err)?;
-        row.map(|r| {
-            Ok(BrowserSession {
-                id: SessionId(r.id),
-                tenant_id: TenantId(r.tenant_id),
-                user_id: UserId(r.user_id),
-                token_hash: hash("browser_session.token_hash", &r.token_hash)?,
-                auth_time: r.auth_time,
-                acr: r.acr,
-                amr: r.amr,
-                created_at: r.created_at,
-                last_seen_at: r.last_seen_at,
-                expires_at: r.expires_at,
-                idle_expires_at: r.idle_expires_at,
-                revoked_at: r.revoked_at,
-                // TRANSITIONAL(03-06): columns arrive with the 0003 migration.
-                ip: None,
-                user_agent: None,
-            })
-        })
+        .map_err(map_err)?
+        .map(SessionRow::into_model)
         .transpose()
     }
 
@@ -135,49 +174,134 @@ impl SessionRepo for PgSessions {
         Ok(done.rows_affected() > 0)
     }
 
-    // TRANSITIONAL(03-06): Phase 3 methods, implemented with the 0003 migration.
     async fn get(
         &self,
-        _tenant: TenantId,
-        _id: SessionId,
+        tenant: TenantId,
+        id: SessionId,
     ) -> Result<Option<BrowserSession>, StorageError> {
-        crate::pending::unsupported("SessionRepo::get")
+        sqlx::query_as!(
+            SessionRow,
+            "SELECT id, tenant_id, user_id, token_hash, auth_time, acr, amr, created_at,
+                    last_seen_at, expires_at, idle_expires_at, revoked_at, ip, user_agent
+               FROM browser_session
+              WHERE tenant_id = $1 AND id = $2",
+            tenant.0,
+            id.0,
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_err)?
+        .map(SessionRow::into_model)
+        .transpose()
     }
 
     async fn list_for_user(
         &self,
-        _tenant: TenantId,
-        _user: UserId,
-        _now: OffsetDateTime,
+        tenant: TenantId,
+        user: UserId,
+        now: OffsetDateTime,
     ) -> Result<Vec<BrowserSession>, StorageError> {
-        crate::pending::unsupported("SessionRepo::list_for_user")
+        sqlx::query_as!(
+            SessionRow,
+            "SELECT id, tenant_id, user_id, token_hash, auth_time, acr, amr, created_at,
+                    last_seen_at, expires_at, idle_expires_at, revoked_at, ip, user_agent
+               FROM browser_session
+              WHERE tenant_id = $1 AND user_id = $2 AND revoked_at IS NULL
+                AND expires_at > $3 AND idle_expires_at > $3
+              ORDER BY created_at DESC, id DESC",
+            tenant.0,
+            user.0,
+            now,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_err)?
+        .into_iter()
+        .map(SessionRow::into_model)
+        .collect()
     }
 
     async fn list(
         &self,
-        _tenant: TenantId,
-        _now: OffsetDateTime,
-        _page: PageRequest,
+        tenant: TenantId,
+        now: OffsetDateTime,
+        page: PageRequest,
     ) -> Result<Page<BrowserSession>, StorageError> {
-        crate::pending::unsupported("SessionRepo::list")
+        let limit = page.clamped_limit();
+        let items = sqlx::query_as!(
+            SessionRow,
+            "SELECT id, tenant_id, user_id, token_hash, auth_time, acr, amr, created_at,
+                    last_seen_at, expires_at, idle_expires_at, revoked_at, ip, user_agent
+               FROM browser_session
+              WHERE tenant_id = $1 AND revoked_at IS NULL
+                AND expires_at > $2 AND idle_expires_at > $2
+                AND ($3::uuid IS NULL OR id > $3)
+              ORDER BY id
+              LIMIT $4",
+            tenant.0,
+            now,
+            page.after,
+            fetch_limit(limit),
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_err)?
+        .into_iter()
+        .map(SessionRow::into_model)
+        .collect::<Result<Vec<_>, _>>()?;
+        Ok(into_page(items, limit, |s| s.id.0))
     }
 
     async fn revoke_with_families(
         &self,
-        _tenant: TenantId,
-        _id: SessionId,
-        _now: OffsetDateTime,
+        tenant: TenantId,
+        id: SessionId,
+        now: OffsetDateTime,
     ) -> Result<bool, StorageError> {
-        crate::pending::unsupported("SessionRepo::revoke_with_families")
+        let mut tx = self.pool.begin().await.map_err(map_err)?;
+        let done = sqlx::query!(
+            "UPDATE browser_session SET revoked_at = $3
+              WHERE tenant_id = $1 AND id = $2 AND revoked_at IS NULL",
+            tenant.0,
+            id.0,
+            now,
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(map_err)?;
+        if done.rows_affected() == 0 {
+            return Ok(false);
+        }
+        revoke_session_families(&mut *tx, tenant, &[id.0], now).await?;
+        tx.commit().await.map_err(map_err)?;
+        Ok(true)
     }
 
     async fn revoke_all_for_user(
         &self,
-        _tenant: TenantId,
-        _user: UserId,
-        _except: Option<SessionId>,
-        _now: OffsetDateTime,
+        tenant: TenantId,
+        user: UserId,
+        except: Option<SessionId>,
+        now: OffsetDateTime,
     ) -> Result<u64, StorageError> {
-        crate::pending::unsupported("SessionRepo::revoke_all_for_user")
+        let mut tx = self.pool.begin().await.map_err(map_err)?;
+        let revoked = sqlx::query_scalar!(
+            "UPDATE browser_session SET revoked_at = $4
+              WHERE tenant_id = $1 AND user_id = $2 AND revoked_at IS NULL
+                AND ($3::uuid IS NULL OR id <> $3)
+          RETURNING id",
+            tenant.0,
+            user.0,
+            except.map(|s| s.0),
+            now,
+        )
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(map_err)?;
+        if !revoked.is_empty() {
+            revoke_session_families(&mut *tx, tenant, &revoked, now).await?;
+        }
+        tx.commit().await.map_err(map_err)?;
+        Ok(revoked.len() as u64)
     }
 }

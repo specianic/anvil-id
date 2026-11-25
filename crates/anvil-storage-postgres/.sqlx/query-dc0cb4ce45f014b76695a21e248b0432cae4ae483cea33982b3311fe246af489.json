@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO recovery_code (tenant_id, user_id, code_hash, created_at)\n         SELECT $1, $2, c, $4 FROM unnest($3::bytea[]) AS c\n          WHERE EXISTS (SELECT 1 FROM \"user\" WHERE tenant_id = $1 AND id = $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "ByteaArray",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "dc0cb4ce45f014b76695a21e248b0432cae4ae483cea33982b3311fe246af489"
+}

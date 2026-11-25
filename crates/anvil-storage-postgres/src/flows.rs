@@ -103,15 +103,28 @@ impl FlowRepo for PgFlows {
         Ok(done.rows_affected() > 0)
     }
 
-    // TRANSITIONAL(03-06): Phase 3 methods, implemented with the 0003 migration.
     async fn swap_state(
         &self,
-        _tenant: TenantId,
-        _id: FlowId,
-        _expected: &str,
-        _new: &str,
-        _now: OffsetDateTime,
+        tenant: TenantId,
+        id: FlowId,
+        expected: &str,
+        new: &str,
+        now: OffsetDateTime,
     ) -> Result<bool, StorageError> {
-        crate::pending::unsupported("FlowRepo::swap_state")
+        // Concurrent swaps block on the row lock and re-check `state = expected` against the
+        // committed row, so exactly one of them matches.
+        let done = sqlx::query!(
+            "UPDATE flow SET state = $4
+              WHERE tenant_id = $1 AND id = $2 AND state = $3 AND expires_at > $5",
+            tenant.0,
+            id.0,
+            expected,
+            new,
+            now,
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(map_err)?;
+        Ok(done.rows_affected() > 0)
     }
 }

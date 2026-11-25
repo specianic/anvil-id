@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM access_token WHERE ctid IN\n               (SELECT ctid FROM access_token WHERE expires_at <= $1 LIMIT $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "82dfb227898a8dd6713438e6a77f22ae9d3722cc9c16f4f15f4a0dbc7c27e6e8"
+}

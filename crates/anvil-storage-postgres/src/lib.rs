@@ -5,13 +5,17 @@
 //! one transaction (READ COMMITTED); races are decided by row-level conditional
 //! `UPDATE … RETURNING` / `INSERT … ON CONFLICT`, never by check-then-act.
 
+mod audit;
 mod clients;
+mod consent;
 mod convert;
+mod credentials;
 mod flows;
 mod grants;
+mod jobs;
 mod keys;
+mod mail_settings;
 mod outbox;
-mod pending;
 mod sessions;
 mod setup;
 mod tenants;
@@ -24,11 +28,14 @@ use anvil_core::ports::{
 use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
 
+use crate::audit::PgAudit;
 use crate::clients::PgClients;
 use crate::convert::map_err;
 use crate::flows::PgFlows;
 use crate::grants::PgGrants;
+use crate::jobs::PgJobs;
 use crate::keys::PgKeys;
+use crate::mail_settings::PgMailSettings;
 use crate::outbox::PgOutbox;
 use crate::sessions::PgSessions;
 use crate::setup::PgSetup;
@@ -36,7 +43,7 @@ use crate::tenants::PgTenants;
 use crate::users::PgUsers;
 
 /// Rows deleted per `purge_expired` statement, so a large backlog never holds long locks.
-const PURGE_BATCH: i64 = 1000;
+pub(crate) const PURGE_BATCH: i64 = 1000;
 
 /// Postgres storage backend.
 #[derive(Debug, Clone)]
@@ -51,6 +58,9 @@ pub struct PostgresStorage {
     grants: PgGrants,
     setup: PgSetup,
     outbox: PgOutbox,
+    audit: PgAudit,
+    mail_settings: PgMailSettings,
+    jobs: PgJobs,
 }
 
 impl PostgresStorage {
@@ -75,6 +85,9 @@ impl PostgresStorage {
             grants: PgGrants { pool: pool.clone() },
             setup: PgSetup { pool: pool.clone() },
             outbox: PgOutbox { pool: pool.clone() },
+            audit: PgAudit { pool: pool.clone() },
+            mail_settings: PgMailSettings { pool: pool.clone() },
+            jobs: PgJobs { pool: pool.clone() },
             pool,
         }
     }
@@ -117,15 +130,14 @@ impl Storage for PostgresStorage {
     fn outbox(&self) -> &dyn OutboxRepo {
         &self.outbox
     }
-    // TRANSITIONAL: explicit Unsupported until the 0003 migration (see `pending`).
     fn audit(&self) -> &dyn AuditRepo {
-        &pending::Pending
+        &self.audit
     }
     fn mail_settings(&self) -> &dyn MailSettingsRepo {
-        &pending::Pending
+        &self.mail_settings
     }
     fn jobs(&self) -> &dyn JobRepo {
-        &pending::Pending
+        &self.jobs
     }
 
     async fn purge_expired(&self, now: time::OffsetDateTime) -> Result<u64, StorageError> {
@@ -166,6 +178,10 @@ impl Storage for PostgresStorage {
         total += purge!(
             "DELETE FROM refresh_token WHERE ctid IN
                (SELECT ctid FROM refresh_token WHERE expires_at <= $1 LIMIT $2)"
+        );
+        total += purge!(
+            "DELETE FROM access_token WHERE ctid IN
+               (SELECT ctid FROM access_token WHERE expires_at <= $1 LIMIT $2)"
         );
         total += purge!(
             "DELETE FROM replay_guard WHERE ctid IN
@@ -294,27 +310,25 @@ mod tests {
             .expect("0003 must apply on a populated 0.1 database");
 
         // Rows intact; the password credential got an id; new columns have their defaults.
-        let (id, kind, data, label, backup): (Uuid, String, String, String, bool) =
-            sqlx::query_as(
-                "SELECT id, kind, data, label, backup_eligible FROM credential WHERE user_id = $1",
-            )
-            .bind(user)
-            .fetch_one(&mut conn)
-            .await
-            .expect("the password credential survives");
+        let (id, kind, data, label, backup): (Uuid, String, String, String, bool) = sqlx::query_as(
+            "SELECT id, kind, data, label, backup_eligible FROM credential WHERE user_id = $1",
+        )
+        .bind(user)
+        .fetch_one(&mut conn)
+        .await
+        .expect("the password credential survives");
         assert!(!id.is_nil());
         assert_eq!(
             (kind.as_str(), data.as_str(), label.as_str(), backup),
             ("password", "$argon2id$v=19$fake", "", false)
         );
-        let (fmt, mode, alg, introspect): (String, String, Option<String>, bool) =
-            sqlx::query_as(
-                "SELECT token_format, consent_mode, id_token_signed_response_alg, can_introspect
+        let (fmt, mode, alg, introspect): (String, String, Option<String>, bool) = sqlx::query_as(
+            "SELECT token_format, consent_mode, id_token_signed_response_alg, can_introspect
                    FROM client WHERE client_id = 'web'",
-            )
-            .fetch_one(&mut conn)
-            .await
-            .expect("the client survives");
+        )
+        .fetch_one(&mut conn)
+        .await
+        .expect("the client survives");
         assert_eq!(
             (fmt.as_str(), mode.as_str(), alg, introspect),
             ("jwt", "required", None, false)

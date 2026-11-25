@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE signing_key SET state = 'active', activated_at = $3\n              WHERE tenant_id = $1 AND id = $2 AND state = 'next'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5f1c058e3fe53bba6686f860e8c99020acdce4e2fafeb2591172b45669766feb"
+}

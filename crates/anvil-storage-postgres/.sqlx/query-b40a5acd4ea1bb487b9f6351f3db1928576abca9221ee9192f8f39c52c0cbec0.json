@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO token_family\n                 (id, tenant_id, client_id, user_id, scope, auth_time, acr, amr, session_id,\n                  claims, created_at, absolute_expires_at)\n             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+  "query": "INSERT INTO token_family\n             (id, tenant_id, client_id, user_id, scope, auth_time, acr, amr, session_id,\n              claims, created_at, absolute_expires_at)\n         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
   "describe": {
     "columns": [],
     "parameters": {
@@ -21,5 +21,5 @@
     },
     "nullable": []
   },
-  "hash": "06bf6d1c182b51927dc12c99174f9831440217ef56b8847bb77ce83dc0010f16"
+  "hash": "b40a5acd4ea1bb487b9f6351f3db1928576abca9221ee9192f8f39c52c0cbec0"
 }

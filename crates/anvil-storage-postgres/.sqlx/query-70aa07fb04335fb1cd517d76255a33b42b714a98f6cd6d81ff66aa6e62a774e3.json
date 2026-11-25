@@ -1,0 +1,100 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT host, port, username, password_enc, from_address, tls, updated_at\n               FROM smtp_settings\n              WHERE tenant_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "host",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "smtp_settings",
+            "name": "host"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "port",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "smtp_settings",
+            "name": "port"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "username",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "smtp_settings",
+            "name": "username"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "password_enc",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "smtp_settings",
+            "name": "password_enc"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "from_address",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "smtp_settings",
+            "name": "from_address"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "tls",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "smtp_settings",
+            "name": "tls"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "smtp_settings",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "70aa07fb04335fb1cd517d76255a33b42b714a98f6cd6d81ff66aa6e62a774e3"
+}

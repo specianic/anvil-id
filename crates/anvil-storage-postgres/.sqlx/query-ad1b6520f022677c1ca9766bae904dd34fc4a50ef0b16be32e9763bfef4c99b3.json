@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, tenant_id, client_id, name, client_type, application_type, auth_method,\n                    secret_hash, jwks, redirect_uris, grant_types, scopes, require_pkce,\n                    created_at, updated_at\n               FROM client\n              WHERE tenant_id = $1 AND ($2::uuid IS NULL OR id > $2)\n              ORDER BY id\n              LIMIT $3",
+  "query": "SELECT id, tenant_id, client_id, name, client_type, application_type, auth_method,\n                    secret_hash, jwks, redirect_uris, grant_types, scopes, require_pkce,\n                    token_format, consent_mode, id_token_signed_response_alg, can_introspect,\n                    created_at, updated_at\n               FROM client\n              WHERE tenant_id = $1 AND ($2::uuid IS NULL OR id > $2)\n              ORDER BY id\n              LIMIT $3",
   "describe": {
     "columns": [
       {
@@ -148,6 +148,50 @@
       },
       {
         "ordinal": 13,
+        "name": "token_format",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "token_format"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "consent_mode",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "consent_mode"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "id_token_signed_response_alg",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "id_token_signed_response_alg"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "can_introspect",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "can_introspect"
+          }
+        }
+      },
+      {
+        "ordinal": 17,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -158,7 +202,7 @@
         }
       },
       {
-        "ordinal": 14,
+        "ordinal": 18,
         "name": "updated_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -191,8 +235,12 @@
       false,
       false,
       false,
+      false,
+      true,
+      false,
+      false,
       false
     ]
   },
-  "hash": "19dfc9b22cacd1ff2bdc5fccae939308a713041771818d7d58032f498bfae3fb"
+  "hash": "ad1b6520f022677c1ca9766bae904dd34fc4a50ef0b16be32e9763bfef4c99b3"
 }

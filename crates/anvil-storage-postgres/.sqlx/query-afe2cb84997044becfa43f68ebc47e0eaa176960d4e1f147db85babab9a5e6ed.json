@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM signing_key\n              WHERE tenant_id = $1 AND state = 'retired' AND expires_at <= $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "afe2cb84997044becfa43f68ebc47e0eaa176960d4e1f147db85babab9a5e6ed"
+}

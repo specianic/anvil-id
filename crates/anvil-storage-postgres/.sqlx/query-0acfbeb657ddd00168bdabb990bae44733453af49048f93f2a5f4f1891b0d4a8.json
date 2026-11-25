@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO job_lease (name, owner, leased_until)\n             VALUES ($1, $2, $3)\n             ON CONFLICT (name) DO UPDATE\n                SET owner = EXCLUDED.owner, leased_until = EXCLUDED.leased_until\n              WHERE job_lease.leased_until <= $4 OR job_lease.owner = EXCLUDED.owner\n          RETURNING owner",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "owner",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "job_lease",
+            "name": "owner"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "0acfbeb657ddd00168bdabb990bae44733453af49048f93f2a5f4f1891b0d4a8"
+}

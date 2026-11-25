@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO credential (id, tenant_id, user_id, kind, data, created_at, updated_at)\n         SELECT $1, $2, $3, 'totp', $4, $5, $5\n          WHERE EXISTS (SELECT 1 FROM \"user\" WHERE tenant_id = $2 AND id = $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "20b3e1180ea7d9f0876c4c853a08155c432accda97aae244ee0dc3a16ef337bd"
+}

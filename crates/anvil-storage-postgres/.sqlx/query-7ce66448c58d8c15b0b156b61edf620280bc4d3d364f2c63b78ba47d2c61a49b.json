@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE flow SET state = $4\n              WHERE tenant_id = $1 AND id = $2 AND state = $3 AND expires_at > $5",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7ce66448c58d8c15b0b156b61edf620280bc4d3d364f2c63b78ba47d2c61a49b"
+}

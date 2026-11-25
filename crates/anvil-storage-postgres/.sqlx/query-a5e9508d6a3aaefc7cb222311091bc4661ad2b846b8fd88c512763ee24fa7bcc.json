@@ -1,0 +1,125 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, user_id, external_id, data, counter, backup_eligible, label, created_at,\n                last_used_at\n           FROM credential\n          WHERE tenant_id = $1 AND external_id = $2 AND kind = 'webauthn'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "credential",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "credential",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "external_id",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "credential",
+            "name": "external_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "data",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "credential",
+            "name": "data"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "counter",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "credential",
+            "name": "counter"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "backup_eligible",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "credential",
+            "name": "backup_eligible"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "label",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "credential",
+            "name": "label"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "credential",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "last_used_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "credential",
+            "name": "last_used_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      true,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "a5e9508d6a3aaefc7cb222311091bc4661ad2b846b8fd88c512763ee24fa7bcc"
+}
