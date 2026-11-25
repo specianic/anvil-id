@@ -11,13 +11,17 @@
 //! parameters → response_type →
 //! request / request_uri → PKCE (public clients and `require_pkce` clients only; opted-out
 //! confidential clients may omit both PKCE and nonce) → scope → redirect_uri required for OpenID
-//! requests → prompt / max_age → claims.
+//! requests → prompt / max_age → claims → resource (the only parameter that may repeat;
+//! RFC 8707 §2.1, errors are `invalid_target`).
 
 use crate::error::CoreError;
 use crate::model::{AuthorizationParams, Client, ClientType, Scope};
 use crate::oauth::claims_request::parse_claims;
 use crate::oauth::redirect::redirect_matches;
 use crate::oauth::response_mode::ResponseMode;
+
+/// The only authorization request parameter that may repeat (RFC 8707 §2).
+const REPEATABLE: &str = "resource";
 
 /// Raw authorization request parameters, in arrival order, from the query (GET) or the form
 /// body (POST). Built by the web layer or by [`parse_raw`].
@@ -49,10 +53,23 @@ impl RawParams {
         }
     }
 
+    /// Every non-empty value of a parameter that may repeat, in arrival order. Empty values are
+    /// treated as omitted (RFC 6749 §3.1).
+    pub fn all(&self, name: &str) -> Vec<String> {
+        self.0
+            .iter()
+            .filter(|(k, v)| k == name && !v.is_empty())
+            .map(|(_, v)| v.clone())
+            .collect()
+    }
+
+    /// The first parameter that occurs more than once. `resource` is the only parameter allowed
+    /// to repeat (RFC 8707 §2) and is never reported.
     fn first_duplicate(&self) -> Option<&str> {
         self.0
             .iter()
             .enumerate()
+            .filter(|(_, (k, _))| k != REPEATABLE)
             .find(|(i, (k, _))| self.0[..*i].iter().any(|(p, _)| p == k))
             .map(|(_, (k, _))| k.as_str())
     }
@@ -304,6 +321,12 @@ pub fn validate(
         None => None,
     };
 
+    // 12. resource indicators (RFC 8707 §2.1): absolute URIs without fragment or query, each one
+    // of the client's allowed resources; anything else is invalid_target.
+    let resource = crate::oauth::resource::parse_resources(&raw.all("resource")).map_err(&fail)?;
+    crate::oauth::resource::validate_resources(&resource, &client.allowed_resources)
+        .map_err(&fail)?;
+
     let acr_values = raw
         .get("acr_values")
         .map(|a| a.split_whitespace().map(str::to_owned).collect())
@@ -324,7 +347,7 @@ pub fn validate(
             ui_locales: raw.get("ui_locales").map(str::to_owned),
             claims,
             response_mode,
-            resource: vec![],
+            resource,
         },
         id_token_hint: raw.get("id_token_hint").map(str::to_owned),
     })
@@ -1060,5 +1083,90 @@ pub(crate) mod tests {
             "https://rp.example.test/cb?code=abc"
         );
         assert_eq!(redirect_with(RP, &[]), RP);
+    }
+
+    const API: &str = "https://api.example.test";
+    const MCP: &str = "https://mcp.example.test/mcp";
+
+    fn resource_client() -> Client {
+        let mut c = client();
+        c.allowed_resources = vec![API.to_owned(), MCP.to_owned()];
+        c
+    }
+
+    #[test]
+    fn resource_may_repeat_and_is_stored() {
+        let c = resource_client();
+        let mut p = base();
+        p.push(("resource", MCP));
+        p.push(("resource", API));
+        p.push(("resource", MCP));
+        p.push(("resource", ""));
+        let ok = validate(&raw(&p), Some(&c)).unwrap();
+        assert_eq!(ok.params.resource, vec![MCP.to_owned(), API.to_owned()]);
+    }
+
+    #[test]
+    fn no_resource_is_empty() {
+        let c = resource_client();
+        let ok = validate(&raw(&base()), Some(&c)).unwrap();
+        assert!(ok.params.resource.is_empty());
+        let ok = validate(&with(&[("resource", Some(""))]), Some(&c)).unwrap();
+        assert!(ok.params.resource.is_empty());
+    }
+
+    #[test]
+    fn repeated_resource_does_not_exempt_other_parameters() {
+        let c = resource_client();
+        let mut p = base();
+        p.push(("resource", API));
+        p.push(("resource", MCP));
+        p.push(("scope", "openid"));
+        assert_eq!(
+            redirect_err(validate(&raw(&p), Some(&c))),
+            ("invalid_request", Some("st".to_owned()))
+        );
+    }
+
+    #[test]
+    fn bad_resources_redirect_invalid_target() {
+        let c = resource_client();
+        for bad in [
+            "https://other.example.test",
+            "https://api.example.test/",
+            "/relative",
+            "https://api.example.test#frag",
+            "https://api.example.test?q=1",
+            "api",
+        ] {
+            let mut p = base();
+            p.push(("resource", API));
+            p.push(("resource", bad));
+            assert_eq!(
+                redirect_err(validate(&raw(&p), Some(&c))),
+                ("invalid_target", Some("st".to_owned())),
+                "{bad}"
+            );
+        }
+        // A client without allowed resources may not ask for any.
+        let mut p = base();
+        p.push(("resource", API));
+        assert_eq!(
+            redirect_err(validate(&raw(&p), Some(&client()))).0,
+            "invalid_target"
+        );
+    }
+
+    #[test]
+    fn bad_resource_with_untrusted_redirect_is_still_an_error_page() {
+        let c = resource_client();
+        let mut p = base();
+        p.retain(|(k, _)| *k != "redirect_uri");
+        p.push(("redirect_uri", "https://evil.example.test/cb"));
+        p.push(("resource", "https://other.example.test"));
+        assert_eq!(
+            page_key(validate(&raw(&p), Some(&c))),
+            "redirect_uri_mismatch"
+        );
     }
 }

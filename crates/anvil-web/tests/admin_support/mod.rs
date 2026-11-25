@@ -104,6 +104,7 @@ pub async fn mint_access_token(
             family_id: None,
             auth_time: None,
             acr: None,
+            resource: &[],
         },
     )
     .expect("sign the access token")

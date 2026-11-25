@@ -143,6 +143,7 @@ async fn setup_creates_the_admin_and_a_working_management_client_once() {
         code_verifier: None,
         refresh_token: None,
         scope: Some("admin:read".to_owned()),
+        resource: vec![],
         auth: ClientAuthInput {
             basic: Some(basic(secret)),
             client_id: None,

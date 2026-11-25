@@ -8,6 +8,7 @@ use serde_json::{Map, Value};
 use time::{Duration, OffsetDateTime};
 
 use crate::model::{RequestedClaim, Scope, TokenFamilyId, User};
+use crate::oauth::resource::audience;
 
 /// ID token lifetime (1 hour).
 pub const ID_TOKEN_TTL: Duration = Duration::hours(1);
@@ -228,16 +229,23 @@ pub struct AccessTokenInput<'a> {
     pub family_id: Option<TokenFamilyId>,
     pub auth_time: Option<OffsetDateTime>,
     pub acr: Option<&'a str>,
+    /// The RFC 8707 resources selected for this token (empty = none requested).
+    pub resource: &'a [String],
 }
 
-/// RFC 9068 access token claims. `aud` is the client id (until RFC 8707 resource indicators);
+/// RFC 9068 access token claims. `aud` is the selected resource (a string), several resources
+/// (an array), or the client id when no resource was selected (RFC 8707 §2, RFC 9068 §3);
 /// `fid` carries the token family so revoking the family invalidates the token. The `at+jwt`
 /// `typ` header is set by the signer call, not here.
 pub fn access_token_claims(input: &AccessTokenInput) -> Map<String, Value> {
     let mut m = Map::new();
     m.insert("iss".into(), input.issuer.into());
     m.insert("sub".into(), input.sub.into());
-    m.insert("aud".into(), input.client_id.into());
+    m.insert(
+        "aud".into(),
+        serde_json::to_value(audience(input.resource, input.client_id))
+            .unwrap_or_else(|_| Value::String(input.client_id.to_owned())),
+    );
     m.insert("client_id".into(), input.client_id.into());
     m.insert("scope".into(), input.scope.to_string().into());
     m.insert("iat".into(), input.now.unix_timestamp().into());
@@ -453,6 +461,7 @@ pub(crate) mod tests {
             family_id: Some(fid),
             auth_time: Some(now()),
             acr: Some(ACR_PWD),
+            resource: &[],
         });
         assert_eq!(m["aud"], "rp");
         assert_eq!(m["client_id"], "rp");
@@ -473,10 +482,60 @@ pub(crate) mod tests {
             family_id: None,
             auth_time: None,
             acr: None,
+            resource: &[],
         });
         assert_eq!(cc["sub"], "svc");
         assert_eq!(cc["aud"], "svc");
         assert!(!cc.contains_key("fid"));
         assert!(!cc.contains_key("auth_time"));
+    }
+
+    #[test]
+    fn access_token_aud_follows_the_selected_resources() {
+        let s = scope("openid");
+        let api = "https://api.example.test".to_owned();
+        let mcp = "https://mcp.example.test/mcp".to_owned();
+        let claims = |resource: &[String]| {
+            access_token_claims(&AccessTokenInput {
+                issuer: "https://op.test",
+                sub: "user-1",
+                client_id: "rp",
+                scope: &s,
+                now: now(),
+                jti: "j".into(),
+                family_id: None,
+                auth_time: None,
+                acr: None,
+                resource,
+            })
+        };
+        assert_eq!(claims(&[])["aud"], serde_json::json!("rp"));
+        assert_eq!(
+            claims(std::slice::from_ref(&api))["aud"],
+            serde_json::json!(api)
+        );
+        let both = claims(&[api.clone(), mcp.clone()]);
+        assert_eq!(both["aud"], serde_json::json!([api, mcp]));
+        // client_id stays the client whatever the audience.
+        assert_eq!(both["client_id"], "rp");
+    }
+
+    #[test]
+    fn id_token_aud_is_always_the_client() {
+        // The ID token input has no resources at all: its aud is the client (OIDC Core §2).
+        let m = id_token_claims(&IdTokenInput {
+            issuer: "https://op.test",
+            sub: "user-1",
+            client_id: "rp",
+            now: now(),
+            auth_time: None,
+            nonce: None,
+            acr: None,
+            amr: &[],
+            sid: None,
+            at_hash: None,
+            extra: Map::new(),
+        });
+        assert_eq!(m["aud"], serde_json::json!(["rp"]));
     }
 }

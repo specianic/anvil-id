@@ -19,8 +19,9 @@
 //! # Grants
 //!
 //! Allow stores the union of the granted and the requested scopes (`GrantRepo::upsert_consent`)
-//! and records `consent_granted`. Revoking a grant revokes every token family of that user and
-//! client in the same transaction (`GrantRepo::revoke_consent`) and records `consent_revoked`.
+//! and records `consent_granted`. Requested RFC 8707 resources are shown on the screen but are
+//! not part of the stored grant (Phase 5 gap, see [`ConsentPage::resources`]). Revoking a grant
+//! revokes every token family of that user and client in the same transaction (`GrantRepo::revoke_consent`) and records `consent_revoked`.
 
 use std::sync::Arc;
 
@@ -65,6 +66,11 @@ pub struct ConsentPage {
     pub client_name: String,
     /// The requested scopes, in request order.
     pub scopes: Vec<String>,
+    /// The RFC 8707 resources the tokens will be audience-bound to, in request order (already
+    /// validated against the client's allowed resources). Shown on the screen only: a stored
+    /// grant covers scopes, not resources (resource-aware grants are a Phase 5 item), so a
+    /// remembered consent does not re-prompt for a different resource of the same client.
+    pub resources: Vec<String>,
 }
 
 /// Result of opening the consent screen.
@@ -223,6 +229,7 @@ impl ConsentService {
                 client_id: client.client_id,
                 client_name: client.name,
                 scopes,
+                resources: request.params.resource.clone(),
             },
         })
     }

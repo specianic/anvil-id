@@ -21,6 +21,7 @@ use time::OffsetDateTime;
 
 use crate::error::CoreError;
 use crate::model::{Client, ClientType, RefreshToken, SecretHash, Tenant, TokenFamily};
+use crate::oauth::resource::{Audience, audience};
 use crate::ports::{Clock, Storage};
 use crate::service::userinfo::{AccessTokenClaims, AccessTokenVerifier};
 
@@ -105,8 +106,9 @@ pub struct IntrospectionResponse {
     pub client_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sub: Option<String>,
+    /// A string for one audience, an array for several (RFC 7662 §2.2, RFC 7519 §4.1.3).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub aud: Option<String>,
+    pub aud: Option<Audience>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub iss: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -126,13 +128,13 @@ impl IntrospectionResponse {
         Self::default()
     }
 
-    /// An active access token. `aud` is the client id (RFC 9068 profile until resource
-    /// indicators exist).
+    /// An active access token. `aud` is the token's audience: the JWT `aud` or the opaque
+    /// token's resources, the client id when there are none (RFC 8707, RFC 9068 §3).
     pub fn access(claims: AccessTokenClaims, issuer: &str) -> Self {
         Self {
             active: true,
             scope: Some(claims.scope.to_string()),
-            aud: Some(claims.client_id.clone()),
+            aud: Some(audience(&claims.aud, &claims.client_id)),
             client_id: Some(claims.client_id),
             sub: Some(claims.sub),
             iss: Some(issuer.to_owned()),
@@ -150,7 +152,8 @@ impl IntrospectionResponse {
             scope: Some(token.scope.clone()),
             client_id: Some(family.client_id.clone()),
             sub: family.user_id.map(|u| u.to_string()),
-            aud: Some(family.client_id.clone()),
+            // A refresh token is only ever presented to this AS by its client.
+            aud: Some(Audience::One(family.client_id.clone())),
             iss: Some(issuer.to_owned()),
             exp: Some(token.expires_at.unix_timestamp()),
             iat: Some(token.created_at.unix_timestamp()),
@@ -370,6 +373,7 @@ mod tests {
             sub: "u1".into(),
             client_id: "rp".into(),
             scope: Scope::parse("openid email").unwrap(),
+            aud: vec!["rp".into()],
             family_id: Some(fid),
             exp: now() + Duration::minutes(10),
             iat: Some(now()),
@@ -388,6 +392,35 @@ mod tests {
         assert_eq!(v["token_type"], "Bearer");
         assert_eq!(v["jti"], "j1");
         assert!(v.get("fid").is_none());
+    }
+
+    #[test]
+    fn access_response_aud_follows_the_token_audience() {
+        let base = AccessTokenClaims {
+            sub: "u1".into(),
+            client_id: "rp".into(),
+            scope: Scope::parse("openid").unwrap(),
+            aud: vec!["https://api.example.test".into()],
+            family_id: None,
+            exp: now() + Duration::minutes(10),
+            iat: Some(now()),
+            jti: None,
+        };
+        let v = serde_json::to_value(IntrospectionResponse::access(base.clone(), "https://op"))
+            .unwrap();
+        assert_eq!(v["aud"], "https://api.example.test");
+        assert_eq!(v["client_id"], "rp");
+        let mut many = base.clone();
+        many.aud.push("https://b.example.test".into());
+        let v = serde_json::to_value(IntrospectionResponse::access(many, "https://op")).unwrap();
+        assert_eq!(
+            v["aud"],
+            serde_json::json!(["https://api.example.test", "https://b.example.test"])
+        );
+        let mut none = base;
+        none.aud.clear();
+        let v = serde_json::to_value(IntrospectionResponse::access(none, "https://op")).unwrap();
+        assert_eq!(v["aud"], "rp");
     }
 
     #[test]

@@ -3,7 +3,8 @@
 //! The handler only translates HTTP into a [`TokenRequest`]; every grant, client-authentication
 //! and token rule lives in [`TokenService`]. Errors go through the single
 //! [`errors::oauth_json`](crate::errors::oauth_json) mapping, which adds
-//! `WWW-Authenticate: Basic` when HTTP Basic client authentication failed.
+//! `WWW-Authenticate: Basic` when HTTP Basic client authentication failed and maps
+//! `invalid_target` (RFC 8707) to 400. `resource` is the only parameter that may repeat.
 
 use std::collections::HashMap;
 
@@ -60,9 +61,29 @@ pub(crate) fn is_form(headers: &HeaderMap) -> bool {
 /// parameters must not be included more than once). Parameters without a value are treated as
 /// omitted (RFC 6749 §3.1).
 pub(crate) fn parse_form(body: &[u8]) -> Result<HashMap<String, String>, CoreError> {
+    parse_form_with_repeatable(body, None).map(|(single, _)| single)
+}
+
+/// The only token request parameter that may repeat (RFC 8707 §2.2).
+const RESOURCE: &str = "resource";
+
+/// Like [`parse_form`], except that the parameter named `repeatable` may occur several times;
+/// its non-empty values are returned in arrival order. Every other repeated parameter is still
+/// `invalid_request`.
+fn parse_form_with_repeatable(
+    body: &[u8],
+    repeatable: Option<&str>,
+) -> Result<(HashMap<String, String>, Vec<String>), CoreError> {
     let mut out = HashMap::new();
+    let mut repeated = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for (k, v) in url::form_urlencoded::parse(body) {
+        if repeatable == Some(k.as_ref()) {
+            if !v.is_empty() {
+                repeated.push(v.into_owned());
+            }
+            continue;
+        }
         if !seen.insert(k.clone().into_owned()) {
             return Err(CoreError::InvalidRequest(format!(
                 "parameter {k} is repeated"
@@ -72,7 +93,7 @@ pub(crate) fn parse_form(body: &[u8]) -> Result<HashMap<String, String>, CoreErr
             out.insert(k.into_owned(), v.into_owned());
         }
     }
-    Ok(out)
+    Ok((out, repeated))
 }
 
 fn token_request(
@@ -85,7 +106,7 @@ fn token_request(
             "the token request must be application/x-www-form-urlencoded".to_owned(),
         ));
     }
-    let mut form = parse_form(body)?;
+    let (mut form, resource) = parse_form_with_repeatable(body, Some(RESOURCE))?;
     let basic = match headers.get(header::AUTHORIZATION) {
         None => None,
         Some(v) => Some(
@@ -104,6 +125,7 @@ fn token_request(
         code_verifier: form.remove("code_verifier"),
         refresh_token: form.remove("refresh_token"),
         scope: form.remove("scope"),
+        resource,
         auth: ClientAuthInput {
             basic,
             client_id: form.remove("client_id"),
@@ -194,6 +216,29 @@ mod tests {
         assert_eq!(err.oauth_error(), "invalid_request");
         // Even when one of the copies is empty.
         assert!(parse_form(b"scope=&scope=openid").is_err());
+    }
+
+    #[test]
+    fn only_resource_may_repeat() {
+        let req = token_request(
+            &form_headers(),
+            b"grant_type=x&resource=https%3A%2F%2Fa.test&resource=&resource=https%3A%2F%2Fb.test",
+            RequestContext::system(),
+        )
+        .expect("resource repeats");
+        assert_eq!(req.resource, ["https://a.test", "https://b.test"]);
+        let err = token_request(
+            &form_headers(),
+            b"grant_type=x&resource=https%3A%2F%2Fa.test&scope=a&scope=b",
+            RequestContext::system(),
+        )
+        .expect_err("scope repeated");
+        assert_eq!(err.oauth_error(), "invalid_request");
+        // Other endpoints keep rejecting every repeated parameter, resource included.
+        assert!(parse_form(b"resource=a&resource=b").is_err());
+        let none = token_request(&form_headers(), b"grant_type=x", RequestContext::system())
+            .expect("no resource");
+        assert!(none.resource.is_empty());
     }
 
     #[test]

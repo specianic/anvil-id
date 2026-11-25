@@ -17,6 +17,7 @@ use crate::error::CoreError;
 use crate::model::{
     AccessTokenRecord, Scope, SecretHash, Tenant, TenantId, TokenFamily, TokenFamilyId, UserStatus,
 };
+use crate::oauth::resource::{audience, userinfo_audience_ok};
 use crate::ports::{Clock, Storage};
 use crate::service::claims::{requested_claims, scope_claims};
 use crate::service::key::published_jwks;
@@ -29,6 +30,9 @@ pub struct AccessTokenClaims {
     pub sub: String,
     pub client_id: String,
     pub scope: Scope,
+    /// The audience: the JWT `aud` values, or the opaque token's resources (the client id when it
+    /// has none). Never empty for a verified token.
+    pub aud: Vec<String>,
     /// Token family; `None` for client-credentials tokens (no user).
     pub family_id: Option<TokenFamilyId>,
     pub exp: OffsetDateTime,
@@ -82,6 +86,20 @@ pub fn verify_access_token_jwt(
     };
     let sub = str_claim("sub")?;
     let client_id = str_claim("client_id")?;
+    // RFC 9068 §2.2 / RFC 7519 §4.1.3: `aud` is required, a string or an array of strings.
+    let aud: Vec<String> = match c.get("aud") {
+        Some(Value::String(a)) if !a.is_empty() => vec![a.clone()],
+        Some(Value::Array(values)) if !values.is_empty() => values
+            .iter()
+            .map(|v| {
+                v.as_str()
+                    .filter(|a| !a.is_empty())
+                    .map(str::to_owned)
+                    .ok_or_else(invalid_token)
+            })
+            .collect::<Result<_, _>>()?,
+        _ => return Err(invalid_token()),
+    };
     let scope = match c.get("scope") {
         None => Scope::default(),
         Some(Value::String(s)) if s.is_empty() => Scope::default(),
@@ -112,6 +130,7 @@ pub fn verify_access_token_jwt(
         sub,
         client_id,
         scope,
+        aud,
         family_id,
         exp,
         iat,
@@ -155,6 +174,7 @@ pub fn opaque_claims(
         sub,
         client_id: record.client_id.clone(),
         scope,
+        aud: audience(&record.resource, &record.client_id).values(),
         family_id: record.family_id,
         exp: record.expires_at,
         iat: Some(record.created_at),
@@ -246,6 +266,11 @@ impl UserInfoService {
         }
         .verify(tenant.id, issuer, token)
         .await?;
+        // A token audience-bound only to other resources is not for UserInfo (04 decision:
+        // aud must contain the client_id or `{issuer}/userinfo`).
+        if !userinfo_audience_ok(&claims.aud, &claims.client_id, issuer) {
+            return Err(invalid_token());
+        }
         let fid = userinfo_requirements(&claims)?;
         let family = self
             .storage
@@ -319,6 +344,7 @@ mod tests {
                 family_id: fid,
                 auth_time: None,
                 acr: None,
+                resource: &[],
             },
         )
         .unwrap()
@@ -346,6 +372,56 @@ mod tests {
         assert_eq!(c.exp, now() + Duration::minutes(10));
         assert_eq!(c.iat, Some(now()));
         assert_eq!(c.jti.as_deref(), Some("j"));
+        assert_eq!(c.aud, vec!["rp".to_owned()]);
+    }
+
+    fn signed(s: &SigningKey, aud: Option<Value>) -> String {
+        let mut claims = serde_json::json!({"iss": ISS, "sub": "u", "client_id": "rp",
+            "scope": "openid", "exp": now().unix_timestamp() + 60});
+        if let Some(aud) = aud {
+            claims["aud"] = aud;
+        }
+        s.sign_jwt(Some("at+jwt"), &claims).unwrap()
+    }
+
+    #[test]
+    fn jwt_aud_string_or_array_is_read() {
+        let (s, jwks) = key();
+        let api = "https://api.example.test";
+        let c = verify_access_token_jwt(&signed(&s, Some(api.into())), &jwks, ISS, now()).unwrap();
+        assert_eq!(c.aud, vec![api.to_owned()]);
+        let c = verify_access_token_jwt(
+            &signed(&s, Some(serde_json::json!([api, "rp"]))),
+            &jwks,
+            ISS,
+            now(),
+        )
+        .unwrap();
+        assert_eq!(c.aud, vec![api.to_owned(), "rp".to_owned()]);
+    }
+
+    #[test]
+    fn jwt_missing_or_malformed_aud_rejected() {
+        let (s, jwks) = key();
+        for aud in [
+            None,
+            Some(serde_json::json!("")),
+            Some(serde_json::json!([])),
+            Some(serde_json::json!(["rp", 1])),
+            Some(serde_json::json!(["rp", ""])),
+            Some(serde_json::json!(7)),
+            Some(serde_json::json!({"a": "b"})),
+        ] {
+            assert!(
+                is_invalid_token(&verify_access_token_jwt(
+                    &signed(&s, aud.clone()),
+                    &jwks,
+                    ISS,
+                    now()
+                )),
+                "{aud:?}"
+            );
+        }
     }
 
     #[test]
@@ -384,6 +460,23 @@ mod tests {
         assert_eq!(c.exp, r.expires_at);
         assert_eq!(c.iat, Some(r.created_at));
         assert!(c.jti.is_none());
+        assert_eq!(c.aud, vec!["rp".to_owned()]);
+    }
+
+    #[test]
+    fn opaque_token_aud_is_its_resources() {
+        let f = family("rp");
+        let mut r = record(Some(f.id), f.user_id);
+        r.resource = vec![
+            "https://api.example.test".into(),
+            "https://b.example.test".into(),
+        ];
+        let c = opaque_claims(&r, Some(&f), now()).unwrap();
+        assert_eq!(c.aud, r.resource);
+        assert!(!userinfo_audience_ok(&c.aud, &c.client_id, ISS));
+        r.resource.push(format!("{ISS}/userinfo"));
+        let c = opaque_claims(&r, Some(&f), now()).unwrap();
+        assert!(userinfo_audience_ok(&c.aud, &c.client_id, ISS));
     }
 
     #[test]
@@ -526,6 +619,7 @@ mod tests {
             sub: "user-1".into(),
             client_id: "rp".into(),
             scope: Scope::parse(scope).unwrap(),
+            aud: vec!["rp".into()],
             family_id: fid,
             exp: now(),
             iat: None,

@@ -97,7 +97,7 @@ pub fn build_code(
         claims: params.claims.clone(),
         created_at: now,
         absolute_expires_at: now + FAMILY_TTL,
-        resource: vec![],
+        resource: params.resource.clone(),
     };
     let code = NewAuthorizationCode {
         code_hash,
@@ -114,7 +114,7 @@ pub fn build_code(
         token_family_id: family_id,
         expires_at: now + CODE_TTL,
         created_at: now,
-        resource: vec![],
+        resource: params.resource.clone(),
     };
     (SecretString::from(plaintext), code, family)
 }
@@ -605,6 +605,13 @@ mod tests {
         assert_eq!(family.auth_time, Some(s.auth_time));
         assert_eq!(family.acr.as_deref(), Some(ACR_PWD));
         assert_eq!(family.scope, "openid profile");
+        assert!(code.resource.is_empty() && family.resource.is_empty());
+        // The granted resources go onto the code and the family (RFC 8707 §2.1).
+        let mut with_resource = p.clone();
+        with_resource.resource = vec!["https://api.example.test".to_owned()];
+        let (_, rcode, rfamily) = build_code(&c, &with_resource, &s, NOW);
+        assert_eq!(rcode.resource, with_resource.resource);
+        assert_eq!(rfamily.resource, with_resource.resource);
         // Two codes never collide.
         let (other, _, other_family) = build_code(&c, &p, &s, NOW);
         assert_ne!(other.expose_secret(), plain);

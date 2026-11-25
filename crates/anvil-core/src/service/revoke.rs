@@ -234,6 +234,7 @@ mod tests {
             sub: "u".into(),
             client_id: client_id.into(),
             scope: Scope::parse("openid").unwrap(),
+            aud: vec![client_id.into()],
             family_id: fid,
             exp: OffsetDateTime::UNIX_EPOCH,
             iat: None,

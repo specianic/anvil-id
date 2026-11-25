@@ -21,6 +21,7 @@ use crate::model::{
     SecretHash, Tenant, TenantId, TokenFamily, TokenFamilyId, TokenFormat, User, UserId,
     UserStatus,
 };
+use crate::oauth::resource;
 use crate::ports::{Clock, ConsumeOutcome, RotateOutcome, Storage};
 use crate::service::audit::AuditService;
 use crate::service::claims::{
@@ -48,6 +49,8 @@ pub struct TokenRequest {
     pub code_verifier: Option<String>,
     pub refresh_token: Option<String>,
     pub scope: Option<String>,
+    /// Every non-empty `resource` value (RFC 8707 §2.2; the only parameter that may repeat).
+    pub resource: Vec<String>,
     pub auth: ClientAuthInput,
     /// Request context (client IP, user agent, request id) recorded with the audit events this
     /// request can raise (code and refresh-token reuse detection).
@@ -64,6 +67,7 @@ impl std::fmt::Debug for TokenRequest {
             .field("code_verifier", &redact(&self.code_verifier))
             .field("refresh_token", &redact(&self.refresh_token))
             .field("scope", &self.scope)
+            .field("resource", &self.resource)
             .field("auth", &self.auth)
             .field("context", &self.context)
             .finish()
@@ -206,6 +210,32 @@ pub fn validate_refresh(
     }
 }
 
+/// Resources of the access token minted by a refresh (RFC 8707 §2.2): the request may only
+/// downscope the family's granted resources. The refresh token itself always keeps the full
+/// grant (the family is never changed). An already-consumed token passes with the family's
+/// resources so that `rotate_refresh` detects the reuse and revokes the family, exactly like
+/// [`validate_refresh`] does for the scope.
+pub fn refresh_resources(
+    token: &RefreshToken,
+    family: &TokenFamily,
+    requested: &[String],
+) -> Result<Vec<String>, CoreError> {
+    if token.consumed_at.is_some() {
+        return Ok(family.resource.clone());
+    }
+    resource::downscope(&family.resource, requested)
+}
+
+/// Resources of a client credentials token: each requested resource must be one of the client's
+/// allowed resources (RFC 8707 §2.2; no grant exists to downscope from).
+pub fn client_credentials_resources(
+    client: &Client,
+    requested: &[String],
+) -> Result<Vec<String>, CoreError> {
+    resource::validate_resources(requested, &client.allowed_resources)?;
+    Ok(requested.to_vec())
+}
+
 /// Rules of the client credentials grant: confidential clients registered for it only; `openid`
 /// is never allowed (there is no user); the scope must be within the client's registered scopes.
 /// No scope requested → every registered scope except `openid`.
@@ -334,6 +364,7 @@ pub fn new_opaque_access_token(
     family_id: Option<TokenFamilyId>,
     user_id: Option<UserId>,
     scope: &Scope,
+    resource: &[String],
     now: OffsetDateTime,
 ) -> NewAccessToken {
     NewAccessToken {
@@ -344,7 +375,7 @@ pub fn new_opaque_access_token(
         scope: scope.to_string(),
         created_at: now,
         expires_at: now + ACCESS_TOKEN_TTL,
-        resource: vec![],
+        resource: resource.to_vec(),
     }
 }
 
@@ -409,6 +440,10 @@ impl TokenService {
     }
 
     /// Stores a new opaque access token and returns its plaintext.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "internal helper; every argument is a distinct field of the stored token"
+    )]
     async fn opaque_access_token(
         &self,
         tenant: TenantId,
@@ -416,6 +451,7 @@ impl TokenService {
         family_id: Option<TokenFamilyId>,
         user_id: Option<UserId>,
         scope: &Scope,
+        resource: &[String],
         now: OffsetDateTime,
     ) -> Result<String, CoreError> {
         let raw = random_token();
@@ -423,7 +459,15 @@ impl TokenService {
             .grants()
             .create_access_token(
                 tenant,
-                &new_opaque_access_token(&raw, &client.client_id, family_id, user_id, scope, now),
+                &new_opaque_access_token(
+                    &raw,
+                    &client.client_id,
+                    family_id,
+                    user_id,
+                    scope,
+                    resource,
+                    now,
+                ),
             )
             .await?;
         Ok(raw)
@@ -443,18 +487,23 @@ impl TokenService {
         }
         .authenticate(tenant, issuer, &req.auth)
         .await?;
+        // Malformed resources are refused before anything (a code) is consumed.
+        let requested = resource::parse_resources(&req.resource)?;
         match grant {
             GrantType::AuthorizationCode => {
                 check_client_grant(&client, grant)?;
-                self.authorization_code(tenant, issuer, &client, &req).await
+                self.authorization_code(tenant, issuer, &client, &req, &requested)
+                    .await
             }
             GrantType::RefreshToken => {
                 check_client_grant(&client, grant)?;
-                self.refresh(tenant, issuer, &client, &req).await
+                self.refresh(tenant, issuer, &client, &req, &requested)
+                    .await
             }
             GrantType::ClientCredentials => {
                 let scope = check_client_credentials(&client, req.scope.as_deref())?;
-                self.client_credentials(tenant, issuer, &client, scope)
+                let selected = client_credentials_resources(&client, &requested)?;
+                self.client_credentials(tenant, issuer, &client, scope, &selected)
                     .await
             }
         }
@@ -466,6 +515,7 @@ impl TokenService {
         issuer: &str,
         client: &Client,
         req: &TokenRequest,
+        requested: &[String],
     ) -> Result<TokenResponse, CoreError> {
         let raw = req
             .code
@@ -515,6 +565,17 @@ impl TokenService {
             Some(f) if f.revoked_at.is_none() && f.client_id == client.client_id => f,
             _ => return Err(invalid_grant()),
         };
+        // RFC 8707 §2.2: the token request may only downscope the resources of the grant. The
+        // code is already burned, so its family must never become usable.
+        let selected = match resource::downscope(&code.resource, requested) {
+            Ok(selected) => selected,
+            Err(e) => {
+                grants
+                    .revoke_family(tenant.id, family_id, RevokeReason::CodeReuse, now)
+                    .await?;
+                return Err(e);
+            }
+        };
         let user = check_user(self.storage.users().get(tenant.id, code.user_id).await?)?;
         let scope = Scope::parse(&code.scope).unwrap_or_default();
 
@@ -526,6 +587,7 @@ impl TokenService {
                 &family,
                 &user,
                 &scope,
+                &selected,
                 now,
                 code.nonce.as_deref(),
             )
@@ -558,6 +620,7 @@ impl TokenService {
         issuer: &str,
         client: &Client,
         req: &TokenRequest,
+        requested: &[String],
     ) -> Result<TokenResponse, CoreError> {
         let raw = req
             .refresh_token
@@ -572,6 +635,7 @@ impl TokenService {
             .await?
             .ok_or_else(invalid_grant)?;
         let scope = validate_refresh(&token, &family, client, req.scope.as_deref(), now)?;
+        let selected = refresh_resources(&token, &family, requested)?;
         let user_id = family.user_id.ok_or_else(invalid_grant)?;
         let user = check_user(self.storage.users().get(tenant.id, user_id).await?)?;
 
@@ -603,7 +667,9 @@ impl TokenService {
             RotateOutcome::NotFound => return Err(invalid_grant()),
         };
         let minted = self
-            .mint_user_tokens(tenant, issuer, client, &family, &user, &scope, now, None)
+            .mint_user_tokens(
+                tenant, issuer, client, &family, &user, &scope, &selected, now, None,
+            )
             .await?;
         Ok(response(minted, scope, Some(rt)))
     }
@@ -614,11 +680,12 @@ impl TokenService {
         issuer: &str,
         client: &Client,
         scope: Scope,
+        selected: &[String],
     ) -> Result<TokenResponse, CoreError> {
         let now = self.clock.now();
         let access_token = match client.token_format {
             TokenFormat::Opaque => {
-                self.opaque_access_token(tenant.id, client, None, None, &scope, now)
+                self.opaque_access_token(tenant.id, client, None, None, &scope, selected, now)
                     .await?
             }
             TokenFormat::Jwt => {
@@ -635,6 +702,7 @@ impl TokenService {
                         family_id: None,
                         auth_time: None,
                         acr: None,
+                        resource: selected,
                     },
                 )?
             }
@@ -661,6 +729,7 @@ impl TokenService {
         family: &TokenFamily,
         user: &User,
         scope: &Scope,
+        selected: &[String],
         now: OffsetDateTime,
         nonce: Option<&str>,
     ) -> Result<Minted, CoreError> {
@@ -674,6 +743,7 @@ impl TokenService {
                     Some(family.id),
                     Some(user.id),
                     scope,
+                    selected,
                     now,
                 )
                 .await?
@@ -692,6 +762,7 @@ impl TokenService {
                         family_id: Some(family.id),
                         auth_time: family.auth_time,
                         acr: family.acr.as_deref(),
+                        resource: selected,
                     },
                 )?;
                 at_signer = Some(signer);
@@ -962,6 +1033,74 @@ mod tests {
         assert_eq!(refresh_expiry(now(), &f), now() + Duration::days(3));
     }
 
+    const API: &str = "https://api.example.test";
+    const MCP: &str = "https://mcp.example.test/mcp";
+
+    fn strs(v: &[&str]) -> Vec<String> {
+        v.iter().map(|x| (*x).to_owned()).collect()
+    }
+
+    #[test]
+    fn refresh_resources_downscope_within_the_family_grant() {
+        let mut f = family("rp", "openid");
+        f.resource = strs(&[API, MCP]);
+        let t = rt(&f);
+        assert_eq!(refresh_resources(&t, &f, &[]).unwrap(), strs(&[API, MCP]));
+        assert_eq!(
+            refresh_resources(&t, &f, &strs(&[MCP])).unwrap(),
+            strs(&[MCP])
+        );
+        for bad in [
+            strs(&["https://other.example.test"]),
+            strs(&[API, "https://x.example.test"]),
+        ] {
+            assert!(matches!(
+                refresh_resources(&t, &f, &bad),
+                Err(CoreError::InvalidTarget(_))
+            ));
+        }
+        // A family without resources cannot gain one at refresh.
+        let plain = family("rp", "openid");
+        assert!(matches!(
+            refresh_resources(&rt(&plain), &plain, &strs(&[API])),
+            Err(CoreError::InvalidTarget(_))
+        ));
+    }
+
+    #[test]
+    fn refresh_resources_let_a_consumed_token_reach_reuse_detection() {
+        let mut f = family("rp", "openid");
+        f.resource = strs(&[API]);
+        let mut t = rt(&f);
+        t.consumed_at = Some(now() - Duration::minutes(1));
+        assert_eq!(
+            refresh_resources(&t, &f, &strs(&["https://other.example.test"])).unwrap(),
+            strs(&[API])
+        );
+    }
+
+    #[test]
+    fn client_credentials_resources_must_be_allowed() {
+        let mut c = client(ClientAuthMethod::ClientSecretBasic);
+        assert_eq!(
+            client_credentials_resources(&c, &[]).unwrap(),
+            Vec::<String>::new()
+        );
+        assert!(matches!(
+            client_credentials_resources(&c, &strs(&[API])),
+            Err(CoreError::InvalidTarget(_))
+        ));
+        c.allowed_resources = strs(&[API, MCP]);
+        assert_eq!(
+            client_credentials_resources(&c, &strs(&[MCP])).unwrap(),
+            strs(&[MCP])
+        );
+        assert!(matches!(
+            client_credentials_resources(&c, &strs(&[API, "https://api.example.test/"])),
+            Err(CoreError::InvalidTarget(_))
+        ));
+    }
+
     #[test]
     fn client_credentials_rules() {
         let mut c = client(ClientAuthMethod::ClientSecretBasic);
@@ -1180,6 +1319,7 @@ mod tests {
                 family_id: Some(fid),
                 auth_time: None,
                 acr: None,
+                resource: &[],
             },
         )
         .unwrap();
@@ -1199,7 +1339,7 @@ mod tests {
         let raw = random_token();
         assert!(!raw.contains('.'), "opaque tokens are never JWT-shaped");
         assert_eq!(raw.len(), 43, "256 bits, base64url without padding");
-        let rec = new_opaque_access_token(&raw, "rp", Some(fid), Some(uid), &scope, now());
+        let rec = new_opaque_access_token(&raw, "rp", Some(fid), Some(uid), &scope, &[], now());
         assert_eq!(rec.token_hash, SecretHash(secret_hash(&raw)));
         assert_eq!(rec.family_id, Some(fid));
         assert_eq!(rec.user_id, Some(uid));
@@ -1208,8 +1348,13 @@ mod tests {
         assert_eq!(rec.created_at, now());
         assert_eq!(rec.expires_at, now() + ACCESS_TOKEN_TTL);
         // Client credentials: no family, no user.
-        let cc = new_opaque_access_token(&raw, "svc", None, None, &scope, now());
+        let cc = new_opaque_access_token(&raw, "svc", None, None, &scope, &[], now());
         assert!(cc.family_id.is_none() && cc.user_id.is_none());
+        assert!(rec.resource.is_empty() && cc.resource.is_empty());
+        // The selected resources are stored on the opaque token row (introspection aud).
+        let api = vec!["https://api.example.test".to_owned()];
+        let bound = new_opaque_access_token(&raw, "rp", Some(fid), Some(uid), &scope, &api, now());
+        assert_eq!(bound.resource, api);
     }
 
     #[test]
@@ -1236,10 +1381,12 @@ mod tests {
             code: Some("c0de-secret".into()),
             refresh_token: Some("rt-secret".into()),
             code_verifier: Some(b64url(b"verifier-secret")),
+            resource: vec![API.to_owned()],
             ..TokenRequest::default()
         };
         let s = format!("{r:?}");
         assert!(!s.contains("c0de-secret") && !s.contains("rt-secret"));
         assert!(!s.contains(&b64url(b"verifier-secret")));
+        assert!(s.contains(API), "resources are not secret");
     }
 }
