@@ -55,3 +55,19 @@ fail 9 anvil-web tests. Both fixes are in files outside 03-13's files_modified:
 - 03-14's `tests/account_security.rs` asserts an empty audit log after signing in; sign-in now
   records `user_registered`/`login_succeeded` (03-12), so those assertions must filter to the
   account actions.
+
+## From 03-20
+
+- `themes/default/static/anvil.css` (not in 03-20's files) has no rules for `.anvil-qr` (the
+  TOTP QR SVG scales to the full container width; constrain e.g. `.anvil-qr svg { max-width: 12rem }`),
+  `.anvil-table`, `.anvil-recovery-codes`, `.anvil-secret` (03-14), nor for the new sign-in
+  classes `.anvil-passkey`, `.anvil-secondary` (passkey button), `.anvil-disclosure`
+  (recovery-code `<details>`) and `.anvil-captcha`.
+- `themes/default/templates/error.html` has no sentence for `too_many_requests` (03-13); the
+  second-factor pre-check lock uses that page (generic sentence + detail line + Retry-After).
+- `themes/default/README.md` still says "No `<script>`": the login page now loads the self-hosted
+  `webauthn.js` (account pages already did). Update the ground rules (self-hosted script files
+  only, every flow still works without JavaScript), add `second_factor.html` and the login
+  extras (`passkey`, `captcha`, `factor_token`) to the context tables, and add the selectors
+  `login-passkey`, `login-passkey-submit`, `login-passkey-status`, `second-factor`,
+  `code`, `recovery_code`, `recovery-code-toggle`, `second-factor-submit` to the contract.
