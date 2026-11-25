@@ -157,7 +157,7 @@ Plans:
 - [x] 04-03-PLAN.md — E2E infra: Node mock IdP (Apple-like, GitHub-like), upstream/logout helpers, sample RP logout + back-channel endpoint, run.sh spec glob (wave 1)
 - [ ] 04-04-PLAN.md — SQLite 0005 (CHECK rebuilds, new tables/columns), repos, enqueue-on-revoke, upgrade + plaintext tests (wave 2)
 - [ ] 04-05-PLAN.md — Postgres 0004, repos (SKIP LOCKED delivery leasing), enqueue-on-revoke, upgrade + plaintext tests (wave 2)
-- [ ] 04-06-PLAN.md — i18n infrastructure: Fluent catalogs, negotiation, t(), localized forms, all templates converted, en catalog, ui_locales_supported (wave 2)
+- [x] 04-06-PLAN.md — i18n infrastructure: Fluent catalogs, negotiation, t(), localized forms, all templates converted, en catalog, ui_locales_supported (wave 2)
 - [x] 04-07-PLAN.md — Pure upstream logic: provider presets, ID-token validation, claim normalisation, link decision (TDD) (wave 2)
 - [x] 04-08-PLAN.md — Pure protocol decisions: end-session table, logout token + delivery classification, RFC 8707, MFA policy (TDD) (wave 2)
 - [x] 04-09-PLAN.md — Pure theming rules: token/contrast validation, CSS validator, merge, stylesheet, logo sniffing (TDD) (wave 2)
@@ -231,7 +231,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 1. Foundations and Spikes (M0) | 8/8 | Complete    | 2026-11-25 |
 | 2. Release 0.1 "First login" | 23/23 | Complete    | 2026-11-25 |
 | 3. Release 0.2 "Secure by default" | 34/34 | Complete    | 2026-11-25 |
-| 4. Release 0.3 "Real-world logins" | 7/33 | In Progress | - |
+| 4. Release 0.3 "Real-world logins" | 10/33 | In Progress | - |
 | 5. Release 0.4 "Operate it" | 0/TBD | Not started | - |
 | 6. Release 1.0 (Organizations and SSO) | 0/TBD | Not started | - |
 | 7. Release 1.0 (Certification and release) | 0/TBD | Not started | - |

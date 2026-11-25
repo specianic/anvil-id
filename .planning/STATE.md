@@ -6,14 +6,14 @@ current_phase: 04
 current_phase_name: release 0 3 real world logins
 current_plan: Not started
 status: planning
-stopped_at: "Completed 03-34-PLAN.md (Phase 3 gap closure: single base64 implementation)"
-last_updated: "2026-11-25T15:35:40.663Z"
+stopped_at: Completed 04-05-PLAN.md
+last_updated: "2026-11-25T15:48:40.536Z"
 last_activity: 2026-11-25
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 98
-  completed_plans: 73
+  completed_plans: 75
   percent: 100
 ---
 
@@ -129,6 +129,8 @@ Phase 3 plans 03-01 through 03-34 are all complete (34/34 summaries); v0.2.0 is 
 | Phase 04 P09 | 25min | 1 tasks | 1 files |
 | Phase 04 P07 | 25min | 1 tasks | 4 files |
 | Phase 04 P04 | 20min | 3 tasks | 75 files |
+| Phase 04 P05 | 75min | 3 tasks | 15 files |
+| Phase 04 P06 | 30min | 3 tasks | 60 files |
 
 ## Accumulated Context
 
@@ -289,6 +291,10 @@ Recent decisions affecting current work:
 - [Phase 04]: 04-07: email_verified is AND-ed with connection trust (Microsoft never trusted) at normalisation; link_decision: existing link wins, auto-link only verified+trusted upstream + verified local + auto_link + not Microsoft, candidate hidden when upstream unverified
 - [Phase 04]: 04-04: SQLite 0005 widens flow/self_service_token/email_template CHECKs with in-transaction rebuilds (no inbound FKs); identity_link uses a composite (tenant_id, connection_id) FK
 - [Phase 04]: 04-04: SQLite revoking intents enqueue logout deliveries for the ids their own UPDATE ... RETURNING revoked; rp_session recorded via INSERT OR IGNORE ... SELECT FROM browser_session; purge drops deliveries past give_up_at
+- [Phase 04]: 04-05: Postgres 0004 additive; branding drafts in their own branding_draft table; composite FKs for rp_session/identity_link (UNIQUE (tenant_id,id) on browser_session and connection); logout deliveries leased with FOR UPDATE SKIP LOCKED and enqueued from the ids returned by each revoking UPDATE
+- [Phase 04]: 04-05: Without Docker, Postgres verified on a local throwaway PG14 cluster (contract/upgrade/plaintext green); PG14-generated .sqlx byte-identical for unchanged queries; PG18 testcontainers run left to CI
+- [Phase 04]: 04-06: i18n via Fluent: one .ftl per feature under themes/default/locales/{lang}/ (id = dotted key with '.'->'-'); negotiation ui_locales > user locale claim > Accept-Language > tenant default > en; core forms carry keys (label_key, FormMessage.args), web localizes; t() reads page.lang
+- [Phase 04]: 04-06: UI handlers take RequestLocale and use error_page_in/core_error_page_in; layer error pages render in the tenant default locale; an honoured ui_locales is carried as &ui_locales= on form actions
 
 ### Pending Todos
 
@@ -301,6 +307,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-25
-Stopped at: Completed 03-34-PLAN.md (Phase 3 gap closure: single base64 implementation)
+Last session: 2026-11-25T15:44:50.964Z
+Stopped at: Completed 04-05-PLAN.md
 Resume file: None
