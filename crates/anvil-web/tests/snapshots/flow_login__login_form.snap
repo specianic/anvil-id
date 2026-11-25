@@ -1,0 +1,28 @@
+---
+source: crates/anvil-web/tests/flow_login.rs
+expression: form_fragment(&html)
+---
+<form id="login" method="post" action="https://op.test/ui/login?FLOW" novalidate>
+<input type="hidden" name="csrf_token" value="CSRF">
+
+
+
+<div class="anvil-field">
+<label for="identifier">Email</label>
+<input id="identifier" name="identifier" type="email" required autocomplete="username">
+
+</div>
+
+
+
+
+<div class="anvil-field">
+<label for="password">Password</label>
+<input id="password" name="password" type="password" required autocomplete="current-password">
+
+</div>
+
+
+
+<button type="submit" id="login-submit">Sign in</button>
+</form>
