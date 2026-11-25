@@ -652,3 +652,93 @@ async fn user_update_block_delete_and_conflicts() {
     .await;
     assert_problem(&resp, 404);
 }
+
+// ---------------------------------------------------------------------------------------------
+// End to end through POST /token
+// ---------------------------------------------------------------------------------------------
+
+/// `POST {prefix}/token` with client_credentials and HTTP Basic.
+async fn cc_token(
+    app: &TestApp,
+    prefix: &str,
+    client_id: &str,
+    secret: &str,
+) -> support::TestResponse {
+    use base64::Engine as _;
+    let basic = base64::engine::general_purpose::STANDARD.encode(format!("{client_id}:{secret}"));
+    let body = "grant_type=client_credentials";
+    let req = axum::http::Request::post(format!("{prefix}/token"))
+        .header("authorization", format!("Basic {basic}"))
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(axum::body::Body::from(body))
+        .unwrap();
+    app.send(req).await
+}
+
+#[tokio::test]
+async fn admin_client_token_from_the_token_endpoint_works_and_rotation_revokes_the_old_secret() {
+    let (app, t) = app_and_token().await;
+    // A management client registered through the API, as an operator would.
+    let resp = call(
+        &app,
+        Method::POST,
+        &format!("{API}/tenants/system/clients"),
+        Some(&t),
+        Some(json!({
+            "name": "automation",
+            "client_type": "confidential",
+            "grant_types": ["client_credentials"],
+            "scopes": ["admin:users:read"],
+        })),
+    )
+    .await;
+    assert_eq!(resp.status, 201, "{}", resp.text());
+    let created = body_json(&resp);
+    let client_id = created["client_id"].as_str().unwrap().to_owned();
+    let secret = created["client_secret"].as_str().unwrap().to_owned();
+
+    let resp = cc_token(&app, "/t/system", &client_id, &secret).await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let at = body_json(&resp)["access_token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let resp = call(
+        &app,
+        Method::GET,
+        &format!("{API}/tenants/default/users"),
+        Some(&at),
+        None,
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let resp = call(
+        &app,
+        Method::GET,
+        &format!("{API}/tenants"),
+        Some(&at),
+        None,
+    )
+    .await;
+    assert_problem(&resp, 403);
+
+    // Rotation: the old secret fails at /token, the new one works.
+    let resp = call(
+        &app,
+        Method::POST,
+        &format!("{API}/tenants/system/clients/{client_id}/secret"),
+        Some(&t),
+        None,
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let new_secret = body_json(&resp)["client_secret"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let resp = cc_token(&app, "/t/system", &client_id, &secret).await;
+    assert_eq!(resp.status, 401, "{}", resp.text());
+    assert_eq!(body_json(&resp)["error"], "invalid_client");
+    let resp = cc_token(&app, "/t/system", &client_id, &new_secret).await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+}
