@@ -2,7 +2,8 @@
 
 use anvil_core::model::{
     ApplicationType, Client, ClientAuthMethod, ClientId, ClientType, ClientUpdate, ConsentMode,
-    GrantType, NewClient, Page, PageRequest, RevokeReason, SecretHash, TenantId, TokenFormat,
+    GrantType, MfaPolicy, NewClient, Page, PageRequest, RevokeReason, SecretHash, TenantId,
+    TokenFormat,
 };
 use anvil_core::ports::{ClientRepo, StorageError};
 use sqlx::PgPool;
@@ -10,7 +11,8 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::convert::{
-    enum_from, enum_names, enums_from, fetch_limit, into_page, map_err, opt_hash,
+    enum_from, enum_names, enums_from, fetch_limit, from_json, into_page, map_err, opt_hash,
+    to_json,
 };
 
 #[derive(Debug, Clone)]
@@ -38,6 +40,11 @@ pub(crate) struct ClientRow {
     can_introspect: bool,
     created_at: OffsetDateTime,
     updated_at: OffsetDateTime,
+    post_logout_redirect_uris: serde_json::Value,
+    backchannel_logout_uri: Option<String>,
+    backchannel_logout_session_required: bool,
+    allowed_resources: serde_json::Value,
+    mfa_policy: Option<String>,
 }
 
 impl ClientRow {
@@ -78,12 +85,18 @@ impl ClientRow {
             can_introspect: self.can_introspect,
             created_at: self.created_at,
             updated_at: self.updated_at,
-            // TRANSITIONAL(04-05): no column yet; non-default writes refused (pending.rs).
-            post_logout_redirect_uris: vec![],
-            backchannel_logout_uri: None,
-            backchannel_logout_session_required: false,
-            allowed_resources: vec![],
-            mfa_policy: None,
+            post_logout_redirect_uris: from_json(
+                "client.post_logout_redirect_uris",
+                self.post_logout_redirect_uris,
+            )?,
+            backchannel_logout_uri: self.backchannel_logout_uri,
+            backchannel_logout_session_required: self.backchannel_logout_session_required,
+            allowed_resources: from_json("client.allowed_resources", self.allowed_resources)?,
+            mfa_policy: self
+                .mfa_policy
+                .as_deref()
+                .map(|m| enum_from("client.mfa_policy", m, MfaPolicy::parse))
+                .transpose()?,
         })
     }
 }
@@ -110,12 +123,11 @@ pub(crate) fn client_from_new(tenant: TenantId, c: &NewClient) -> Client {
         can_introspect: c.can_introspect,
         created_at: c.created_at,
         updated_at: c.created_at,
-        // TRANSITIONAL(04-05): no column yet; non-default writes refused (pending.rs).
-        post_logout_redirect_uris: vec![],
-        backchannel_logout_uri: None,
-        backchannel_logout_session_required: false,
-        allowed_resources: vec![],
-        mfa_policy: None,
+        post_logout_redirect_uris: c.post_logout_redirect_uris.clone(),
+        backchannel_logout_uri: c.backchannel_logout_uri.clone(),
+        backchannel_logout_session_required: c.backchannel_logout_session_required,
+        allowed_resources: c.allowed_resources.clone(),
+        mfa_policy: c.mfa_policy,
     }
 }
 
@@ -128,7 +140,11 @@ pub(crate) async fn insert_client<'e, E>(
 where
     E: sqlx::PgExecutor<'e>,
 {
-    crate::pending::refuse_phase4_client(c)?;
+    let post_logout = to_json(
+        "client.post_logout_redirect_uris",
+        &c.post_logout_redirect_uris,
+    )?;
+    let resources = to_json("client.allowed_resources", &c.allowed_resources)?;
     let secret_hash = c.secret_hash.as_ref().map(|h| h.as_bytes().as_slice());
     let grant_types = enum_names(&c.grant_types, GrantType::as_str);
     sqlx::query!(
@@ -136,9 +152,10 @@ where
              (id, tenant_id, client_id, name, client_type, application_type, auth_method,
               secret_hash, jwks, redirect_uris, grant_types, scopes, require_pkce,
               token_format, consent_mode, id_token_signed_response_alg, can_introspect,
-              created_at, updated_at)
+              created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,
+              backchannel_logout_session_required, allowed_resources, mfa_policy)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-                 $18, $18)",
+                 $18, $18, $19, $20, $21, $22, $23)",
         c.id.0,
         tenant.0,
         c.client_id,
@@ -157,6 +174,11 @@ where
         c.id_token_signed_response_alg,
         c.can_introspect,
         c.created_at,
+        post_logout,
+        c.backchannel_logout_uri,
+        c.backchannel_logout_session_required,
+        resources,
+        c.mfa_policy.map(|m| m.as_str()),
     )
     .execute(exec)
     .await
@@ -177,7 +199,8 @@ impl ClientRepo for PgClients {
             "SELECT id, tenant_id, client_id, name, client_type, application_type, auth_method,
                     secret_hash, jwks, redirect_uris, grant_types, scopes, require_pkce,
                     token_format, consent_mode, id_token_signed_response_alg, can_introspect,
-                    created_at, updated_at
+                    created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,
+                    backchannel_logout_session_required, allowed_resources, mfa_policy
                FROM client
               WHERE tenant_id = $1 AND client_id = $2",
             tenant.0,
@@ -201,7 +224,8 @@ impl ClientRepo for PgClients {
             "SELECT id, tenant_id, client_id, name, client_type, application_type, auth_method,
                     secret_hash, jwks, redirect_uris, grant_types, scopes, require_pkce,
                     token_format, consent_mode, id_token_signed_response_alg, can_introspect,
-                    created_at, updated_at
+                    created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,
+                    backchannel_logout_session_required, allowed_resources, mfa_policy
                FROM client
               WHERE tenant_id = $1 AND ($2::uuid IS NULL OR id > $2)
               ORDER BY id
@@ -227,7 +251,24 @@ impl ClientRepo for PgClients {
         update: &ClientUpdate,
         now: OffsetDateTime,
     ) -> Result<Option<Client>, StorageError> {
-        crate::pending::refuse_phase4_client_update(update)?;
+        let post_logout = update
+            .post_logout_redirect_uris
+            .as_ref()
+            .map(|u| to_json("client.post_logout_redirect_uris", u))
+            .transpose()?;
+        let resources = update
+            .allowed_resources
+            .as_ref()
+            .map(|r| to_json("client.allowed_resources", r))
+            .transpose()?;
+        let (set_bc_uri, bc_uri) = match &update.backchannel_logout_uri {
+            Some(u) => (true, u.clone()),
+            None => (false, None),
+        };
+        let (set_mfa, mfa) = match update.mfa_policy {
+            Some(m) => (true, m.map(|m| m.as_str())),
+            None => (false, None),
+        };
         let grant_types = update
             .grant_types
             .as_ref()
@@ -254,12 +295,20 @@ impl ClientRepo for PgClients {
                     id_token_signed_response_alg =
                       CASE WHEN $13 THEN $14 ELSE id_token_signed_response_alg END,
                     can_introspect = COALESCE($15, can_introspect),
+                    post_logout_redirect_uris = COALESCE($16, post_logout_redirect_uris),
+                    backchannel_logout_uri =
+                      CASE WHEN $17 THEN $18 ELSE backchannel_logout_uri END,
+                    backchannel_logout_session_required =
+                      COALESCE($19, backchannel_logout_session_required),
+                    allowed_resources = COALESCE($20, allowed_resources),
+                    mfa_policy = CASE WHEN $21 THEN $22 ELSE mfa_policy END,
                     updated_at = $10
               WHERE tenant_id = $1 AND client_id = $2
           RETURNING id, tenant_id, client_id, name, client_type, application_type, auth_method,
                     secret_hash, jwks, redirect_uris, grant_types, scopes, require_pkce,
                     token_format, consent_mode, id_token_signed_response_alg, can_introspect,
-                    created_at, updated_at",
+                    created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,
+                    backchannel_logout_session_required, allowed_resources, mfa_policy",
             tenant.0,
             client_id,
             update.name,
@@ -275,6 +324,13 @@ impl ClientRepo for PgClients {
             set_alg,
             alg,
             update.can_introspect,
+            post_logout,
+            set_bc_uri,
+            bc_uri,
+            update.backchannel_logout_session_required,
+            resources,
+            set_mfa,
+            mfa,
         )
         .fetch_optional(&self.pool)
         .await

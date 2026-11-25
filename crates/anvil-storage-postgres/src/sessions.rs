@@ -10,6 +10,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::convert::{fetch_limit, hash, into_page, map_err};
+use crate::logout::enqueue_deliveries;
 
 #[derive(Debug, Clone)]
 pub(crate) struct PgSessions {
@@ -76,6 +77,26 @@ where
     .await
     .map_err(map_err)?;
     Ok(())
+}
+
+/// Revokes one unrevoked session on the caller's transaction. The id if this call revoked it.
+async fn revoke_one(
+    conn: &mut sqlx::PgConnection,
+    tenant: TenantId,
+    id: SessionId,
+    now: OffsetDateTime,
+) -> Result<Option<Uuid>, StorageError> {
+    sqlx::query_scalar!(
+        "UPDATE browser_session SET revoked_at = $3
+          WHERE tenant_id = $1 AND id = $2 AND revoked_at IS NULL
+      RETURNING id",
+        tenant.0,
+        id.0,
+        now,
+    )
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(map_err)
 }
 
 #[async_trait::async_trait]
@@ -161,17 +182,13 @@ impl SessionRepo for PgSessions {
         id: SessionId,
         now: OffsetDateTime,
     ) -> Result<bool, StorageError> {
-        let done = sqlx::query!(
-            "UPDATE browser_session SET revoked_at = $3
-              WHERE tenant_id = $1 AND id = $2 AND revoked_at IS NULL",
-            tenant.0,
-            id.0,
-            now,
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(map_err)?;
-        Ok(done.rows_affected() > 0)
+        let mut tx = self.pool.begin().await.map_err(map_err)?;
+        let Some(revoked) = revoke_one(&mut tx, tenant, id, now).await? else {
+            return Ok(false);
+        };
+        enqueue_deliveries(&mut tx, tenant, &[revoked], now).await?;
+        tx.commit().await.map_err(map_err)?;
+        Ok(true)
     }
 
     async fn get(
@@ -259,20 +276,11 @@ impl SessionRepo for PgSessions {
         now: OffsetDateTime,
     ) -> Result<bool, StorageError> {
         let mut tx = self.pool.begin().await.map_err(map_err)?;
-        let done = sqlx::query!(
-            "UPDATE browser_session SET revoked_at = $3
-              WHERE tenant_id = $1 AND id = $2 AND revoked_at IS NULL",
-            tenant.0,
-            id.0,
-            now,
-        )
-        .execute(&mut *tx)
-        .await
-        .map_err(map_err)?;
-        if done.rows_affected() == 0 {
+        let Some(revoked) = revoke_one(&mut tx, tenant, id, now).await? else {
             return Ok(false);
-        }
-        revoke_session_families(&mut *tx, tenant, &[id.0], now).await?;
+        };
+        revoke_session_families(&mut *tx, tenant, &[revoked], now).await?;
+        enqueue_deliveries(&mut tx, tenant, &[revoked], now).await?;
         tx.commit().await.map_err(map_err)?;
         Ok(true)
     }
@@ -300,6 +308,7 @@ impl SessionRepo for PgSessions {
         .map_err(map_err)?;
         if !revoked.is_empty() {
             revoke_session_families(&mut *tx, tenant, &revoked, now).await?;
+            enqueue_deliveries(&mut tx, tenant, &revoked, now).await?;
         }
         tx.commit().await.map_err(map_err)?;
         Ok(revoked.len() as u64)
@@ -307,14 +316,28 @@ impl SessionRepo for PgSessions {
 
     async fn upgrade_auth(
         &self,
-        _tenant: TenantId,
-        _id: SessionId,
-        _acr: &str,
-        _amr: &[String],
-        _auth_time: OffsetDateTime,
-        _now: OffsetDateTime,
+        tenant: TenantId,
+        id: SessionId,
+        acr: &str,
+        amr: &[String],
+        auth_time: OffsetDateTime,
+        now: OffsetDateTime,
     ) -> Result<bool, StorageError> {
-        // TRANSITIONAL(04-05)
-        crate::pending::upgrade_auth_unsupported()
+        // One conditional statement: only an active session is upgraded.
+        let done = sqlx::query!(
+            "UPDATE browser_session SET acr = $3, amr = $4, auth_time = $5
+              WHERE tenant_id = $1 AND id = $2 AND revoked_at IS NULL
+                AND expires_at > $6 AND idle_expires_at > $6",
+            tenant.0,
+            id.0,
+            acr,
+            amr,
+            auth_time,
+            now,
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(map_err)?;
+        Ok(done.rows_affected() > 0)
     }
 }

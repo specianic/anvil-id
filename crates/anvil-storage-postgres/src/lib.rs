@@ -6,7 +6,9 @@
 //! `UPDATE … RETURNING` / `INSERT … ON CONFLICT`, never by check-then-act.
 
 mod audit;
+mod branding;
 mod clients;
+mod connections;
 mod consent;
 mod convert;
 mod credentials;
@@ -14,10 +16,10 @@ mod flows;
 mod grants;
 mod jobs;
 mod keys;
+mod logout;
 mod mail_settings;
 pub mod migrate;
 mod outbox;
-mod pending;
 mod sessions;
 mod setup;
 mod tenants;
@@ -32,12 +34,15 @@ use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
 
 use crate::audit::PgAudit;
+use crate::branding::PgBranding;
 use crate::clients::PgClients;
+use crate::connections::PgConnections;
 use crate::convert::map_err;
 use crate::flows::PgFlows;
 use crate::grants::PgGrants;
 use crate::jobs::PgJobs;
 use crate::keys::PgKeys;
+use crate::logout::PgLogout;
 use crate::mail_settings::PgMailSettings;
 use crate::outbox::PgOutbox;
 use crate::sessions::PgSessions;
@@ -66,6 +71,9 @@ pub struct PostgresStorage {
     audit: PgAudit,
     mail_settings: PgMailSettings,
     jobs: PgJobs,
+    connections: PgConnections,
+    branding: PgBranding,
+    logout: PgLogout,
 }
 
 impl PostgresStorage {
@@ -93,6 +101,9 @@ impl PostgresStorage {
             audit: PgAudit { pool: pool.clone() },
             mail_settings: PgMailSettings { pool: pool.clone() },
             jobs: PgJobs { pool: pool.clone() },
+            connections: PgConnections { pool: pool.clone() },
+            branding: PgBranding { pool: pool.clone() },
+            logout: PgLogout { pool: pool.clone() },
             pool,
         }
     }
@@ -136,15 +147,14 @@ impl Storage for PostgresStorage {
     fn jobs(&self) -> &dyn JobRepo {
         &self.jobs
     }
-    // TRANSITIONAL(04-05): the Phase 4 repositories are explicit `Unsupported` shims.
     fn connections(&self) -> &dyn ConnectionRepo {
-        &crate::pending::PendingConnections
+        &self.connections
     }
     fn branding(&self) -> &dyn BrandingRepo {
-        &crate::pending::PendingBranding
+        &self.branding
     }
     fn logout(&self) -> &dyn LogoutRepo {
-        &crate::pending::PendingLogout
+        &self.logout
     }
 
     async fn purge_expired(&self, now: time::OffsetDateTime) -> Result<u64, StorageError> {

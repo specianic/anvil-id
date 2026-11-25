@@ -19,6 +19,7 @@ use uuid::Uuid;
 
 use crate::consent;
 use crate::convert::{enum_from, from_json, hash, map_err, opt_from_json, opt_hash, to_json};
+use crate::logout;
 
 #[derive(Debug, Clone)]
 pub(crate) struct PgGrants {
@@ -40,6 +41,7 @@ struct FamilyRow {
     absolute_expires_at: OffsetDateTime,
     revoked_at: Option<OffsetDateTime>,
     revoked_reason: Option<String>,
+    resource: serde_json::Value,
 }
 
 impl FamilyRow {
@@ -63,8 +65,7 @@ impl FamilyRow {
                 .as_deref()
                 .map(|r| enum_from("token_family.revoked_reason", r, RevokeReason::parse))
                 .transpose()?,
-            // TRANSITIONAL(04-05): no column yet; non-default writes refused (pending.rs).
-            resource: vec![],
+            resource: from_json("token_family.resource", self.resource)?,
         })
     }
 }
@@ -80,7 +81,7 @@ where
     sqlx::query_as!(
         FamilyRow,
         "SELECT id, tenant_id, client_id, user_id, scope, auth_time, acr, amr, session_id, claims,
-                created_at, absolute_expires_at, revoked_at, revoked_reason
+                created_at, absolute_expires_at, revoked_at, revoked_reason, resource
            FROM token_family
           WHERE tenant_id = $1 AND id = $2",
         tenant.0,
@@ -102,7 +103,7 @@ async fn insert_family<'e, E>(
 where
     E: sqlx::PgExecutor<'e>,
 {
-    crate::pending::refuse_resource(&family.resource)?;
+    let resource = to_json("token_family.resource", &family.resource)?;
     let claims = family
         .claims
         .as_ref()
@@ -111,8 +112,8 @@ where
     sqlx::query!(
         "INSERT INTO token_family
              (id, tenant_id, client_id, user_id, scope, auth_time, acr, amr, session_id,
-              claims, created_at, absolute_expires_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+              claims, created_at, absolute_expires_at, resource)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
         family.id.0,
         tenant.0,
         family.client_id,
@@ -125,6 +126,7 @@ where
         claims,
         family.created_at,
         family.absolute_expires_at,
+        resource,
     )
     .execute(exec)
     .await
@@ -236,21 +238,23 @@ impl GrantRepo for PgGrants {
         code: &NewAuthorizationCode,
         family: &NewTokenFamily,
     ) -> Result<(), StorageError> {
-        crate::pending::refuse_resource(&code.resource)?;
+        let resource = to_json("authorization_code.resource", &code.resource)?;
         if code.token_family_id != family.id {
             return Err(StorageError::Conflict(
                 "authorization code token_family_id does not match the family".to_owned(),
             ));
         }
-        // Family first, then the code, in one transaction: a conflict on either rolls back both.
+        // Family first, then the code and the RP session, in one transaction: a conflict on the
+        // family or the code rolls everything back.
         let mut tx = self.pool.begin().await.map_err(map_err)?;
         insert_family(&mut *tx, tenant, family).await?;
         sqlx::query!(
             "INSERT INTO authorization_code
                  (code_hash, tenant_id, client_id, user_id, session_id, redirect_uri, scope,
                   nonce, code_challenge, auth_time, acr, amr, token_family_id, expires_at,
-                  consumed_at, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NULL, $15)",
+                  consumed_at, created_at, resource)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NULL, $15,
+                     $16)",
             code.code_hash.as_bytes().as_slice(),
             tenant.0,
             code.client_id,
@@ -266,10 +270,19 @@ impl GrantRepo for PgGrants {
             code.token_family_id.0,
             code.expires_at,
             code.created_at,
+            resource,
         )
         .execute(&mut *tx)
         .await
         .map_err(map_err)?;
+        logout::record_rp_session(
+            &mut tx,
+            tenant,
+            code.session_id,
+            &code.client_id,
+            code.created_at,
+        )
+        .await?;
         tx.commit().await.map_err(map_err)
     }
 
@@ -289,7 +302,7 @@ impl GrantRepo for PgGrants {
                 AND consumed_at IS NULL AND expires_at > $3
           RETURNING code_hash, tenant_id, client_id, user_id, session_id, redirect_uri, scope,
                     nonce, code_challenge, auth_time, acr, amr, token_family_id, expires_at,
-                    created_at",
+                    created_at, resource",
             tenant.0,
             hash_bytes,
             now,
@@ -315,8 +328,7 @@ impl GrantRepo for PgGrants {
                 token_family_id: TokenFamilyId(r.token_family_id),
                 expires_at: r.expires_at,
                 created_at: r.created_at,
-                // TRANSITIONAL(04-05): no column yet; non-default writes refused (pending.rs).
-                resource: vec![],
+                resource: from_json("authorization_code.resource", r.resource)?,
             }));
         }
 
@@ -536,12 +548,12 @@ impl GrantRepo for PgGrants {
         tenant: TenantId,
         token: &NewAccessToken,
     ) -> Result<(), StorageError> {
-        crate::pending::refuse_resource(&token.resource)?;
+        let resource = to_json("access_token.resource", &token.resource)?;
         sqlx::query!(
             "INSERT INTO access_token
                  (token_hash, tenant_id, family_id, client_id, user_id, scope, created_at,
-                  expires_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                  expires_at, resource)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
             token.token_hash.as_bytes().as_slice(),
             tenant.0,
             token.family_id.map(|f| f.0),
@@ -550,6 +562,7 @@ impl GrantRepo for PgGrants {
             token.scope,
             token.created_at,
             token.expires_at,
+            resource,
         )
         .execute(&self.pool)
         .await
@@ -564,7 +577,7 @@ impl GrantRepo for PgGrants {
     ) -> Result<Option<(AccessTokenRecord, Option<TokenFamily>)>, StorageError> {
         let Some(r) = sqlx::query!(
             "SELECT token_hash, tenant_id, family_id, client_id, user_id, scope, created_at,
-                    expires_at, revoked_at
+                    expires_at, revoked_at, resource
                FROM access_token
               WHERE tenant_id = $1 AND token_hash = $2",
             tenant.0,
@@ -593,8 +606,7 @@ impl GrantRepo for PgGrants {
             created_at: r.created_at,
             expires_at: r.expires_at,
             revoked_at: r.revoked_at,
-            // TRANSITIONAL(04-05): no column yet; non-default writes refused (pending.rs).
-            resource: vec![],
+            resource: from_json("access_token.resource", r.resource)?,
         };
         Ok(Some((token, family)))
     }

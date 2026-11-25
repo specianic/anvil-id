@@ -14,6 +14,7 @@ use uuid::Uuid;
 
 use crate::convert::{enum_from, fetch_limit, from_json, into_page, map_err, to_json};
 use crate::credentials;
+use crate::logout::enqueue_deliveries;
 use crate::outbox::enqueue_email;
 
 #[derive(Debug, Clone)]
@@ -160,9 +161,6 @@ impl UserRepo for PgUsers {
         token: Option<&NewSelfServiceToken>,
         email: Option<&NewEmail>,
     ) -> Result<User, StorageError> {
-        if let Some(t) = token {
-            crate::pending::refuse_phase4_token_kind(t.kind)?;
-        }
         // One transaction; any error drops `tx` and rolls everything back.
         let mut tx = self.pool.begin().await.map_err(map_err)?;
         insert_user(&mut *tx, tenant, user).await?;
@@ -290,6 +288,26 @@ impl UserRepo for PgUsers {
 
     async fn delete(&self, tenant: TenantId, id: UserId) -> Result<bool, StorageError> {
         let mut tx = self.pool.begin().await.map_err(map_err)?;
+        // The port passes no timestamp here; use the database clock at the storage contract's
+        // millisecond precision.
+        let now = sqlx::query_scalar!(r#"SELECT date_trunc('milliseconds', now()) AS "now!""#)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(map_err)?;
+        // Log the user's live sessions out of their RPs before the sessions (and their RP
+        // sessions) cascade away; the deliveries have no FK and survive the delete.
+        let revoked = sqlx::query_scalar!(
+            "UPDATE browser_session SET revoked_at = $3
+              WHERE tenant_id = $1 AND user_id = $2 AND revoked_at IS NULL
+          RETURNING id",
+            tenant.0,
+            id.0,
+            now,
+        )
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(map_err)?;
+        enqueue_deliveries(&mut tx, tenant, &revoked, now).await?;
         // Credentials, sessions and self-service tokens go by ON DELETE CASCADE.
         let done = sqlx::query!(
             "DELETE FROM \"user\" WHERE tenant_id = $1 AND id = $2",
@@ -300,16 +318,15 @@ impl UserRepo for PgUsers {
         .await
         .map_err(map_err)?;
         if done.rows_affected() == 0 {
+            // Unknown user: roll back (nothing was revoked or enqueued).
             return Ok(false);
         }
-        // The port passes no timestamp here; use the database clock at the storage contract's
-        // millisecond precision.
         sqlx::query!(
-            "UPDATE token_family
-                SET revoked_at = date_trunc('milliseconds', now()), revoked_reason = $3
+            "UPDATE token_family SET revoked_at = $3, revoked_reason = $4
               WHERE tenant_id = $1 AND user_id = $2 AND revoked_at IS NULL",
             tenant.0,
             id.0,
+            now,
             RevokeReason::UserDeleted.as_str(),
         )
         .execute(&mut *tx)
@@ -377,7 +394,6 @@ impl UserRepo for PgUsers {
         token: &NewSelfServiceToken,
         email: Option<&NewEmail>,
     ) -> Result<(), StorageError> {
-        crate::pending::refuse_phase4_token_kind(token.kind)?;
         let mut tx = self.pool.begin().await.map_err(map_err)?;
         insert_self_service_token(&mut *tx, tenant, token).await?;
         if let Some(e) = email {
@@ -483,16 +499,18 @@ impl UserRepo for PgUsers {
         else {
             return Ok(None);
         };
-        sqlx::query!(
+        let revoked = sqlx::query_scalar!(
             "UPDATE browser_session SET revoked_at = $3
-              WHERE tenant_id = $1 AND user_id = $2 AND revoked_at IS NULL",
+              WHERE tenant_id = $1 AND user_id = $2 AND revoked_at IS NULL
+          RETURNING id",
             tenant.0,
             user_id.0,
             now,
         )
-        .execute(&mut *tx)
+        .fetch_all(&mut *tx)
         .await
         .map_err(map_err)?;
+        enqueue_deliveries(&mut tx, tenant, &revoked, now).await?;
         sqlx::query!(
             "UPDATE token_family SET revoked_at = $3, revoked_reason = $4
               WHERE tenant_id = $1 AND user_id = $2 AND revoked_at IS NULL",
@@ -625,13 +643,63 @@ impl UserRepo for PgUsers {
 
     async fn complete_email_change(
         &self,
-        _tenant: TenantId,
-        _token_hash: &SecretHash,
-        _now: OffsetDateTime,
-        _notice: Option<&RecoveryNotice>,
+        tenant: TenantId,
+        token_hash: &SecretHash,
+        now: OffsetDateTime,
+        notice: Option<&RecoveryNotice>,
     ) -> Result<Option<User>, StorageError> {
-        // TRANSITIONAL(04-05)
-        crate::pending::complete_email_change_unsupported()
+        let mut tx = self.pool.begin().await.map_err(map_err)?;
+        // Single conditional UPDATE: concurrent callers serialise on the row lock and only the
+        // first sees `consumed_at IS NULL`.
+        let Some(token) = sqlx::query!(
+            "UPDATE self_service_token SET consumed_at = $3
+              WHERE tenant_id = $1 AND token_hash = $2 AND kind = $4
+                AND consumed_at IS NULL AND expires_at > $3
+          RETURNING user_id, email",
+            tenant.0,
+            token_hash.as_bytes().as_slice(),
+            now,
+            SelfServiceKind::EmailChange.as_str(),
+        )
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(map_err)?
+        else {
+            return Ok(None);
+        };
+        // The address before the change (row locked until commit), for the notice.
+        let Some(old_email) = sqlx::query_scalar!(
+            "SELECT email FROM \"user\" WHERE tenant_id = $1 AND id = $2 FOR UPDATE",
+            tenant.0,
+            token.user_id,
+        )
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(map_err)?
+        else {
+            return Ok(None);
+        };
+        // A unique violation (another user holds the address) is `Conflict`; returning drops
+        // `tx`, which rolls back the token consumption, so the token stays usable.
+        let user = sqlx::query_as!(
+            UserRow,
+            "UPDATE \"user\" SET email = $3, email_verified = TRUE, updated_at = $4
+              WHERE tenant_id = $1 AND id = $2
+          RETURNING id, tenant_id, email, email_verified, username, claims, status, created_at,
+                    updated_at, last_login_at",
+            tenant.0,
+            token.user_id,
+            token.email,
+            now,
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(map_err)?;
+        if let Some(notice) = notice {
+            enqueue_email(&mut *tx, tenant, &notice.to_email(&old_email)).await?;
+        }
+        tx.commit().await.map_err(map_err)?;
+        user.into_model().map(Some)
     }
 }
 
