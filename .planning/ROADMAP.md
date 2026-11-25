@@ -40,7 +40,17 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. The shared storage contract suite (tenant repository + atomic `consume_code`, including a concurrency test showing exactly one winner) passes on both SQLite and Postgres, and the duplication cost is recorded
   4. CI produces static musl release binaries for amd64 and arm64 (aws-lc-rs, mimalloc, embedded assets) and reports binary size and idle memory
   5. CI starts a fresh binary and runs the OpenID conformance suite against it end to end
-**Plans**: TBD
+**Plans**: 8 plans in 5 waves
+
+Plans:
+- [ ] 01-01-PLAN.md — Workspace skeleton, toolchain, Cargo.lock, storage ports in anvil-core, justfile (wave 1)
+- [ ] 01-02-PLAN.md — cargo-deny policy, dependency-rule checker + self-test, ci.yml (wave 2)
+- [ ] 01-03-PLAN.md — Spike A: shared contract suite + SQLite backend + .sqlx (wave 2)
+- [ ] 01-04-PLAN.md — anvil-web router (discovery, assets, 501s) + `anvilid serve` with mimalloc (wave 2)
+- [ ] 01-05-PLAN.md — Spike A: Postgres backend on testcontainers + duplication cost (wave 3)
+- [ ] 01-06-PLAN.md — Spike C: conformance harness (Config OP plan, ratchet) + conformance.yml (wave 3)
+- [ ] 01-07-PLAN.md — Spike B: storage wiring in anvilid, static musl build, size/RSS, release-build.yml (wave 4)
+- [ ] 01-08-PLAN.md — Phase gate: `just ci`, push + CI green (checkpoint), spike verdicts (wave 5)
 
 ### Phase 2: Release 0.1 "First login"
 **Goal**: Anyone can start one binary with zero configuration and have a sample app log users in through a standards-correct OIDC provider, with every in-scope security control enforced and covered by a negative test
@@ -122,7 +132,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundations and Spikes (M0) | 0/TBD | Not started | - |
+| 1. Foundations and Spikes (M0) | 0/8 | Not started | - |
 | 2. Release 0.1 "First login" | 0/TBD | Not started | - |
 | 3. Release 0.2 "Secure by default" | 0/TBD | Not started | - |
 | 4. Release 0.3 "Real-world logins" | 0/TBD | Not started | - |
