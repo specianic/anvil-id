@@ -63,3 +63,4 @@ The login journeys real products need, on top of 0.2:
 - **`sid`:** equals the browser session id (already in 0.2 ID tokens); the separate `rp_session.sid` column from ARCHITECTURE §6.1 is dropped — sync the doc.
 - **Docs:** ROADMAP Phase 4 success criterion 2 and ARCHITECTURE M3 exit criterion are reworded from "staging environment" to "mock IdPs in CI + manual real-provider checklist" (user decision).
 - **Logout plan variant string:** confirm on the first harness run.
+- **v0.3.0 release gate (user decision 2026-11-25):** the release plan (04-33) PAUSES before tagging until the owner runs `docs/social-login-checklist.md` against real providers or explicitly waives named items. Publishing after that checkpoint (tag + release workflow) is authorized, as for v0.1.0/v0.2.0.
