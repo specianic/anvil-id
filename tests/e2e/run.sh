@@ -3,7 +3,8 @@
 # real SMTP sink (Mailpit).
 #
 #   1. Mailpit on 127.0.0.1:1025 (SMTP) and 127.0.0.1:8025 (HTTP API)
-#   2. `cargo build -p anvilid`, then `anvilid serve` in a temp data dir with
+#   2. the admin console (`npm ci` + `npm run build` in admin-ui), then `cargo build --release -p anvilid`
+#      so the tested binary embeds the console at /console/, then `anvilid serve` in a temp data dir with
 #      ANVILID_SMTP_URL=smtp://127.0.0.1:1025 and --breach-check off (Postgres variant: a throwaway
 #      postgres:18-alpine container and a random KEK passed through the environment)
 #   3. the setup URL from the logs; the specs complete /setup once and share the credential
@@ -31,7 +32,8 @@ esac
 SPECS=("$@")
 ((${#SPECS[@]} > 0)) || SPECS=(
     specs/a11y.spec.ts specs/registration.spec.ts specs/recovery.spec.ts specs/login.spec.ts
-    specs/keyboard.spec.ts specs/nojs.spec.ts specs/fixtures.spec.ts
+    specs/keyboard.spec.ts specs/nojs.spec.ts specs/fixtures.spec.ts specs/passkey.spec.ts specs/totp.spec.ts
+    specs/consent.spec.ts specs/sessions.spec.ts specs/console.spec.ts
 )
 
 MAILPIT_IMAGE=axllent/mailpit:v1.29.7
@@ -82,9 +84,16 @@ wait_for() { # url, tries
 MAILPIT_CID=$(docker run -d -p 127.0.0.1:1025:1025 -p 127.0.0.1:8025:8025 "$MAILPIT_IMAGE")
 wait_for http://127.0.0.1:8025/api/v1/info
 
-# 2. Build and start anvilid.
-cargo build -p anvilid --locked
-BIN="$ROOT/target/debug/anvilid"
+# 2. Build the console, then the release binary that embeds it (rust-embed reads admin-ui/dist at
+# compile time in release builds), and start anvilid.
+npm --prefix admin-ui ci --no-audit --no-fund
+npm --prefix admin-ui run build
+[[ -f admin-ui/dist/index.html ]] || {
+    echo "error: admin-ui/dist/index.html missing after the console build" >&2
+    exit 1
+}
+cargo build --release -p anvilid --locked
+BIN="$ROOT/target/release/anvilid"
 
 # Every spec posts from 127.0.0.1, so the default login budget (10/min, burst 5) would throttle the
 # suite. Rate limiting stays ON (its behaviour is covered by the Rust security_ratelimit /

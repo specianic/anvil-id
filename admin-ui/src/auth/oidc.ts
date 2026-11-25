@@ -49,9 +49,15 @@ export function currentReturnTo(): string {
   return window.location.pathname + window.location.search + window.location.hash;
 }
 
+// Set by signOut(): the next sign-in asks for credentials again (prompt=login) even though the
+// server-side session of the system tenant still exists (RP-initiated logout arrives later).
+const SIGNED_OUT_KEY = "anvil-console:signed-out";
+
 export function signIn(returnTo: string): Promise<void> {
   const state: SigninState = { returnTo: safeReturnTo(returnTo) };
-  return userManager.signinRedirect({ state });
+  const afterSignOut = window.sessionStorage.getItem(SIGNED_OUT_KEY) !== null;
+  window.sessionStorage.removeItem(SIGNED_OUT_KEY);
+  return userManager.signinRedirect(afterSignOut ? { state, prompt: "login" } : { state });
 }
 
 // React StrictMode runs effects twice in development; the code exchange must happen exactly once.
@@ -116,6 +122,7 @@ export async function signOut(): Promise<void> {
       console.warn("token revocation failed", error);
     }
   }
+  window.sessionStorage.setItem(SIGNED_OUT_KEY, "1");
   await userManager.removeUser();
 }
 
