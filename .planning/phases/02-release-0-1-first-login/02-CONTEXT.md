@@ -49,6 +49,7 @@ Builds on Phase 1's workspace, storage contract suite and CI.
 ## Decisions after research (2026-11-25)
 
 - **C1 PKCE (user decision):** per-client `require_pkce`, default true; only confidential clients may disable it, and then `nonce` is mandatory for `openid` requests. `plain` always rejected; downgrade defense (challenge sent ⇒ verifier required). PRD OIDC-1 and ARCHITECTURE §11 updated.
+  - **C1 amended 2026-11-25 by user:** opted-out confidential clients may omit nonce, for OIDC Core / Basic OP conformance (`oidcc-ensure-request-without-nonce-succeeds-for-code-flow`). PKCE stays required by default, public clients can never opt out, `plain` is always rejected, and the downgrade defense is unchanged. PRD OIDC-1, ARCHITECTURE §11 and REQUIREMENTS OIDC-01 updated.
 - **C2 prompt/max_age:** the minimal subset Basic OP needs moves into 0.1: `prompt=none` (with `login_required` error), `prompt=login`, `max_age`, `id_token_hint`, login-session reuse. The rest of OIDC-14 (`select_account`, `create`, `acr_values` step-up) stays in Phase 4.
 - **C3 crate cycle:** storage port traits and their domain types live in `anvil_core::ports`; `anvil-storage` holds the contract suite (applied in Phase 1 plans).
 - **C4 discovery paths:** serve both forms for path tenants: OIDC `{issuer}/.well-known/openid-configuration` and RFC 8414 `/.well-known/oauth-authorization-server/t/{slug}` (inserted form).

@@ -73,7 +73,7 @@ async fn public_native_client_always_needs_pkce() {
 }
 
 #[tokio::test]
-async fn nonce_is_required_without_pkce() {
+async fn opted_out_confidential_client_may_omit_pkce_and_nonce() {
     let app = TestApp::new().await;
     let iss = app.issuer(None);
     let t = default_tenant(&app);
@@ -82,13 +82,34 @@ async fn nonce_is_required_without_pkce() {
         pkce_params(&c.client_id),
         &["code_challenge", "code_challenge_method"],
     );
-    let resp = send(&app, &p).await;
-    assert_error_redirect(&resp, RP, "invalid_request", &iss);
+    assert_login_redirect(&send(&app, &p).await, &iss);
 
     let mut with_nonce = p.clone();
     with_nonce.push(("nonce", "n-1"));
-    let resp = send(&app, &with_nonce).await;
-    assert_login_redirect(&resp, &iss);
+    assert_login_redirect(&send(&app, &with_nonce).await, &iss);
+
+    // Opting out never relaxes S256-only.
+    let mut plain = p.clone();
+    plain.push((
+        "code_challenge",
+        "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+    ));
+    plain.push(("code_challenge_method", "plain"));
+    assert_error_redirect(&send(&app, &plain).await, RP, "invalid_request", &iss);
+}
+
+#[tokio::test]
+async fn pkce_required_client_without_pkce_is_rejected_even_with_nonce() {
+    let app = TestApp::new().await;
+    let iss = app.issuer(None);
+    let t = default_tenant(&app);
+    let c = web_client(&app, &t).await;
+    let mut p = without(
+        pkce_params(&c.client_id),
+        &["code_challenge", "code_challenge_method"],
+    );
+    p.push(("nonce", "n-1"));
+    assert_error_redirect(&send(&app, &p).await, RP, "invalid_request", &iss);
 }
 
 #[tokio::test]

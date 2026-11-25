@@ -19,7 +19,7 @@ Source of truth for wording and detail: [docs/PRD.md](../docs/PRD.md) §8–9. I
 
 ### OAuth 2.1 / OpenID Connect server
 
-- [ ] **OIDC-01**: A client can complete authorization code flow with PKCE; only S256 is accepted; PKCE is required by default and only confidential clients may opt out (then nonce is mandatory) [0.1]
+- [ ] **OIDC-01**: A client can complete authorization code flow with PKCE; only S256 is accepted; PKCE is required by default and only confidential clients may opt out (nonce then stays optional, per OIDC Core; public clients never opt out) [0.1]
 - [ ] **OIDC-02**: Redirect URIs are matched exactly (loopback port flexibility only for native apps); invalid redirects show an error page and never redirect [0.1]
 - [ ] **OIDC-03**: Authorization codes are single-use, ≤60 s, bound to client/redirect/PKCE; reuse revokes the tokens issued from that code [0.1]
 - [ ] **OIDC-04**: Clients authenticate with client_secret_basic, client_secret_post, private_key_jwt (aud = issuer, jti replay rejected) or none; secrets hashed, compared in constant time [0.1]

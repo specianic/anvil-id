@@ -7,8 +7,9 @@
 //! Order: client_id (missing or duplicated → page) → client (unknown → page) → redirect_uri
 //! (duplicated or not matching → page; required when the client has more than one registered,
 //! else defaults to the single one) → other duplicated parameters → response_type →
-//! request / request_uri → PKCE → scope → redirect_uri required for OpenID requests → nonce rule
-//! → prompt / max_age → claims.
+//! request / request_uri → PKCE (public clients and `require_pkce` clients only; opted-out
+//! confidential clients may omit both PKCE and nonce) → scope → redirect_uri required for OpenID
+//! requests → prompt / max_age → claims.
 
 use crate::error::CoreError;
 use crate::model::{AuthorizationParams, Client, ClientType, Scope};
@@ -219,11 +220,15 @@ pub fn validate(
         return Err(invalid("redirect_uri is required"));
     }
 
-    // 9. nonce rule: without PKCE, an OpenID request must carry a nonce.
+    // 9. nonce is optional for the code flow (OIDC Core §3.1.2.1). After step 6, a request
+    // without PKCE can only come from a confidential client an admin set to
+    // `require_pkce = false`; its code stays bound to the client's authentication at the token
+    // endpoint. Public clients and `require_pkce = true` clients never get here without PKCE.
     let nonce = raw.get("nonce").map(str::to_owned);
-    if challenge.is_none() && nonce.is_none() {
-        return Err(invalid("nonce is required when PKCE is not used"));
-    }
+    debug_assert!(
+        challenge.is_some()
+            || (client.client_type == ClientType::Confidential && !client.require_pkce)
+    );
 
     // 10. prompt and max_age
     let prompt: Vec<String> = raw
@@ -531,19 +536,41 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn confidential_without_pkce_needs_nonce() {
+    fn opted_out_confidential_client_may_omit_pkce_and_nonce() {
         let mut c = client();
         c.require_pkce = false;
         let no_pkce = [("code_challenge", None), ("code_challenge_method", None)];
-        assert_eq!(
-            redirect_err(validate(&with(&no_pkce), Some(&c))).0,
-            "invalid_request"
-        );
+        let v = validate(&with(&no_pkce), Some(&c)).unwrap();
+        assert!(v.params.nonce.is_none());
+        assert!(v.params.code_challenge.is_none());
         let mut changes = no_pkce.to_vec();
         changes.push(("nonce", Some("n-123")));
         let v = validate(&with(&changes), Some(&c)).unwrap();
         assert_eq!(v.params.nonce.as_deref(), Some("n-123"));
-        assert!(v.params.code_challenge.is_none());
+        // Opting out does not relax the S256-only rule or partial PKCE parameters.
+        for bad in [
+            vec![("code_challenge_method", Some("plain"))],
+            vec![("code_challenge_method", None)],
+            vec![("code_challenge", None)],
+        ] {
+            assert_eq!(
+                redirect_err(validate(&with(&bad), Some(&c))).0,
+                "invalid_request",
+                "{bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn require_pkce_client_without_pkce_is_rejected_even_with_nonce() {
+        let c = client();
+        assert!(c.require_pkce);
+        let r = with(&[
+            ("code_challenge", None),
+            ("code_challenge_method", None),
+            ("nonce", Some("n")),
+        ]);
+        assert_eq!(redirect_err(validate(&r, Some(&c))).0, "invalid_request");
     }
 
     #[test]
@@ -556,6 +583,8 @@ pub(crate) mod tests {
             ("code_challenge_method", None),
             ("nonce", Some("n")),
         ]);
+        assert_eq!(redirect_err(validate(&r, Some(&c))).0, "invalid_request");
+        let r = with(&[("code_challenge", None), ("code_challenge_method", None)]);
         assert_eq!(redirect_err(validate(&r, Some(&c))).0, "invalid_request");
     }
 

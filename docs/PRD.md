@@ -142,7 +142,7 @@ phase, **P1** is expected in the phase, **P2** is opportunistic.
 
 | ID | Requirement | Phase | Pri |
 |---|---|---|---|
-| OIDC-1 | Authorization code grant with PKCE; only **S256** accepted, `plain` rejected. PKCE is required by default for every client (`require_pkce`); only confidential clients may turn it off, in which case `nonce` is mandatory for `openid` requests (RFC 9700 §2.1.1). Needed for OpenID certification | 0.1 | P0 |
+| OIDC-1 | Authorization code grant with PKCE; only **S256** accepted, `plain` rejected. PKCE is required by default for every client (`require_pkce`); only confidential clients may turn it off (public clients never can); such opted-out clients may omit `nonce` as OIDC Core allows for the code flow, with the code bound to the client's authentication at the token endpoint. Needed for OpenID certification | 0.1 | P0 |
 | OIDC-2 | Exact redirect URI matching (localhost port flexibility for native apps only, per RFC 8252) | 0.1 | P0 |
 | OIDC-3 | Authorization codes are single-use, short-lived (≤ 60 s), and bound to client, redirect URI and PKCE challenge; reuse revokes the tokens issued from that code | 0.1 | P0 |
 | OIDC-4 | Client authentication: `client_secret_basic`, `client_secret_post`, `private_key_jwt`, `none` (public clients). Secrets stored hashed; constant-time comparison. For `private_key_jwt`, the assertion's `aud` must be exactly the issuer identifier, and `jti` replay is rejected | 0.1 | P0 |
