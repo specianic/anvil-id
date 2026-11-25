@@ -1,0 +1,19 @@
+# Email one-time code and magic-link sign-in (AUTH-06), German.
+title-email_code = Prüfen Sie Ihre E-Mails
+title-magic_link = Anmeldung fortsetzen
+email_code-request_toggle = Anmeldecode per E-Mail senden
+email_code-request = Anmeldecode per E-Mail senden
+email_code-request_hint = Wir senden einen Code und einen Anmeldelink an diese Adresse.
+email_code-sent = Falls zu dieser Adresse ein Konto existiert, haben wir einen Code dorthin gesendet. Er ist 10 Minuten gültig.
+email_code-code_hint = Geben Sie den 6-stelligen Code aus der E-Mail ein oder öffnen Sie den Link darin.
+email_code-submit = Anmelden
+email_code-resend = Neuen Code senden
+email_code-other_way = Auf andere Weise anmelden
+email_code-invalid = Dieser Code ist nicht richtig. Prüfen Sie die E-Mail und versuchen Sie es erneut.
+email_code-expired = Dieser Code ist abgelaufen. Lassen Sie sich einen neuen Code senden.
+email_code-invalidated = Dieser Code kann nicht mehr verwendet werden. Lassen Sie sich einen neuen Code senden.
+email_code-too_many_sends = Für diese Anmeldung wurden zu viele Codes gesendet. Beginnen Sie erneut auf der Anmeldeseite.
+email_code-link_explain = Klicken Sie auf die Schaltfläche, um die Anmeldung abzuschließen.
+email_code-link_continue = Anmeldung fortsetzen
+email_code-link_invalid = Dieser Anmeldelink kann nicht mehr verwendet werden. Fordern Sie auf der Anmeldeseite einen neuen Code an.
+email_code-other_browser = Öffnen Sie den Link in dem Browser, in dem Sie die Anmeldung begonnen haben, oder geben Sie dort den Code aus der E-Mail ein.

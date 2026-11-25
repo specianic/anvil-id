@@ -113,16 +113,18 @@ fn user_locale_sits_between_ui_locales_and_accept_language() {
 
 #[test]
 fn missing_messages_fall_back_to_english_then_to_the_key() {
-    let (_d, c) = with_german();
-    let de = Locale::new("de");
-    assert_eq!(c.text(&de, "title.login", &[]), "Anmelden");
+    // A locale the default theme does not ship (German is complete since 04-30).
+    let dir = theme(&[("fr", "main.ftl", "title-login = Se connecter\n")]);
+    let c = Catalogs::load(Some(dir.path())).expect("catalogs load");
+    let fr = Locale::new("fr");
+    assert_eq!(c.text(&fr, "title.login", &[]), "Se connecter");
     assert_eq!(
-        c.text(&de, "title.registration", &[]),
+        c.text(&fr, "title.registration", &[]),
         "Create an account",
-        "missing in de -> English"
+        "missing in fr -> English"
     );
     assert_eq!(
-        c.text(&de, "no.such_key", &[]),
+        c.text(&fr, "no.such_key", &[]),
         "no.such_key",
         "missing everywhere -> the key"
     );
@@ -251,7 +253,7 @@ fn t_function_uses_page_lang_and_kwargs_and_escapes() {
     };
     assert_eq!(
         html(Some("de")),
-        "Anmelden|&lt;b&gt;x&lt;&#x2f;b&gt; abmelden|Too many attempts. Try again in 1 second."
+        "Anmelden|&lt;b&gt;x&lt;&#x2f;b&gt; abmelden|Zu viele Versuche. Versuchen Sie es in 1 Sekunde erneut."
     );
     assert!(
         html(None).starts_with("Sign in|Sign out &lt;b&gt;"),

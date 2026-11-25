@@ -1,0 +1,24 @@
+# Linked accounts page (plan 04-25, AUTH-11), German.
+title-account_linked = Verknüpfte Konten
+account_nav-linked = Verknüpfte Konten
+account-last_sign_in_method = Dies ist Ihre einzige Anmeldemethode. Legen Sie ein Passwort fest oder fügen Sie einen Passkey hinzu, bevor Sie die Verbindung trennen.
+account-link_not_found = Dieses verknüpfte Konto existiert nicht mehr.
+linked-unlinked = Die Verbindung zum Konto wurde getrennt.
+linked-heading = Konten, mit denen Sie sich anmelden
+linked-caption = Konten anderer Anbieter, die mit diesem Konto verbunden sind.
+linked-col_provider = Anbieter
+linked-col_email = E-Mail-Adresse beim Anbieter
+linked-col_linked = Verbunden
+linked-col_last_used = Zuletzt verwendet
+linked-col_action = Aktion
+linked-no_email = Nicht freigegeben
+linked-never_used = Nie
+linked-none = Es sind keine anderen Konten verbunden.
+linked-disconnect = Trennen
+linked-disconnect_provider = Verbindung mit { $provider } trennen
+linked-available_heading = Weiteres Konto verbinden
+linked-available_help = Nachdem Sie ein Konto verbunden haben, können Sie sich hier damit anmelden.
+linked-connect_provider = Mit { $provider } verbinden
+linked-reauth_before = Aus Sicherheitsgründen
+linked-reauth_link = melden Sie sich bitte erneut an
+linked-reauth_after = und verbinden oder trennen Sie danach ein Konto.
