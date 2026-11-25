@@ -78,12 +78,14 @@ pub fn decode_header(token: &str) -> Result<JoseHeader, JoseError> {
     parse(token).map(|p| p.header)
 }
 
-/// Whether `jwk` can verify `alg`: matching kty (and P-256 for ES256), `use` absent or `sig`,
+/// Whether `jwk` can verify `alg`: matching kty (P-256 for ES256, OKP/Ed25519 for Ed25519),
+/// `use` absent or `sig`,
 /// `alg` absent or equal.
 fn fits(jwk: &Jwk, alg: Alg) -> bool {
     let kty_ok = match alg {
         Alg::RS256 | Alg::PS256 => jwk.kty == "RSA",
         Alg::ES256 => jwk.kty == "EC" && jwk.crv.as_deref() == Some("P-256"),
+        Alg::Ed25519 => jwk.kty == "OKP" && jwk.crv.as_deref() == Some("Ed25519"),
     };
     kty_ok
         && jwk.use_.as_deref().is_none_or(|u| u == "sig")
@@ -107,22 +109,34 @@ fn select_key<'k>(keys: &'k Jwks, kid: Option<&str>, alg: Alg) -> Result<&'k Jwk
 
 fn decoding_key(jwk: &Jwk, alg: Alg) -> Result<DecodingKey, JoseError> {
     let bad = |_| JoseError::Malformed("invalid JWK key material");
-    if alg.is_rsa() {
-        let (Some(n), Some(e)) = (jwk.n.as_deref(), jwk.e.as_deref()) else {
-            return Err(JoseError::Malformed("RSA JWK without n/e"));
-        };
-        // Strict decoding first: jsonwebtoken's own decoder is more lenient.
-        b64url_decode(n)?;
-        b64url_decode(e)?;
-        DecodingKey::from_rsa_components(n, e).map_err(bad)
-    } else {
-        let (Some(x), Some(y)) = (jwk.x.as_deref(), jwk.y.as_deref()) else {
-            return Err(JoseError::Malformed("EC JWK without x/y"));
-        };
-        if b64url_decode(x)?.len() != 32 || b64url_decode(y)?.len() != 32 {
-            return Err(JoseError::Malformed("P-256 coordinates must be 32 bytes"));
+    match alg {
+        Alg::RS256 | Alg::PS256 => {
+            let (Some(n), Some(e)) = (jwk.n.as_deref(), jwk.e.as_deref()) else {
+                return Err(JoseError::Malformed("RSA JWK without n/e"));
+            };
+            // Strict decoding first: jsonwebtoken's own decoder is more lenient.
+            b64url_decode(n)?;
+            b64url_decode(e)?;
+            DecodingKey::from_rsa_components(n, e).map_err(bad)
         }
-        DecodingKey::from_ec_components(x, y).map_err(bad)
+        Alg::ES256 => {
+            let (Some(x), Some(y)) = (jwk.x.as_deref(), jwk.y.as_deref()) else {
+                return Err(JoseError::Malformed("EC JWK without x/y"));
+            };
+            if b64url_decode(x)?.len() != 32 || b64url_decode(y)?.len() != 32 {
+                return Err(JoseError::Malformed("P-256 coordinates must be 32 bytes"));
+            }
+            DecodingKey::from_ec_components(x, y).map_err(bad)
+        }
+        Alg::Ed25519 => {
+            let Some(x) = jwk.x.as_deref() else {
+                return Err(JoseError::Malformed("OKP JWK without x"));
+            };
+            if b64url_decode(x)?.len() != 32 {
+                return Err(JoseError::Malformed("Ed25519 public key must be 32 bytes"));
+            }
+            DecodingKey::from_ed_components(x).map_err(bad)
+        }
     }
 }
 
@@ -169,7 +183,7 @@ pub(crate) mod test_keys {
 
     use crate::encoding::b64url;
     use crate::jwk::{Jwk, thumbprint};
-    use crate::keys::{Alg, SigningKey, generate_rs256};
+    use crate::keys::{Alg, SigningKey, generate_ed25519, generate_rs256};
 
     pub struct TestKey {
         pub signer: SigningKey,
@@ -209,6 +223,14 @@ pub(crate) mod test_keys {
         }
     }
 
+    pub fn ed25519() -> TestKey {
+        let g = generate_ed25519().unwrap();
+        TestKey {
+            signer: SigningKey::from_pkcs8(&g.kid, Alg::Ed25519, &g.pkcs8).unwrap(),
+            jwk: g.public_jwk,
+        }
+    }
+
     /// Build an unsigned-by-us token from raw header/claims JSON plus an arbitrary signature.
     pub fn raw_token(header: &serde_json::Value, claims: &serde_json::Value, sig: &[u8]) -> String {
         format!(
@@ -222,13 +244,13 @@ pub(crate) mod test_keys {
 
 #[cfg(test)]
 mod tests {
-    use super::test_keys::{es256, raw_token, rsa};
+    use super::test_keys::{ed25519, es256, raw_token, rsa};
     use super::*;
     use crate::encoding::b64url;
     use jsonwebtoken::{Algorithm, EncodingKey, Header};
     use serde_json::json;
 
-    const ALL: &[Alg] = &[Alg::RS256, Alg::PS256, Alg::ES256];
+    const ALL: &[Alg] = &[Alg::RS256, Alg::PS256, Alg::ES256, Alg::Ed25519];
 
     fn set(keys: &[&Jwk]) -> Jwks {
         Jwks {
@@ -248,6 +270,69 @@ mod tests {
             assert_eq!(v.header.kid.as_deref(), Some(k.signer.kid()));
             assert_eq!(v.header.typ.as_deref(), Some("JWT"));
         }
+    }
+
+    #[test]
+    fn rs256_es256_ed25519_sign_verify_round_trip() {
+        for k in [rsa(Alg::RS256), es256(), ed25519()] {
+            let alg = k.signer.alg();
+            let t = k.signer.sign_jwt(None, &json!({"sub": "rt"})).unwrap();
+            let v = verify_jwt(&t, &set(&[&k.jwk]), &[alg]).unwrap();
+            assert_eq!(v.claims["sub"], "rt");
+            assert_eq!(v.header.alg, alg.as_str());
+            // Not in the allow-list: rejected before any key lookup or crypto.
+            let others: Vec<Alg> = ALL.iter().copied().filter(|a| *a != alg).collect();
+            assert!(matches!(
+                verify_jwt(&t, &set(&[&k.jwk]), &others),
+                Err(JoseError::UnsupportedAlg(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn ed25519_token_with_eddsa_header_rejected() {
+        // Same key, same valid Ed25519 signature bytes, but the polymorphic `EdDSA` header.
+        let k = ed25519();
+        let header = json!({"alg": "EdDSA", "kid": k.signer.kid()});
+        let message = format!(
+            "{}.{}",
+            b64url(&serde_json::to_vec(&header).unwrap()),
+            b64url(&serde_json::to_vec(&json!({"sub": "a"})).unwrap())
+        );
+        let sig = k.signer.sign_message(&message).unwrap();
+        let t = format!("{message}.{sig}");
+        assert!(matches!(
+            verify_jwt(&t, &set(&[&k.jwk]), ALL),
+            Err(JoseError::UnsupportedAlg(_))
+        ));
+    }
+
+    #[test]
+    fn ed25519_wrong_key_and_tampered_signature_rejected() {
+        let k = ed25519();
+        let other = ed25519();
+        let t = k.signer.sign_jwt(None, &json!({"sub": "a"})).unwrap();
+        // Right kid but someone else's key material.
+        let mut forged = other.jwk.clone();
+        forged.kid = k.jwk.kid.clone();
+        assert_eq!(
+            verify_jwt(&t, &set(&[&forged]), ALL).unwrap_err(),
+            JoseError::BadSignature
+        );
+        // An Ed25519 token cannot be verified with an EC key under the same kid.
+        let mut ec = es256().jwk;
+        ec.kid = k.jwk.kid.clone();
+        assert_eq!(
+            verify_jwt(&t, &set(&[&ec]), ALL).unwrap_err(),
+            JoseError::UnknownKey
+        );
+        // Short x is refused before crypto.
+        let mut short = k.jwk.clone();
+        short.x = Some(b64url(&[1u8; 31]));
+        assert!(matches!(
+            verify_jwt(&t, &set(&[&short]), ALL),
+            Err(JoseError::Malformed(_))
+        ));
     }
 
     #[test]

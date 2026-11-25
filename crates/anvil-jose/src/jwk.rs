@@ -47,7 +47,7 @@ fn json_str(s: &str) -> String {
 }
 
 /// RFC 7638 SHA-256 thumbprint, base64url. RSA uses `{"e","kty","n"}`, EC uses
-/// `{"crv","kty","x","y"}`, members in lexicographic order with no whitespace.
+/// `{"crv","kty","x","y"}`, OKP (RFC 8037 §2) uses `{"crv","kty","x"}`, members in lexicographic order with no whitespace.
 pub fn thumbprint(jwk: &Jwk) -> Result<String, JoseError> {
     let canonical = match jwk.kty.as_str() {
         "RSA" => format!(
@@ -60,6 +60,11 @@ pub fn thumbprint(jwk: &Jwk) -> Result<String, JoseError> {
             json_str(required(&jwk.crv, "EC JWK without crv")?),
             json_str(required(&jwk.x, "EC JWK without x")?),
             json_str(required(&jwk.y, "EC JWK without y")?),
+        ),
+        "OKP" => format!(
+            r#"{{"crv":{},"kty":"OKP","x":{}}}"#,
+            json_str(required(&jwk.crv, "OKP JWK without crv")?),
+            json_str(required(&jwk.x, "OKP JWK without x")?),
         ),
         _ => return Err(JoseError::Malformed("unsupported kty")),
     };
@@ -166,6 +171,56 @@ mod tests {
             ..rfc7638_key()
         };
         assert!(thumbprint(&oct).is_err());
+    }
+
+    fn sha256_b64(s: &str) -> String {
+        b64url(&sha256(s.as_bytes()))
+    }
+
+    #[test]
+    fn ec_thumbprint_uses_crv_kty_x_y_in_order() {
+        // RFC 7517 Appendix A.1 EC public key.
+        let ec = Jwk {
+            kty: "EC".into(),
+            kid: Some("1".into()),
+            use_: Some("enc".into()),
+            alg: None,
+            n: None,
+            e: None,
+            crv: Some("P-256".into()),
+            x: Some("MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4".into()),
+            y: Some("4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM".into()),
+        };
+        let expected = sha256_b64(
+            r#"{"crv":"P-256","kty":"EC","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM"}"#,
+        );
+        assert_eq!(thumbprint(&ec).unwrap(), expected);
+    }
+
+    #[test]
+    fn okp_ed25519_thumbprint_rfc8037_vector() {
+        // RFC 8037 Appendix A.3: thumbprint of the A.2 Ed25519 public key.
+        let okp = Jwk {
+            kty: "OKP".into(),
+            kid: None,
+            use_: None,
+            alg: Some("Ed25519".into()),
+            n: None,
+            e: None,
+            crv: Some("Ed25519".into()),
+            x: Some("11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo".into()),
+            y: None,
+        };
+        assert_eq!(
+            thumbprint(&okp).unwrap(),
+            "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k"
+        );
+        let mut no_x = okp.clone();
+        no_x.x = None;
+        assert!(thumbprint(&no_x).is_err());
+        let mut no_crv = okp;
+        no_crv.crv = None;
+        assert!(thumbprint(&no_crv).is_err());
     }
 
     #[test]

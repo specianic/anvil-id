@@ -42,7 +42,29 @@ pub fn verify_op_token(
     expiry: ExpiryCheck,
     now: OffsetDateTime,
 ) -> Result<VerifiedJwt, JoseError> {
-    let jwt = verify_jwt(token, published, &[Alg::RS256])?;
+    verify_op_token_algs(
+        token,
+        published,
+        &[Alg::RS256],
+        issuer,
+        expected_typ,
+        expiry,
+        now,
+    )
+}
+
+/// [`verify_op_token`] with an explicit algorithm allow-list (e.g. RS256, ES256 and Ed25519 once
+/// tenants sign with more than one algorithm). The allow-list is checked before any crypto.
+pub fn verify_op_token_algs(
+    token: &str,
+    published: &Jwks,
+    allowed: &[Alg],
+    issuer: &str,
+    expected_typ: Option<&str>,
+    expiry: ExpiryCheck,
+    now: OffsetDateTime,
+) -> Result<VerifiedJwt, JoseError> {
+    let jwt = verify_jwt(token, published, allowed)?;
     if let Some(expected) = expected_typ {
         match jwt.header.typ.as_deref() {
             Some(actual) if typ_matches(actual, expected) => {}
@@ -64,7 +86,7 @@ pub fn verify_op_token(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::jws::test_keys::{TestKey, es256, rsa};
+    use crate::jws::test_keys::{TestKey, ed25519, es256, rsa};
     use serde_json::{Value, json};
 
     const ISSUER: &str = "https://op.example.test";
@@ -236,6 +258,34 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    #[test]
+    fn explicit_allow_list_accepts_ed25519_and_es256_only_when_listed() {
+        let all = [Alg::RS256, Alg::ES256, Alg::Ed25519];
+        for k in [rsa(Alg::RS256), es256(), ed25519()] {
+            let t = k.signer.sign_jwt(Some("at+jwt"), &claims(60)).unwrap();
+            let ok = verify_op_token_algs(
+                &t,
+                &published(&[&k]),
+                &all,
+                ISSUER,
+                Some("at+jwt"),
+                ExpiryCheck::Enforce,
+                now(),
+            );
+            assert!(ok.is_ok(), "{:?}", k.signer.alg());
+            let refused = verify_op_token_algs(
+                &t,
+                &published(&[&k]),
+                &[],
+                ISSUER,
+                Some("at+jwt"),
+                ExpiryCheck::Enforce,
+                now(),
+            );
+            assert!(matches!(refused, Err(JoseError::UnsupportedAlg(_))));
+        }
     }
 
     #[test]

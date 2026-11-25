@@ -5,7 +5,8 @@
 //! - [`pkce`]: RFC 7636 S256 verification.
 //! - [`kek`]: AES-256-GCM envelope with HKDF-derived per-purpose keys.
 //! - [`jwk`]: public JWKs, JWK Sets, RFC 7638 thumbprints.
-//! - [`keys`]: RS256 key generation and JWT signing.
+//! - [`keys`]: RS256/ES256/Ed25519 key generation and JWT signing.
+//! - [`hash`]: per-algorithm `at_hash`/`c_hash`.
 //! - [`jws`]: strict compact-JWS parsing and signature verification against a JWK Set.
 //! - [`client_assertion`]: `private_key_jwt` client assertion rules.
 //! - [`op_token`]: verification of tokens this OP issued (access tokens, `id_token_hint`).
@@ -16,6 +17,7 @@
 pub mod client_assertion;
 pub mod encoding;
 pub mod error;
+pub mod hash;
 pub mod jwk;
 pub mod jws;
 pub mod kek;
@@ -25,8 +27,11 @@ pub mod pkce;
 
 pub use client_assertion::{AssertionRules, VerifiedAssertion, verify_client_assertion};
 pub use error::JoseError;
+pub use hash::token_hash;
 pub use jwk::{Jwk, Jwks, thumbprint};
 pub use jws::{JoseHeader, VerifiedJwt, decode_header, verify_jwt};
 pub use kek::Kek;
-pub use keys::{Alg, GeneratedKey, SigningKey, generate_rs256};
-pub use op_token::{ExpiryCheck, verify_op_token};
+pub use keys::{
+    Alg, GeneratedKey, SigningKey, generate, generate_ed25519, generate_es256, generate_rs256,
+};
+pub use op_token::{ExpiryCheck, verify_op_token, verify_op_token_algs};
