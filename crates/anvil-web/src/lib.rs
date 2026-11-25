@@ -5,6 +5,7 @@
 pub mod adapters;
 pub mod admin;
 mod assets;
+pub mod client_ip;
 pub mod config;
 pub mod cookies;
 pub mod errors;
@@ -12,6 +13,7 @@ mod health;
 pub mod layers;
 pub mod protocol;
 pub mod render;
+pub mod request_context;
 pub mod state;
 pub mod tenant;
 pub mod ui;
