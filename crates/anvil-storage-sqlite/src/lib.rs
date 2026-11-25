@@ -320,4 +320,122 @@ mod tests {
         assert_eq!(migrated.host, None);
         assert_eq!(migrated.settings, Default::default());
     }
+
+    /// 0004 rebuilds token_family with foreign keys off: on a populated 0.1 database (last 0.1
+    /// migration = version 2) every code, refresh token and password survives 0003 + 0004, and
+    /// foreign keys are enforced again on the migrating connection afterwards.
+    #[tokio::test]
+    async fn migrations_0003_0004_preserve_a_populated_0_1_database() {
+        let storage = SqliteStorage::connect("sqlite::memory:")
+            .await
+            .expect("connect");
+        let mut v01 = sqlx::migrate!();
+        v01.migrations = Cow::Owned(v01.migrations[..2].to_vec());
+        assert_eq!(v01.migrations.last().map(|m| m.version), Some(2));
+        v01.run(&storage.writer).await.expect("0001 + 0002 apply");
+
+        // Unchecked queries: the 0.1 schema is not the one the query macros check against.
+        let seed = [
+            "INSERT INTO tenant (id, slug, display_name, created_at)
+             VALUES (x'0000000000000000000000000000000a', 'legacy', 'Legacy', 0)",
+            "INSERT INTO user (id, tenant_id, email, email_verified, claims, status, created_at,
+                               updated_at)
+             VALUES (x'0000000000000000000000000000000b', x'0000000000000000000000000000000a',
+                     'user@example.test', 1, '{}', 'active', 0, 0)",
+            "INSERT INTO credential (tenant_id, user_id, kind, secret, created_at, updated_at)
+             VALUES (x'0000000000000000000000000000000a', x'0000000000000000000000000000000b',
+                     'password', '$argon2id$v=19$legacy', 1, 2)",
+            "INSERT INTO flow (id, tenant_id, kind, state, csrf_hash, cookie_hash, created_at,
+                               expires_at)
+             VALUES (x'0000000000000000000000000000000f', x'0000000000000000000000000000000a',
+                     'login', '{}', zeroblob(32), zeroblob(32), 0, 9999999999999)",
+            "INSERT INTO token_family (id, tenant_id, client_id, user_id, scope, amr, created_at,
+                                       absolute_expires_at, revoked_at, revoked_reason)
+             VALUES (x'0000000000000000000000000000000c', x'0000000000000000000000000000000a',
+                     'app', x'0000000000000000000000000000000b', 'openid', '[\"pwd\"]', 0,
+                     9999999999999, NULL, NULL),
+                    (x'0000000000000000000000000000000d', x'0000000000000000000000000000000a',
+                     'app', x'0000000000000000000000000000000b', 'openid', '[]', 0,
+                     9999999999999, 5, 'refresh_reuse')",
+            "INSERT INTO authorization_code
+                 (code_hash, tenant_id, client_id, user_id, session_id, redirect_uri, scope,
+                  auth_time, acr, amr, token_family_id, expires_at, created_at)
+             VALUES (x'0101010101010101010101010101010101010101010101010101010101010101',
+                     x'0000000000000000000000000000000a', 'app', x'0000000000000000000000000000000b',
+                     x'0000000000000000000000000000000e', 'https://app.example.test/cb', 'openid',
+                     0, 'urn:anvilid:acr:pwd', '[\"pwd\"]', x'0000000000000000000000000000000c',
+                     9999999999999, 0)",
+            "INSERT INTO refresh_token (token_hash, tenant_id, family_id, scope, created_at,
+                                        expires_at)
+             VALUES (x'0202020202020202020202020202020202020202020202020202020202020202',
+                     x'0000000000000000000000000000000a', x'0000000000000000000000000000000c',
+                     'openid', 0, 9999999999999),
+                    (x'0303030303030303030303030303030303030303030303030303030303030303',
+                     x'0000000000000000000000000000000a', x'0000000000000000000000000000000d',
+                     'openid', 0, 9999999999999)",
+        ];
+        for sql in seed {
+            sqlx::query(sql)
+                .execute(&storage.writer)
+                .await
+                .unwrap_or_else(|e| panic!("seed failed: {e}: {sql}"));
+        }
+
+        storage.migrate().await.expect("0003 + 0004 apply on 0.1 data");
+
+        let count = |sql: &'static str| {
+            let w = storage.writer.clone();
+            async move {
+                sqlx::query_scalar::<_, i64>(sql)
+                    .fetch_one(&w)
+                    .await
+                    .expect(sql)
+            }
+        };
+        assert_eq!(count("SELECT count(*) FROM token_family").await, 2);
+        assert_eq!(
+            count("SELECT count(*) FROM token_family WHERE revoked_reason = 'refresh_reuse'").await,
+            1
+        );
+        assert_eq!(count("SELECT count(*) FROM authorization_code").await, 1);
+        assert_eq!(count("SELECT count(*) FROM refresh_token").await, 2);
+        assert_eq!(count("SELECT count(*) FROM flow").await, 1);
+        assert_eq!(
+            count(
+                "SELECT count(*) FROM credential
+                  WHERE kind = 'password' AND secret = '$argon2id$v=19$legacy'
+                    AND length(id) = 16 AND created_at = 1 AND updated_at = 2"
+            )
+            .await,
+            1
+        );
+        // The new revoke reasons are accepted.
+        sqlx::query(
+            "UPDATE token_family SET revoked_at = 7, revoked_reason = 'consent_revoked'
+              WHERE id = x'0000000000000000000000000000000c'",
+        )
+        .execute(&storage.writer)
+        .await
+        .expect("consent_revoked accepted");
+        // Foreign keys are on again on the migrating connection, and the references from codes
+        // and refresh tokens now point at the rebuilt table.
+        assert_eq!(count("PRAGMA foreign_keys").await, 1);
+        assert_eq!(count("SELECT count(*) FROM pragma_foreign_key_check").await, 0);
+        let dangling = sqlx::query(
+            "INSERT INTO refresh_token (token_hash, tenant_id, family_id, scope, created_at,
+                                        expires_at)
+             VALUES (x'0404040404040404040404040404040404040404040404040404040404040404',
+                     x'0000000000000000000000000000000a', x'000000000000000000000000000000ff',
+                     'openid', 0, 1)",
+        )
+        .execute(&storage.writer)
+        .await;
+        assert!(dangling.is_err(), "foreign keys must be enforced again");
+        sqlx::query("DELETE FROM token_family WHERE id = x'0000000000000000000000000000000c'")
+            .execute(&storage.writer)
+            .await
+            .expect("delete family");
+        assert_eq!(count("SELECT count(*) FROM authorization_code").await, 0);
+        assert_eq!(count("SELECT count(*) FROM refresh_token").await, 1);
+    }
 }
