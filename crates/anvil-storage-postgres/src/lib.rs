@@ -23,6 +23,8 @@ mod outbox;
 mod sessions;
 mod setup;
 mod tenants;
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
 mod users;
 
 use anvil_core::ports::{
@@ -238,8 +240,6 @@ mod tests {
     use std::borrow::Cow;
 
     use sqlx::{Connection, PgConnection};
-    use testcontainers_modules::postgres::Postgres;
-    use testcontainers_modules::testcontainers::{ImageExt, runners::AsyncRunner};
     use uuid::Uuid;
 
     /// The embedded migrator restricted to versions `<= max`.
@@ -278,15 +278,9 @@ mod tests {
 
     #[tokio::test]
     async fn migration_0003_upgrades_a_populated_0_1_database() {
-        let container = Postgres::default()
-            .with_tag("18-alpine")
-            .start()
-            .await
-            .expect("docker must be running for Postgres migration tests");
-        let host = container.get_host().await.expect("host");
-        let port = container.get_host_port_ipv4(5432).await.expect("port");
-        // Default credentials of the throwaway testcontainers image, not a secret.
-        let url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
+        // Held to the end of the test; dropping it removes the container.
+        let (_container, server) = crate::testing::start(100).await;
+        let url = format!("{server}/postgres");
         let mut conn = connect(&url).await;
 
         migrator_up_to(2)
@@ -469,15 +463,9 @@ mod tests {
     /// repository pre-check involved).
     #[tokio::test]
     async fn composite_tenant_foreign_keys_reject_cross_tenant_rows() {
-        let container = Postgres::default()
-            .with_tag("18-alpine")
-            .start()
-            .await
-            .expect("docker must be running for Postgres migration tests");
-        let host = container.get_host().await.expect("host");
-        let port = container.get_host_port_ipv4(5432).await.expect("port");
-        // Default credentials of the throwaway testcontainers image, not a secret.
-        let url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
+        // Held to the end of the test; dropping it removes the container.
+        let (_container, server) = crate::testing::start(100).await;
+        let url = format!("{server}/postgres");
         let mut conn = connect(&url).await;
         migrator_up_to(i64::MAX)
             .run(&mut conn)

@@ -169,7 +169,7 @@ async fn locked(
 #[cfg(test)]
 mod tests {
     use testcontainers_modules::postgres::Postgres;
-    use testcontainers_modules::testcontainers::{ContainerAsync, ImageExt, runners::AsyncRunner};
+    use testcontainers_modules::testcontainers::ContainerAsync;
 
     use super::*;
 
@@ -183,15 +183,8 @@ mod tests {
 
     /// A fresh database on a throwaway container (kept alive by the returned handle).
     async fn storage() -> (PostgresStorage, ContainerAsync<Postgres>) {
-        let container = Postgres::default()
-            .with_tag("18-alpine")
-            .start()
-            .await
-            .expect("docker must be running for Postgres migration tests");
-        let host = container.get_host().await.expect("host");
-        let port = container.get_host_port_ipv4(5432).await.expect("port");
-        // Default credentials of the throwaway testcontainers image, not a secret.
-        let url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
+        let (container, server) = crate::testing::start(100).await;
+        let url = format!("{server}/postgres");
         let mut last = None;
         for _ in 0..50 {
             match PostgresStorage::connect(&url, 4).await {

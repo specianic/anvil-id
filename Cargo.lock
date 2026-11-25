@@ -208,6 +208,7 @@ dependencies = [
  "anvil-core",
  "anvil-jose",
  "anvil-storage",
+ "anvil-storage-postgres",
  "async-trait",
  "serde",
  "serde_json",

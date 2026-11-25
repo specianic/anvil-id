@@ -23,7 +23,7 @@ use anvil_storage::contract::TestStorage;
 use anvil_storage_postgres::{MigrateOptions, PostgresStorage};
 use sqlx::{Connection, PgConnection};
 use testcontainers_modules::postgres::Postgres;
-use testcontainers_modules::testcontainers::{ContainerAsync, ImageExt, runners::AsyncRunner};
+use testcontainers_modules::testcontainers::ContainerAsync;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -54,24 +54,10 @@ const MAX_CONNECTIONS: u32 = 40;
 static PG: tokio::sync::OnceCell<(ContainerAsync<Postgres>, String)> =
     tokio::sync::OnceCell::const_new();
 
-/// Server URL of the shared container (never dropped, like the contract suite's container).
+/// Server URL of the shared container (never dropped; see `anvil_storage_postgres::testing` for cleanup).
 async fn server_url() -> &'static str {
     let (_, url) = PG
-        .get_or_init(|| async {
-            let container = Postgres::default()
-                .with_tag("18-alpine")
-                .with_cmd(["postgres", "-c", "max_connections=500"])
-                .start()
-                .await
-                .expect("docker must be running for Postgres upgrade tests");
-            let host = container.get_host().await.expect("host");
-            let port = container.get_host_port_ipv4(5432).await.expect("port");
-            // Default credentials of the throwaway testcontainers image, not a secret.
-            (
-                container,
-                format!("postgres://postgres:postgres@{host}:{port}"),
-            )
-        })
+        .get_or_init(|| anvil_storage_postgres::testing::start(500))
         .await;
     url
 }

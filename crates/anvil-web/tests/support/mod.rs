@@ -89,7 +89,7 @@ mod pg {
     use anvil_storage_postgres::PostgresStorage;
     use sqlx::Connection;
     use testcontainers_modules::postgres::Postgres;
-    use testcontainers_modules::testcontainers::{ContainerAsync, ImageExt, runners::AsyncRunner};
+    use testcontainers_modules::testcontainers::ContainerAsync;
     use uuid::Uuid;
 
     const MAX_CONNECTIONS: u32 = 10;
@@ -99,22 +99,7 @@ mod pg {
 
     async fn server_url() -> &'static str {
         let (_, url) = PG
-            .get_or_init(|| async {
-                let container = Postgres::default()
-                    .with_tag("18-alpine")
-                    .with_cmd(["postgres", "-c", "max_connections=500"])
-                    .start()
-                    .await
-                    .expect("docker must be running for ANVILID_TEST_DB=postgres");
-                let host = container.get_host().await.expect("container host");
-                let port = container
-                    .get_host_port_ipv4(5432)
-                    .await
-                    .expect("container port 5432");
-                // Default credentials of the throwaway testcontainers image, not a secret.
-                let url = format!("postgres://postgres:postgres@{host}:{port}");
-                (container, url)
-            })
+            .get_or_init(|| anvil_storage_postgres::testing::start(500))
             .await;
         url
     }
