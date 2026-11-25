@@ -21,13 +21,13 @@ Source of truth for wording and detail: [docs/PRD.md](../docs/PRD.md) §8–9. I
 
 - [x] **OIDC-01**: A client can complete authorization code flow with PKCE; only S256 is accepted; PKCE is required by default and only confidential clients may opt out (then nonce is mandatory) [0.1]
 - [x] **OIDC-02**: Redirect URIs are matched exactly (loopback port flexibility only for native apps); invalid redirects show an error page and never redirect [0.1]
-- [ ] **OIDC-03**: Authorization codes are single-use, ≤60 s, bound to client/redirect/PKCE; reuse revokes the tokens issued from that code [0.1]
-- [ ] **OIDC-04**: Clients authenticate with client_secret_basic, client_secret_post, private_key_jwt (aud = issuer, jti replay rejected) or none; secrets hashed, compared in constant time [0.1]
-- [ ] **OIDC-05**: Refresh tokens rotate on every use; reuse revokes the whole token family [0.1]
-- [ ] **OIDC-06**: A client can obtain tokens with the client credentials grant [0.1]
-- [ ] **OIDC-07**: ID tokens are signed with the active key (kid set) and carry nonce, at_hash, auth_time, acr/amr [0.1]
-- [ ] **OIDC-08**: Relying parties can discover the provider (OIDC discovery + RFC 8414 metadata) and fetch a JWKS that reflects key rotation with overlap [0.1]
-- [ ] **OIDC-09**: A client can call UserInfo and receive scope-based claims [0.1]
+- [x] **OIDC-03**: Authorization codes are single-use, ≤60 s, bound to client/redirect/PKCE; reuse revokes the tokens issued from that code [0.1]
+- [x] **OIDC-04**: Clients authenticate with client_secret_basic, client_secret_post, private_key_jwt (aud = issuer, jti replay rejected) or none; secrets hashed, compared in constant time [0.1]
+- [x] **OIDC-05**: Refresh tokens rotate on every use; reuse revokes the whole token family [0.1]
+- [x] **OIDC-06**: A client can obtain tokens with the client credentials grant [0.1]
+- [x] **OIDC-07**: ID tokens are signed with the active key (kid set) and carry nonce, at_hash, auth_time, acr/amr [0.1]
+- [x] **OIDC-08**: Relying parties can discover the provider (OIDC discovery + RFC 8414 metadata) and fetch a JWKS that reflects key rotation with overlap [0.1]
+- [x] **OIDC-09**: A client can call UserInfo and receive scope-based claims [0.1]
 - [ ] **OIDC-10**: Resource servers can introspect (RFC 7662) and clients can revoke (RFC 7009) tokens [0.2]
 - [ ] **OIDC-11**: Tokens can be signed with RS256, ES256 or Ed25519 [0.2]
 - [ ] **OIDC-12**: RPs can log users out via RP-initiated logout and receive back-channel logout notifications [0.3]
@@ -176,13 +176,13 @@ Which phases cover which requirements. Updated during roadmap creation.
 | FND-05 | Phase 1 | Complete |
 | OIDC-01 | Phase 2 | Complete |
 | OIDC-02 | Phase 2 | Complete |
-| OIDC-03 | Phase 2 | Pending |
-| OIDC-04 | Phase 2 | Pending |
-| OIDC-05 | Phase 2 | Pending |
-| OIDC-06 | Phase 2 | Pending |
-| OIDC-07 | Phase 2 | Pending |
-| OIDC-08 | Phase 2 | Pending |
-| OIDC-09 | Phase 2 | Pending |
+| OIDC-03 | Phase 2 | Complete |
+| OIDC-04 | Phase 2 | Complete |
+| OIDC-05 | Phase 2 | Complete |
+| OIDC-06 | Phase 2 | Complete |
+| OIDC-07 | Phase 2 | Complete |
+| OIDC-08 | Phase 2 | Complete |
+| OIDC-09 | Phase 2 | Complete |
 | OIDC-10 | Phase 3 | Pending |
 | OIDC-11 | Phase 3 | Pending |
 | OIDC-12 | Phase 4 | Pending |

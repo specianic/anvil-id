@@ -4,13 +4,13 @@ milestone: v1.0
 milestone_name: milestone
 status: verifying
 stopped_at: Completed 02-10-PLAN.md
-last_updated: "2026-11-25T02:05:16.595Z"
+last_updated: "2026-11-25T02:08:37.655Z"
 last_activity: "2026-11-25 — Completed 01-08 (phase gate: CI green on GitHub, spike verdicts, stack confirmed)"
 progress:
   total_phases: 7
   completed_phases: 1
   total_plans: 29
-  completed_plans: 15
+  completed_plans: 16
   percent: 53
 ---
 
@@ -65,6 +65,7 @@ Progress: [█████░░░░░] 53%
 | Phase 02 P11 | 25min | 2 tasks | 6 files |
 | Phase 02 P07 | 20min | 2 tasks | 5 files |
 | Phase 02 P10 | 20min | 2 tasks | 5 files |
+| Phase 02 P08 | 30min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -111,6 +112,10 @@ Recent decisions affecting current work:
 - [Phase 02]: Admin page normalisation (limit 0 -> 50, clamp 1..=200) lives once in service::tenant::admin_page
 - [Phase 02]: Tenant slugs immutable for every tenant; system/default protected from delete; confidential clients may not use auth none; jwks only with private_key_jwt
 - [Phase 02]: complete_setup peeks the setup token before Argon2 hashing; SetupRepo::complete_setup stays authoritative; bad token -> Forbidden
+- [Phase 02]: KeyService has a clock field; published_jwks(storage, clock, tenant) is the single JWKS path shared with AccessTokenVerifier (no KEK needed)
+- [Phase 02]: All client-credential failures share one invalid_client description (CoreError::description returns the reason); grant/token failures likewise one description per class
+- [Phase 02]: validate_refresh passes a consumed token from the right client to rotate_refresh (reuse detection) regardless of scope; wrong client rejected before consume
+- [Phase 02]: Code exchange/refresh require an existing Active user; codes without challenge refused for public or require_pkce clients
 
 ### Pending Todos
 
