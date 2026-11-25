@@ -184,10 +184,15 @@ async fn consume(app: &TestApp, user: UserId, code: &str) -> bool {
 
 /// Events recorded by signing in (the `signed_in` helpers register and log in users). The account
 /// tests assert their own events exactly and ignore only these.
+/// Sign-in side effects of the helpers. `SessionRevoked` is one of them: signing a second user
+/// in within the same browser revokes the first user's session (session switch, 04-16).
 fn is_sign_in_event(action: AuditAction) -> bool {
     matches!(
         action,
-        AuditAction::UserRegistered | AuditAction::LoginSucceeded | AuditAction::LoginFailed
+        AuditAction::UserRegistered
+            | AuditAction::LoginSucceeded
+            | AuditAction::LoginFailed
+            | AuditAction::SessionRevoked
     )
 }
 

@@ -1,9 +1,17 @@
-//! Second-factor sign-in page (AUTH-05): a TOTP code or a recovery code after a correct password.
+//! Second-factor sign-in page (AUTH-05): a TOTP code or a recovery code after a correct password,
+//! and the in-flow enrolment and step-up of the MFA policy (AUTH-08).
 //!
 //! | Route | |
 //! |---|---|
-//! | `POST /ui/login/second-factor?flow=` | `code` (TOTP) or `recovery_code`, plus `factor_token` |
+//! | `POST /ui/login/second-factor?flow=` | `code` (TOTP) or `recovery_code`, plus `factor_token`; in the enrolment step `code` confirms the new authenticator app |
 //! | `GET  /ui/login/second-factor` | 303 to `/ui/login` (the page only exists as a POST answer) |
+//!
+//! The same route serves the three steps of the login flow that come after the user is known:
+//! the second factor (`second_factor.html`), the enrolment required by a `required` policy
+//! (`mfa_enroll.html`: QR code, key, confirming code; the recovery codes are shown once after
+//! it), and step-up of a signed-in session (the flow upgrades the session instead of creating
+//! one). The flow state decides which step a code belongs to; a step-up page is the answer to
+//! `GET /ui/login?request=` and carries its `factor_token` like the password answer does.
 //!
 //! The page is the answer to a password POST whose user has a second factor; no session exists
 //! until the second factor succeeds (the flow service creates it). The form is bound to the

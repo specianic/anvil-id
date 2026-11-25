@@ -17,7 +17,17 @@
 //! | `POST /ui/login?flow=` | email + password |
 //! | `POST /ui/login/passkey/options?flow=` | discoverable WebAuthn request options (JSON, for webauthn.js) |
 //! | `POST /ui/login/passkey?flow=` | the passkey assertion (`response`) |
-//! | `GET/POST /ui/login/second-factor?flow=` | TOTP or recovery code ([`super::mfa`]) |
+//! | `GET/POST /ui/login/second-factor?flow=` | TOTP or recovery code, or the enrolment code ([`super::mfa`]) |
+//!
+//! # MFA policy, step-up and `login_hint` (AUTH-08, OIDC-14)
+//!
+//! `GET /ui/login?request=` starts the flow with `FlowService::start_login`: for a signed-in
+//! single-factor session that the stored request wants stepped up, the page is directly the
+//! second-factor (or enrolment) form for that session's user, without the password. Otherwise
+//! it is the sign-in form, with the identifier prefilled from the request's `login_hint` only
+//! when the hint normalises to an email address (the value is auto-escaped like every field).
+//! The enrolment page (`mfa_enroll.html`) shows the authenticator-app QR code and key; after the
+//! confirming code it shows the new recovery codes once, then continues the request.
 //!
 //! Brute-force protection goes through the one limiter ([`guard_attempt`] / [`record_attempt`]):
 //! a password POST is keyed by (identifier, client IP) and by identifier, a passkey assertion by
@@ -40,12 +50,14 @@ use anvil_cache::limiter::Decision;
 use anvil_core::error::CoreError;
 use anvil_core::flow::engine::{FlowEnv, FlowInput, FlowState};
 use anvil_core::flow::form::{FormDescription, FormMessage, MessageLevel};
-use anvil_core::flow::login::SECOND_FACTOR_FORM_ID;
+use anvil_core::flow::login::{ENROLL_FORM_ID, SECOND_FACTOR_FORM_ID};
 use anvil_core::model::{
-    ActorKind, AuditAction, AuditActor, AuditDetails, AuditOutcome, AuthRequestId, CaptchaSettings,
-    FlowId, FlowKind, RegistrationMode, RequestContext, SessionId, UserId,
+    ActorKind, AuditAction, AuditActor, AuditDetails, AuditOutcome, AuthRequestId, BrowserSession,
+    CaptchaSettings, FlowId, FlowKind, RegistrationMode, RequestContext, SessionId, UserId,
+    normalize_email,
 };
 use anvil_core::ports::RelyingParty;
+use anvil_core::service::account::TotpEnrolment;
 use anvil_core::service::audit::AuditService;
 use anvil_core::service::flow::{
     AuthAttempt, FlowContext, FlowOutcome, FlowService, StartedFlow, SubmitResult, bind_form,
@@ -59,10 +71,10 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum_extra::extract::cookie::CookieJar;
 use minijinja::value::{Serde, Value};
-use secrecy::ExposeSecret as _;
+use secrecy::{ExposeSecret as _, SecretString};
 use serde::{Deserialize, Serialize};
 
-use super::account_security::ACCOUNT_CSP;
+use super::account_security::{ACCOUNT_CSP, grouped};
 use super::mfa::seal_factor_token;
 use crate::adapters::captcha::{
     CaptchaError, CaptchaVerifier, DEFAULT_TIMEOUT, captcha_csp, open_secret,
@@ -116,6 +128,7 @@ async fn show(
     tenant: ResolvedTenant,
     locale: RequestLocale,
     headers: HeaderMap,
+    jar: CookieJar,
     Query(q): Query<UiQuery>,
 ) -> Response {
     let request = match q.auth_request() {
@@ -123,7 +136,74 @@ async fn show(
         Err(resp) => return resp.into_response(&state, Some(&tenant), &locale.0),
     };
     let loc = page_locale(&state, &tenant, locale, &headers, request).await;
-    start_page(&state, &tenant, &loc, FlowKind::Login, request, None).await
+    let current = match current_browser_session(&state, &tenant, &jar).await {
+        Ok(s) => s,
+        Err(e) => return core_error_page_in(&state, Some(&tenant), &loc, &e),
+    };
+    let base = ui_base(&tenant);
+    let rp = tenant_relying_party(&tenant);
+    // Starting a flow records nothing (no session, no audit event), so no request context.
+    let ctx = RequestContext::default();
+    let cx = FlowContext {
+        tenant: &tenant.tenant,
+        issuer: &tenant.issuer,
+        ui_base: &base,
+        rp: &rp,
+        ctx: &ctx,
+    };
+    let mut started = match state
+        .ui_flow_service()
+        .start_login(&cx, request, current.as_ref())
+        .await
+    {
+        Ok(s) => s,
+        Err(e) => return core_error_page_in(&state, Some(&tenant), &loc, &e),
+    };
+    if started.form.id == "login"
+        && let Some(hint) = login_hint(&state, &tenant, request).await
+        && let Some(field) = started
+            .form
+            .fields
+            .iter_mut()
+            .find(|f| f.name == "identifier")
+    {
+        field.value = Some(hint);
+    }
+    let extras = Extras {
+        factor_token: started
+            .factor_user
+            .and_then(|user| factor_token(&state, &tenant, started.flow_id, user)),
+        totp: started.totp.as_ref(),
+        ..Extras::default()
+    };
+    started_response_with(
+        &state,
+        &tenant,
+        &loc,
+        &started,
+        request,
+        StatusCode::OK,
+        &extras,
+    )
+}
+
+/// The request's `login_hint`, normalised, if it is an email address (OIDC Core §3.1.2.1: a
+/// hint, never trusted; anything else is ignored).
+async fn login_hint(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    request: Option<AuthRequestId>,
+) -> Option<String> {
+    let request = state
+        .storage()
+        .grants()
+        .get_authorization_request(tenant.tenant.id, request?, state.clock().now())
+        .await
+        .inspect_err(
+            |e| tracing::warn!(error = %e, "loading the request for its login_hint failed"),
+        )
+        .ok()??;
+    normalize_email(request.params.login_hint.as_deref()?.trim()).ok()
 }
 
 /// The locale of a page that may continue an authorization request: an explicit `ui_locales`
@@ -704,6 +784,7 @@ pub(super) fn form_template(form_id: &str) -> (&'static str, &'static str) {
     match form_id {
         "login" => ("login.html", "title.login"),
         SECOND_FACTOR_FORM_ID => ("second_factor.html", "title.second_factor"),
+        ENROLL_FORM_ID => ("mfa_enroll.html", "title.mfa_enroll"),
         "registration" => ("registration.html", "title.registration"),
         "verification" => ("verification.html", "title.verification"),
         "recovery" => ("recovery.html", "title.recovery"),
@@ -789,6 +870,8 @@ pub(super) struct Extras<'a> {
     pub(super) captcha: Option<&'a CaptchaSettings>,
     /// Second-factor binding token of the user who just passed the password step.
     pub(super) factor_token: Option<String>,
+    /// The pending authenticator-app secret of the enrolment form.
+    pub(super) totp: Option<&'a TotpEnrolment>,
 }
 
 /// URLs of the passkey sign-in form (webauthn.js `data-options-url` and form action).
@@ -810,28 +893,6 @@ fn flow_of(form: &FormDescription) -> Option<FlowId> {
     let (_, rest) = form.action.rsplit_once("?flow=")?;
     let id = rest.split('&').next().unwrap_or_default();
     uuid::Uuid::parse_str(id).ok().map(FlowId)
-}
-
-/// Renders a tenant form page (title and links derived from the form).
-fn render_tenant_form(
-    state: &AppState,
-    tenant: &ResolvedTenant,
-    loc: &Locale,
-    form: &FormDescription,
-    request: Option<AuthRequestId>,
-    status: StatusCode,
-    jar: CookieJar,
-) -> Response {
-    render_tenant_form_with(
-        state,
-        tenant,
-        loc,
-        form,
-        request,
-        status,
-        jar,
-        &Extras::default(),
-    )
 }
 
 /// Renders a tenant form page with sign-in extras. The sign-in form gets the passkey form (when
@@ -861,6 +922,8 @@ pub(super) fn render_tenant_form_with(
     let mut passkey = None;
     let mut captcha = None;
     let mut factor_token = None;
+    let mut qr_svg = None;
+    let mut secret_groups = None;
     match (form.id.as_str(), flow_of(&form)) {
         ("login", Some(flow)) => {
             if tenant_relying_party(tenant).is_ok() {
@@ -875,6 +938,17 @@ pub(super) fn render_tenant_form_with(
             form.action = format!("{base}/login/second-factor?flow={flow}");
             factor_token = extras.factor_token.clone();
         }
+        (ENROLL_FORM_ID, Some(flow)) => {
+            form.action = format!("{base}/login/second-factor?flow={flow}");
+            factor_token = extras.factor_token.clone();
+            if let Some(totp) = extras.totp {
+                match crate::adapters::qr::qr_svg(totp.otpauth_uri.expose_secret()) {
+                    Ok(svg) => qr_svg = Some(Value::from_safe_string(svg)),
+                    Err(e) => return core_error_page_in(state, Some(tenant), loc, &e),
+                }
+                secret_groups = Some(grouped(totp.secret_base32.expose_secret()));
+            }
+        }
         _ => {}
     }
     form.action = carry_ui_locales(&form.action, loc);
@@ -887,11 +961,16 @@ pub(super) fn render_tenant_form_with(
             site_key: c.site_key.clone(),
         }))),
         factor_token => factor_token,
+        enroll => qr_svg.is_some(),
+        qr_svg => qr_svg,
+        secret_groups => secret_groups,
     };
     let mut resp = render_page(state, Some(tenant), loc, template, ctx, status, jar);
     let csp = match (captcha, &passkey) {
         (Some(c), _) => HeaderValue::from_str(&captcha_csp(c.provider).header_value()).ok(),
         (None, Some(_)) => Some(HeaderValue::from_static(LOGIN_CSP)),
+        // The enrolment page's inline QR code needs no more than the account pages' policy.
+        (None, None) if form.id == ENROLL_FORM_ID => Some(HeaderValue::from_static(LOGIN_CSP)),
         (None, None) => None,
     };
     if let Some(csp) = csp {
@@ -962,12 +1041,42 @@ fn started_response(
     request: Option<AuthRequestId>,
     status: StatusCode,
 ) -> Response {
+    started_response_with(
+        state,
+        tenant,
+        loc,
+        started,
+        request,
+        status,
+        &Extras::default(),
+    )
+}
+
+/// [`started_response`] with sign-in page extras (step-up binding token, enrolment secret).
+fn started_response_with(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    loc: &Locale,
+    started: &StartedFlow,
+    request: Option<AuthRequestId>,
+    status: StatusCode,
+    extras: &Extras<'_>,
+) -> Response {
     let jar = CookieJar::new().add(
         state
             .cookies()
             .flow_cookie(&tenant.tenant, started.cookie_token.expose_secret()),
     );
-    render_tenant_form(state, tenant, loc, &started.form, request, status, jar)
+    render_tenant_form_with(
+        state,
+        tenant,
+        loc,
+        &started.form,
+        request,
+        status,
+        jar,
+        extras,
+    )
 }
 
 /// `GET` of a self-service page: starts a flow of `kind` and renders its form.
@@ -1039,13 +1148,23 @@ async fn current_session(
     tenant: &ResolvedTenant,
     jar: &CookieJar,
 ) -> Result<Option<SessionId>, CoreError> {
-    let name = state.cookies().session_name(&tenant.tenant);
-    let token = jar.get(&name).map(|c| c.value().to_owned());
-    Ok(state
-        .ui_session_service()
-        .current(tenant.tenant.id, token.as_deref())
+    Ok(current_browser_session(state, tenant, jar)
         .await?
         .map(|s| s.id))
+}
+
+/// The caller's active session (from the session cookie), if any.
+async fn current_browser_session(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    jar: &CookieJar,
+) -> Result<Option<BrowserSession>, CoreError> {
+    let name = state.cookies().session_name(&tenant.tenant);
+    let token = jar.get(&name).map(|c| c.value().to_owned());
+    state
+        .ui_session_service()
+        .current(tenant.tenant.id, token.as_deref())
+        .await
 }
 
 /// The tenant's WebAuthn relying party. An issuer that cannot be one is an error only for the
@@ -1120,6 +1239,54 @@ pub(super) async fn submit_flow(
     }
 }
 
+/// After a sign-in or step-up: continue the authorization request (303) or show the signed-in
+/// page. Recovery codes of a second factor enrolled in the flow are shown once first, with a
+/// link that continues.
+fn signed_in_response(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    loc: &Locale,
+    continue_to: Option<AuthRequestId>,
+    recovery_codes: &[SecretString],
+    jar: CookieJar,
+) -> Response {
+    let continue_url = continue_to
+        .map(|request| format!("{}/authorize/continue?request={request}", tenant.issuer));
+    if !recovery_codes.is_empty() {
+        let codes: Vec<String> = recovery_codes
+            .iter()
+            .map(|c| c.expose_secret().to_owned())
+            .collect();
+        let codes_text = codes.join("\n");
+        let page = PageContext::for_tenant(state, tenant, loc, "title.mfa_codes");
+        let ctx = minijinja::context! {
+            page => page.into_value(),
+            codes => codes,
+            codes_text => codes_text,
+            continue_url => continue_url
+                .unwrap_or_else(|| carry_ui_locales(&tenant.ui_url("/ui/account/security"), loc)),
+        };
+        let mut resp = render_page(
+            state,
+            Some(tenant),
+            loc,
+            "mfa_enroll.html",
+            ctx,
+            StatusCode::OK,
+            jar,
+        );
+        resp.headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        return resp;
+    }
+    match continue_url {
+        Some(location) => {
+            (StatusCode::SEE_OTHER, jar, [(header::LOCATION, location)]).into_response()
+        }
+        None => message_page(state, tenant, loc, SIGNED_IN, jar),
+    }
+}
+
 /// Maps a flow outcome of a tenant self-service page to a response.
 fn outcome_response(
     state: &AppState,
@@ -1150,6 +1317,23 @@ pub(super) fn outcome_response_with(
             CookieJar::new(),
             extras,
         ),
+        FlowOutcome::Enroll { form, totp } => {
+            let extras = Extras {
+                captcha: None,
+                factor_token: extras.factor_token.clone(),
+                totp: Some(&totp),
+            };
+            render_tenant_form_with(
+                state,
+                tenant,
+                loc,
+                &form,
+                None,
+                form_status(&form),
+                CookieJar::new(),
+                &extras,
+            )
+        }
         FlowOutcome::Restarted(started) => {
             let status = form_status(&started.form);
             started_response(state, tenant, loc, &started, None, status)
@@ -1161,18 +1345,20 @@ pub(super) fn outcome_response_with(
         FlowOutcome::SignedIn {
             cookie,
             continue_to,
+            recovery_codes,
         } => {
             let jar = CookieJar::new()
                 .add(cookies.clear_flow(&tenant.tenant))
                 .add(cookies.session_cookie(&tenant.tenant, cookie.token.expose_secret()));
-            match continue_to {
-                Some(request) => {
-                    let location =
-                        format!("{}/authorize/continue?request={request}", tenant.issuer);
-                    (StatusCode::SEE_OTHER, jar, [(header::LOCATION, location)]).into_response()
-                }
-                None => message_page(state, tenant, loc, SIGNED_IN, jar),
-            }
+            signed_in_response(state, tenant, loc, continue_to, &recovery_codes, jar)
+        }
+        FlowOutcome::SteppedUp {
+            continue_to,
+            recovery_codes,
+        } => {
+            // The session was upgraded in place: its cookie stays.
+            let jar = CookieJar::new().add(cookies.clear_flow(&tenant.tenant));
+            signed_in_response(state, tenant, loc, continue_to, &recovery_codes, jar)
         }
         FlowOutcome::SetupSubmitted { .. } => core_error_page_in(
             state,

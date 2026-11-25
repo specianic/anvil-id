@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% import "form.html" as forms %}
+{#- In-flow second-factor enrolment at sign-in (AUTH-08), when the MFA policy is `required` and
+    the user has no second factor. Two modes:
+    - Enrolment (`form`, form id `mfa-enroll`, field `code`): `qr_svg` (trusted inline SVG of the
+      otpauth URI), `secret_groups` (the key for manual entry), `factor_token` (hidden binding
+      token). Works without JavaScript.
+    - Done (`codes` set): the new recovery codes, shown once; `codes_text` (one per line) and
+      `continue_url` (continues the authorization request).
+    Selectors: mfa-enroll-required, totp-qr, totp-secret, form mfa-enroll with input code, button
+    mfa-enroll-submit, messages mfa-enroll-msg-N, link link-login; recovery-codes,
+    recovery-codes-text, link-continue. -#}
+{% block heading %}{% if codes %}{{ t("title.mfa_codes") }}{% else %}{{ t("title.mfa_enroll") }}{% endif %}{% endblock %}
+{% block content %}
+{% if codes %}
+<p id="recovery-codes-help">{{ t("mfa_codes.help") }}</p>
+<ol class="anvil-recovery-codes" id="recovery-codes" aria-labelledby="page-heading">
+{% for c in codes %}
+<li><code>{{ c }}</code></li>
+{% endfor %}
+</ol>
+<div class="anvil-field">
+<label for="recovery-codes-text">{{ t("mfa_codes.copy_label") }}</label>
+<textarea id="recovery-codes-text" readonly autocomplete="off" spellcheck="false" rows="5" cols="24">{{ codes_text }}</textarea>
+</div>
+<nav class="anvil-links" aria-label="{{ t("nav.next_steps") }}">
+<a id="link-continue" href="{{ continue_url }}">{{ t("mfa_codes.continue") }}</a>
+</nav>
+{% else %}
+{% set has_error = "error" in form.messages|map(attribute="level")|list %}
+<p id="mfa-enroll-required">{{ t("mfa_enroll.required") }}</p>
+<p id="totp-instructions">{{ t("mfa_enroll.instructions") }}</p>
+{% if qr_svg %}<div class="anvil-qr" id="totp-qr">{{ qr_svg }}</div>{% endif %}
+{% if secret_groups %}
+<p id="totp-manual">{{ t("mfa_enroll.manual") }}</p>
+<p><code class="anvil-secret" id="totp-secret">{{ secret_groups }}</code></p>
+{% endif %}
+<form id="{{ form.id }}" method="post" action="{{ form.action }}" novalidate>
+<input type="hidden" name="csrf_token" value="{{ form.csrf_token }}">
+{% if factor_token %}<input type="hidden" id="factor_token" name="factor_token" value="{{ factor_token }}">{% endif %}
+{% if form.messages %}
+<div class="anvil-form-messages">
+{{ forms.messages(form.messages, form.id) }}
+</div>
+{% endif %}
+<div class="anvil-field{% if has_error %} anvil-field-invalid{% endif %}">
+<label for="code">{{ t("mfa_enroll.code_label") }}</label>
+<input id="code" name="code" type="text" inputmode="numeric" maxlength="7" autocomplete="one-time-code" spellcheck="false" required{% if has_error %} aria-invalid="true" aria-describedby="mfa-enroll-msg-1"{% endif %}>
+</div>
+<button type="submit" id="{{ form.id }}-submit">{{ t("mfa_enroll.submit") }}</button>
+</form>
+{% if page.links.login %}
+<nav class="anvil-links" aria-label="{{ t("nav.other_options") }}">
+<a id="link-login" href="{{ page.links.login }}">{{ t("second_factor.start_over") }}</a>
+</nav>
+{% endif %}
+{% endif %}
+{% endblock %}

@@ -387,7 +387,7 @@ fn json_error(status: StatusCode, error: &str) -> Response {
 }
 
 /// Groups a base32 key in blocks of four for manual entry.
-fn grouped(base32: &str) -> String {
+pub(super) fn grouped(base32: &str) -> String {
     base32
         .as_bytes()
         .chunks(4)

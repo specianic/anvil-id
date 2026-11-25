@@ -268,7 +268,12 @@ async fn submit(
             );
             render_setup(&state, &loc, &with_token(started.form, &token), status, jar)
         }
-        Ok(FlowOutcome::Message { .. } | FlowOutcome::SignedIn { .. }) => core_error_page_in(
+        Ok(
+            FlowOutcome::Message { .. }
+            | FlowOutcome::SignedIn { .. }
+            | FlowOutcome::SteppedUp { .. }
+            | FlowOutcome::Enroll { .. },
+        ) => core_error_page_in(
             &state,
             None,
             &loc,
