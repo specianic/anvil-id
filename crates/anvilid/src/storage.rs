@@ -12,13 +12,14 @@ const POSTGRES_MAX_CONNECTIONS: u32 = 10;
 
 /// Backend selected by the database URL scheme.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Backend {
+pub enum Backend {
     Sqlite,
     Postgres,
 }
 
 impl Backend {
-    fn from_url(url: &str) -> anyhow::Result<Self> {
+    /// The backend for `url`. Errors never echo the URL.
+    pub fn from_url(url: &str) -> anyhow::Result<Self> {
         if url.starts_with("sqlite:") {
             Ok(Self::Sqlite)
         } else if url.starts_with("postgres://") || url.starts_with("postgresql://") {
@@ -29,7 +30,7 @@ impl Backend {
         }
     }
 
-    fn name(self) -> &'static str {
+    pub fn name(self) -> &'static str {
         match self {
             Self::Sqlite => "sqlite",
             Self::Postgres => "postgres",
@@ -37,10 +38,10 @@ impl Backend {
     }
 }
 
-/// Opens the backend selected by the URL scheme and applies its migrations.
+/// Opens the backend selected by the URL scheme and, if `migrate` is set, applies its migrations.
 ///
 /// Only the backend kind is logged; the URL may hold credentials.
-pub async fn open_storage(url: &str) -> anyhow::Result<Arc<dyn Storage>> {
+pub async fn open_storage(url: &str, migrate: bool) -> anyhow::Result<Arc<dyn Storage>> {
     let backend = Backend::from_url(url)?;
     tracing::info!(backend = backend.name(), "opening storage");
     let storage: Arc<dyn Storage> = match backend {
@@ -48,26 +49,49 @@ pub async fn open_storage(url: &str) -> anyhow::Result<Arc<dyn Storage>> {
             let s = SqliteStorage::connect(url)
                 .await
                 .context("failed to open sqlite database")?;
-            s.migrate()
-                .await
-                .context("failed to migrate sqlite database")?;
+            if migrate {
+                s.migrate()
+                    .await
+                    .context("failed to migrate sqlite database")?;
+            }
             Arc::new(s)
         }
         Backend::Postgres => {
             let s = PostgresStorage::connect(url, POSTGRES_MAX_CONNECTIONS)
                 .await
                 .context("failed to connect to postgres")?;
-            s.migrate()
-                .await
-                .context("failed to migrate postgres database")?;
+            if migrate {
+                s.migrate()
+                    .await
+                    .context("failed to migrate postgres database")?;
+            }
             Arc::new(s)
         }
     };
-    tracing::info!(
-        backend = backend.name(),
-        "storage ready (migrations applied)"
-    );
+    if migrate {
+        tracing::info!(
+            backend = backend.name(),
+            "storage ready (migrations applied)"
+        );
+    } else {
+        tracing::info!(
+            backend = backend.name(),
+            "storage ready (migrations skipped)"
+        );
+    }
     Ok(storage)
+}
+
+/// The file of a `sqlite://` / `sqlite:` file URL (`None` for in-memory databases).
+pub fn sqlite_file(url: &str) -> Option<std::path::PathBuf> {
+    let rest = url
+        .strip_prefix("sqlite://")
+        .or_else(|| url.strip_prefix("sqlite:"))?;
+    let path = rest.split('?').next().unwrap_or_default();
+    if path.is_empty() || path == ":memory:" {
+        return None;
+    }
+    Some(std::path::PathBuf::from(path))
 }
 
 #[cfg(test)]
@@ -84,6 +108,19 @@ mod tests {
         ] {
             assert_eq!(Backend::from_url(url).expect(url), want, "{url}");
         }
+    }
+
+    #[test]
+    fn sqlite_file_paths() {
+        assert_eq!(sqlite_file("sqlite::memory:"), None);
+        assert_eq!(
+            sqlite_file("sqlite:///var/lib/anvil.db?mode=rwc"),
+            Some("/var/lib/anvil.db".into())
+        );
+        assert_eq!(
+            sqlite_file("sqlite://./anvilid-data/anvilid.db"),
+            Some("./anvilid-data/anvilid.db".into())
+        );
     }
 
     #[test]
