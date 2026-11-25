@@ -257,7 +257,11 @@ mod tests {
             WebauthnError::AuthenticationFailure,
             WebauthnError::Configuration,
         ] {
-            assert_eq!(reject("authenticate", &err), PasskeyError::Invalid, "{err:?}");
+            assert_eq!(
+                reject("authenticate", &err),
+                PasskeyError::Invalid,
+                "{err:?}"
+            );
         }
     }
 
