@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: planning
-stopped_at: Completed 01-01-PLAN.md
-last_updated: "2026-11-25T00:49:23.155Z"
-last_activity: 2026-11-25 — Roadmap created (7 phases, 84/84 v1 requirements mapped)
+status: executing
+stopped_at: Completed 01-04-PLAN.md
+last_updated: "2026-11-25T00:53:18.186Z"
+last_activity: 2026-11-25 — Completed 01-04 (anvil-web router, anvilid serve)
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 8
-  completed_plans: 1
-  percent: 13
+  completed_plans: 2
+  percent: 25
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 ## Current Position
 
 Phase: 1 of 7 (Foundations and Spikes (M0))
-Plan: 1 of 8 in current phase
+Plan: 2 of 8 in current phase (01-01, 01-04 complete)
 Status: In progress
-Last activity: 2026-11-25 — Completed 01-01 (workspace skeleton, ports in anvil-core, just entry point)
+Last activity: 2026-11-25 — Completed 01-04 (anvil-web router, anvilid serve)
 
-Progress: [█░░░░░░░░░] 13%
+Progress: [███░░░░░░░] 25%
 
 ## Performance Metrics
 
@@ -51,6 +51,7 @@ Progress: [█░░░░░░░░░] 13%
 
 *Updated after each plan completion*
 | Phase 01 P01 | 15min | 3 tasks | 28 files |
+| Phase 01 P04 | 5min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -64,6 +65,8 @@ Recent decisions affecting current work:
 - [Roadmap]: QUAL-01 (negative test per security control) is mapped to Phase 2 but remains a gate for every later phase
 - [Phase 01]: Storage ports live in anvil_core::ports; backends normal-depend on anvil-core only, anvil-storage (contract suite) is a dev-dependency
 - [Phase 01]: ConsumeOutcome::Consumed holds AuthorizationCode unboxed (documented clippy expect)
+- [Phase 01]: If-None-Match uses RFC 9110 weak comparison; anvilid rejects issuers with query, fragment or non-http(s) scheme
+- [Phase 01]: Discovery document serialised once at router build; advertised-but-unbuilt endpoints return 501 JSON
 
 ### Pending Todos
 
@@ -77,6 +80,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-25T00:49:23.154Z
-Stopped at: Completed 01-01-PLAN.md
+Last session: 2026-11-25T00:53:18.184Z
+Stopped at: Completed 01-04-PLAN.md
 Resume file: None
