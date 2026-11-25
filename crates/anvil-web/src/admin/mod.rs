@@ -7,9 +7,11 @@
 //! authentication at `/api/admin/v1/openapi.json` and committed as `docs/openapi/admin-v1.json`
 //! (drift test: `tests/openapi_drift.rs`, refresh with `just openapi-update`).
 
+mod audit;
 mod auth;
 mod clients;
 pub mod dto;
+mod email;
 mod sessions;
 mod tenants;
 mod users;
@@ -107,6 +109,8 @@ fn base_document() -> OpenApi {
             tag("clients", "OAuth clients of a tenant"),
             tag("users", "Users of a tenant and their credentials"),
             tag("sessions", "Browser sessions of a tenant's users"),
+            tag("audit", "Audit log of a tenant"),
+            tag("email", "Email templates and SMTP settings of a tenant"),
         ]))
         .build()
 }
@@ -141,6 +145,19 @@ fn api_router() -> OpenApiRouter<AppState> {
             sessions::list_user_sessions,
             sessions::revoke_user_sessions
         ))
+        .routes(routes!(audit::list_audit_events))
+        .routes(routes!(email::list_email_templates))
+        .routes(routes!(
+            email::get_email_template,
+            email::put_email_template,
+            email::reset_email_template
+        ))
+        .routes(routes!(
+            email::get_smtp,
+            email::put_smtp,
+            email::delete_smtp
+        ))
+        .routes(routes!(email::test_smtp))
 }
 
 /// Management API routes, including the served OpenAPI document.
