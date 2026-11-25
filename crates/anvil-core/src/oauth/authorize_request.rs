@@ -620,6 +620,184 @@ pub(crate) mod tests {
         );
     }
 
+    /// An unsecured (`alg: none`) JWT with `payload` as its claims.
+    fn unsigned_jwt(payload: &str) -> String {
+        format!(
+            "{}.{}.",
+            anvil_jose::encoding::b64url(br#"{"alg":"none"}"#),
+            anvil_jose::encoding::b64url(payload.as_bytes())
+        )
+    }
+
+    /// `base()` with `remove` dropped and `add` appended (owned values).
+    fn with_owned(remove: &[&str], add: &[(&str, String)]) -> RawParams {
+        let mut p: Vec<(String, String)> = base()
+            .into_iter()
+            .filter(|(k, _)| !remove.contains(k))
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .collect();
+        p.extend(add.iter().map(|(k, v)| ((*k).to_owned(), v.clone())));
+        RawParams(p)
+    }
+
+    fn rejected(r: Result<ValidatedAuthorize, AuthorizeError>) -> (ResponseMode, Option<String>) {
+        match r {
+            Err(AuthorizeError::Redirect {
+                redirect_uri,
+                state,
+                response_mode,
+                error,
+            }) => {
+                assert_eq!(redirect_uri, RP);
+                assert_eq!(error.oauth_error(), "request_not_supported");
+                (response_mode, state)
+            }
+            other => panic!("expected redirect, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejected_request_object_uses_its_response_mode_and_state() {
+        let c = client();
+        let jwt = unsigned_jwt(r#"{"response_mode":"form_post","state":"obj-st"}"#);
+        let r = with_owned(&["state"], &[("request", jwt)]);
+        assert_eq!(
+            rejected(validate(&r, Some(&c))),
+            (ResponseMode::FormPost, Some("obj-st".to_owned()))
+        );
+    }
+
+    #[test]
+    fn outer_response_mode_and_state_win_over_the_request_object() {
+        let c = client();
+        let jwt = unsigned_jwt(r#"{"response_mode":"form_post","state":"obj-st"}"#);
+        let r = with_owned(
+            &[],
+            &[("response_mode", "query".to_owned()), ("request", jwt)],
+        );
+        assert_eq!(
+            rejected(validate(&r, Some(&c))),
+            (ResponseMode::Query, Some("st".to_owned()))
+        );
+        let jwt = unsigned_jwt(r#"{"response_mode":"query"}"#);
+        let r = with_owned(
+            &[],
+            &[("response_mode", "form_post".to_owned()), ("request", jwt)],
+        );
+        assert_eq!(
+            rejected(validate(&r, Some(&c))),
+            (ResponseMode::FormPost, Some("st".to_owned()))
+        );
+    }
+
+    #[test]
+    fn unknown_response_mode_in_request_object_falls_back_to_query() {
+        let c = client();
+        for payload in [
+            r#"{"response_mode":"fragment","state":"obj-st"}"#,
+            r#"{"response_mode":"FORM_POST","state":"obj-st"}"#,
+            r#"{"response_mode":"form_post.jwt","state":"obj-st"}"#,
+            r#"{"response_mode":["form_post"],"state":"obj-st"}"#,
+            r#"{"response_mode":1,"state":"obj-st"}"#,
+            r#"{"state":"obj-st"}"#,
+        ] {
+            let r = with_owned(&["state"], &[("request", unsigned_jwt(payload))]);
+            assert_eq!(
+                rejected(validate(&r, Some(&c))),
+                (ResponseMode::Query, Some("obj-st".to_owned())),
+                "{payload}"
+            );
+        }
+        // A non-string state is not echoed.
+        let jwt = unsigned_jwt(r#"{"response_mode":"form_post","state":42}"#);
+        let r = with_owned(&["state"], &[("request", jwt)]);
+        assert_eq!(
+            rejected(validate(&r, Some(&c))),
+            (ResponseMode::FormPost, None)
+        );
+    }
+
+    #[test]
+    fn malformed_or_oversized_request_object_falls_back_to_outer_params() {
+        let c = client();
+        let fp = r#"{"response_mode":"form_post","state":"obj-st"}"#;
+        let good_payload = anvil_jose::encoding::b64url(fp.as_bytes());
+        let big = format!(
+            r#"{{"response_mode":"form_post","state":"obj-st","pad":"{}"}}"#,
+            "a".repeat(8 * 1024)
+        );
+        let malformed = [
+            "not-a-jwt".to_owned(),
+            "a.b".to_owned(),
+            format!("x.{good_payload}.y.z"),
+            format!("x.{good_payload}.y.z.w"),
+            "x.!!!.".to_owned(),
+            format!("x.{good_payload}=."),
+            unsigned_jwt("not json"),
+            unsigned_jwt(r#"["form_post"]"#),
+            unsigned_jwt(&big),
+        ];
+        for jwt in malformed {
+            // Outer state present: echoed; outer mode absent: query.
+            let r = with_owned(&[], &[("request", jwt.clone())]);
+            assert_eq!(
+                rejected(validate(&r, Some(&c))),
+                (ResponseMode::Query, Some("st".to_owned())),
+                "{jwt:.40}"
+            );
+            // Outer form_post is still honoured.
+            let r = with_owned(
+                &[],
+                &[("response_mode", "form_post".to_owned()), ("request", jwt)],
+            );
+            assert_eq!(rejected(validate(&r, Some(&c))).0, ResponseMode::FormPost);
+        }
+        // Just under the cap is still read.
+        let jwt = unsigned_jwt(fp);
+        assert!(jwt.len() <= 8 * 1024);
+        let r = with_owned(&["state"], &[("request", jwt)]);
+        assert_eq!(rejected(validate(&r, Some(&c))).0, ResponseMode::FormPost);
+    }
+
+    #[test]
+    fn request_object_never_rescues_an_untrusted_redirect() {
+        let c = client();
+        let jwt = unsigned_jwt(
+            r#"{"response_mode":"form_post","redirect_uri":"https://rp.example.test/cb","client_id":"rp"}"#,
+        );
+        let r = with_owned(
+            &["redirect_uri"],
+            &[
+                ("redirect_uri", "https://evil.example.test/cb".to_owned()),
+                ("request", jwt.clone()),
+            ],
+        );
+        assert_eq!(page_key(validate(&r, Some(&c))), "redirect_uri_mismatch");
+        // No outer redirect_uri with several registered: still the page, even though the object
+        // names one.
+        let r = with_owned(&["redirect_uri"], &[("request", jwt.clone())]);
+        assert_eq!(page_key(validate(&r, Some(&c))), "invalid_request");
+        // Unknown client.
+        let r = with_owned(&["client_id"], &[("client_id", "x".to_owned()), ("request", jwt)]);
+        assert_eq!(page_key(validate(&r, Some(&c))), "unknown_client");
+    }
+
+    #[test]
+    fn request_uri_uses_only_the_outer_response_mode() {
+        let c = client();
+        let r = with_owned(
+            &[],
+            &[
+                ("response_mode", "form_post".to_owned()),
+                ("request_uri", "https://rp.example.test/r".to_owned()),
+            ],
+        );
+        assert_eq!(
+            redirect_mode(validate(&r, Some(&c))),
+            ("request_uri_not_supported", ResponseMode::FormPost)
+        );
+    }
+
     #[test]
     fn duplicate_state_or_other_param_redirects_invalid_request() {
         let c = client();
