@@ -45,3 +45,14 @@ Builds on Phase 1's workspace, storage contract suite and CI.
 
 ---
 *Phase: 02-release-0-1-first-login — context from ARCHITECTURE.md/PRD.md*
+
+## Decisions after research (2026-11-25)
+
+- **C1 PKCE (user decision):** per-client `require_pkce`, default true; only confidential clients may disable it, and then `nonce` is mandatory for `openid` requests. `plain` always rejected; downgrade defense (challenge sent ⇒ verifier required). PRD OIDC-1 and ARCHITECTURE §11 updated.
+- **C2 prompt/max_age:** the minimal subset Basic OP needs moves into 0.1: `prompt=none` (with `login_required` error), `prompt=login`, `max_age`, `id_token_hint`, login-session reuse. The rest of OIDC-14 (`select_account`, `create`, `acr_values` step-up) stays in Phase 4.
+- **C3 crate cycle:** storage port traits and their domain types live in `anvil_core::ports`; `anvil-storage` holds the contract suite (applied in Phase 1 plans).
+- **C4 discovery paths:** serve both forms for path tenants: OIDC `{issuer}/.well-known/openid-configuration` and RFC 8414 `/.well-known/oauth-authorization-server/t/{slug}` (inserted form).
+- **C5 HTTPS in conformance CI:** use AnvilID's own rustls listener with a certificate generated at CI time in a temp dir (no extra proxy dependency; exercises our TLS path).
+- **C6 test placement:** `anvil-web` may dev-depend on concrete storage crates so HTTP/security tests run on both backends; dependency rules apply to normal deps only.
+- **Q2 admin credentials in 0.1:** the setup page creates the first admin user and displays a one-time management API client credential (client credentials, admin scopes).
+- **Q5/Q6:** planner's discretion, documented in the plan: password login `amr=["pwd"]`; access-token `aud` = the client_id until resource indicators (Phase 4).
