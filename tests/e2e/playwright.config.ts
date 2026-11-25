@@ -7,9 +7,9 @@ import { defineConfig, devices } from '@playwright/test';
 //
 // Projects:
 //   chromium  every spec except the no-JavaScript ones
-//   nojs      specs named nojs*.spec.ts, run with JavaScript disabled (UI-01/UI-02: every flow works
-//             without JavaScript)
-const NOJS_SPECS = /nojs\..*\.spec\.ts|nojs\.spec\.ts/;
+//   nojs      specs named nojs.spec.ts, nojs-*.spec.ts or nojs.*.spec.ts, run with JavaScript
+//             disabled (UI-01/UI-02: every flow works without JavaScript)
+const NOJS_SPECS = /nojs([.-][^/]*)?\.spec\.ts$/;
 
 export default defineConfig({
   testDir: 'specs',
