@@ -6,8 +6,8 @@ current_phase: 04
 current_phase_name: release 0 3 real world logins
 current_plan: Not started
 status: planning
-stopped_at: Completed 04-26-PLAN.md
-last_updated: "2026-11-25T22:52:13.725Z"
+stopped_at: Completed 04-25-PLAN.md
+last_updated: "2026-11-25T22:52:36.612Z"
 last_activity: 2026-11-25
 progress:
   total_phases: 7
@@ -144,6 +144,7 @@ Phase 3 plans 03-01 through 03-34 are all complete (34/34 summaries); v0.2.0 is 
 | Phase 04 P20 | 90min | 2 tasks | 10 files |
 | Phase 04 P21 | 1h45m | 2 tasks | 16 files |
 | Phase 04 P26 | 75min | 2 tasks | 8 files |
+| Phase 04 P25 | 35min | 1 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -327,6 +328,7 @@ Recent decisions affecting current work:
 - [Phase 04]: 04-21: upstream callback continues in a fresh login flow (no CSRF rotation, Strict flow cookie absent on provider return); purpose follows the start flow kind (login=Login, settings=Link)
 - [Phase 04]: 04-21: step-up never adds the primary method to amr ([fed]+2FA = [fed, otp, mfa])
 - [Phase 04]: A single-tenant Microsoft connection accepts only its own tid (resolve pins allowed_tenants)
+- [Phase 04]: Linked-accounts unlink guard: password, passkeys, other links or tenant email_otp/magic_link must remain; unknown/foreign link 404, last method 409
 
 ### Pending Todos
 
@@ -339,6 +341,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-25T22:52:13.722Z
-Stopped at: Completed 04-26-PLAN.md
+Last session: 2026-11-25T22:52:36.609Z
+Stopped at: Completed 04-25-PLAN.md
 Resume file: None
