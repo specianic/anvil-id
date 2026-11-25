@@ -149,7 +149,7 @@ Plans:
   3. An admin edits theme settings in the console and sees the login pages change live; pages render in the language chosen from `ui_locales` or the browser
   4. A user can log in with email OTP or magic link, and manage profile, email, password, passkeys, MFA, sessions and connected apps from the account page
   5. Admin MFA policy (off/optional/required) is enforced per tenant and client, and clients can request step-up via `acr_values`, `prompt` and `max_age`, and audience-bound tokens via resource indicators
-**Plans**: 33 plans in 9 waves
+**Plans**: 37 plans in 11 waves
 
 Plans:
 - [x] 04-01-PLAN.md — Core foundation: all Phase 4 model/ports (connections, branding, logout deliveries, UpstreamClient), errors, audit actions, anvil-jose email code, Fluent/moka deps, contract suite, backend shims (wave 1)
@@ -183,8 +183,12 @@ Plans:
 - [ ] 04-29-PLAN.md — E2E: email code/magic link, account page, live theming (wave 7)
 - [ ] 04-30-PLAN.md — German catalog, catalog parity test, i18n e2e (wave 7)
 - [ ] 04-31-PLAN.md — Docs: ARCHITECTURE (incl. sid divergence, SSRF), PRD, UPGRADING 0.2→0.3, theme README, manual social-login checklist (wave 7)
-- [ ] 04-32-PLAN.md — Phase gate: security-test map, `just ci`, version 0.3.0 + migration pins, push main, all workflows green (wave 8)
-- [ ] 04-33-PLAN.md — Release: manual real-provider checklist sign-off (checkpoint), tag + verify v0.3.0 (wave 9)
+- [ ] 04-34-PLAN.md — Gap closure (storage): logout-token iss per RP session (SQLite 0006 / Postgres 0005), atomic unlink guard, logo + client-branding purge, Postgres token-family purge, verification-aware create_user_with_link (wave 8)
+- [ ] 04-35-PLAN.md — Gap closure: independent email_otp / magic_link (optional login_code variables, per-toggle routes) (wave 8)
+- [ ] 04-36-PLAN.md — Gap closure: back-channel wake on every revocation path, upstream buttons on lock/CAPTCHA/passkey pages, console client card, body-limit regression test (wave 8)
+- [ ] 04-37-PLAN.md — Gap closure: require_verified_email for upstream accounts, binding-cookie clear rule, link redirect, docs for the closed gaps (wave 9)
+- [ ] 04-32-PLAN.md — Phase gate: security-test map, `just ci`, version 0.3.0 + migration pins, push main, all workflows green (wave 10)
+- [ ] 04-33-PLAN.md — Release: manual real-provider checklist sign-off (checkpoint), tag + verify v0.3.0 (wave 11)
 
 ### Phase 5: Release 0.4 "Operate it"
 **Goal**: Operators can run AnvilID for many tenants in production with high availability, and integrators can automate and extend it (RBAC, webhooks, declarative config, DCR, MCP clients)

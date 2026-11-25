@@ -25,3 +25,39 @@
 - Linked accounts (04-25): the guard is check-then-delete; two concurrent unlinks of different links could both pass and leave no sign-in method. Needs an atomic storage intent in both backends.
 - Email sign-in (04-24): either tenant toggle (email_otp or magic_link) enables both code and link, because the login_code template always contains both. Either rename to one setting or let the template omit one; decide before 0.3 docs.
 - Back-channel latency (04-28): only `/logout` and `/ui/logout` wake the delivery worker (`logout_wake`). A session switch (prompt=select_account "use another account", 04-16), account-page session revocation and admin revocations enqueue deliveries but wait for the 10 s poll. Consider waking the worker from `revoke_with_families` callers too; e2e waits allow 30 s for the switch case.
+
+## Gate list disposition (planner, 2026-11-26)
+
+Gap-closure plans 04-34..04-37 run before the gate. 04-32 now depends on them (wave 10) and 04-33 is wave 11.
+
+- Planned in 04-34 (storage):
+  - logo purge and client-branding cleanup;
+  - Postgres token-family purge;
+  - logout-token `iss` per RP session (new migrations SQLite 0006 / Postgres 0005; `admin_issuer_of` delegates to `canonical_issuer`);
+  - atomic unlink guard with the verified-email rule;
+  - verification-aware `create_user_with_link`.
+- Planned in 04-35: independent `email_otp` / `magic_link` (optional `login_code` variables, per-toggle routes).
+- Planned in 04-36:
+  - back-channel wake on every revocation path (one helper);
+  - upstream buttons on the lockout, CAPTCHA and passkey-failure pages;
+  - console client card with the 0.3 fields;
+  - a regression test for 04-18's per-request body limit (413 above 64 KiB everywhere except the logo uploads).
+- Planned in 04-37:
+  - `require_verified_email` for upstream accounts;
+  - binding cookie cleared only on a state match;
+  - 303 to `/ui/account/linked` after Connect;
+  - docs for every closed gap.
+- Already done: the themes README / ARCHITECTURE docs pass (04-31) and the Apple provider suite (04-26).
+- At the gate: the STATE.md Current Position fix (04-32/04-33).
+
+### Moved to Phase 5
+
+- **Remembered consent covering resources (04-12).** Saved consent covers scopes only, so a client already consented to is not
+  re-prompted when it requests a different allowed resource. Reason: OIDC-16 (audience-bound tokens, `invalid_target`, downscoping)
+  is met without it. Closing it changes the consent model: the `consent_grant` schema, the consent screen and revocation. That
+  belongs with the Phase 5 RBAC/permissions work rather than a late 0.3 storage change. Documented as a known limitation in
+  ARCHITECTURE by 04-37.
+- **In-flow passkey enrolment as an MFA choice under `required` (04-16).** Reason: AUTH-08 reads "Admin can set MFA policy
+  (off/optional/required) per tenant, org or client; clients can request step-up via acr_values". It does not require passkey
+  enrolment during sign-in. TOTP enrolment satisfies `required` in 0.3, and passkeys can be added from the account page.
+  Documented by 04-37.
