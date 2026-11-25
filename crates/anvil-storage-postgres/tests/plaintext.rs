@@ -8,6 +8,13 @@
 //! text, text[], jsonb and bytea column of every table with a plain sqlx connection and asserts
 //! that no marker appears anywhere, and that every hash column holds exactly the 32-byte hash.
 //!
+//! Phase 3 secrets are seeded the way the core services store them: a TOTP seed sealed with
+//! `Kek::seal(TOTP_SEED_PURPOSE, credential_aad(id), seed)`, recovery codes hashed with
+//! `recovery_code_hash`, an SMTP password sealed with `SMTP_PASSWORD_PURPOSE` and a captcha
+//! secret sealed with `CAPTCHA_SECRET_PURPOSE` in the tenant settings. None of the plaintexts
+//! (seed bytes, hex and base32; each recovery code; the SMTP password; the captcha secret) may
+//! appear in any column.
+//!
 //! Run with `cargo test`, not nextest: the container is shared per test binary.
 
 mod support;
@@ -15,11 +22,14 @@ mod support;
 use std::collections::BTreeMap;
 
 use anvil_core::model::{
-    FlowKind, NewBrowserSession, NewEmail, NewFlow, NewRefreshToken, NewSelfServiceToken,
-    NewSetupToken, OutboxId, ReplayKind, SecretHash, SelfServiceKind, seal_payload,
+    CAPTCHA_SECRET_PURPOSE, CaptchaProvider, CaptchaSettings, CredentialId, FlowKind,
+    NewBrowserSession, NewEmail, NewFlow, NewRefreshToken, NewSelfServiceToken, NewSetupToken,
+    NewTotp, OutboxId, RecoveryCodeHash, ReplayKind, SMTP_PASSWORD_PURPOSE, SecretHash,
+    SelfServiceKind, SmtpSettings, SmtpTls, TOTP_SEED_PURPOSE, TenantSettings, TenantUpdate,
+    credential_aad, seal_payload,
 };
-use anvil_jose::Kek;
-use anvil_jose::encoding::secret_hash;
+use anvil_jose::encoding::{b64url, secret_hash};
+use anvil_jose::{Kek, TotpSecret, generate_recovery_codes, recovery_code_hash};
 use anvil_storage::contract::*;
 use sqlx::{Connection, PgConnection, Row};
 use time::Duration;
@@ -83,6 +93,32 @@ async fn locations(
             format!("SELECT count(*) FROM {t} WHERE {predicate}"),
             plain,
             plain.as_bytes(),
+        )
+        .await;
+        if hits > 0 {
+            found.push(format!("{table}.{column}"));
+        }
+    }
+    found
+}
+
+/// Every bytea column that contains the raw `bytes` (for secrets that are not valid text).
+async fn raw_bytes_locations(
+    conn: &mut PgConnection,
+    columns: &[(String, String, String, String)],
+    bytes: &[u8],
+) -> Vec<String> {
+    let mut found = Vec::new();
+    for (table, column, data_type, _) in columns {
+        if data_type != "bytea" {
+            continue;
+        }
+        let (t, c) = (ident(table), ident(column));
+        let hits = count(
+            conn,
+            format!("SELECT count(*) FROM {t} WHERE position($2 in {c}) > 0 AND $1 IS NOT NULL"),
+            "",
+            bytes,
         )
         .await;
         if hits > 0 {
@@ -233,6 +269,101 @@ async fn secrets_never_stored_plaintext() {
         .await
         .expect("record_jti");
 
+    // --- Phase 3 secrets, sealed or hashed as the core services store them ---------------
+    let kek = Kek::generate();
+
+    let seed = TotpSecret::generate();
+    let totp_id = CredentialId::new_v7();
+    let recovery_plain = generate_recovery_codes(10).expect("generate recovery codes");
+    let recovery_hashes: Vec<RecoveryCodeHash> = recovery_plain
+        .iter()
+        .map(|c| RecoveryCodeHash(recovery_code_hash(&kek, c)))
+        .collect();
+    s.storage
+        .users()
+        .create_totp(
+            ctx.tenant,
+            ctx.user.id,
+            &NewTotp {
+                id: totp_id,
+                secret_enc: kek
+                    .seal(TOTP_SEED_PURPOSE, &credential_aad(totp_id), seed.as_bytes())
+                    .expect("seal TOTP seed"),
+                created_at: now,
+            },
+            &recovery_hashes,
+            now,
+        )
+        .await
+        .expect("create_totp");
+
+    let smtp_password = format!("plaintext-marker-smtp-{}", Uuid::now_v7().simple());
+    s.storage
+        .mail_settings()
+        .put_smtp(
+            ctx.tenant,
+            &SmtpSettings {
+                host: "smtp.example.test".to_owned(),
+                port: 587,
+                username: Some("mailer".to_owned()),
+                password_enc: Some(
+                    kek.seal(
+                        SMTP_PASSWORD_PURPOSE,
+                        ctx.tenant.0.as_bytes(),
+                        smtp_password.as_bytes(),
+                    )
+                    .expect("seal SMTP password"),
+                ),
+                from: "noreply@example.test".to_owned(),
+                tls: SmtpTls::Starttls,
+                updated_at: now,
+            },
+        )
+        .await
+        .expect("put_smtp");
+
+    let captcha_secret = format!("plaintext-marker-captcha-{}", Uuid::now_v7().simple());
+    s.storage
+        .tenants()
+        .update(
+            ctx.tenant,
+            &TenantUpdate {
+                settings: Some(TenantSettings {
+                    captcha: Some(CaptchaSettings {
+                        provider: CaptchaProvider::Turnstile,
+                        site_key: "site-key".to_owned(),
+                        secret_sealed: b64url(
+                            &kek.seal(
+                                CAPTCHA_SECRET_PURPOSE,
+                                ctx.tenant.0.as_bytes(),
+                                captcha_secret.as_bytes(),
+                            )
+                            .expect("seal captcha secret"),
+                        ),
+                    }),
+                    ..TenantSettings::default()
+                }),
+                ..TenantUpdate::default()
+            },
+        )
+        .await
+        .expect("tenant update")
+        .expect("tenant exists");
+
+    let seed_hex: String = seed.as_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    let mut phase3_plain: Vec<(String, String)> = vec![
+        (
+            "TOTP seed (base32)".to_owned(),
+            seed.to_base32().to_string(),
+        ),
+        ("TOTP seed (hex)".to_owned(), seed_hex),
+        ("SMTP password".to_owned(), smtp_password),
+        ("captcha secret".to_owned(), captcha_secret),
+    ];
+    for (i, code) in recovery_plain.iter().enumerate() {
+        phase3_plain.push((format!("recovery code {i}"), code.to_string()));
+    }
+
     let markers = [
         &code,
         &refresh,
@@ -271,6 +402,17 @@ async fn secrets_never_stored_plaintext() {
         "the scan must cover the 0.1 schema, found {} columns",
         columns.len()
     );
+    for (table, column) in [
+        ("credential", "data"),
+        ("recovery_code", "code_hash"),
+        ("smtp_settings", "password_enc"),
+        ("tenant", "settings"),
+    ] {
+        assert!(
+            columns.iter().any(|(t, c, _, _)| t == table && c == column),
+            "the scan must cover {table}.{column}"
+        );
+    }
 
     for m in markers {
         let found = locations(&mut conn, &columns, &m.plain).await;
@@ -280,6 +422,67 @@ async fn secrets_never_stored_plaintext() {
             m.plain
         );
     }
+    for (what, plain) in &phase3_plain {
+        let found = locations(&mut conn, &columns, plain).await;
+        assert!(found.is_empty(), "{what} found in plaintext in {found:?}");
+    }
+    // The raw seed bytes must not appear in any bytea column either.
+    let raw_seed_hits = raw_bytes_locations(&mut conn, &columns, seed.as_bytes()).await;
+    assert!(
+        raw_seed_hits.is_empty(),
+        "the raw TOTP seed bytes were found in {raw_seed_hits:?}"
+    );
+    // Positive controls for the Phase 3 rows: they exist and hold the sealed/hashed forms.
+    let stored_codes = count(
+        &mut conn,
+        "SELECT count(*) FROM recovery_code WHERE octet_length(code_hash) = 32
+            AND $1 IS NOT NULL AND $2 IS NOT NULL"
+            .to_owned(),
+        "",
+        &[],
+    )
+    .await;
+    assert_eq!(
+        stored_codes, 10,
+        "every recovery code is stored as a 32-byte hash"
+    );
+    let stored_first = count(
+        &mut conn,
+        "SELECT count(*) FROM recovery_code WHERE code_hash = $2 AND $1 IS NOT NULL".to_owned(),
+        "",
+        &recovery_hashes[0].0,
+    )
+    .await;
+    assert_eq!(
+        stored_first, 1,
+        "the recovery-code hash is stored as passed in"
+    );
+    let totp_rows = count(
+        &mut conn,
+        "SELECT count(*) FROM credential WHERE kind = 'totp' AND $1 IS NOT NULL
+            AND $2 IS NOT NULL"
+            .to_owned(),
+        "",
+        &[],
+    )
+    .await;
+    assert_eq!(totp_rows, 1, "the TOTP credential row exists");
+    let smtp_rows = count(
+        &mut conn,
+        "SELECT count(*) FROM smtp_settings WHERE password_enc IS NOT NULL AND $1 IS NOT NULL
+            AND $2 IS NOT NULL"
+            .to_owned(),
+        "",
+        &[],
+    )
+    .await;
+    assert_eq!(smtp_rows, 1, "the sealed SMTP password is stored");
+    let captcha_rows = locations(&mut conn, &columns, "secret_sealed").await;
+    assert!(
+        captcha_rows.contains(&"tenant.settings".to_owned()),
+        "the captcha settings are stored (sealed) in tenant.settings, found {captcha_rows:?}"
+    );
+
     // Positive control: the same scan finds a value that is stored in clear (the email).
     let email_found = locations(&mut conn, &columns, &ctx.user.email).await;
     assert!(
