@@ -6,10 +6,13 @@
   --anvil-text: #1c1f24;
   --anvil-muted: #5b6270;
   --anvil-border: #d6dae1;
+  /* Input boundaries need 3:1 against the surface (WCAG 1.4.11). */
+  --anvil-input-border: #6b7280;
   --anvil-primary: #2f5bd3;
   --anvil-primary-text: #ffffff;
   --anvil-danger: #b42318;
-  --anvil-focus: #8aa8f0;
+  /* Focus ring: at least 3:1 against both the surface and the page background. */
+  --anvil-focus: #1d4ed8;
   --anvil-danger-bg: #fef3f2;
   --anvil-warning-bg: #fffaeb;
   --anvil-warning-border: #b54708;
@@ -26,10 +29,11 @@
     --anvil-text: #e7e9ee;
     --anvil-muted: #a0a7b4;
     --anvil-border: #343944;
+    --anvil-input-border: #8a92a1;
     --anvil-primary: #6d8ef0;
     --anvil-primary-text: #0d1020;
     --anvil-danger: #f97066;
-    --anvil-focus: #3d5fc4;
+    --anvil-focus: #a9c0ff;
     --anvil-danger-bg: #2a1614;
     --anvil-warning-bg: #2a2010;
     --anvil-warning-border: #f79009;
@@ -91,21 +95,26 @@ label {
 }
 
 input {
+  width: 100%;
+  min-width: 0;
+  min-height: 2.75rem;
   padding: 0.5rem 0.75rem;
   font: inherit;
   color: var(--anvil-text);
   background: var(--anvil-surface);
-  border: 1px solid var(--anvil-border);
+  border: 1px solid var(--anvil-input-border);
   border-radius: var(--anvil-radius);
 }
 
+/* Visible focus for every control (WCAG 2.4.7); never removed, never covered by fixed content. */
 input:focus-visible,
 button:focus-visible {
   outline: 3px solid var(--anvil-focus);
-  outline-offset: 1px;
+  outline-offset: 2px;
 }
 
 button {
+  min-height: 2.75rem;
   padding: 0.625rem 1rem;
   font: inherit;
   font-weight: 600;
@@ -177,6 +186,10 @@ a:focus-visible {
   border-radius: 2px;
 }
 
+.anvil-optional {
+  font-weight: 400;
+}
+
 button:hover {
   filter: brightness(1.08);
 }
@@ -208,9 +221,16 @@ button:hover {
   display: flex;
   flex-wrap: wrap;
   justify-content: space-between;
-  gap: 0.5rem;
+  gap: 0.5rem 1rem;
   margin-top: 1.25rem;
   font-size: 0.875rem;
+}
+
+/* Links between pages are targets of at least 24x24 CSS px (WCAG 2.5.8). */
+.anvil-links a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2rem;
 }
 
 .anvil-callout {
@@ -254,8 +274,38 @@ code {
   border-radius: 4px;
 }
 
+/* Narrow screens: one column, no horizontal scrolling down to 320 CSS px (WCAG 1.4.10). */
+@media (max-width: 30rem) {
+  body {
+    justify-content: flex-start;
+    padding: 0.5rem;
+  }
+
+  main {
+    padding: 1.25rem;
+  }
+
+  .anvil-links {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+/* High-contrast / forced-colours modes keep a visible boundary on the card and the controls. */
+@media (forced-colors: active) {
+  main,
+  input,
+  button {
+    border: 1px solid CanvasText;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  * {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
     transition: none !important;
+    scroll-behavior: auto !important;
   }
 }

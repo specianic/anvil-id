@@ -40,8 +40,9 @@ export async function expectNoA11yViolations(page: Page, options: A11yOptions = 
     builder = builder.exclude(selector);
   }
   const results = await builder.analyze();
+  // Compare the count so the failure message is the readable list, not a JSON diff.
   expect(
-    results.violations,
+    results.violations.length,
     `axe violations on ${page.url()}:\n${formatViolations(results.violations)}`,
-  ).toEqual([]);
+  ).toBe(0);
 }

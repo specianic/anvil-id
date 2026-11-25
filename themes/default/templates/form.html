@@ -14,7 +14,7 @@
 {% else %}
 {% set invalid = "error" in field.messages|map(attribute="level")|list %}
 <div class="anvil-field{% if invalid %} anvil-field-invalid{% endif %}">
-<label for="{{ field.name }}">{{ field.label }}</label>
+<label for="{{ field.name }}">{{ field.label }}{% if not field.required %} <span class="anvil-optional">(optional)</span>{% endif %}</label>
 <input id="{{ field.name }}" name="{{ field.name }}" type="{{ field.kind }}"
 {%- if field.value is not none and field.kind != "password" %} value="{{ field.value }}"{% endif %}
 {%- if field.required %} required{% endif %}

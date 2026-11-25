@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/e2e/run.sh [sqlite|postgres]: the Playwright e2e suite against a real anvilid binary and a
+# tests/e2e/run.sh [sqlite|postgres] [spec ...]: the Playwright e2e suite against a real anvilid binary and a
 # real SMTP sink (Mailpit).
 #
 #   1. Mailpit on 127.0.0.1:1025 (SMTP) and 127.0.0.1:8025 (HTTP API)
@@ -7,9 +7,11 @@
 #      ANVILID_SMTP_URL=smtp://127.0.0.1:1025 and --breach-check off (Postgres variant: a throwaway
 #      postgres:18-alpine container and a random KEK passed through the environment)
 #   3. the setup URL from the logs; the specs complete /setup once and share the credential
-#   4. `playwright test` on the registration, recovery and login specs
+#   4. `playwright test` on the given specs (default: every spec below), in both Playwright projects
+#      (chromium, and nojs with JavaScript disabled)
 #
-# Requires Docker, Node.js, `npm ci --prefix tests/e2e` and Playwright's chromium.
+# Requires Docker, Node.js, `npm ci` in tests/e2e and examples/node-rp (nojs.spec.ts starts the
+# sample RP) and Playwright's chromium.
 # Ports: E2E_PORT (default 18090) for AnvilID, 1025/8025 for Mailpit.
 set -euo pipefail
 
@@ -20,10 +22,17 @@ BACKEND=${1:-sqlite}
 case "$BACKEND" in
     sqlite | postgres) ;;
     *)
-        echo "usage: $0 [sqlite|postgres]" >&2
+        echo "usage: $0 [sqlite|postgres] [spec ...]" >&2
         exit 2
         ;;
 esac
+(($# > 0)) && shift
+# a11y first: on a fresh instance it audits the setup pages before the setup token is used.
+SPECS=("$@")
+((${#SPECS[@]} > 0)) || SPECS=(
+    specs/a11y.spec.ts specs/registration.spec.ts specs/recovery.spec.ts specs/login.spec.ts
+    specs/keyboard.spec.ts specs/nojs.spec.ts specs/fixtures.spec.ts
+)
 
 MAILPIT_IMAGE=axllent/mailpit:v1.29.7
 POSTGRES_IMAGE=postgres:18-alpine
@@ -126,5 +135,5 @@ ANVIL_URL="$ANVIL_URL" \
     SETUP_URL="$SETUP_URL" \
     E2E_STATE_FILE="$TMP_DIR/state.json" \
     npx --prefix tests/e2e playwright test --config tests/e2e/playwright.config.ts --workers=1 \
-    specs/registration.spec.ts specs/recovery.spec.ts specs/login.spec.ts
+    "${SPECS[@]}"
 echo "e2e ($BACKEND): passed"
