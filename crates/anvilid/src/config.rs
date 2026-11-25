@@ -348,7 +348,6 @@ pub enum LogFormat {
 }
 
 /// TLS certificate and key files of the built-in listener.
-#[allow(dead_code)] // TEMP: read by the server wiring
 #[derive(Debug, Clone)]
 pub struct TlsFiles {
     pub cert: PathBuf,
@@ -356,7 +355,6 @@ pub struct TlsFiles {
 }
 
 /// The validated configuration.
-#[allow(dead_code)] // TEMP: read by the server wiring
 #[derive(Debug)]
 pub struct Config {
     pub public_url: PublicUrl,
@@ -500,12 +498,6 @@ impl Config {
             log_format,
             warnings,
         })
-    }
-
-    /// `true` for plain http on loopback, or when `insecure_http` is set.
-    #[allow(dead_code)] // TEMP: read by the server wiring
-    pub fn dev_mode(&self) -> bool {
-        self.public_url.is_dev_mode() || self.insecure_http
     }
 }
 
@@ -655,7 +647,7 @@ mod tests {
         );
         assert!(cfg.migrate);
         assert!(!cfg.insecure_http);
-        assert!(cfg.dev_mode());
+        assert!(cfg.public_url.is_dev_mode());
         assert_eq!(cfg.log_format, LogFormat::Pretty);
         assert!(cfg.tls.is_none());
     }
@@ -715,7 +707,7 @@ mod tests {
         );
         let cfg = resolve(&l).expect("cfg");
         assert_eq!(cfg.log_format, LogFormat::Json);
-        assert!(!cfg.dev_mode());
+        assert!(!cfg.public_url.is_dev_mode());
         assert_eq!(cfg.smtp_from, "AnvilID <no-reply@id.example.test>");
     }
 
@@ -792,7 +784,7 @@ mod tests {
             ..Default::default()
         };
         let cfg = resolve(&layers(&cli, &env, None)).expect("allowed with insecure_http");
-        assert!(cfg.dev_mode());
+        assert!(cfg.insecure_http);
         assert!(
             cfg.warnings.iter().any(|w| w.contains("insecure_http")),
             "{:?}",

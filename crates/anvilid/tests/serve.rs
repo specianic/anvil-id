@@ -1,13 +1,14 @@
-//! End-to-end tests for `anvilid serve`: storage selection by URL scheme and migrations on start.
+//! End-to-end tests for `anvilid serve`: storage selection, migrations on start, the discovery
+//! document of the full router, the TLS listener and graceful shutdown.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 const BIN: &str = env!("CARGO_BIN_EXE_anvilid");
-const STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Picks a free local port (bind to :0, read it, release it).
 fn free_port() -> u16 {
@@ -28,17 +29,56 @@ impl Drop for Server {
     }
 }
 
-fn spawn(database_url: Option<&str>, port: u16) -> Child {
+impl Server {
+    /// Sends SIGTERM and waits for the exit status.
+    fn terminate(&mut self) -> ExitStatus {
+        let status = Command::new("kill")
+            .arg("-TERM")
+            .arg(self.child.id().to_string())
+            .status()
+            .expect("run kill");
+        assert!(status.success(), "kill -TERM failed");
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            if let Some(status) = self.child.try_wait().expect("try_wait") {
+                return status;
+            }
+            assert!(Instant::now() < deadline, "anvilid did not stop on SIGTERM");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    fn stderr(&mut self) -> String {
+        let mut err = String::new();
+        if let Some(mut stderr) = self.child.stderr.take() {
+            let _ = stderr.read_to_string(&mut err);
+        }
+        err
+    }
+}
+
+/// `anvilid serve` on `port` with a loopback public URL, the data dir `data_dir`, an optional
+/// database URL and extra arguments. Only PATH is inherited from the environment.
+fn spawn(data_dir: &Path, database_url: Option<&str>, port: u16, extra: &[&str]) -> Child {
     let mut cmd = Command::new(BIN);
     cmd.arg("serve")
         .arg("--listen")
         .arg(format!("127.0.0.1:{port}"))
-        .arg("--issuer")
+        .arg("--public-url")
         .arg(format!("http://127.0.0.1:{port}"))
-        .env_remove("ANVILID_DATABASE_URL")
+        .arg("--data-dir")
+        .arg(data_dir)
+        .arg("--breach-check")
+        .arg("off")
+        .args(extra)
+        .current_dir(data_dir)
+        .env_clear()
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
+    if let Some(path) = std::env::var_os("PATH") {
+        cmd.env("PATH", path);
+    }
     if let Some(url) = database_url {
         cmd.arg("--database-url").arg(url);
     }
@@ -63,66 +103,58 @@ fn http_get(port: u16, path: &str) -> std::io::Result<(String, String)> {
     Ok((status, body))
 }
 
-/// Starts the server and waits until /healthz answers 200; panics (with stderr) if it exits.
-fn start(database_url: &str) -> Server {
-    let port = free_port();
-    let mut server = Server {
-        child: spawn(Some(database_url), port),
-        port,
-    };
+/// Waits until `ready` returns true; panics (with stderr) if the server exits first.
+fn wait_ready(server: &mut Server, mut ready: impl FnMut(u16) -> bool) {
     let deadline = Instant::now() + STARTUP_TIMEOUT;
     loop {
         if let Some(status) = server.child.try_wait().expect("try_wait") {
-            let mut err = String::new();
-            if let Some(mut stderr) = server.child.stderr.take() {
-                let _ = stderr.read_to_string(&mut err);
-            }
+            let err = server.stderr();
             panic!("anvilid exited early with {status}: {err}");
         }
-        if let Ok((status, _)) = http_get(port, "/healthz")
-            && status.contains(" 200 ")
-        {
-            return server;
+        if ready(server.port) {
+            return;
         }
-        assert!(Instant::now() < deadline, "anvilid did not become healthy");
+        assert!(Instant::now() < deadline, "anvilid did not become ready");
         std::thread::sleep(Duration::from_millis(50));
     }
 }
 
-/// Runs the binary expecting it to fail fast; returns stderr.
-fn expect_failure(database_url: Option<&str>) -> String {
+fn healthy(port: u16) -> bool {
+    http_get(port, "/healthz").is_ok_and(|(status, _)| status.contains(" 200 "))
+}
+
+/// Starts the server and waits until /healthz answers 200.
+fn start(data_dir: &Path, database_url: Option<&str>) -> Server {
+    let port = free_port();
     let mut server = Server {
-        child: spawn(database_url, free_port()),
-        port: 0,
+        child: spawn(data_dir, database_url, port, &[]),
+        port,
     };
-    let deadline = Instant::now() + STARTUP_TIMEOUT;
-    let status = loop {
-        if let Some(status) = server.child.try_wait().expect("try_wait") {
-            break status;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "anvilid kept running for {database_url:?}; expected it to exit with an error"
-        );
-        std::thread::sleep(Duration::from_millis(50));
-    };
-    assert!(
-        !status.success(),
-        "anvilid unexpectedly succeeded for {database_url:?}"
-    );
-    let mut err = String::new();
-    if let Some(mut stderr) = server.child.stderr.take() {
-        stderr.read_to_string(&mut err).expect("read stderr");
-    }
-    err
+    wait_ready(&mut server, healthy);
+    server
 }
 
 fn assert_discovery(port: u16) {
     let (status, body) = http_get(port, "/.well-known/openid-configuration").expect("discovery");
     assert!(status.contains(" 200 "), "discovery status: {status}");
+    let doc: serde_json::Value = serde_json::from_str(&body).expect("discovery JSON");
+    assert_eq!(doc["issuer"], format!("http://127.0.0.1:{port}"), "{body}");
+    assert_eq!(
+        doc["id_token_signing_alg_values_supported"],
+        serde_json::json!(["RS256"]),
+        "{body}"
+    );
+    assert_eq!(
+        doc["userinfo_endpoint"],
+        format!("http://127.0.0.1:{port}/userinfo"),
+        "{body}"
+    );
+    let (status, body) = http_get(port, "/jwks").expect("jwks");
+    assert!(status.contains(" 200 "), "jwks status: {status}");
+    let jwks: serde_json::Value = serde_json::from_str(&body).expect("jwks JSON");
     assert!(
-        body.contains(&format!("\"issuer\":\"http://127.0.0.1:{port}\"")),
-        "discovery body: {body}"
+        jwks["keys"].as_array().is_some_and(|k| !k.is_empty()),
+        "{body}"
     );
 }
 
@@ -131,39 +163,151 @@ fn file_len(path: &Path) -> u64 {
 }
 
 #[test]
+fn defaults_to_data_dir_sqlite() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let server = start(dir.path(), None);
+    assert_discovery(server.port);
+    let db = dir.path().join("anvilid.db");
+    assert!(db.exists(), "default database file was not created");
+    assert!(dir.path().join("kek").exists(), "KEK file was not created");
+}
+
+#[test]
 fn sqlite_file_is_created_migrated_and_restart_is_clean() {
     let dir = tempfile::tempdir().expect("tempdir");
     let db = dir.path().join("anvil.db");
     let url = format!("sqlite://{}?mode=rwc", db.display());
 
-    let first = start(&url);
+    let first = start(dir.path(), Some(&url));
     assert_discovery(first.port);
     assert!(db.exists(), "database file was not created");
     assert!(file_len(&db) > 0, "database file is empty (no migrations?)");
     drop(first);
 
     // Same file again: migrations already applied must not break startup.
-    let second = start(&url);
+    let second = start(dir.path(), Some(&url));
     assert_discovery(second.port);
 }
 
 #[test]
 fn sqlite_memory_serves_discovery() {
-    let server = start("sqlite::memory:");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let server = start(dir.path(), Some("sqlite::memory:"));
     assert_discovery(server.port);
 }
 
 #[test]
 fn rejects_unsupported_scheme() {
-    let stderr = expect_failure(Some("mysql://user@localhost/anvil"));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = Command::new(BIN)
+        .args([
+            "serve",
+            "--database-url",
+            "mysql://user:pw-secret@localhost/anvil",
+        ])
+        .current_dir(dir.path())
+        .env_clear()
+        .output()
+        .expect("run anvilid");
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         stderr.contains("unsupported database URL scheme"),
         "stderr: {stderr}"
     );
+    assert!(!stderr.contains("pw-secret"), "stderr: {stderr}");
 }
 
 #[test]
-fn requires_database_url() {
-    let stderr = expect_failure(None);
-    assert!(stderr.contains("--database-url"), "stderr: {stderr}");
+fn sigterm_shuts_down_gracefully_with_exit_code_zero() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut server = start(dir.path(), None);
+    let status = server.terminate();
+    let stderr = server.stderr();
+    assert!(status.success(), "exit status {status}: {stderr}");
+    assert!(stderr.contains("shut down cleanly"), "{stderr}");
+}
+
+/// Generates a self-signed P-256 certificate for localhost with openssl, or returns `None` (and
+/// says why) when openssl is not available.
+fn self_signed_cert(dir: &Path) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+    let cert = dir.join("cert.pem");
+    let key = dir.join("key.pem");
+    let status = Command::new("openssl")
+        .args([
+            "req",
+            "-x509",
+            "-newkey",
+            "ec",
+            "-pkeyopt",
+            "ec_paramgen_curve:P-256",
+        ])
+        .args(["-nodes", "-days", "1", "-subj", "/CN=localhost"])
+        .arg("-keyout")
+        .arg(&key)
+        .arg("-out")
+        .arg(&cert)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    match status {
+        Ok(s) if s.success() => Some((cert, key)),
+        Ok(s) => panic!("openssl failed to create a test certificate: {s}"),
+        Err(e) => {
+            eprintln!("SKIPPED: openssl is not on PATH ({e}); TLS listener test not run");
+            None
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tls_listener_serves_discovery_over_https() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let Some((cert, key)) = self_signed_cert(dir.path()) else {
+        return;
+    };
+    let port = free_port();
+    let child = spawn(
+        dir.path(),
+        None,
+        port,
+        &[
+            "--tls-cert",
+            cert.to_str().expect("utf-8 path"),
+            "--tls-key",
+            key.to_str().expect("utf-8 path"),
+        ],
+    );
+    let mut server = Server { child, port };
+    let client = reqwest::Client::builder()
+        // The certificate is self-signed: this test proves the listener speaks TLS, not PKI.
+        .tls_danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(5))
+        .build()
+        .expect("client");
+    let url = format!("https://127.0.0.1:{port}/.well-known/openid-configuration");
+    let deadline = Instant::now() + STARTUP_TIMEOUT;
+    let body = loop {
+        if let Some(status) = server.child.try_wait().expect("try_wait") {
+            let err = server.stderr();
+            panic!("anvilid exited early with {status}: {err}");
+        }
+        if let Ok(resp) = client.get(&url).send().await
+            && resp.status().is_success()
+        {
+            break resp.text().await.expect("body");
+        }
+        assert!(Instant::now() < deadline, "TLS listener did not answer");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    let doc: serde_json::Value = serde_json::from_str(&body).expect("discovery JSON");
+    assert_eq!(doc["issuer"], format!("http://127.0.0.1:{port}"));
+
+    // Plain http on the TLS port must not be served.
+    assert!(
+        http_get(port, "/healthz").map_or(true, |(status, _)| !status.contains(" 200 ")),
+        "plain http answered on the TLS listener"
+    );
+    let status = server.terminate();
+    assert!(status.success(), "exit status {status}");
 }

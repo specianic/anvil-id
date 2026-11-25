@@ -14,6 +14,9 @@ pub struct AppConfig {
     /// embedded default theme; missing files fall back to it.
     pub theme_dir: Option<PathBuf>,
     pub password_policy: PasswordPolicy,
+    /// Operator opt-in to a plain-http public URL on a non-loopback host (`--insecure-http`).
+    /// Treated as development mode (banner, dev cookie policy).
+    pub insecure_http: bool,
 }
 
 impl AppConfig {
@@ -23,13 +26,14 @@ impl AppConfig {
             public_url,
             theme_dir: None,
             password_policy: PasswordPolicy::default(),
+            insecure_http: false,
         }
     }
 
-    /// Development mode: plain http on a loopback host. Decided from the configured public URL only,
-    /// never from request headers.
+    /// Development mode: plain http on a loopback host, or `insecure_http`. Decided from the
+    /// configuration only, never from request headers.
     pub fn dev_mode(&self) -> bool {
-        self.public_url.is_dev_mode()
+        self.public_url.is_dev_mode() || self.insecure_http
     }
 
     /// `true` when the public URL uses https (HSTS and `Secure` cookies).
@@ -61,5 +65,10 @@ mod tests {
         assert_eq!(dev.public_origin(), "http://localhost:8080");
         assert!(!dev.is_https());
         assert!(dev.dev_mode());
+        let mut insecure = AppConfig::new(PublicUrl::parse("http://op.test").expect("url"));
+        assert!(!insecure.dev_mode());
+        insecure.insecure_http = true;
+        assert!(insecure.dev_mode());
+        assert!(!insecure.is_https());
     }
 }

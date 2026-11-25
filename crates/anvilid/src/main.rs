@@ -2,6 +2,9 @@
 
 mod config;
 mod datadir;
+mod jobs;
+mod server;
+mod startup;
 mod storage;
 
 use std::io::IsTerminal as _;
@@ -14,11 +17,15 @@ use anvil_web::adapters::Argon2Pool;
 use anyhow::{Context, bail};
 use clap::{Parser, Subcommand};
 use secrecy::ExposeSecret;
+use tokio::sync::watch;
 use tracing_subscriber::EnvFilter;
 
 use crate::config::{CliOverrides, Config, Layers, LogFormat};
-use crate::datadir::{KekOrigin, OnMissing};
+use crate::datadir::OnMissing;
 use crate::storage::Backend;
+
+/// Time background jobs get to finish their current batch after the server stopped.
+const JOBS_SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -167,43 +174,15 @@ async fn setup_url(cfg: &Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Data directory, serve lock and KEK, in that order: the lock is taken before a KEK could be
-/// generated, so two concurrent first starts cannot write two KEKs.
-fn prepare_data_dir(
-    cfg: &Config,
-    backend: Backend,
-) -> anyhow::Result<(Option<datadir::ServeLock>, anvil_jose::Kek)> {
-    let (lock, on_missing) = match backend {
-        Backend::Sqlite => {
-            datadir::ensure_dir(&cfg.data_dir)?;
-            (Some(datadir::lock(&cfg.data_dir)?), OnMissing::Generate)
-        }
-        // Postgres: no data directory is needed (the KEK comes from the environment or an
-        // existing file), and several nodes may share the database.
-        Backend::Postgres => (None, OnMissing::RefuseSharedDatabase),
-    };
-    let (kek, origin) = datadir::load_kek(cfg.kek.as_ref(), &cfg.kek_file, on_missing)?;
-    match origin {
-        KekOrigin::Configured => tracing::info!("using the configured KEK"),
-        KekOrigin::File(path) => tracing::info!(path = %path.display(), "using the KEK file"),
-        KekOrigin::Generated(path) => tracing::warn!(
-            path = %path.display(),
-            "generated a new KEK; back up {}: losing it makes signing keys unrecoverable",
-            path.display()
-        ),
-    }
-    Ok((lock, kek))
-}
-
 #[tokio::main(flavor = "multi_thread")]
 async fn serve(cfg: &Config) -> anyhow::Result<()> {
     init_tracing(cfg.log_format);
     log_warnings(cfg);
-    let url = cfg.database_url.expose_secret();
-    let backend = Backend::from_url(url)?;
-    let (_lock, _kek) = prepare_data_dir(cfg, backend)?;
-    // Held for the server's lifetime; the next task passes it into the web state.
-    let _storage = storage::open_storage(url, cfg.migrate).await?;
+    // The development-mode warning is logged by the web layer (AppState::new).
+    // Fail on a bad certificate before touching the data directory or the database.
+    let tls = cfg.tls.as_ref().map(server::tls_config).transpose()?;
+
+    let started = startup::start(cfg).await?;
 
     let listener = tokio::net::TcpListener::bind(cfg.listen)
         .await
@@ -211,19 +190,37 @@ async fn serve(cfg: &Config) -> anyhow::Result<()> {
     let addr = listener
         .local_addr()
         .context("failed to read local address")?;
-    tracing::info!(public_url = %cfg.public_url, "listening on {addr}");
 
-    let issuer: url::Url = cfg
-        .public_url
-        .as_str()
-        .parse()
-        .context("public_url is not a valid URL")?;
-    let app = anvil_web::router(anvil_web::WebConfig { issuer });
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+    let (stop_tx, stop_rx) = watch::channel(false);
+    let stop_tx = Arc::new(stop_tx);
+    let mut jobs = jobs::spawn(
+        cfg,
+        &started.storage,
+        &started.clock,
+        &started.kek,
+        &stop_rx,
+    )?;
+    let signal_tx = Arc::clone(&stop_tx);
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        let _ = signal_tx.send(true);
+    });
+
+    let scheme = if tls.is_some() { "https" } else { "http" };
+    tracing::info!(public_url = %cfg.public_url, "listening on {scheme}://{addr}");
+    let result = server::run(listener, started.app, tls, stop_rx).await;
+
+    // The server stopped: make sure the jobs stop too (also when the server failed).
+    let _ = stop_tx.send(true);
+    let jobs_done = async { while jobs.join_next().await.is_some() {} };
+    if tokio::time::timeout(JOBS_SHUTDOWN_TIMEOUT, jobs_done)
         .await
-        .context("server error")?;
-
+        .is_err()
+    {
+        tracing::warn!("background jobs did not stop in time");
+    }
+    drop(started.lock);
+    result?;
     tracing::info!("shut down cleanly");
     Ok(())
 }
