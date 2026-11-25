@@ -25,6 +25,8 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
 
+use crate::http_cache::{etag_from_digest, if_none_match};
+
 #[derive(rust_embed::Embed)]
 #[folder = "$CARGO_MANIFEST_DIR/../../admin-ui/dist"]
 #[allow_missing = true]
@@ -189,25 +191,6 @@ fn accepts(accept: &str, coding: &str) -> bool {
     explicit.or(wildcard).is_some_and(|q| q > 0.0)
 }
 
-/// Quoted lowercase hex of a SHA-256 digest.
-fn etag(hash: [u8; 32]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(66);
-    out.push('"');
-    for b in hash {
-        out.push(char::from(HEX[usize::from(b >> 4)]));
-        out.push(char::from(HEX[usize::from(b & 0x0f)]));
-    }
-    out.push('"');
-    out
-}
-
-/// Weak comparison as required for `If-None-Match` (RFC 9110 §13.1.2).
-fn if_none_match_hits(header: &str, etag: &str) -> bool {
-    header.split(',').map(str::trim).any(|candidate| {
-        candidate == "*" || candidate.strip_prefix("W/").unwrap_or(candidate) == etag
-    })
-}
 
 fn csp() -> (header::HeaderName, HeaderValue) {
     (
@@ -253,16 +236,12 @@ fn serve_file(path: &str, headers: &HeaderMap) -> Response {
         },
     };
 
-    let tag = etag(file.metadata.sha256_hash());
+    let tag = etag_from_digest(&file.metadata.sha256_hash());
     let tag_value = HeaderValue::from_str(&tag).expect("quoted hex is a valid header value");
     let cache = HeaderValue::from_static(cache_control(path));
     let vary = HeaderValue::from_static("accept-encoding");
 
-    if headers
-        .get(header::IF_NONE_MATCH)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| if_none_match_hits(v, &tag))
-    {
+    if if_none_match(headers, &tag) {
         return (
             StatusCode::NOT_MODIFIED,
             [
@@ -414,17 +393,6 @@ mod tests {
         assert_eq!(negotiate(true, true, Some("br; q=0.000")), Identity);
     }
 
-    #[test]
-    fn etag_and_if_none_match() {
-        let tag = etag([0xab; 32]);
-        assert_eq!(tag.len(), 66);
-        assert!(tag.starts_with("\"abab") && tag.ends_with("ab\""));
-        assert!(if_none_match_hits(&tag, &tag));
-        assert!(if_none_match_hits(&format!("W/{tag}"), &tag));
-        assert!(if_none_match_hits(&format!("\"x\", {tag}"), &tag));
-        assert!(if_none_match_hits("*", &tag));
-        assert!(!if_none_match_hits("\"abab\"", &tag));
-    }
 
     #[test]
     fn csp_is_strict() {

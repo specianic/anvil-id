@@ -37,8 +37,8 @@ use axum::routing::{get, post};
 use axum_extra::extract::cookie::CookieJar;
 use secrecy::ExposeSecret as _;
 use serde::{Deserialize, Serialize};
-use time::OffsetDateTime;
 
+use super::format::{human, iso};
 use super::login::{UiQuery, bad_form, csrf_page};
 use crate::adapters::passkey::{WebauthnPasskeys, relying_party};
 use crate::errors::core_error_page;
@@ -202,28 +202,7 @@ fn flow_url(tenant: &ResolvedTenant, path: &str, flow: FlowId) -> String {
     tenant.ui_url(&format!("{path}?flow={flow}"))
 }
 
-fn iso(t: OffsetDateTime) -> String {
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        t.year(),
-        u8::from(t.month()),
-        t.day(),
-        t.hour(),
-        t.minute(),
-        t.second()
-    )
-}
 
-fn human(t: OffsetDateTime) -> String {
-    format!(
-        "{:04}-{:02}-{:02} {:02}:{:02} UTC",
-        t.year(),
-        u8::from(t.month()),
-        t.day(),
-        t.hour(),
-        t.minute()
-    )
-}
 
 #[derive(Serialize)]
 struct CredentialRow {
@@ -737,7 +716,6 @@ async fn remove_credential(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use time::macros::datetime;
 
     #[test]
     fn base32_is_grouped_in_fours() {
@@ -745,12 +723,6 @@ mod tests {
         assert_eq!(grouped(""), "");
     }
 
-    #[test]
-    fn timestamps_are_formatted_in_utc() {
-        let t = datetime!(2026-11-25 12:03:04 UTC);
-        assert_eq!(iso(t), "2026-11-25T12:03:04Z");
-        assert_eq!(human(t), "2026-11-25 12:03 UTC");
-    }
 
     #[test]
     fn account_csp_only_adds_self_script_and_connect() {

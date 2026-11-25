@@ -28,8 +28,8 @@ use axum::routing::{get, post};
 use axum_extra::extract::cookie::CookieJar;
 use secrecy::ExposeSecret as _;
 use serde::{Deserialize, Serialize};
-use time::OffsetDateTime;
 
+use super::format::{human, iso};
 use super::login::{UiQuery, bad_form, csrf_page};
 use crate::errors::core_error_page;
 use crate::render::PageContext;
@@ -146,30 +146,7 @@ fn device_label(user_agent: Option<&str>) -> String {
     short
 }
 
-fn iso(t: OffsetDateTime) -> String {
-    let t = t.to_offset(time::UtcOffset::UTC);
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        t.year(),
-        u8::from(t.month()),
-        t.day(),
-        t.hour(),
-        t.minute(),
-        t.second()
-    )
-}
 
-fn human(t: OffsetDateTime) -> String {
-    let t = t.to_offset(time::UtcOffset::UTC);
-    format!(
-        "{:04}-{:02}-{:02} {:02}:{:02} UTC",
-        t.year(),
-        u8::from(t.month()),
-        t.day(),
-        t.hour(),
-        t.minute()
-    )
-}
 
 fn flow_url(tenant: &ResolvedTenant, path: &str, flow: FlowId) -> String {
     tenant.ui_url(&format!("{path}?flow={flow}"))
@@ -469,7 +446,6 @@ mod tests {
     use anvil_core::service::account::AccountFailure;
 
     use super::*;
-    use time::macros::datetime;
 
     #[test]
     fn device_label_truncates_long_and_names_missing_agents() {
@@ -485,12 +461,6 @@ mod tests {
         assert_eq!(device_label(Some(&wide)).chars().count(), DEVICE_MAX_CHARS);
     }
 
-    #[test]
-    fn timestamps_are_formatted_in_utc() {
-        let t = datetime!(2026-11-25 12:03:04 UTC);
-        assert_eq!(iso(t), "2026-11-25T12:03:04Z");
-        assert_eq!(human(t), "2026-11-25 12:03 UTC");
-    }
 
     #[test]
     fn flow_expired_has_page_text() {

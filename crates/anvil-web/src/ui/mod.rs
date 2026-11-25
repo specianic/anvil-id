@@ -4,6 +4,7 @@ mod account_apps;
 mod account_security;
 mod account_sessions;
 mod consent;
+mod format;
 mod login;
 mod mfa;
 mod recovery;

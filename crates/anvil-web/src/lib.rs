@@ -11,6 +11,7 @@ pub mod console;
 pub mod cookies;
 pub mod errors;
 mod health;
+mod http_cache;
 pub mod layers;
 pub mod protocol;
 pub mod render;
