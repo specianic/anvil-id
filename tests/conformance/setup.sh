@@ -118,6 +118,8 @@ admin_post() {
 
 # --- 3. Static clients ------------------------------------------------------------------------------
 # require_pkce=false: the Basic OP plan does not send PKCE (confidential clients may opt out, C1).
+# consent_mode=skip_first_party: the suite's browser automation signs in but does not answer a
+# consent screen (new clients default to consent_mode=required).
 create_client() {
   # $1 = client name, $2 = auth method; prints "client_id client_secret"
   local body
@@ -132,6 +134,7 @@ print(json.dumps({
     "redirect_uris": [cb],
     "grant_types": ["authorization_code", "refresh_token"],
     "scopes": ["openid", "profile", "email", "address", "phone"],
+    "consent_mode": "skip_first_party",
 }))
 PY
 )

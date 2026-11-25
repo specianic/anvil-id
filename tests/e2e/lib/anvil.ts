@@ -99,8 +99,12 @@ export interface CreateClientBody {
   redirect_uris: string[];
   grant_types: string[];
   scopes: string[];
+  consent_mode?: ConsentMode;
   [extra: string]: unknown;
 }
+
+/** When the consent screen is shown (`required` is the server default for new clients). */
+export type ConsentMode = 'required' | 'skip_first_party';
 
 export interface CreatedClient {
   client_id: string;
@@ -211,13 +215,21 @@ export async function sharedManagementCredential(browser: Browser): Promise<Mana
   }
 }
 
-/** Creates an OAuth client in the given tenant (default `default`). */
+/**
+ * Creates a client in the given tenant (default `default`). `consentMode` defaults to
+ * `skip_first_party`: these are first-party test clients, and the server default (`required`)
+ * would stop automated flows at the consent screen. A `consent_mode` in `body` takes precedence.
+ */
 export function createClient(
   token: string,
   body: CreateClientBody,
   tenant = 'default',
+  consentMode: ConsentMode = 'skip_first_party',
 ): Promise<CreatedClient> {
-  return adminPost<CreatedClient>(token, `/tenants/${encodeURIComponent(tenant)}/clients`, body);
+  return adminPost<CreatedClient>(token, `/tenants/${encodeURIComponent(tenant)}/clients`, {
+    consent_mode: consentMode,
+    ...body,
+  });
 }
 
 /** Creates a user in the given tenant (default `default`). */
