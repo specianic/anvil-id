@@ -2,16 +2,19 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
+current_phase: 2
+current_phase_name: Release 0.1 "First login" (M1)
+current_plan: 22
 status: verifying
-stopped_at: Completed 02-19-PLAN.md
-last_updated: "2026-11-25T03:55:16.554Z"
-last_activity: "2026-11-25 — Completed 01-08 (phase gate: CI green on GitHub, spike verdicts, stack confirmed)"
+stopped_at: Completed 02-21-PLAN.md
+last_updated: "2026-11-25T04:38:14.105Z"
+last_activity: 2026-11-25
 progress:
   total_phases: 7
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 59
-  completed_plans: 29
-  percent: 53
+  completed_plans: 30
+  percent: 51
 ---
 
 # Project State
@@ -21,16 +24,21 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-25)
 
 **Core value:** A standards-correct, secure OIDC provider that anyone can run in two minutes.
-**Current focus:** Phase 1: Foundations and Spikes (M0)
+**Current focus:** Phase 2: Release 0.1 "First login" (M1) — complete, awaiting verification
 
 ## Current Position
 
-Phase: 1 of 7 (Foundations and Spikes (M0))
-Plan: 8 of 8 in current phase (phase complete; all plans 01-01 through 01-08 done)
-Status: Phase complete — ready for verification
-Last activity: 2026-11-25 — Completed 01-08 (phase gate: CI green on GitHub, spike verdicts, stack confirmed)
+**Current Phase:** 2
+**Current Phase Name:** Release 0.1 "First login" (M1)
+**Total Phases:** 7
+**Current Plan:** 22
+**Total Plans in Phase:** 22
+**Status:** Phase complete — ready for verification
+**Last Activity:** 2026-11-25
+**Last Activity Description:** Completed 02-21 (phase gate: security-test map, `just ci` gates, docs sync, CI green on GitHub)
+**Progress:** [█████░░░░░] 51%
 
-Progress: [█████░░░░░] 53%
+Phase 2 plans 02-01 through 02-22 are all complete (22/22 summaries). Next: Phase 2 verification, then Phase 3.
 
 ## Performance Metrics
 
@@ -79,6 +87,7 @@ Progress: [█████░░░░░] 53%
 | Phase 02 P18 | 45min | 3 tasks | 18 files |
 | Phase 02 P20 | 25min | 3 tasks | 15 files |
 | Phase 02 P19 | 90min | 2 tasks | 13 files |
+| Phase 02 P21 | 80min | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -155,6 +164,10 @@ Recent decisions affecting current work:
 - [Phase 02]: QUAL-04 measured at 5 s (sqlite) / 8 s (postgres) vs 120 s limit; e2e suite runs with one worker sharing one setup via E2E_STATE_FILE
 - [Phase 02]: C1 amended by user: confidential clients with require_pkce=false may omit nonce (OIDC Core / Basic OP); PKCE default, public-client PKCE, S256-only and downgrade defense unchanged
 - [Phase 02]: Conformance harness runs anvilid on 9443 (suite nginx owns 8443/8444); one reviewed skip; expected failures []
+- [Phase 02]: 02-21: QUAL-01 security-test map (scripts/check-security-tests.sh, 107 control/test pairs, checks fn exists + registered via cargo test --list) runs in just ci and CI
+- [Phase 02]: 02-21: serde_json float_roundtrip enabled workspace-wide (jwt_decode fuzz finding: f64 claims did not round-trip)
+- [Phase 02]: 02-21: scripts/fuzz.sh pins --target to the nightly host triple (prebuilt cargo-fuzz defaults to musl; ASan cannot link)
+- [Phase 02]: 02-21: Conformance on GitHub Linux runners showed 0 TLS handshake interruptions in 3 runs; the 02-19 local interruptions are a Docker Desktop/WSL2 environment issue
 
 ### Pending Todos
 
@@ -167,6 +180,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-25T03:55:16.552Z
-Stopped at: Completed 02-19-PLAN.md
+Last session: 2026-11-25T04:38:14.103Z
+Stopped at: Completed 02-21-PLAN.md
 Resume file: None

@@ -21,7 +21,7 @@ headless flow API, user import/export, OpenID certification, external security r
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Foundations and Spikes (M0)** - Workspace, CI and the three stack spikes (dual storage, static binary, conformance in CI) (completed 2026-11-25)
-- [ ] **Phase 2: Release 0.1 "First login"** - Zero-config binary with spec-correct auth code + PKCE, refresh, client credentials, password login and bootstrap admin
+- [x] **Phase 2: Release 0.1 "First login"** - Zero-config binary with spec-correct auth code + PKCE, refresh, client credentials, password login and bootstrap admin (completed 2026-11-25)
 - [ ] **Phase 3: Release 0.2 "Secure by default"** - Passkeys, TOTP, consent, sessions, brute-force protection, audit log, introspection/revocation, key rotation, admin console v1
 - [ ] **Phase 4: Release 0.3 "Real-world logins"** - Social login, account linking, MFA policy, logout profiles, theming, i18n, account page, resource indicators
 - [ ] **Phase 5: Release 0.4 "Operate it"** - Multi-tenant console, RBAC, webhooks, declarative config, DCR, MCP basics, HA on Postgres, observability, Helm
@@ -85,7 +85,7 @@ Plans:
 - [x] 02-18-PLAN.md — Binary wiring: zero-config, figment config, CLI, bootstrap, TLS listener, jobs, conformance ratchet refresh (wave 4)
 - [x] 02-19-PLAN.md — Conformance gate: Basic OP + Config OP over TLS (wave 5)
 - [x] 02-20-PLAN.md — Container image < 50 MB, QUAL-04 ≤ 2 min on both backends, Playwright self-service e2e (wave 5)
-- [ ] 02-21-PLAN.md — Phase gate: security-test map, `just ci`, docs sync, push + CI green (checkpoint) (wave 6)
+- [x] 02-21-PLAN.md — Phase gate: security-test map, `just ci`, docs sync, push + CI green (checkpoint) (wave 6)
 - [x] 02-22-PLAN.md — Gap closure: seal email outbox payloads at rest with the KEK; worker opens before render; plaintext tests on both backends (wave 3)
 
 Note: the multi-tenant data model and the `serve`, `migrate`, `config` and `admin setup-url` CLI commands land here; ORG-01 and ADM-07 are mapped to Phase 5, where they are completed.
@@ -188,7 +188,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundations and Spikes (M0) | 8/8 | Complete    | 2026-11-25 |
-| 2. Release 0.1 "First login" | 21/22 | In Progress|  |
+| 2. Release 0.1 "First login" | 22/22 | Complete   | 2026-11-25 |
 | 3. Release 0.2 "Secure by default" | 0/29 | Planned | - |
 | 4. Release 0.3 "Real-world logins" | 0/TBD | Not started | - |
 | 5. Release 0.4 "Operate it" | 0/TBD | Not started | - |
