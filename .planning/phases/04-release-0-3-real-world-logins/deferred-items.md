@@ -20,3 +20,6 @@
 - Upstream sign-in (04-21): every callback response clears the binding cookie, including rejections, so a forged cross-site callback can cancel a victim's pending upstream sign-in (they retry). Consider clearing only on success/state-match; low severity.
 - Upstream sign-in buttons are missing from the lockout, CAPTCHA and passkey-failure login pages (04-21).
 - Apple-specific path (ES256 client secret, first-login name) is implemented but covered only via the generic form_post hop until 04-26.
+- Linked accounts (04-25): after Connect, `ui/upstream.rs` `outcome_page` still shows the `upstream.linked` message; make it a 303 to `/ui/account/linked` and update the assertion in `upstream_login.rs::account_page_link_connects_the_signed_in_user`.
+- Linked accounts (04-25): the last-sign-in-method guard counts tenant email_otp/magic_link as a remaining method even when the user's email is unverified. Require a verified email for that to count (and confirm 04-24 only offers email sign-in for verified emails).
+- Linked accounts (04-25): the guard is check-then-delete; two concurrent unlinks of different links could both pass and leave no sign-in method. Needs an atomic storage intent in both backends.
