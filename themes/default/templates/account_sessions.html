@@ -1,0 +1,46 @@
+{#- Account sessions page (plan 03-19). Variables (besides page/account_base/account_nav):
+      csrf_token, messages [{level, key, text}],
+      sessions [{id, device, ip, created, created_iso, last_seen, last_seen_iso, current, revoke_url}],
+      other_count, revoke_others_url
+    Selectors: table session-list; rows session-{id} (data-current on this browser's row, marker
+    session-current-marker); forms session-revoke-{id} and sessions-revoke-others; submit buttons
+    "{form id}-submit". -#}
+{% extends "account_base.html" %}
+{% block account %}
+{% macro csrf() %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endmacro %}
+<div class="anvil-form-messages" id="account-messages" aria-live="polite">
+{% for m in messages %}
+<p class="anvil-message anvil-message-{{ m.level }}" id="account-msg-{{ loop.index }}" data-message-key="{{ m.key }}"{% if m.level == "error" %} role="alert"{% endif %}>{{ m.text }}</p>
+{% endfor %}
+</div>
+
+<section class="anvil-account-section" id="sessions" aria-labelledby="sessions-heading">
+<h2 id="sessions-heading">Where you are signed in</h2>
+<table class="anvil-table" id="session-list">
+<caption>Your active sessions. Signing out a session also ends the app access granted from it.</caption>
+<thead><tr><th scope="col">Device</th><th scope="col">IP address</th><th scope="col">Signed in</th><th scope="col">Last active</th><th scope="col">Action</th></tr></thead>
+<tbody>
+{% for s in sessions %}
+<tr id="session-{{ s.id }}"{% if s.current %} data-current{% endif %}>
+<td class="anvil-session-device">{{ s.device }}{% if s.current %} <strong id="session-current-marker">(this device)</strong>{% endif %}</td>
+<td class="anvil-session-ip">{% if s.ip %}{{ s.ip }}{% else %}Unknown{% endif %}</td>
+<td><time datetime="{{ s.created_iso }}">{{ s.created }}</time></td>
+<td><time datetime="{{ s.last_seen_iso }}">{{ s.last_seen }}</time></td>
+<td>
+<form id="session-revoke-{{ s.id }}" method="post" action="{{ s.revoke_url }}">
+{{ csrf() }}
+<button type="submit" id="session-revoke-{{ s.id }}-submit" aria-label="Sign out {{ s.device }}{% if s.current %} (this device){% endif %}">Sign out</button>
+</form>
+</td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+{% if other_count > 0 %}
+<form id="sessions-revoke-others" method="post" action="{{ revoke_others_url }}">
+{{ csrf() }}
+<button type="submit" id="sessions-revoke-others-submit">Sign out all other sessions</button>
+</form>
+{% endif %}
+</section>
+{% endblock %}
