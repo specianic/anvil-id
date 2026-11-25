@@ -189,7 +189,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 |-------|----------------|--------|-----------|
 | 1. Foundations and Spikes (M0) | 8/8 | Complete    | 2026-11-25 |
 | 2. Release 0.1 "First login" | 22/22 | Complete   | 2026-11-25 |
-| 3. Release 0.2 "Secure by default" | 5/29 | In Progress|  |
+| 3. Release 0.2 "Secure by default" | 6/29 | In Progress|  |
 | 4. Release 0.3 "Real-world logins" | 0/TBD | Not started | - |
 | 5. Release 0.4 "Operate it" | 0/TBD | Not started | - |
 | 6. Release 1.0 (Organizations and SSO) | 0/TBD | Not started | - |
