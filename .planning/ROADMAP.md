@@ -82,7 +82,7 @@ Plans:
 - [x] 02-15-PLAN.md — UI handlers (login, registration, verification, recovery, setup) + CSRF/cookie/CSP/enumeration tests (wave 3)
 - [x] 02-16-PLAN.md — OpenAPI 3.1 management API with admin scopes + drift check (wave 3)
 - [x] 02-17-PLAN.md — Fuzz targets (JWT, assertion, authorize, redirect) + SEC-06 release-graph gate (wave 3)
-- [ ] 02-18-PLAN.md — Binary wiring: zero-config, figment config, CLI, bootstrap, TLS listener, jobs, conformance ratchet refresh (wave 4)
+- [x] 02-18-PLAN.md — Binary wiring: zero-config, figment config, CLI, bootstrap, TLS listener, jobs, conformance ratchet refresh (wave 4)
 - [ ] 02-19-PLAN.md — Conformance gate: Basic OP + Config OP over TLS (wave 5)
 - [ ] 02-20-PLAN.md — Container image < 50 MB, QUAL-04 ≤ 2 min on both backends, Playwright self-service e2e (wave 5)
 - [ ] 02-21-PLAN.md — Phase gate: security-test map, `just ci`, docs sync, push + CI green (checkpoint) (wave 6)
@@ -157,7 +157,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundations and Spikes (M0) | 8/8 | Complete    | 2026-11-25 |
-| 2. Release 0.1 "First login" | 13/22 | In Progress|  |
+| 2. Release 0.1 "First login" | 19/22 | In Progress|  |
 | 3. Release 0.2 "Secure by default" | 0/TBD | Not started | - |
 | 4. Release 0.3 "Real-world logins" | 0/TBD | Not started | - |
 | 5. Release 0.4 "Operate it" | 0/TBD | Not started | - |
