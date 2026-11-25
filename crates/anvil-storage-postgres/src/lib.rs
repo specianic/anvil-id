@@ -217,6 +217,15 @@ impl Storage for PostgresStorage {
                (SELECT ctid FROM email_outbox
                  WHERE sent_at IS NOT NULL OR expires_at <= $1 LIMIT $2)"
         );
+        // Back-channel logout deliveries stay visible (delivered or not) until give_up_at.
+        total += purge!(
+            "DELETE FROM logout_delivery WHERE ctid IN
+               (SELECT ctid FROM logout_delivery WHERE give_up_at <= $1 LIMIT $2)"
+        );
+        total += purge!(
+            "DELETE FROM branding_draft WHERE ctid IN
+               (SELECT ctid FROM branding_draft WHERE preview_expires_at <= $1 LIMIT $2)"
+        );
         Ok(total)
     }
 }

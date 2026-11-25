@@ -123,8 +123,8 @@ pub(crate) async fn enqueue_deliveries(
     Ok(())
 }
 
-/// Records the RP session of (`session`, `client_id`) on the caller's transaction; a repeat is a
-/// no-op.
+/// Records the RP session of (`session`, `client_id`) on the caller's transaction. Idempotent;
+/// only an existing session of `tenant` is recorded (same semantics as SQLite).
 pub(crate) async fn record_rp_session(
     conn: &mut sqlx::PgConnection,
     tenant: TenantId,
@@ -134,7 +134,7 @@ pub(crate) async fn record_rp_session(
 ) -> Result<(), StorageError> {
     sqlx::query!(
         "INSERT INTO rp_session (tenant_id, session_id, client_id, created_at)
-         VALUES ($1, $2, $3, $4)
+         SELECT tenant_id, id, $3, $4 FROM browser_session WHERE tenant_id = $1 AND id = $2
          ON CONFLICT (tenant_id, session_id, client_id) DO NOTHING",
         tenant.0,
         session.0,

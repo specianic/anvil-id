@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM branding_draft WHERE ctid IN\n               (SELECT ctid FROM branding_draft WHERE preview_expires_at <= $1 LIMIT $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "84a8eb5572905a704d2700464b8a8f2e225da79e894267cdc31ffebfd255af3e"
+}
