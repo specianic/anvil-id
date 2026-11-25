@@ -59,6 +59,21 @@ const ACTION_SET: Record<AuditAction, true> = {
   smtp_settings_updated: true,
   smtp_test_sent: true,
   admin_setup_completed: true,
+  identity_linked: true,
+  identity_unlinked: true,
+  upstream_login_failed: true,
+  connection_created: true,
+  connection_updated: true,
+  connection_deleted: true,
+  connection_secret_rotated: true,
+  branding_updated: true,
+  logout: true,
+  backchannel_logout_failed: true,
+  email_change_requested: true,
+  email_changed: true,
+  profile_updated: true,
+  step_up_completed: true,
+  email_code_sent: true,
 };
 const ACTIONS = Object.keys(ACTION_SET).sort() as AuditAction[];
 const OUTCOMES: readonly AuditOutcome[] = ["success", "failure"];
