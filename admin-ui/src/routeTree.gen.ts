@@ -15,6 +15,9 @@ import { Route as AuditIndexRouteImport } from './routes/audit/index'
 import { Route as ClientsIndexRouteImport } from './routes/clients/index'
 import { Route as ClientsClientIdRouteImport } from './routes/clients/$clientId'
 import { Route as ClientsNewRouteImport } from './routes/clients/new'
+import { Route as ConnectionsIndexRouteImport } from './routes/connections/index'
+import { Route as ConnectionsConnectionIdRouteImport } from './routes/connections/$connectionId'
+import { Route as ConnectionsNewRouteImport } from './routes/connections/new'
 import { Route as EmailIndexRouteImport } from './routes/email/index'
 import { Route as EmailKindRouteImport } from './routes/email/$kind'
 import { Route as EmailSmtpRouteImport } from './routes/email/smtp'
@@ -50,6 +53,21 @@ const ClientsClientIdRoute = ClientsClientIdRouteImport.update({
 const ClientsNewRoute = ClientsNewRouteImport.update({
   id: '/clients/new',
   path: '/clients/new',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ConnectionsIndexRoute = ConnectionsIndexRouteImport.update({
+  id: '/connections/',
+  path: '/connections/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ConnectionsConnectionIdRoute = ConnectionsConnectionIdRouteImport.update({
+  id: '/connections/$connectionId',
+  path: '/connections/$connectionId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ConnectionsNewRoute = ConnectionsNewRouteImport.update({
+  id: '/connections/new',
+  path: '/connections/new',
   getParentRoute: () => rootRouteImport,
 } as any)
 const EmailIndexRoute = EmailIndexRouteImport.update({
@@ -88,11 +106,14 @@ export interface FileRoutesByFullPath {
   '/callback': typeof CallbackRoute
   '/clients/$clientId': typeof ClientsClientIdRoute
   '/clients/new': typeof ClientsNewRoute
+  '/connections/$connectionId': typeof ConnectionsConnectionIdRoute
+  '/connections/new': typeof ConnectionsNewRoute
   '/email/$kind': typeof EmailKindRoute
   '/email/smtp': typeof EmailSmtpRoute
   '/users/$userId': typeof UsersUserIdRoute
   '/audit/': typeof AuditIndexRoute
   '/clients/': typeof ClientsIndexRoute
+  '/connections/': typeof ConnectionsIndexRoute
   '/email/': typeof EmailIndexRoute
   '/sessions/': typeof SessionsIndexRoute
   '/users/': typeof UsersIndexRoute
@@ -102,11 +123,14 @@ export interface FileRoutesByTo {
   '/callback': typeof CallbackRoute
   '/clients/$clientId': typeof ClientsClientIdRoute
   '/clients/new': typeof ClientsNewRoute
+  '/connections/$connectionId': typeof ConnectionsConnectionIdRoute
+  '/connections/new': typeof ConnectionsNewRoute
   '/email/$kind': typeof EmailKindRoute
   '/email/smtp': typeof EmailSmtpRoute
   '/users/$userId': typeof UsersUserIdRoute
   '/audit': typeof AuditIndexRoute
   '/clients': typeof ClientsIndexRoute
+  '/connections': typeof ConnectionsIndexRoute
   '/email': typeof EmailIndexRoute
   '/sessions': typeof SessionsIndexRoute
   '/users': typeof UsersIndexRoute
@@ -117,11 +141,14 @@ export interface FileRoutesById {
   '/callback': typeof CallbackRoute
   '/clients/$clientId': typeof ClientsClientIdRoute
   '/clients/new': typeof ClientsNewRoute
+  '/connections/$connectionId': typeof ConnectionsConnectionIdRoute
+  '/connections/new': typeof ConnectionsNewRoute
   '/email/$kind': typeof EmailKindRoute
   '/email/smtp': typeof EmailSmtpRoute
   '/users/$userId': typeof UsersUserIdRoute
   '/audit/': typeof AuditIndexRoute
   '/clients/': typeof ClientsIndexRoute
+  '/connections/': typeof ConnectionsIndexRoute
   '/email/': typeof EmailIndexRoute
   '/sessions/': typeof SessionsIndexRoute
   '/users/': typeof UsersIndexRoute
@@ -133,11 +160,14 @@ export interface FileRouteTypes {
     | '/callback'
     | '/clients/$clientId'
     | '/clients/new'
+    | '/connections/$connectionId'
+    | '/connections/new'
     | '/email/$kind'
     | '/email/smtp'
     | '/users/$userId'
     | '/audit/'
     | '/clients/'
+    | '/connections/'
     | '/email/'
     | '/sessions/'
     | '/users/'
@@ -147,11 +177,14 @@ export interface FileRouteTypes {
     | '/callback'
     | '/clients/$clientId'
     | '/clients/new'
+    | '/connections/$connectionId'
+    | '/connections/new'
     | '/email/$kind'
     | '/email/smtp'
     | '/users/$userId'
     | '/audit'
     | '/clients'
+    | '/connections'
     | '/email'
     | '/sessions'
     | '/users'
@@ -161,11 +194,14 @@ export interface FileRouteTypes {
     | '/callback'
     | '/clients/$clientId'
     | '/clients/new'
+    | '/connections/$connectionId'
+    | '/connections/new'
     | '/email/$kind'
     | '/email/smtp'
     | '/users/$userId'
     | '/audit/'
     | '/clients/'
+    | '/connections/'
     | '/email/'
     | '/sessions/'
     | '/users/'
@@ -176,11 +212,14 @@ export interface RootRouteChildren {
   CallbackRoute: typeof CallbackRoute
   ClientsClientIdRoute: typeof ClientsClientIdRoute
   ClientsNewRoute: typeof ClientsNewRoute
+  ConnectionsConnectionIdRoute: typeof ConnectionsConnectionIdRoute
+  ConnectionsNewRoute: typeof ConnectionsNewRoute
   EmailKindRoute: typeof EmailKindRoute
   EmailSmtpRoute: typeof EmailSmtpRoute
   UsersUserIdRoute: typeof UsersUserIdRoute
   AuditIndexRoute: typeof AuditIndexRoute
   ClientsIndexRoute: typeof ClientsIndexRoute
+  ConnectionsIndexRoute: typeof ConnectionsIndexRoute
   EmailIndexRoute: typeof EmailIndexRoute
   SessionsIndexRoute: typeof SessionsIndexRoute
   UsersIndexRoute: typeof UsersIndexRoute
@@ -228,6 +267,27 @@ declare module '@tanstack/react-router' {
       path: '/clients/new'
       fullPath: '/clients/new'
       preLoaderRoute: typeof ClientsNewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/connections/': {
+      id: '/connections/'
+      path: '/connections'
+      fullPath: '/connections/'
+      preLoaderRoute: typeof ConnectionsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/connections/$connectionId': {
+      id: '/connections/$connectionId'
+      path: '/connections/$connectionId'
+      fullPath: '/connections/$connectionId'
+      preLoaderRoute: typeof ConnectionsConnectionIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/connections/new': {
+      id: '/connections/new'
+      path: '/connections/new'
+      fullPath: '/connections/new'
+      preLoaderRoute: typeof ConnectionsNewRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/email/': {
@@ -280,11 +340,14 @@ const rootRouteChildren: RootRouteChildren = {
   CallbackRoute: CallbackRoute,
   ClientsClientIdRoute: ClientsClientIdRoute,
   ClientsNewRoute: ClientsNewRoute,
+  ConnectionsConnectionIdRoute: ConnectionsConnectionIdRoute,
+  ConnectionsNewRoute: ConnectionsNewRoute,
   EmailKindRoute: EmailKindRoute,
   EmailSmtpRoute: EmailSmtpRoute,
   UsersUserIdRoute: UsersUserIdRoute,
   AuditIndexRoute: AuditIndexRoute,
   ClientsIndexRoute: ClientsIndexRoute,
+  ConnectionsIndexRoute: ConnectionsIndexRoute,
   EmailIndexRoute: EmailIndexRoute,
   SessionsIndexRoute: SessionsIndexRoute,
   UsersIndexRoute: UsersIndexRoute,
