@@ -16,6 +16,7 @@
 use serde::{Deserialize, Serialize};
 use time::{Duration, OffsetDateTime};
 
+use super::upstream::PendingUpstream;
 use crate::model::{FlowId, UserId};
 
 /// Credential changes require a sign-in no older than this (session `auth_time`).
@@ -67,6 +68,10 @@ pub struct SettingsState {
     /// KEK-sealed (base64url) TOTP secret awaiting confirmation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_totp: Option<String>,
+    /// An upstream authorization started from the account page to link a provider identity
+    /// (`flow::upstream`, purpose `Link`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream: Option<PendingUpstream>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,7 +93,22 @@ impl SettingsState {
             user,
             pending_passkey: None,
             pending_totp: None,
+            upstream: None,
         }
+    }
+
+    /// Starts an upstream authorization; replaces any earlier pending one.
+    #[must_use]
+    pub fn with_upstream(mut self, pending: PendingUpstream) -> Self {
+        self.upstream = Some(pending);
+        self
+    }
+
+    /// Consumes the pending upstream authorization (the returned state no longer holds it).
+    #[must_use]
+    pub fn take_upstream(mut self) -> (Self, Option<PendingUpstream>) {
+        let pending = self.upstream.take();
+        (self, pending)
     }
 
     /// Starts a passkey registration; replaces any earlier pending challenge.
@@ -188,6 +208,37 @@ mod tests {
             .with_passkey_challenge("old".into())
             .with_passkey_challenge("new".into());
         assert_eq!(s.take_passkey().1.as_deref(), Some("new"));
+    }
+
+    #[test]
+    fn upstream_is_taken_once_and_old_json_still_parses() {
+        use crate::flow::upstream::{PendingUpstream, UpstreamPurpose};
+        use crate::model::ConnectionId;
+        let user = UserId::new_v7();
+        // Settings JSON written before the upstream field existed.
+        let old = format!(
+            r#"{{"kind":"settings","user":"{}","pending_totp":"x"}}"#,
+            user.0
+        );
+        let parsed = SettingsState::from_json(&old).expect("old settings JSON parses");
+        assert_eq!(parsed.upstream, None);
+        assert!(!SettingsState::new(user).to_json().contains("upstream"));
+        let pending = PendingUpstream {
+            connection_id: ConnectionId::new_v7(),
+            state_hash: "s".into(),
+            nonce: None,
+            pkce_sealed: None,
+            binding_hash: "b".into(),
+            purpose: UpstreamPurpose::Link { user_id: user },
+            started_at: 0,
+            expected_iss: None,
+            response_sealed: None,
+        };
+        let s = SettingsState::new(user).with_upstream(pending.clone());
+        let back = SettingsState::from_json(&s.to_json()).expect("round trip");
+        let (back, taken) = back.take_upstream();
+        assert_eq!(taken, Some(pending));
+        assert_eq!(back.take_upstream().1, None);
     }
 
     #[test]

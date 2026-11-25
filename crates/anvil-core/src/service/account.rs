@@ -336,6 +336,20 @@ impl AccountService {
         Ok(Opened { flow, state })
     }
 
+    /// The settings flow of a submission, checked like every account change: flow cookie and
+    /// CSRF token, owned by the session's user, session authenticated within
+    /// [`REAUTH_WINDOW`](crate::flow::settings::REAUTH_WINDOW). Changes nothing. Used by the
+    /// upstream service to link a provider identity from the account page.
+    pub(crate) async fn settings_flow_for(
+        &self,
+        tenant: TenantId,
+        binding: &SettingsBinding<'_>,
+        session: &BrowserSession,
+    ) -> Result<(Flow, SettingsState), AccountError> {
+        let opened = self.open(tenant, session, binding).await?;
+        Ok((opened.flow, opened.state))
+    }
+
     /// Persists `next` iff the flow still holds the state it was opened with.
     async fn swap(
         &self,

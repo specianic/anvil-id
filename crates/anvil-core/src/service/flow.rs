@@ -61,6 +61,16 @@
 //! too; the intent enqueues back-channel logout deliveries) before the new user's session is
 //! created, and `session_revoked` is audited with reason `session_switch`.
 //!
+//! # Upstream sign-in (AUTH-07, AUTH-11)
+//!
+//! `service::upstream` runs the provider round trip and then hands the established user to
+//! [`FlowService::upstream_primary`]: the same MFA policy applies, a single-factor upstream
+//! sign-in gets `[fed]` and a second factor after it `[fed, otp, mfa]`. The provider's return
+//! carries neither the flow cookie nor the CSRF token, so a login that needs another form
+//! continues in a fresh flow ([`FlowService::continue_login`]). A login flow holding a pending
+//! link (`flow::upstream::PendingLink`) links the waiting identity to the account signed in to
+//! there, right before the session is created (`service::upstream::confirm_link`).
+//!
 //! # Audit
 //!
 //! `login_succeeded`, `login_failed`, `second_factor_failed`, `passkey_clone_suspected`,
@@ -85,11 +95,12 @@ use super::account::{
 use super::audit::AuditService;
 use super::authorize::mfa_context;
 use super::session::{NewSessionCookie, SessionService};
+use super::upstream::confirm_link;
 use crate::error::CoreError;
 use crate::flow::engine::{
-    AfterPrimary, Effect, EmailKind, Failure, FlowEnv, FlowInput, FlowState, LoginStep,
-    SecondFactorMethods, after_primary_auth, enroll_required, on_failure, second_factor_required,
-    session_acr_amr, step_up, transition, upgraded_acr_amr,
+    AfterPrimary, Effect, EmailKind, Failure, FlowEnv, FlowInput, FlowState, LoginState, LoginStep,
+    SecondFactorMethods, SessionAuth, after_primary_auth, enroll_required, on_failure,
+    second_factor_required, session_acr_amr, step_up, transition, upgraded_acr_amr,
 };
 use crate::flow::form::{FormDescription, FormMessage, MessageLevel};
 use crate::model::{
@@ -240,6 +251,18 @@ impl SubmitResult {
             attempt: None,
         }
     }
+}
+
+/// Result of [`FlowService::upstream_primary`].
+#[derive(Debug)]
+pub(crate) enum UpstreamPrimary {
+    /// Signed in: set the session cookie and continue.
+    SignedIn {
+        cookie: NewSessionCookie,
+        continue_to: Option<AuthRequestId>,
+    },
+    /// A second factor or enrolment is needed: set the new flow's cookie and render its form.
+    Continue(StartedFlow),
 }
 
 /// Why a submission does not match its flow.
@@ -487,7 +510,7 @@ impl FlowService {
 
     /// [`Self::create_flow`] with a chosen id (a pending enrolment secret is sealed under it
     /// before the flow is stored).
-    async fn create_flow_with_id(
+    pub(crate) async fn create_flow_with_id(
         &self,
         cx: &FlowContext<'_>,
         id: FlowId,
@@ -841,6 +864,113 @@ impl FlowService {
         Ok(Some(started))
     }
 
+    /// Continues a login in a fresh flow `id` (new flow cookie and CSRF token) holding `state`,
+    /// bound to the old flow's authorization request; the old flow is deleted. Used after an
+    /// upstream callback, which arrives without the flow cookie and the CSRF token.
+    pub(crate) async fn continue_login(
+        &self,
+        cx: &FlowContext<'_>,
+        old: Option<&Flow>,
+        id: FlowId,
+        state: &FlowState,
+        form: FormDescription,
+    ) -> Result<StartedFlow, CoreError> {
+        let auth_request = old.and_then(|f| f.auth_request_id);
+        let started = self
+            .create_flow_with_id(cx, id, state, form, auth_request)
+            .await?;
+        if let Some(old) = old {
+            self.storage.flows().delete(cx.tenant.id, old.id).await?;
+        }
+        Ok(started)
+    }
+
+    /// A fresh login flow whose sign-in form shows the error `key` (bound to the old flow's
+    /// authorization request, which is deleted).
+    pub(crate) async fn restart_login_with(
+        &self,
+        cx: &FlowContext<'_>,
+        old: Option<&Flow>,
+        key: &str,
+    ) -> Result<StartedFlow, CoreError> {
+        let (state, mut form) = FlowState::initial(FlowKind::Login, None, &self.env(cx))?;
+        form.messages.insert(0, FormMessage::error(key));
+        self.continue_login(cx, old, FlowId::new_v7(), &state, form)
+            .await
+    }
+
+    /// After an upstream sign-in established `user` (`flow::upstream`): applies the MFA policy of
+    /// the flow's authorization request ([`after_primary_auth`]) and signs in with `[fed]`, or
+    /// continues in a fresh flow at the second-factor or enrolment step (whose second factor
+    /// then signs in with `[fed, otp, mfa]`). `state` is the login state without its pending
+    /// upstream authorization.
+    pub(crate) async fn upstream_primary(
+        &self,
+        cx: &FlowContext<'_>,
+        flow: &Flow,
+        state: LoginState,
+        user: &User,
+        current_session: Option<SessionId>,
+    ) -> Result<UpstreamPrimary, CoreError> {
+        let tenant = cx.tenant.id;
+        let methods = self.second_factor_methods(tenant, user.id).await?;
+        let (policy, acr) = self.flow_mfa(cx, flow).await?;
+        let state = LoginState {
+            federated: true,
+            upstream: None,
+            pending_link: None,
+            step_up_session: None,
+            passkey_challenge: None,
+            ..state
+        };
+        match after_primary_auth(policy, acr, methods) {
+            AfterPrimary::SignIn => {
+                let (acr, amr) = session_acr_amr(SessionAuth::Federated, false);
+                let replaces = self.switch_session(cx, current_session, user.id).await?;
+                let cookie = self
+                    .sessions()
+                    .create(tenant, user.id, acr, &amr, replaces, cx.ctx)
+                    .await?;
+                self.storage
+                    .users()
+                    .record_login(tenant, user.id, self.clock.now())
+                    .await?;
+                self.storage.flows().delete(tenant, flow.id).await?;
+                self.audit_user(
+                    cx,
+                    AuditAction::LoginSucceeded,
+                    user.id,
+                    AuditOutcome::Success,
+                    AuditDetails::login("upstream"),
+                )
+                .await?;
+                Ok(UpstreamPrimary::SignedIn {
+                    cookie,
+                    continue_to: flow.auth_request_id,
+                })
+            }
+            AfterPrimary::SecondFactor(methods) => {
+                let (next, form) = second_factor_required(state, user.id, methods);
+                let mut started = self
+                    .continue_login(cx, Some(flow), FlowId::new_v7(), &next, form)
+                    .await?;
+                started.factor_user = Some(user.id);
+                Ok(UpstreamPrimary::Continue(started))
+            }
+            AfterPrimary::Enroll => {
+                let id = FlowId::new_v7();
+                let secret = PendingSecret::generate();
+                let display = enrolment(cx.tenant, user, &secret)?;
+                let sealed = seal_pending_totp(&self.kek, id, &secret)?;
+                let (next, form) = enroll_required(state, user.id, sealed);
+                let mut started = self.continue_login(cx, Some(flow), id, &next, form).await?;
+                started.factor_user = Some(user.id);
+                started.totp = Some(display);
+                Ok(UpstreamPrimary::Continue(started))
+            }
+        }
+    }
+
     /// The second factors `user` can use at the second-factor step.
     async fn second_factor_methods(
         &self,
@@ -1127,6 +1257,22 @@ impl FlowService {
                         "CreateSession without an established user".into(),
                     ));
                 };
+                // Link confirmation (AUTH-11): the account just proved gets the waiting
+                // upstream identity.
+                if let Ok(FlowState::Login(s)) = serde_json::from_str::<FlowState>(exec.state_json)
+                    && let Some(link) = &s.pending_link
+                {
+                    confirm_link(
+                        self.storage.as_ref(),
+                        &self.kek,
+                        &self.audit(),
+                        cx,
+                        exec.flow.id,
+                        link,
+                        user.id,
+                    )
+                    .await?;
+                }
                 let (acr, amr) = session_acr_amr(*auth, exec.passkey_backup_eligible);
                 let replaces = self
                     .switch_session(cx, exec.current_session, user.id)

@@ -43,7 +43,7 @@ pub use super::verification::VerificationState;
 use super::{login, recovery, registration, setup, verification};
 use crate::error::CoreError;
 use crate::model::{
-    ACR_MFA, ACR_PWD, AMR_HWK, AMR_MFA, AMR_OTP, AMR_PWD, AMR_SWK, AMR_USER, FlowKind,
+    ACR_MFA, ACR_PWD, AMR_FED, AMR_HWK, AMR_MFA, AMR_OTP, AMR_PWD, AMR_SWK, AMR_USER, FlowKind,
     RegistrationMode, SessionId, UserId, normalize_email,
 };
 use crate::policy::mfa::acr_for;
@@ -246,11 +246,16 @@ pub enum SessionAuth {
     SecondFactor,
     /// A user-verified passkey (counts as multi-factor).
     Passkey,
+    /// An upstream identity provider (social, OIDC, OAuth2): single factor (`flow::upstream`).
+    Federated,
+    /// An upstream identity provider, then a TOTP code or a recovery code.
+    FederatedSecondFactor,
 }
 
 /// `(acr, amr)` of a session: password `[pwd]` + pwd ACR; password plus TOTP or recovery code
 /// `[pwd, otp, mfa]` + MFA ACR; passkey `[hwk|swk, user, mfa]` + MFA ACR, `swk` when the
-/// passkey is backup eligible (synced), `hwk` otherwise.
+/// passkey is backup eligible (synced), `hwk` otherwise; upstream provider `[fed]` + pwd ACR
+/// (single factor), plus a second factor `[fed, otp, mfa]` + MFA ACR.
 pub fn session_acr_amr(
     auth: SessionAuth,
     passkey_backup_eligible: bool,
@@ -267,6 +272,8 @@ pub fn session_acr_amr(
             };
             (ACR_MFA, v(&[key, AMR_USER, AMR_MFA]))
         }
+        SessionAuth::Federated => (ACR_PWD, v(&[AMR_FED])),
+        SessionAuth::FederatedSecondFactor => (ACR_MFA, v(&[AMR_FED, AMR_OTP, AMR_MFA])),
     }
 }
 
@@ -281,7 +288,11 @@ pub fn upgraded_acr_amr(
     let (_, added) = session_acr_amr(auth, passkey_backup_eligible);
     let mut amr = existing.to_vec();
     for a in added {
-        // A step-up after a password sign-in keeps `pwd` once.
+        // A step-up proves the second factor only: it never adds the primary method (`pwd`
+        // stays once after a password sign-in and is not claimed for an upstream sign-in).
+        if a == AMR_PWD || a == AMR_FED {
+            continue;
+        }
         if !amr.contains(&a) {
             amr.push(a);
         }
@@ -882,6 +893,11 @@ mod tests {
         let had = vec![AMR_PWD.to_owned(), AMR_OTP.to_owned()];
         let (_, amr) = upgraded_acr_amr(&had, SessionAuth::SecondFactor, false);
         assert_eq!(amr, vec![AMR_PWD, AMR_OTP, AMR_MFA]);
+        // An upstream session stepped up does not claim a password.
+        let fed = vec![AMR_FED.to_owned()];
+        let (acr, amr) = upgraded_acr_amr(&fed, SessionAuth::SecondFactor, false);
+        assert_eq!(acr, ACR_MFA);
+        assert_eq!(amr, vec![AMR_FED, AMR_OTP, AMR_MFA]);
     }
 
     #[test]
@@ -902,6 +918,14 @@ mod tests {
         assert_eq!(
             session_acr_amr(SessionAuth::Passkey, true),
             (ACR_MFA, s(&["swk", "user", "mfa"]))
+        );
+        assert_eq!(
+            session_acr_amr(SessionAuth::Federated, false),
+            (ACR_PWD, s(&["fed"]))
+        );
+        assert_eq!(
+            session_acr_amr(SessionAuth::FederatedSecondFactor, false),
+            (ACR_MFA, s(&["fed", "otp", "mfa"]))
         );
     }
 

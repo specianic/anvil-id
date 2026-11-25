@@ -47,7 +47,8 @@ use super::engine::{
     Effect, Failure, FlowEnv, FlowState, SessionAuth, error, field, form as build_form,
     password_field, secret,
 };
-use super::form::{FieldKind, FormDescription, FormMessage};
+use super::form::{FieldKind, FormDescription, FormMessage, MessageLevel};
+use super::upstream::{PendingLink, PendingUpstream};
 use crate::model::{MfaPolicy, SessionId, UserId, normalize_email};
 use crate::policy::mfa::{AcrRequest, MfaRequirement, mfa_requirement};
 
@@ -55,6 +56,8 @@ use crate::policy::mfa::{AcrRequest, MfaRequirement, mfa_requirement};
 pub const SECOND_FACTOR_FORM_ID: &str = "second-factor";
 /// Id of the in-flow enrolment form.
 pub const ENROLL_FORM_ID: &str = "mfa-enroll";
+/// Id of the sign-in form shown while an upstream identity waits for link confirmation.
+pub const UPSTREAM_LINK_FORM_ID: &str = "upstream-link";
 
 /// Login state, stored as flow JSON. Every field has a serde default so flow JSON written by
 /// release 0.1 (`{"kind":"login","identifier":…}`) still decodes.
@@ -76,6 +79,18 @@ pub struct LoginState {
     /// Taken out with a compare-and-swap when the confirming code is accepted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_totp: Option<String>,
+    /// A started upstream sign-in (`flow::upstream`); taken out with a compare-and-swap by the
+    /// callback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream: Option<Box<PendingUpstream>>,
+    /// An upstream identity waiting for the user to sign in to an existing account: the account
+    /// proved in this flow gets the link (`flow::upstream`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_link: Option<Box<PendingLink>>,
+    /// The primary authentication was an upstream sign-in (`amr` `fed`, not `pwd`): a second
+    /// factor ends in [`SessionAuth::FederatedSecondFactor`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub federated: bool,
 }
 
 /// Where the login stands.
@@ -198,13 +213,15 @@ pub(super) fn passkey_assertion(
     }
 }
 
-/// The terminal effect after a second factor: upgrade the step-up session, or sign in.
+/// The terminal effect after a second factor: upgrade the step-up session, or sign in (after an
+/// upstream sign-in with `[fed, otp, mfa]`).
 fn finish(state: &LoginState) -> Effect {
     match state.step_up_session {
         Some(session) => Effect::UpgradeSession {
             session,
             auth: SessionAuth::SecondFactor,
         },
+        None if state.federated => Effect::CreateSession(SessionAuth::FederatedSecondFactor),
         None => Effect::CreateSession(SessionAuth::SecondFactor),
     }
 }
@@ -300,6 +317,18 @@ pub fn step_up(
     }
 }
 
+/// A fresh login state holding `link` (link confirmation, `flow::upstream`) and its form: the
+/// identifier is prefilled with the candidate account's email only when the link exposes it.
+pub fn link_confirmation(link: PendingLink) -> (FlowState, FormDescription) {
+    let state = LoginState {
+        identifier: link.candidate_email.clone(),
+        pending_link: Some(Box::new(link)),
+        ..LoginState::default()
+    };
+    let f = form(&state, Vec::new());
+    (FlowState::Login(state), f)
+}
+
 fn invalid_input(state: LoginState) -> (FlowState, Vec<Effect>) {
     let f = current_form(&state, vec![error("flow.invalid_input")]);
     (FlowState::Login(state), vec![Effect::Render(f)])
@@ -360,9 +389,23 @@ pub(super) fn enroll_form(messages: Vec<FormMessage>) -> FormDescription {
     )
 }
 
+/// The sign-in form of the identify step. While an upstream identity waits for link
+/// confirmation it is the [`UPSTREAM_LINK_FORM_ID`] form: the same fields, introduced by
+/// `upstream.link_explain` (argument `provider`).
 pub(super) fn form(state: &LoginState, messages: Vec<FormMessage>) -> FormDescription {
+    let (id, messages) = match &state.pending_link {
+        Some(link) => {
+            let mut all = vec![
+                FormMessage::new(MessageLevel::Info, "upstream.link_explain")
+                    .with_arg("provider", &link.provider_name),
+            ];
+            all.extend(messages);
+            (UPSTREAM_LINK_FORM_ID, all)
+        }
+        None => ("login", messages),
+    };
     build_form(
-        "login",
+        id,
         "login",
         vec![
             field(
@@ -464,6 +507,74 @@ mod tests {
             Effect::Render(f) => f,
             other => panic!("{other:?}"),
         }
+    }
+
+    fn pending_link(email: Option<&str>) -> PendingLink {
+        PendingLink {
+            connection_id: crate::model::ConnectionId::new_v7(),
+            identity_sealed: "sealed".into(),
+            candidate_user: email.map(|_| UserId::new_v7()),
+            provider_name: "Example ID".into(),
+            candidate_email: email.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn link_confirmation_is_the_sign_in_form_with_the_provider_named() {
+        let (state, f) = link_confirmation(pending_link(Some("alice@example.com")));
+        assert_eq!(f.id, UPSTREAM_LINK_FORM_ID);
+        assert_eq!(f.action, "login");
+        assert_eq!(f.messages[0].key, "upstream.link_explain");
+        assert_eq!(f.messages[0].args["provider"], "Example ID");
+        let ident = f.fields.iter().find(|x| x.name == "identifier").unwrap();
+        assert_eq!(ident.value.as_deref(), Some("alice@example.com"));
+        // A wrong password keeps the link form (and the pending link).
+        let FlowState::Login(s) = state.clone() else {
+            panic!()
+        };
+        let (next, effects) = engine_transition(
+            state,
+            FlowInput::Login {
+                identifier: "alice@example.com".into(),
+                password: PW.into(),
+            },
+            &env(),
+        );
+        let (after, f) = engine_on_failure(next, &effects, Failure::InvalidCredentials, &env());
+        assert_eq!(f.id, UPSTREAM_LINK_FORM_ID);
+        let FlowState::Login(after) = after else {
+            panic!()
+        };
+        assert_eq!(after.pending_link, s.pending_link);
+        // An unexposed candidate leaves the identifier empty.
+        let (_, f) = link_confirmation(pending_link(None));
+        let ident = f.fields.iter().find(|x| x.name == "identifier").unwrap();
+        assert_eq!(ident.value, None);
+    }
+
+    #[test]
+    fn second_factor_after_upstream_signs_in_federated() {
+        let (user, mut state) = second_factor_state(BOTH);
+        state.federated = true;
+        let (_, effects) = totp(state.clone(), "123456".into());
+        assert!(matches!(
+            effects.last(),
+            Some(Effect::CreateSession(SessionAuth::FederatedSecondFactor))
+        ));
+        let (_, effects) = recovery_code(state, "abcd".into());
+        assert!(matches!(
+            effects.last(),
+            Some(Effect::CreateSession(SessionAuth::FederatedSecondFactor))
+        ));
+        let _ = user;
+        // Old login JSON has no upstream fields.
+        let old: LoginState = serde_json::from_str(r#"{"identifier":null}"#).unwrap();
+        assert!(!old.federated && old.upstream.is_none() && old.pending_link.is_none());
+        assert!(
+            !serde_json::to_string(&LoginState::default())
+                .unwrap()
+                .contains("federated")
+        );
     }
 
     #[test]
