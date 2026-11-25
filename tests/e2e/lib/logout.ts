@@ -1,5 +1,8 @@
 // Helpers for logout e2e tests: RP-initiated logout URLs and the sample RP's back-channel record.
 
+import { startSampleRp, type SampleRp } from './account';
+import { createClient } from './anvil';
+
 /** One back-channel logout token the sample RP accepted (examples/node-rp /backchannel_logout). */
 export interface BackchannelEntry {
   sub?: string;
@@ -54,4 +57,41 @@ export async function waitForBackchannel(
     }
     await new Promise((r) => setTimeout(r, 250));
   }
+}
+
+/** The sample RP started by startLogoutRp, with the id of its client. */
+export interface LogoutRp extends SampleRp {
+  clientId: string;
+}
+
+/**
+ * Starts examples/node-rp for a new default-tenant client registered with the RP's logout
+ * metadata: post_logout_redirect_uris [{base}/logged-out] and backchannel_logout_uri
+ * {base}/backchannel_logout (plain http to loopback is allowed in development mode). `extra`
+ * adds client fields (e.g. mfa_policy).
+ */
+export async function startLogoutRp(
+  token: string,
+  name: string,
+  extra: Record<string, unknown> = {},
+): Promise<LogoutRp> {
+  let clientId = '';
+  const rp = await startSampleRp(async (redirectUri) => {
+    const base = redirectUri.replace(/\/callback$/, '');
+    const client = await createClient(token, {
+      name,
+      client_type: 'confidential',
+      application_type: 'web',
+      auth_method: 'client_secret_basic',
+      redirect_uris: [redirectUri],
+      grant_types: ['authorization_code', 'refresh_token'],
+      scopes: ['openid', 'profile', 'email'],
+      post_logout_redirect_uris: [`${base}/logged-out`],
+      backchannel_logout_uri: `${base}/backchannel_logout`,
+      ...extra,
+    });
+    clientId = client.client_id;
+    return client;
+  });
+  return { ...rp, clientId };
 }
