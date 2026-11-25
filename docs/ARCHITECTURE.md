@@ -106,9 +106,11 @@ Cargo workspace:
 
 ```
 crates/
-  anvil-core/              Domain model + protocol state machines. No I/O, no axum, no sqlx.
+  anvil-core/              Domain model, protocol state machines and the storage port traits
+                           (`anvil_core::ports`). No I/O, no axum, no sqlx.
   anvil-jose/              JWK/JWS/JWT, key generation, signing-key lifecycle helpers.
-  anvil-storage/           Storage traits, error types, and the storage contract test suite.
+  anvil-storage/           Shared storage contract test suite (feature `contract`) and
+                           backend-agnostic helpers.
   anvil-storage-sqlite/    sqlx SQLite implementation + its own migrations/ directory.
   anvil-storage-postgres/  sqlx Postgres implementation + its own migrations/ directory.
   anvil-cache/             Cache trait, moka and redis implementations, keyed rate limiter.
@@ -125,11 +127,16 @@ docs/
 
 **Dependency rules** (checked in CI with a small script over per-crate `cargo tree -p` output; `cargo metadata` unifies features across the workspace and gives false positives):
 
-- `anvil-core` depends only on `anvil-jose` and pure libraries (serde, time, uuid, url, thiserror).
-- `anvil-storage-*` depend on `anvil-storage` and `anvil-core` (for domain types), never on `anvil-web`.
-- `anvil-web` depends on `anvil-core`, `anvil-storage` (traits only), `anvil-cache`, `anvil-mail`.
+- `anvil-core` depends only on `anvil-jose` and pure libraries (serde, time, uuid, url, thiserror,
+  async-trait).
+- `anvil-storage-*` normal-depend on `anvil-core` (for the ports and domain types) and sqlx, never on
+  `anvil-web`. They use `anvil-storage` only as a dev-dependency, for the contract suite.
+- `anvil-web` depends on `anvil-core` (including the storage ports), `anvil-cache`, `anvil-mail`.
   It never imports a concrete storage crate.
 - Only `anvilid` (the binary) knows the concrete storage and cache implementations.
+
+Rules apply to normal (non-dev) dependencies. `anvil-web` may dev-depend on concrete storage crates
+so HTTP and security tests run on both backends (QUAL-02); it never normal-depends on them.
 
 Later modules (federation, directory, permissions, gateway) become crates of their own following the
 same pattern: logic in a no-I/O crate, endpoints in `anvil-web`.
@@ -215,7 +222,8 @@ Losing the KEK makes encrypted columns unrecoverable; the docs say so prominentl
 
 ### 7.1 Traits
 
-`anvil-storage` defines **repository traits grouped by aggregate**, plus a transaction abstraction:
+`anvil-core` defines the storage ports (`anvil_core::ports`): **repository traits grouped by
+aggregate**, plus a transaction abstraction:
 
 ```rust
 #[async_trait]
@@ -250,7 +258,8 @@ contract:
   own `.sqlx/` offline metadata, so every query is compile-time checked against its real dialect.
 - Native types per backend: Postgres `uuid`, `timestamptz`, `jsonb`; SQLite `STRICT` tables, UUIDs as
   `BLOB`, timestamps as integer Unix milliseconds, JSON as `TEXT`.
-- **Storage contract test suite** (`anvil-storage/src/contract/`): one set of async tests, generic over
+- **Storage contract test suite** (stays in `anvil-storage/src/contract/`, behind the `contract`
+  feature): one set of async tests, generic over
   `Storage`, instantiated for SQLite (in-memory and file) and Postgres (testcontainers). It includes
   **concurrency tests**: N parallel `consume_code` calls must yield exactly one success; parallel
   refresh rotation must yield one success and one `ReuseDetected`.
