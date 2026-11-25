@@ -51,9 +51,11 @@ pub trait Storage: Send + Sync + 'static {
     fn outbox(&self) -> &dyn OutboxRepo;
 
     /// Batch-deletes expired rows across all tenants: authorization codes, authorization
-    /// requests, flows, browser sessions, consumed or expired refresh tokens, replay guards,
-    /// self-service tokens, setup tokens, and sent or expired outbox emails. Never deletes a row
-    /// that is still usable at `now`. Returns the number of rows deleted.
+    /// requests, flows, browser sessions, refresh tokens, replay guards, self-service tokens and
+    /// setup tokens with `expires_at <= now`, plus sent or expired outbox emails. Never deletes a
+    /// row that is still usable at `now`. Consumed codes and refresh tokens are kept until they
+    /// expire, so code and refresh-token reuse detection keeps working. Returns the number of
+    /// rows deleted.
     async fn purge_expired(&self, now: OffsetDateTime) -> Result<u64, StorageError>;
 }
 

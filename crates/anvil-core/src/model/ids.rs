@@ -120,8 +120,8 @@ impl PageRequest {
     }
 }
 
-/// One page of results in UUIDv7 id order. `next_cursor` is the id of the last item when more
-/// items may follow, `None` on the last page.
+/// One page of results in UUIDv7 id order. `next_cursor` is the id of the last item if and only
+/// if at least one more item follows (backends fetch `limit + 1` rows); `None` on the last page.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Page<T> {
     pub items: Vec<T>,
