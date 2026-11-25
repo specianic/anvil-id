@@ -4,13 +4,13 @@ milestone: v1.0
 milestone_name: milestone
 status: verifying
 stopped_at: Completed 02-10-PLAN.md
-last_updated: "2026-11-25T02:12:52.947Z"
+last_updated: "2026-11-25T02:13:24.477Z"
 last_activity: "2026-11-25 — Completed 01-08 (phase gate: CI green on GitHub, spike verdicts, stack confirmed)"
 progress:
   total_phases: 7
   completed_phases: 1
   total_plans: 29
-  completed_plans: 18
+  completed_plans: 19
   percent: 53
 ---
 
@@ -68,6 +68,7 @@ Progress: [█████░░░░░] 53%
 | Phase 02 P08 | 30min | 2 tasks | 5 files |
 | Phase 02 P09 | 25min | 2 tasks | 8 files |
 | Phase 02 P05 | 30min | 3 tasks | 16 files |
+| Phase 02 P06 | 50min | 3 tasks | 16 files |
 
 ## Accumulated Context
 
@@ -126,6 +127,7 @@ Recent decisions affecting current work:
 - [Phase 02]: SQLite: token families have no FK to user/session/client; codes, credentials, sessions, self-service tokens cascade from user via composite (tenant_id,user_id) FKs
 - [Phase 02]: UserRepo::delete/ClientRepo::delete stamp family revocation with storage clock (ports take no now)
 - [Phase 02]: Outbox payloads may hold plaintext token links (02-08 to decide: build link at send time or document)
+- [Phase 02]: 02-06: Postgres token families/codes/refresh tokens reference only tenant (+family); user/client delete revokes families instead of cascading
 
 ### Pending Todos
 
