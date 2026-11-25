@@ -71,7 +71,7 @@ pub async fn postgres() -> TestStorage {
     let db = format!("test_{}", Uuid::now_v7().simple());
 
     // Create the database through a short-lived admin connection to `postgres` (never template1).
-    let mut admin = connect_admin(&server).await;
+    let mut admin = connect_admin(server).await;
     // `db` is built only from a UUID's hex digits, so interpolating it is safe.
     sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {db}")))
         .execute(&mut admin)
