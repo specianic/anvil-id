@@ -2,17 +2,43 @@
 
 The easiest open-source identity and access platform to self-host.
 
-> **Status: pre-release.** Release 0.1 is in development. Not ready for production use.
+> **Status: early release (0.1).** Not ready for production use.
+
+## Install
+
+Every release publishes static Linux binaries (x86_64, arm64), macOS binaries (Apple silicon,
+Intel) and a multi-arch container image. See [Releases](https://github.com/specianic/anvil-id/releases)
+and [docs/RELEASING.md](docs/RELEASING.md) for what is published and how to verify it.
+
+**Container image** (linux/amd64, linux/arm64, under 50 MB, runs as nonroot):
+
+```bash
+docker run -p 8080:8080 ghcr.io/specianic/anvil-id:0.1.0
+```
+
+Data (SQLite database and key-encryption key) lives in `/data` in the container; mount a volume
+there to keep it (`-v anvilid-data:/data`).
+
+**Binary** (replace the target with `aarch64-unknown-linux-musl`, `aarch64-apple-darwin` or
+`x86_64-apple-darwin` as needed):
+
+```bash
+V=0.1.0
+T=x86_64-unknown-linux-musl
+curl -fLO "https://github.com/specianic/anvil-id/releases/download/v$V/anvilid-$V-$T.tar.gz"
+curl -fLO "https://github.com/specianic/anvil-id/releases/download/v$V/anvilid-$V-$T.tar.gz.sha256"
+sha256sum -c "anvilid-$V-$T.tar.gz.sha256"     # macOS: shasum -a 256 -c ...
+tar -xzf "anvilid-$V-$T.tar.gz"
+./anvilid-$V-$T/anvilid serve
+```
+
+Optionally check build provenance with the GitHub CLI:
+`gh attestation verify "anvilid-$V-$T.tar.gz" --repo specianic/anvil-id`.
 
 ## Quickstart
 
-AnvilID starts with no configuration. No container images are published yet, so build the image
-locally (needs Docker; the build compiles a static binary inside the official Rust image):
-
-```bash
-just docker-image          # builds anvilid:ci
-docker run -p 8080:8080 anvilid:ci
-```
+AnvilID starts with no configuration. Start the container (above) or the binary; to build the image
+from source instead, run `just docker-image` (needs Docker) and `docker run -p 8080:8080 anvilid:ci`.
 
 On first start the log prints a one-time setup URL:
 
@@ -25,7 +51,7 @@ setup page then shows a management client id and secret for the admin API
 (`http://localhost:8080/api/admin/v1`, OpenAPI document at `/api/admin/v1/openapi.json`), which
 are shown only once.
 
-Without a container, run the binary directly: `cargo run -p anvilid -- serve`. It listens on
+The binary (`anvilid serve`, or `cargo run -p anvilid -- serve` from source) listens on
 `127.0.0.1:8080` and keeps its SQLite database and key-encryption key in `./anvilid-data/`. In the
 container the data lives in `/data`; mount a volume there to keep it.
 

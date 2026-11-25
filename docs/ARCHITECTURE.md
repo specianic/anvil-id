@@ -58,7 +58,7 @@ Versions are the latest stable releases as of the date above. Pin them in the wo
 | OpenAPI | utoipa | Spec generated from handler annotations; checked in CI |
 | Testing | proptest, insta, wiremock, testcontainers, Playwright, OpenID conformance suite | |
 | Supply chain | cargo-deny, cargo-audit, cargo-auditable | |
-| Release | cargo-dist, static musl builds (amd64, arm64), mimalloc allocator, distroless image | |
+| Release | Tag-triggered GitHub Actions workflow (`release.yml`), static musl builds (amd64, arm64), macOS builds, mimalloc allocator, distroless image | cargo-dist was planned; 0.1 uses a small custom workflow around `scripts/build-musl.sh` (see `docs/RELEASING.md`) |
 
 **Banned dependencies** (enforced with cargo-deny): `openssl`, `native-tls`, `ring` as a second crypto
 backend, the RustCrypto `rsa` crate for private-key operations (unpatched timing side channel),
@@ -569,8 +569,10 @@ properties, documented (user docs + OpenAPI where relevant), conformance suite s
   check, `sqlx` offline metadata check.
 - **Main branch:** everything above plus conformance suite, Playwright e2e, upgrade test, musl
   release build with binary-size and idle-memory report.
-- **Release:** cargo-dist builds (linux musl amd64/arm64, macOS, Windows), container image, SBOM,
-  signed checksums/attestations. Changelog generated from conventional commits.
+- **Release:** tag-triggered `release.yml` (linux musl amd64/arm64 and macOS archives with SHA-256
+  checksums, multi-arch container image on ghcr.io, build provenance attestations; see
+  `docs/RELEASING.md`). Still to come: Windows builds, SBOM, changelog generated from conventional
+  commits.
 
 ## 18. Milestones
 
