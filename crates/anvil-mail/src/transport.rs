@@ -2,13 +2,17 @@
 
 use std::time::Duration;
 
+use anvil_core::model::SmtpTls;
+use anvil_core::ports::SmtpConnection;
 use lettre::message::{Mailbox, MultiPart};
+use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
+use secrecy::ExposeSecret as _;
 
 use crate::MailError;
 
 /// SMTP command timeout.
-const SMTP_TIMEOUT: Duration = Duration::from_secs(30);
+pub const SMTP_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Longest transport error text kept (it ends up in the outbox `last_error`).
 const MAX_ERROR_LEN: usize = 300;
@@ -83,6 +87,63 @@ impl SmtpTransport {
         })
     }
 
+    /// Builds a transport from per-tenant connection parameters (host, port, TLS mode,
+    /// optional credentials). `conn.from` is the default sender.
+    ///
+    /// Errors never contain the password. Must be called inside a Tokio runtime.
+    pub fn from_settings(conn: &SmtpConnection) -> Result<Self, MailError> {
+        Self::from_settings_with_timeout(conn, SMTP_TIMEOUT)
+    }
+
+    /// [`from_settings`](Self::from_settings) with an explicit per-command timeout.
+    pub fn from_settings_with_timeout(
+        conn: &SmtpConnection,
+        timeout: Duration,
+    ) -> Result<Self, MailError> {
+        let host = conn.host.trim();
+        if host.is_empty()
+            || host.len() > 253
+            || host
+                .chars()
+                .any(|c| c.is_whitespace() || c.is_control() || matches!(c, '/' | '@' | '?' | '#'))
+        {
+            return Err(MailError::Config("invalid SMTP host".into()));
+        }
+        if conn.port == 0 {
+            return Err(MailError::Config("invalid SMTP port".into()));
+        }
+        let default_from: Mailbox = conn
+            .from
+            .parse()
+            .map_err(|_| MailError::Config("invalid sender address".into()))?;
+        let builder = match conn.tls {
+            SmtpTls::Implicit => AsyncSmtpTransport::<Tokio1Executor>::relay(host),
+            SmtpTls::Starttls => AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(host),
+            SmtpTls::None => Ok(AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(
+                host,
+            )),
+        }
+        .map_err(|_| MailError::Config("invalid SMTP host".into()))?;
+        let mut builder = builder.port(conn.port).timeout(Some(timeout));
+        if let Some(user) = &conn.username {
+            let password = conn
+                .password
+                .as_ref()
+                .map(|p| p.expose_secret().to_owned())
+                .unwrap_or_default();
+            builder = builder.credentials(Credentials::new(user.clone(), password));
+        }
+        Ok(Self {
+            inner: builder.build(),
+            default_from,
+        })
+    }
+
+    /// Closes the pooled connections (used after a one-off test send).
+    pub async fn shutdown(&self) {
+        self.inner.shutdown().await;
+    }
+
     fn build_message(&self, mail: OutgoingMail) -> Result<Message, MailError> {
         let from = if mail.from.is_empty() {
             self.default_from.clone()
@@ -116,7 +177,7 @@ impl MailTransport for SmtpTransport {
     }
 }
 
-fn truncate(mut s: String) -> String {
+pub(crate) fn truncate(mut s: String) -> String {
     if s.len() > MAX_ERROR_LEN {
         let mut end = MAX_ERROR_LEN;
         while !s.is_char_boundary(end) {
@@ -211,5 +272,40 @@ mod tests {
             })
             .is_err()
         );
+    }
+
+    fn conn(host: &str, tls: SmtpTls) -> SmtpConnection {
+        SmtpConnection {
+            host: host.into(),
+            port: 587,
+            username: Some("mailer".into()),
+            password: Some(secrecy::SecretString::from("hunter2-pw".to_owned())),
+            from: "Acme <noreply@acme.example>".into(),
+            tls,
+        }
+    }
+
+    #[tokio::test]
+    async fn from_settings_accepts_every_tls_mode() {
+        for tls in SmtpTls::ALL {
+            let t = SmtpTransport::from_settings(&conn("mail.example.test", *tls)).unwrap();
+            assert!(!format!("{t:?}").contains("hunter2-pw"));
+            assert!(format!("{t:?}").contains("noreply@acme.example"));
+        }
+    }
+
+    #[tokio::test]
+    async fn from_settings_rejects_bad_hosts_ports_and_senders() {
+        for host in ["", "  ", "smtp://mail.example.test", "a b", "user@host"] {
+            let err = SmtpTransport::from_settings(&conn(host, SmtpTls::Starttls)).unwrap_err();
+            assert!(matches!(err, MailError::Config(_)), "{host:?}");
+            assert!(!err.to_string().contains("hunter2-pw"));
+        }
+        let mut c = conn("mail.example.test", SmtpTls::None);
+        c.port = 0;
+        assert!(SmtpTransport::from_settings(&c).is_err());
+        let mut c = conn("mail.example.test", SmtpTls::None);
+        c.from = "not an address".into();
+        assert!(SmtpTransport::from_settings(&c).is_err());
     }
 }

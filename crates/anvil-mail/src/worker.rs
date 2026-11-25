@@ -11,18 +11,31 @@
 //!   error [`PAYLOAD_DECRYPT_ERROR`].
 //! - Logs and `last_error` contain the outbox id, template name and error kind only, never the
 //!   message body, the payload or links (they carry single-use tokens).
+//!
+//! # Per-tenant templates and transports
+//!
+//! - The tenant's template override for the row's kind (`MailSettingsRepo::template`) is
+//!   rendered when present, the theme default otherwise.
+//! - The tenant's SMTP settings (`MailSettingsRepo::smtp`) are used when present, through a
+//!   transport built by the [`TransportFactory`] (production: [`SmtpTransportFactory`], which
+//!   opens the sealed password and caches one transport per tenant keyed by `updated_at`); the
+//!   sender is the tenant's `from`. Otherwise the installation transport is used. With neither,
+//!   the attempt fails with [`NO_SMTP_ERROR`] and the normal backoff.
 
+use std::collections::HashMap;
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anvil_core::model::{OutboxEmail, open_payload};
-use anvil_core::ports::{Clock, OutboxRepo, Storage};
+use anvil_core::model::{EmailKind, OutboxEmail, SmtpSettings, TenantId, open_payload};
+use anvil_core::ports::{Clock, MailSettingsRepo, OutboxRepo, Storage, StorageError};
+use anvil_core::service::mail_settings::smtp_connection;
 use anvil_jose::Kek;
+use time::OffsetDateTime;
 
 use crate::MailError;
 use crate::render::EmailRenderer;
-use crate::transport::{MailTransport, OutgoingMail};
+use crate::transport::{MailTransport, OutgoingMail, SmtpTransport};
 
 /// Claim lease: a claimed row is invisible to other claimers for this long.
 pub const CLAIM_LEASE: Duration = Duration::from_secs(120);
@@ -34,6 +47,8 @@ pub const MAX_ATTEMPTS: u32 = 8;
 pub const IDLE_POLL: Duration = Duration::from_secs(2);
 /// `last_error` of a row whose sealed payload cannot be opened.
 pub const PAYLOAD_DECRYPT_ERROR: &str = "payload could not be decrypted";
+/// `last_error` of a row whose tenant has no SMTP settings when there is no installation SMTP.
+pub const NO_SMTP_ERROR: &str = "no SMTP configured";
 
 const BASE_BACKOFF: Duration = Duration::from_secs(30);
 const MAX_BACKOFF: Duration = Duration::from_secs(3600);
@@ -41,24 +56,103 @@ const MAX_BACKOFF: Duration = Duration::from_secs(3600);
 /// The slice of storage the worker needs.
 pub trait OutboxAccess: Send + Sync {
     fn outbox(&self) -> &dyn OutboxRepo;
+    /// Tenant template overrides and SMTP settings.
+    fn mail_settings(&self) -> &dyn MailSettingsRepo;
 }
 
-/// Production [`OutboxAccess`]: the outbox repository of a full [`Storage`].
+/// Production [`OutboxAccess`]: the outbox and mail-settings repositories of a full
+/// [`Storage`].
 pub struct StorageOutbox(pub Arc<dyn Storage>);
 
 impl OutboxAccess for StorageOutbox {
     fn outbox(&self) -> &dyn OutboxRepo {
         self.0.outbox()
     }
+
+    fn mail_settings(&self) -> &dyn MailSettingsRepo {
+        self.0.mail_settings()
+    }
+}
+
+/// Builds the transport for a tenant's SMTP settings.
+pub trait TransportFactory: Send + Sync {
+    /// The transport for `settings` of `tenant`. Errors never contain the password.
+    fn transport(
+        &self,
+        tenant: TenantId,
+        settings: &SmtpSettings,
+    ) -> Result<Arc<dyn MailTransport>, MailError>;
+
+    /// Drops any cached transport of `tenant` (its settings were removed).
+    fn evict(&self, tenant: TenantId);
+}
+
+/// A cached tenant transport and the `updated_at` of the settings it was built from.
+type CachedTransport = (OffsetDateTime, Arc<dyn MailTransport>);
+
+/// Production [`TransportFactory`]: an [`SmtpTransport`] per tenant, built from the settings
+/// with the password opened by the KEK, cached until the settings' `updated_at` changes.
+pub struct SmtpTransportFactory {
+    kek: Arc<Kek>,
+    cache: Mutex<HashMap<TenantId, CachedTransport>>,
+}
+
+impl SmtpTransportFactory {
+    pub fn new(kek: Arc<Kek>) -> Self {
+        Self {
+            kek,
+            cache: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+impl std::fmt::Debug for SmtpTransportFactory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SmtpTransportFactory")
+            .finish_non_exhaustive()
+    }
+}
+
+impl TransportFactory for SmtpTransportFactory {
+    fn transport(
+        &self,
+        tenant: TenantId,
+        settings: &SmtpSettings,
+    ) -> Result<Arc<dyn MailTransport>, MailError> {
+        let mut cache = self
+            .cache
+            .lock()
+            .map_err(|_| MailError::Config("transport cache poisoned".into()))?;
+        if let Some((updated_at, transport)) = cache.get(&tenant)
+            && *updated_at == settings.updated_at
+        {
+            return Ok(Arc::clone(transport));
+        }
+        // The open error is generic; the sealed and opened values are never logged.
+        let conn = smtp_connection(&self.kek, tenant, settings)
+            .map_err(|_| MailError::Config("SMTP password could not be decrypted".into()))?;
+        let transport: Arc<dyn MailTransport> = Arc::new(SmtpTransport::from_settings(&conn)?);
+        cache.insert(tenant, (settings.updated_at, Arc::clone(&transport)));
+        Ok(transport)
+    }
+
+    fn evict(&self, tenant: TenantId) {
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.remove(&tenant);
+        }
+    }
 }
 
 /// Delivers outbox emails.
 pub struct OutboxWorker {
     pub source: Arc<dyn OutboxAccess>,
-    pub transport: Arc<dyn MailTransport>,
+    /// The installation transport (`smtp_url`), used for tenants without SMTP settings.
+    pub transport: Option<Arc<dyn MailTransport>>,
+    /// Builds transports from tenant SMTP settings.
+    pub transports: Arc<dyn TransportFactory>,
     pub renderer: EmailRenderer,
     pub clock: Arc<dyn Clock>,
-    /// Sender address (`From`) of every email.
+    /// Sender address (`From`) of emails sent through the installation transport.
     pub from: String,
     /// Opens the sealed outbox payloads.
     pub kek: Arc<Kek>,
@@ -67,6 +161,7 @@ pub struct OutboxWorker {
 /// Why one delivery failed. The message of each variant is what `last_error` records.
 enum DeliveryError {
     Payload,
+    NoSmtp,
     Mail(MailError),
 }
 
@@ -74,8 +169,15 @@ impl DeliveryError {
     fn message(&self) -> String {
         match self {
             Self::Payload => PAYLOAD_DECRYPT_ERROR.to_owned(),
+            Self::NoSmtp => NO_SMTP_ERROR.to_owned(),
             Self::Mail(e) => e.to_string(),
         }
+    }
+}
+
+impl From<StorageError> for DeliveryError {
+    fn from(e: StorageError) -> Self {
+        Self::Mail(MailError::Storage(e))
     }
 }
 
@@ -145,21 +247,52 @@ impl OutboxWorker {
     }
 
     async fn deliver(&self, row: &OutboxEmail) -> Result<(), DeliveryError> {
+        let (transport, from) = self.resolve_transport(row.tenant_id).await?;
         // The open error is deliberately dropped: it is generic and the stored value is never
         // logged.
         let payload = open_payload(&self.kek, row.tenant_id, &row.payload)
             .map_err(|_| DeliveryError::Payload)?;
-        let (subject, text, html) = self.renderer.render(&row.template, &payload)?;
-        Ok(self
-            .transport
+        let (subject, text, html) = match EmailKind::parse(&row.template) {
+            Some(kind) => {
+                let override_ = self
+                    .source
+                    .mail_settings()
+                    .template(row.tenant_id, kind)
+                    .await?;
+                self.renderer
+                    .render_with(override_.as_ref(), kind, &payload)?
+            }
+            None => self.renderer.render(&row.template, &payload)?,
+        };
+        Ok(transport
             .send(OutgoingMail {
                 to: row.to.clone(),
-                from: self.from.clone(),
+                from,
                 subject,
                 text,
                 html,
             })
             .await?)
+    }
+
+    /// The tenant's transport and sender, else the installation's, else [`NO_SMTP_ERROR`].
+    async fn resolve_transport(
+        &self,
+        tenant: TenantId,
+    ) -> Result<(Arc<dyn MailTransport>, String), DeliveryError> {
+        match self.source.mail_settings().smtp(tenant).await? {
+            Some(settings) => {
+                let transport = self.transports.transport(tenant, &settings)?;
+                Ok((transport, settings.from))
+            }
+            None => {
+                self.transports.evict(tenant);
+                match &self.transport {
+                    Some(t) => Ok((Arc::clone(t), self.from.clone())),
+                    None => Err(DeliveryError::NoSmtp),
+                }
+            }
+        }
     }
 
     async fn record_failure(&self, repo: &dyn OutboxRepo, row: &OutboxEmail, err: &DeliveryError) {

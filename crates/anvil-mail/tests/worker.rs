@@ -1,17 +1,23 @@
-//! Outbox worker semantics: send, backoff, give-up, render failures and sealed payloads.
+//! Outbox worker semantics: send, backoff, give-up, render failures, sealed payloads, tenant
+//! template overrides and per-tenant SMTP transport resolution.
 
 mod support;
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use anvil_core::model::TenantId;
-use anvil_core::ports::{Clock, OutboxRepo};
+use anvil_core::model::{EmailKind, EmailTemplate, SmtpSettings, SmtpTls, TenantId};
+use anvil_core::ports::{Clock, MailSettingsRepo, OutboxRepo};
+use anvil_core::service::mail_settings::seal_smtp_password;
 use anvil_jose::Kek;
-use anvil_mail::worker::{MAX_ATTEMPTS, PAYLOAD_DECRYPT_ERROR};
+use anvil_mail::worker::{
+    MAX_ATTEMPTS, NO_SMTP_ERROR, PAYLOAD_DECRYPT_ERROR, SmtpTransportFactory, TransportFactory,
+};
 use anvil_mail::{EmailRenderer, OutboxWorker};
+use secrecy::SecretString;
 use support::{
-    CapturingTransport, MemOutbox, TestClock, email_with_payload, new_email, payload, start_time,
+    CapturingTransport, MemOutbox, RecordingFactory, TestClock, email_with_payload, new_email,
+    payload, start_time,
 };
 
 const FROM: &str = "AnvilID <noreply@example.test>";
@@ -19,6 +25,7 @@ const FROM: &str = "AnvilID <noreply@example.test>";
 struct Harness {
     outbox: Arc<MemOutbox>,
     transport: Arc<CapturingTransport>,
+    factory: Arc<RecordingFactory>,
     clock: Arc<TestClock>,
     kek: Arc<Kek>,
     tenant: TenantId,
@@ -33,13 +40,22 @@ impl Harness {
 }
 
 fn harness(transport: CapturingTransport) -> Harness {
+    harness_with(Some(transport))
+}
+
+/// `installation = None`: no installation SMTP (`smtp_url` unset).
+fn harness_with(installation: Option<CapturingTransport>) -> Harness {
     let outbox = Arc::new(MemOutbox::default());
-    let transport = Arc::new(transport);
+    let has_installation = installation.is_some();
+    let transport = Arc::new(installation.unwrap_or_default());
+    let factory = Arc::new(RecordingFactory::default());
     let clock = Arc::new(TestClock::new(start_time()));
     let kek = Arc::new(Kek::generate());
     let worker = OutboxWorker {
         source: outbox.clone(),
-        transport: transport.clone(),
+        transport: has_installation
+            .then(|| transport.clone() as Arc<dyn anvil_mail::MailTransport>),
+        transports: factory.clone(),
         renderer: EmailRenderer::embedded(),
         clock: clock.clone(),
         from: FROM.to_owned(),
@@ -48,6 +64,7 @@ fn harness(transport: CapturingTransport) -> Harness {
     Harness {
         outbox,
         transport,
+        factory,
         clock,
         kek,
         tenant: TenantId::new_v7(),
@@ -318,4 +335,195 @@ async fn unsealed_or_tampered_payload_is_failed_and_never_sent() {
         assert_eq!(err, PAYLOAD_DECRYPT_ERROR);
         assert!(!err.contains("plain-token"));
     }
+}
+
+fn tenant_smtp(from: &str) -> SmtpSettings {
+    SmtpSettings {
+        host: "smtp.tenant.example".into(),
+        port: 587,
+        username: Some("mailer".into()),
+        password_enc: None,
+        from: from.into(),
+        tls: SmtpTls::Starttls,
+        updated_at: start_time(),
+    }
+}
+
+#[tokio::test]
+async fn tenant_override_is_rendered_and_other_tenants_get_the_default() {
+    let h = harness(CapturingTransport::default());
+    h.outbox
+        .put_template(
+            h.tenant,
+            &EmailTemplate {
+                kind: EmailKind::Verification,
+                subject: "Custom {{ tenant_name }} subject".into(),
+                body_html: "<p>{{ email }}</p><a href=\"{{ link }}\">go</a>".into(),
+                body_text: "Custom text {{ link }}".into(),
+                updated_at: start_time(),
+            },
+        )
+        .await
+        .unwrap();
+    let mine = h.email(
+        "a@example.test",
+        "verification",
+        "https://id.test/v?token=t1",
+    );
+    h.outbox.enqueue(h.tenant, &mine).await.unwrap();
+    let other_tenant = TenantId::new_v7();
+    let theirs = new_email(
+        &h.kek,
+        other_tenant,
+        "b@example.test",
+        "verification",
+        "https://id.test/v?token=t2",
+        start_time(),
+    );
+    h.outbox.enqueue(other_tenant, &theirs).await.unwrap();
+    // A kind without an override uses the default even for the overriding tenant.
+    let recovery = h.email("c@example.test", "recovery", "https://id.test/r");
+    h.outbox.enqueue(h.tenant, &recovery).await.unwrap();
+
+    assert_eq!(h.worker.run_once().await.unwrap(), 3);
+    let sent = h.transport.sent();
+    assert_eq!(sent[0].subject, "Custom Acme subject");
+    assert_eq!(sent[0].text, "Custom text https://id.test/v?token=t1");
+    assert!(sent[0].html.starts_with("<p>a@example.test</p>"));
+    assert!(sent[1].subject.starts_with("Confirm your email address"));
+    assert!(sent[2].subject.starts_with("Reset your"));
+}
+
+#[tokio::test]
+async fn broken_override_fails_the_row_with_backoff() {
+    let h = harness(CapturingTransport::default());
+    h.outbox
+        .put_template(
+            h.tenant,
+            &EmailTemplate {
+                kind: EmailKind::Recovery,
+                subject: "S".into(),
+                body_html: "x".into(),
+                body_text: "{{ link }}\n{{ nope }}".into(),
+                updated_at: start_time(),
+            },
+        )
+        .await
+        .unwrap();
+    let e = h.email(
+        "a@example.test",
+        "recovery",
+        "https://id.test/r?token=secret-r",
+    );
+    h.outbox.enqueue(h.tenant, &e).await.unwrap();
+
+    assert_eq!(h.worker.run_once().await.unwrap(), 0);
+    let row = h.outbox.row(e.id);
+    let err = row.last_error.unwrap();
+    assert!(err.contains("recovery.txt:2"), "{err}");
+    assert!(!err.contains("secret-r"), "{err}");
+    assert_eq!(row.next_attempt_at, start_time() + Duration::from_secs(30));
+    assert_eq!(h.transport.calls(), 0);
+}
+
+#[tokio::test]
+async fn tenant_smtp_settings_route_mail_through_the_tenant_transport() {
+    let h = harness(CapturingTransport::default());
+    let settings = tenant_smtp("Acme <noreply@acme.example>");
+    h.outbox.put_smtp(h.tenant, &settings).await.unwrap();
+    let mine = h.email("a@example.test", "verification", "https://id.test/v");
+    h.outbox.enqueue(h.tenant, &mine).await.unwrap();
+    let other_tenant = TenantId::new_v7();
+    let theirs = new_email(
+        &h.kek,
+        other_tenant,
+        "b@example.test",
+        "verification",
+        "https://id.test/v",
+        start_time(),
+    );
+    h.outbox.enqueue(other_tenant, &theirs).await.unwrap();
+
+    assert_eq!(h.worker.run_once().await.unwrap(), 2);
+
+    let requests = h.factory.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].0, h.tenant);
+    assert_eq!(requests[0].1, settings);
+    let via_tenant = h.factory.for_tenant(h.tenant).sent();
+    assert_eq!(via_tenant.len(), 1);
+    assert_eq!(via_tenant[0].to, "a@example.test");
+    assert_eq!(via_tenant[0].from, "Acme <noreply@acme.example>");
+    // The other tenant has no settings: the installation transport and sender.
+    let via_installation = h.transport.sent();
+    assert_eq!(via_installation.len(), 1);
+    assert_eq!(via_installation[0].to, "b@example.test");
+    assert_eq!(via_installation[0].from, FROM);
+    assert!(h.factory.evicted.lock().unwrap().contains(&other_tenant));
+}
+
+#[tokio::test]
+async fn without_any_smtp_the_row_fails_with_backoff() {
+    let h = harness_with(None);
+    let e = h.email(
+        "a@example.test",
+        "verification",
+        "https://id.test/v?token=nosmtp",
+    );
+    h.outbox.enqueue(h.tenant, &e).await.unwrap();
+
+    assert_eq!(h.worker.run_once().await.unwrap(), 0);
+    let row = h.outbox.row(e.id);
+    assert_eq!(row.last_error.as_deref(), Some(NO_SMTP_ERROR));
+    assert_eq!(row.attempts, 1);
+    assert_eq!(row.sent_at, None);
+    assert_eq!(row.next_attempt_at, start_time() + Duration::from_secs(30));
+    assert_eq!(h.transport.calls(), 0);
+
+    // Once the tenant configures SMTP the retry goes through its transport.
+    h.outbox
+        .put_smtp(h.tenant, &tenant_smtp("noreply@acme.example"))
+        .await
+        .unwrap();
+    h.clock.advance(Duration::from_secs(30));
+    assert_eq!(h.worker.run_once().await.unwrap(), 1);
+    assert_eq!(h.factory.for_tenant(h.tenant).sent().len(), 1);
+    assert!(h.outbox.row(e.id).sent_at.is_some());
+}
+
+#[tokio::test]
+async fn production_factory_opens_the_sealed_password_and_caches_by_updated_at() {
+    let kek = Arc::new(Kek::generate());
+    let tenant = TenantId::new_v7();
+    let mut settings = tenant_smtp("noreply@acme.example");
+    settings.password_enc = Some(
+        seal_smtp_password(&kek, tenant, &SecretString::from("factory-pw".to_owned())).unwrap(),
+    );
+    let factory = SmtpTransportFactory::new(kek.clone());
+
+    let a = factory.transport(tenant, &settings).unwrap();
+    let b = factory.transport(tenant, &settings).unwrap();
+    assert!(Arc::ptr_eq(&a, &b), "cached while updated_at is unchanged");
+    settings.updated_at += Duration::from_secs(1);
+    let c = factory.transport(tenant, &settings).unwrap();
+    assert!(!Arc::ptr_eq(&a, &c), "rebuilt after an update");
+    factory.evict(tenant);
+    let d = factory.transport(tenant, &settings).unwrap();
+    assert!(!Arc::ptr_eq(&c, &d), "rebuilt after eviction");
+
+    // Sealed for another tenant (AAD mismatch) or with another KEK: refused, generically.
+    let other = SmtpTransportFactory::new(Arc::new(Kek::generate()));
+    let err = other
+        .transport(tenant, &settings)
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(err.contains("could not be decrypted"), "{err}");
+    assert!(!err.contains("factory-pw"));
+    let err = factory
+        .transport(TenantId::new_v7(), &settings)
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(err.contains("could not be decrypted"), "{err}");
 }

@@ -10,10 +10,12 @@
 //! Message bodies and links contain single-use tokens. Nothing in this crate logs them, and
 //! [`transport::OutgoingMail`]'s `Debug` output shows only the recipient and subject.
 
+pub mod check;
 pub mod render;
 pub mod transport;
 pub mod worker;
 
+pub use check::TemplateChecker;
 pub use render::EmailRenderer;
 pub use transport::{MailTransport, OutgoingMail, SmtpTransport};
 pub use worker::{OutboxAccess, OutboxWorker, StorageOutbox};

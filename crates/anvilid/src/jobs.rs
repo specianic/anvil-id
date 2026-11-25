@@ -1,12 +1,14 @@
-//! Background jobs (ARCHITECTURE.md §14): the expired-row purge and, when SMTP is configured,
-//! the outbox worker. Both stop when the shutdown channel flips.
+//! Background jobs (ARCHITECTURE.md §14): the expired-row purge and the outbox worker. Both
+//! stop when the shutdown channel flips. The worker always runs: tenants with their own SMTP
+//! settings get mail even when the installation SMTP (`smtp_url`) is not configured.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use anvil_core::ports::{Clock, Storage};
 use anvil_jose::Kek;
-use anvil_mail::{EmailRenderer, OutboxWorker, SmtpTransport, StorageOutbox};
+use anvil_mail::worker::SmtpTransportFactory;
+use anvil_mail::{EmailRenderer, MailTransport, OutboxWorker, SmtpTransport, StorageOutbox};
 use anyhow::Context;
 use secrecy::ExposeSecret;
 use tokio::sync::watch;
@@ -34,29 +36,33 @@ pub fn spawn(
         shutdown.clone(),
     ));
 
-    match &cfg.smtp_url {
-        Some(url) => {
-            let transport =
-                SmtpTransport::from_url(url.expose_secret(), &cfg.smtp_from).context("smtp_url")?;
-            let renderer = match &cfg.theme_dir {
-                Some(dir) => EmailRenderer::with_theme_dir(dir),
-                None => EmailRenderer::embedded(),
-            };
-            let worker = OutboxWorker {
-                source: Arc::new(StorageOutbox(Arc::clone(storage))),
-                transport: Arc::new(transport),
-                renderer,
-                clock: Arc::clone(clock),
-                from: cfg.smtp_from.clone(),
-                kek: Arc::clone(kek),
-            };
-            tracing::info!("outbox worker started");
-            jobs.spawn(worker.run(wait_for_shutdown(shutdown.clone())));
+    let transport: Option<Arc<dyn MailTransport>> = match &cfg.smtp_url {
+        Some(url) => Some(Arc::new(
+            SmtpTransport::from_url(url.expose_secret(), &cfg.smtp_from).context("smtp_url")?,
+        )),
+        None => {
+            tracing::warn!(
+                "installation SMTP is not configured (smtp_url): only tenants with their own SMTP \
+                 settings can receive mail; other emails fail and are retried with backoff"
+            );
+            None
         }
-        None => tracing::warn!(
-            "SMTP is not configured (smtp_url): emails are queued in the outbox but not sent"
-        ),
-    }
+    };
+    let renderer = match &cfg.theme_dir {
+        Some(dir) => EmailRenderer::with_theme_dir(dir),
+        None => EmailRenderer::embedded(),
+    };
+    let worker = OutboxWorker {
+        source: Arc::new(StorageOutbox(Arc::clone(storage))),
+        transport,
+        transports: Arc::new(SmtpTransportFactory::new(Arc::clone(kek))),
+        renderer,
+        clock: Arc::clone(clock),
+        from: cfg.smtp_from.clone(),
+        kek: Arc::clone(kek),
+    };
+    tracing::info!("outbox worker started");
+    jobs.spawn(worker.run(wait_for_shutdown(shutdown.clone())));
     Ok(jobs)
 }
 

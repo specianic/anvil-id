@@ -1,14 +1,17 @@
 //! Test doubles for the outbox worker tests. Test code only (CLAUDE.md): nothing here is
 //! reachable from `src/`.
 
-use std::collections::BTreeMap;
-use std::sync::Mutex;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anvil_core::model::{NewEmail, OutboxEmail, OutboxId, TenantId, seal_payload};
-use anvil_core::ports::{Clock, OutboxRepo, StorageError};
+use anvil_core::model::{
+    EmailKind, EmailTemplate, NewEmail, OutboxEmail, OutboxId, SmtpSettings, TenantId, seal_payload,
+};
+use anvil_core::ports::{Clock, MailSettingsRepo, OutboxRepo, StorageError};
 use anvil_jose::Kek;
+use anvil_mail::worker::TransportFactory;
 use anvil_mail::{MailError, MailTransport, OutboxAccess, OutgoingMail};
 use time::OffsetDateTime;
 
@@ -75,10 +78,13 @@ impl MailTransport for CapturingTransport {
     }
 }
 
-/// In-memory outbox with the claim/lease semantics documented on [`OutboxRepo`].
+/// In-memory outbox with the claim/lease semantics documented on [`OutboxRepo`], plus
+/// in-memory tenant mail settings.
 #[derive(Default)]
 pub struct MemOutbox {
     rows: Mutex<Vec<OutboxEmail>>,
+    templates: Mutex<HashMap<(TenantId, EmailKind), EmailTemplate>>,
+    smtp: Mutex<HashMap<TenantId, SmtpSettings>>,
 }
 
 impl MemOutbox {
@@ -96,6 +102,114 @@ impl MemOutbox {
 impl OutboxAccess for MemOutbox {
     fn outbox(&self) -> &dyn OutboxRepo {
         self
+    }
+
+    fn mail_settings(&self) -> &dyn MailSettingsRepo {
+        self
+    }
+}
+
+#[async_trait::async_trait]
+impl MailSettingsRepo for MemOutbox {
+    async fn template(
+        &self,
+        tenant: TenantId,
+        kind: EmailKind,
+    ) -> Result<Option<EmailTemplate>, StorageError> {
+        Ok(self.templates.lock().unwrap().get(&(tenant, kind)).cloned())
+    }
+
+    async fn list_templates(&self, tenant: TenantId) -> Result<Vec<EmailTemplate>, StorageError> {
+        let mut v: Vec<_> = self
+            .templates
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|((t, _), _)| *t == tenant)
+            .map(|(_, tpl)| tpl.clone())
+            .collect();
+        v.sort_by_key(|t| t.kind.as_str());
+        Ok(v)
+    }
+
+    async fn put_template(
+        &self,
+        tenant: TenantId,
+        template: &EmailTemplate,
+    ) -> Result<(), StorageError> {
+        self.templates
+            .lock()
+            .unwrap()
+            .insert((tenant, template.kind), template.clone());
+        Ok(())
+    }
+
+    async fn delete_template(
+        &self,
+        tenant: TenantId,
+        kind: EmailKind,
+    ) -> Result<bool, StorageError> {
+        Ok(self
+            .templates
+            .lock()
+            .unwrap()
+            .remove(&(tenant, kind))
+            .is_some())
+    }
+
+    async fn smtp(&self, tenant: TenantId) -> Result<Option<SmtpSettings>, StorageError> {
+        Ok(self.smtp.lock().unwrap().get(&tenant).cloned())
+    }
+
+    async fn put_smtp(
+        &self,
+        tenant: TenantId,
+        settings: &SmtpSettings,
+    ) -> Result<(), StorageError> {
+        self.smtp.lock().unwrap().insert(tenant, settings.clone());
+        Ok(())
+    }
+
+    async fn delete_smtp(&self, tenant: TenantId) -> Result<bool, StorageError> {
+        Ok(self.smtp.lock().unwrap().remove(&tenant).is_some())
+    }
+}
+
+/// A [`TransportFactory`] that hands out one [`CapturingTransport`] per tenant and records
+/// every settings value it was asked for.
+#[derive(Default)]
+pub struct RecordingFactory {
+    pub requests: Mutex<Vec<(TenantId, SmtpSettings)>>,
+    pub evicted: Mutex<Vec<TenantId>>,
+    transports: Mutex<HashMap<TenantId, Arc<CapturingTransport>>>,
+}
+
+impl RecordingFactory {
+    /// The transport handed out for `tenant` (created on first use).
+    pub fn for_tenant(&self, tenant: TenantId) -> Arc<CapturingTransport> {
+        Arc::clone(self.transports.lock().unwrap().entry(tenant).or_default())
+    }
+
+    pub fn requests(&self) -> Vec<(TenantId, SmtpSettings)> {
+        self.requests.lock().unwrap().clone()
+    }
+}
+
+impl TransportFactory for RecordingFactory {
+    fn transport(
+        &self,
+        tenant: TenantId,
+        settings: &SmtpSettings,
+    ) -> Result<Arc<dyn MailTransport>, MailError> {
+        self.requests
+            .lock()
+            .unwrap()
+            .push((tenant, settings.clone()));
+        Ok(self.for_tenant(tenant))
+    }
+
+    fn evict(&self, tenant: TenantId) {
+        self.evicted.lock().unwrap().push(tenant);
     }
 }
 

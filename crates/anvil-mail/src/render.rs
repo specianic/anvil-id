@@ -6,24 +6,56 @@
 //! are not. Undefined variables are an error (strict mode), so a missing payload key never
 //! silently produces an email with a blank link.
 //!
-//! Template lookup follows ARCHITECTURE §10.4: an operator theme directory first, then the
-//! defaults embedded in the binary.
+//! Template lookup follows ARCHITECTURE §10.4: a tenant override stored through
+//! `MailSettingsRepo` first ([`EmailRenderer::render_with`]), then an operator theme directory,
+//! then the defaults embedded in the binary.
+//!
+//! Every environment comes from one factory ([`environment`]): strict undefined, HTML
+//! autoescape for `.html` templates only, and a fuel limit ([`RENDER_FUEL`]) so a runaway loop in
+//! a tenant-edited template fails with an error instead of hanging the worker. Tenant overrides
+//! are rendered in an environment without a loader, so they cannot include theme files.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use minijinja::{Environment, ErrorKind, UndefinedBehavior, Value};
+use anvil_core::model::{EmailKind, EmailTemplate};
+use minijinja::{AutoEscape, Environment, ErrorKind, UndefinedBehavior, Value};
 
 use crate::MailError;
+
+/// Fuel available to one template render. The default templates use well under 10% of it
+/// (tested); a runaway loop exhausts it in a few milliseconds.
+pub const RENDER_FUEL: u64 = 50_000;
+
+/// The one minijinja environment factory: strict undefined, `.html` autoescaped, bounded by
+/// [`RENDER_FUEL`]. No loader is set.
+pub fn environment<'s>() -> Environment<'s> {
+    environment_with_fuel(RENDER_FUEL)
+}
+
+pub(crate) fn environment_with_fuel<'s>(fuel: u64) -> Environment<'s> {
+    let mut env = Environment::new();
+    env.set_undefined_behavior(UndefinedBehavior::Strict);
+    env.set_fuel(Some(fuel));
+    env.set_auto_escape_callback(|name| {
+        if name.ends_with(".html") {
+            AutoEscape::Html
+        } else {
+            AutoEscape::None
+        }
+    });
+    env
+}
 
 /// The default email templates, embedded at compile time.
 #[derive(rust_embed::Embed)]
 #[folder = "../../themes/default/emails/"]
 struct DefaultEmails;
 
-/// Renders emails from the theme templates.
+/// Renders emails from tenant overrides and the theme templates.
 pub struct EmailRenderer {
     env: Environment<'static>,
+    overrides: Environment<'static>,
 }
 
 impl std::fmt::Debug for EmailRenderer {
@@ -35,21 +67,52 @@ impl std::fmt::Debug for EmailRenderer {
 impl EmailRenderer {
     /// A renderer that uses only the embedded default templates.
     pub fn embedded() -> Self {
-        Self::build(None)
+        Self::build(None, RENDER_FUEL)
     }
 
     /// A renderer that looks in `dir/emails/` first and falls back to the embedded defaults for
     /// any file the directory does not contain. `dir` is the theme root (the directory that
     /// holds `templates/`, `emails/` and `static/`).
     pub fn with_theme_dir(dir: &Path) -> Self {
-        Self::build(Some(dir.join("emails")))
+        Self::build(Some(dir.join("emails")), RENDER_FUEL)
     }
 
-    fn build(theme_emails: Option<PathBuf>) -> Self {
-        let mut env = Environment::new();
-        env.set_undefined_behavior(UndefinedBehavior::Strict);
+    fn build(theme_emails: Option<PathBuf>, fuel: u64) -> Self {
+        let mut env = environment_with_fuel(fuel);
         env.set_loader(move |name: &str| load(theme_emails.as_deref(), name));
-        Self { env }
+        Self {
+            env,
+            overrides: environment_with_fuel(fuel),
+        }
+    }
+
+    /// Renders email `kind` from the tenant `override_` when present, otherwise from the theme
+    /// (see [`render`](Self::render)). Returns `(subject, text, html)`.
+    ///
+    /// An override's subject is its own (single-line) template; its text body is rendered as
+    /// is (no subject line is stripped).
+    pub fn render_with(
+        &self,
+        override_: Option<&EmailTemplate>,
+        kind: EmailKind,
+        payload: &BTreeMap<String, String>,
+    ) -> Result<(String, String, String), MailError> {
+        let Some(t) = override_ else {
+            return self.render(kind.as_str(), payload);
+        };
+        let ctx = context(payload);
+        let name = kind.as_str();
+        let render = |file: String, source: &str| {
+            self.overrides
+                .render_named_str(&file, source, &ctx)
+                .map_err(|e| template_error(&file, &e))
+        };
+        let subject = render(format!("{name}.subject"), &t.subject)?;
+        let subject = clean_subject(&subject)
+            .ok_or_else(|| MailError::Template(format!("{name}.subject: subject is empty")))?;
+        let text = render(format!("{name}.txt"), &t.body_text)?;
+        let html = render(format!("{name}.html"), &t.body_html)?;
+        Ok((subject, text, html))
     }
 
     /// Renders `template` with the payload map flattened into template variables.
@@ -65,24 +128,16 @@ impl EmailRenderer {
         if !valid_template_name(template) {
             return Err(MailError::Template("invalid template name".into()));
         }
-        let ctx = Value::from_pairs(payload.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+        let ctx = context(payload);
         let text = self.render_file(&format!("{template}.txt"), &ctx)?;
         let html = self.render_file(&format!("{template}.html"), &ctx)?;
 
         let (first, rest) = text.split_once('\n').unwrap_or((text.as_str(), ""));
         let first = first.trim();
         let first = first.strip_prefix("Subject:").unwrap_or(first);
-        let subject: String = first
-            .chars()
-            .map(|c| if c.is_control() { ' ' } else { c })
-            .collect::<String>()
-            .trim()
-            .to_owned();
-        if subject.is_empty() {
-            return Err(MailError::Template(format!(
-                "{template}.txt: first line (subject) is empty"
-            )));
-        }
+        let subject = clean_subject(first).ok_or_else(|| {
+            MailError::Template(format!("{template}.txt: first line (subject) is empty"))
+        })?;
         let body = rest.trim_start_matches(['\r', '\n']).to_owned();
         Ok((subject, body, html))
     }
@@ -96,12 +151,30 @@ impl EmailRenderer {
     }
 }
 
+/// The payload map as template variables.
+pub(crate) fn context(payload: &BTreeMap<String, String>) -> Value {
+    Value::from_pairs(payload.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+}
+
+/// A rendered subject as a header value: control characters become spaces, surrounding
+/// whitespace is trimmed. `None` if nothing is left.
+pub(crate) fn clean_subject(raw: &str) -> Option<String> {
+    let subject = raw
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect::<String>()
+        .trim()
+        .to_owned();
+    (!subject.is_empty()).then_some(subject)
+}
+
 /// Describes a minijinja error by kind and line only: its full display can include template
 /// source, which after rendering may be adjacent to payload values.
 fn template_error(name: &str, err: &minijinja::Error) -> MailError {
     let kind = match err.kind() {
         ErrorKind::TemplateNotFound => "unknown template".to_owned(),
         ErrorKind::UndefinedError => "undefined variable".to_owned(),
+        ErrorKind::OutOfFuel => "template ran out of fuel (runaway loop)".to_owned(),
         other => format!("{other:?}"),
     };
     match err.line() {
@@ -259,5 +332,20 @@ mod tests {
         let r = EmailRenderer::with_theme_dir(&dir);
         assert!(r.render("recovery", &payload("x")).is_err());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn default_templates_use_under_ten_percent_of_the_fuel() {
+        let r = EmailRenderer::build(None, RENDER_FUEL / 10);
+        for name in ["verification", "recovery", "invitation", "password_changed"] {
+            r.render(name, &payload("https://id.example.test/l?token=abc"))
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+        }
+    }
+
+    #[test]
+    fn subject_cleaning_strips_control_characters() {
+        assert_eq!(clean_subject(" a\r\nBcc: x ").as_deref(), Some("a  Bcc: x"));
+        assert_eq!(clean_subject(" \t "), None);
     }
 }
