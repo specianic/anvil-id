@@ -75,6 +75,19 @@ v7_id!(
     AuditEventId
 );
 
+v7_id!(
+    /// Identifier of an upstream identity-provider connection (social, OIDC, OAuth2).
+    ConnectionId
+);
+v7_id!(
+    /// Identifier of a link between a user and an upstream identity.
+    IdentityLinkId
+);
+v7_id!(
+    /// Identifier of a queued back-channel logout delivery.
+    LogoutDeliveryId
+);
+
 /// SHA-256 hash of a secret (authorization code, refresh token, session cookie, flow CSRF token,
 /// self-service token, setup token, client secret digest). Secrets are stored and looked up only
 /// by hash. A hash is not a secret, so it derives `Debug`.
@@ -183,6 +196,9 @@ mod tests {
         assert_eq!(CredentialId::new_v7().0.get_version_num(), 7);
         assert_eq!(ConsentId::new_v7().0.get_version_num(), 7);
         assert_eq!(AuditEventId::new_v7().0.get_version_num(), 7);
+        assert_eq!(ConnectionId::new_v7().0.get_version_num(), 7);
+        assert_eq!(IdentityLinkId::new_v7().0.get_version_num(), 7);
+        assert_eq!(LogoutDeliveryId::new_v7().0.get_version_num(), 7);
     }
 
     #[test]

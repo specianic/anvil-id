@@ -2,6 +2,10 @@
 
 use crate::error::CoreError;
 
+// Phase 4 (pre-declared by plan 04-01; the owning plans fill them in)
+pub mod branding;
+pub mod mfa;
+
 /// Length limits in characters (not bytes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PasswordPolicy {

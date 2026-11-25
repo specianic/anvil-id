@@ -19,8 +19,6 @@ use aws_lc_rs::rsa::{KeyPair as RsaKeyPair, KeySize};
 use aws_lc_rs::signature::{
     ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, Ed25519KeyPair, KeyPair as _,
 };
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD;
 use jsonwebtoken::{Algorithm, EncodingKey};
 use serde::Serialize;
 use zeroize::Zeroizing;
@@ -28,6 +26,7 @@ use zeroize::Zeroizing;
 use crate::JoseError;
 use crate::encoding::b64url;
 use crate::jwk::{Jwk, thumbprint};
+use crate::pem::pkcs8_pem;
 
 /// Asymmetric JWS algorithms AnvilID supports. `none` and HMAC algorithms do not exist here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -199,20 +198,6 @@ fn finish(alg: Alg, mut jwk: Jwk, pkcs8: Zeroizing<Vec<u8>>) -> Result<Generated
         public_jwk: jwk,
         pkcs8,
     })
-}
-
-/// PKCS#8 DER as a `PRIVATE KEY` PEM with 64-column lines.
-fn pkcs8_pem(pkcs8: &[u8]) -> Zeroizing<String> {
-    let b64 = Zeroizing::new(STANDARD.encode(pkcs8));
-    let mut pem = Zeroizing::new(String::with_capacity(b64.len() + b64.len() / 64 + 64));
-    pem.push_str("-----BEGIN PRIVATE KEY-----\n");
-    for chunk in b64.as_bytes().chunks(64) {
-        // base64 output is ASCII.
-        pem.push_str(std::str::from_utf8(chunk).unwrap_or_default());
-        pem.push('\n');
-    }
-    pem.push_str("-----END PRIVATE KEY-----\n");
-    pem
 }
 
 /// A loaded signing key. `Debug` shows only kid and alg.
@@ -514,7 +499,7 @@ mod tests {
         let key = SigningKey::from_pkcs8(&g.kid, Alg::RS256, &g.pkcs8).unwrap();
         let dbg = format!("{key:?} {g:?}");
         assert!(dbg.contains(&g.kid));
-        let pkcs8_b64 = STANDARD.encode(g.pkcs8.as_slice());
+        let pkcs8_b64 = crate::encoding::b64std(g.pkcs8.as_slice());
         assert!(!dbg.contains(&pkcs8_b64[..40]));
         assert!(!dbg.contains("pkcs8"));
         assert!(!dbg.contains("PRIVATE"));

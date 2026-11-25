@@ -63,6 +63,8 @@ impl FamilyRow {
                 .as_deref()
                 .map(|r| enum_from("token_family.revoked_reason", r, RevokeReason::parse))
                 .transpose()?,
+            // TRANSITIONAL(04-05): no column yet; non-default writes refused (pending.rs).
+            resource: vec![],
         })
     }
 }
@@ -100,6 +102,7 @@ async fn insert_family<'e, E>(
 where
     E: sqlx::PgExecutor<'e>,
 {
+    crate::pending::refuse_resource(&family.resource)?;
     let claims = family
         .claims
         .as_ref()
@@ -233,6 +236,7 @@ impl GrantRepo for PgGrants {
         code: &NewAuthorizationCode,
         family: &NewTokenFamily,
     ) -> Result<(), StorageError> {
+        crate::pending::refuse_resource(&code.resource)?;
         if code.token_family_id != family.id {
             return Err(StorageError::Conflict(
                 "authorization code token_family_id does not match the family".to_owned(),
@@ -311,6 +315,8 @@ impl GrantRepo for PgGrants {
                 token_family_id: TokenFamilyId(r.token_family_id),
                 expires_at: r.expires_at,
                 created_at: r.created_at,
+                // TRANSITIONAL(04-05): no column yet; non-default writes refused (pending.rs).
+                resource: vec![],
             }));
         }
 
@@ -530,6 +536,7 @@ impl GrantRepo for PgGrants {
         tenant: TenantId,
         token: &NewAccessToken,
     ) -> Result<(), StorageError> {
+        crate::pending::refuse_resource(&token.resource)?;
         sqlx::query!(
             "INSERT INTO access_token
                  (token_hash, tenant_id, family_id, client_id, user_id, scope, created_at,
@@ -586,6 +593,8 @@ impl GrantRepo for PgGrants {
             created_at: r.created_at,
             expires_at: r.expires_at,
             revoked_at: r.revoked_at,
+            // TRANSITIONAL(04-05): no column yet; non-default writes refused (pending.rs).
+            resource: vec![],
         };
         Ok(Some((token, family)))
     }

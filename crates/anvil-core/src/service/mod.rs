@@ -29,3 +29,9 @@ pub mod introspect;
 pub mod key_rotation;
 pub mod mail_settings;
 pub mod revoke;
+
+// Phase 4 (pre-declared by plan 04-01; the owning plans fill them in)
+pub mod branding;
+pub mod connection;
+pub mod logout;
+pub mod upstream;

@@ -157,6 +157,21 @@ pub enum AuditAction {
     SmtpSettingsUpdated,
     SmtpTestSent,
     AdminSetupCompleted,
+    IdentityLinked,
+    IdentityUnlinked,
+    UpstreamLoginFailed,
+    ConnectionCreated,
+    ConnectionUpdated,
+    ConnectionDeleted,
+    ConnectionSecretRotated,
+    BrandingUpdated,
+    Logout,
+    BackchannelLogoutFailed,
+    EmailChangeRequested,
+    EmailChanged,
+    ProfileUpdated,
+    StepUpCompleted,
+    EmailCodeSent,
 }
 
 str_enum!(AuditAction {
@@ -201,6 +216,21 @@ str_enum!(AuditAction {
     SmtpSettingsUpdated => "smtp_settings_updated",
     SmtpTestSent => "smtp_test_sent",
     AdminSetupCompleted => "admin_setup_completed",
+    IdentityLinked => "identity_linked",
+    IdentityUnlinked => "identity_unlinked",
+    UpstreamLoginFailed => "upstream_login_failed",
+    ConnectionCreated => "connection_created",
+    ConnectionUpdated => "connection_updated",
+    ConnectionDeleted => "connection_deleted",
+    ConnectionSecretRotated => "connection_secret_rotated",
+    BrandingUpdated => "branding_updated",
+    Logout => "logout",
+    BackchannelLogoutFailed => "backchannel_logout_failed",
+    EmailChangeRequested => "email_change_requested",
+    EmailChanged => "email_changed",
+    ProfileUpdated => "profile_updated",
+    StepUpCompleted => "step_up_completed",
+    EmailCodeSent => "email_code_sent",
 });
 
 /// Structured event details. Only typed constructors build it, and none of them accepts a
@@ -260,6 +290,39 @@ impl AuditDetails {
     /// An email template kind.
     pub fn template(kind: EmailKind) -> Self {
         Self::one("template", Value::from(kind.as_str()))
+    }
+
+    /// An identity link change: the connection slug and how the link was made (`auto`: verified
+    /// email match; `confirmed`: the user signed in to the existing account; `account`: linked
+    /// from the account page).
+    pub fn link(connection_slug: &str, mode: &'static str) -> Self {
+        let mut d = Self::one("connection", Value::from(connection_slug));
+        d.0.insert("mode".into(), Value::from(mode));
+        d
+    }
+
+    /// A connection by slug and kind (`google`, `oidc`, ...). Never its configuration or secret.
+    pub fn connection(slug: &str, kind: &'static str) -> Self {
+        let mut d = Self::one("connection", Value::from(slug));
+        d.0.insert("kind".into(), Value::from(kind));
+        d
+    }
+
+    /// A logout, optionally initiated by a relying party.
+    pub fn logout(client_id: Option<&str>) -> Self {
+        match client_id {
+            Some(c) => Self::one("client_id", Value::from(c)),
+            None => Self::empty(),
+        }
+    }
+
+    /// A back-channel logout delivery: the RP, the attempts made and a fixed reason
+    /// (`timeout`, `status`, `blocked`, `expired`, ...).
+    pub fn delivery(client_id: &str, attempts: u32, reason: &'static str) -> Self {
+        let mut d = Self::one("client_id", Value::from(client_id));
+        d.0.insert("attempts".into(), Value::from(attempts));
+        d.0.insert("reason".into(), Value::from(reason));
+        d
     }
 
     /// Merges `other` into `self` (later keys win).
@@ -348,7 +411,7 @@ mod tests {
         for v in AuditOutcome::ALL {
             assert_eq!(AuditOutcome::parse(v.as_str()), Some(*v));
         }
-        assert_eq!(AuditAction::ALL.len(), 41);
+        assert_eq!(AuditAction::ALL.len(), 56);
         assert_eq!(
             AuditAction::PasskeyCloneSuspected.as_str(),
             "passkey_clone_suspected"
@@ -386,5 +449,19 @@ mod tests {
         assert!(AuditDetails::empty().is_empty());
         assert_eq!(AuditDetails::login("passkey").as_map()["method"], "passkey");
         assert_eq!(AuditDetails::count("sessions", 3).as_map()["sessions"], 3);
+        let l = AuditDetails::link("google", "auto");
+        assert_eq!(l.as_map()["connection"], "google");
+        assert_eq!(l.as_map()["mode"], "auto");
+        let c = AuditDetails::connection("corp", "oidc");
+        assert_eq!(c.as_map()["kind"], "oidc");
+        assert!(AuditDetails::logout(None).is_empty());
+        assert_eq!(AuditDetails::logout(Some("rp")).as_map()["client_id"], "rp");
+        let d = AuditDetails::delivery("rp", 3, "timeout");
+        assert_eq!(d.as_map()["attempts"], 3);
+        assert_eq!(d.as_map()["reason"], "timeout");
+        assert_eq!(
+            AuditAction::BackchannelLogoutFailed.as_str(),
+            "backchannel_logout_failed"
+        );
     }
 }

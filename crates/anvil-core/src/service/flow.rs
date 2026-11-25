@@ -1169,6 +1169,11 @@ fn self_service_email(
         ),
         SelfServiceKind::Recovery => (RECOVERY_TOKEN_TTL, "recovery", "recovery", "1 hour"),
         SelfServiceKind::Invitation => (Duration::days(7), "recovery", "invitation", "7 days"),
+        SelfServiceKind::EmailChange => {
+            return Err(CoreError::Internal(
+                "email change tokens are issued by AccountService".to_owned(),
+            ));
+        }
     };
     let expires_at = now + ttl;
     let record = NewSelfServiceToken {
@@ -1246,7 +1251,7 @@ fn engine_kind(kind: FlowKind) -> bool {
         | FlowKind::Verification
         | FlowKind::Recovery
         | FlowKind::Setup => true,
-        FlowKind::Settings | FlowKind::Consent => false,
+        FlowKind::Settings | FlowKind::Consent | FlowKind::Logout => false,
     }
 }
 

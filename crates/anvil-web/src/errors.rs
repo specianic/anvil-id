@@ -149,7 +149,9 @@ pub fn core_error_page(
     log_if_internal(err);
     let key = match err {
         CoreError::NotFound => "not_found",
-        CoreError::InvalidRequest(_) | CoreError::Validation { .. } => "invalid_request",
+        CoreError::InvalidRequest(_)
+        | CoreError::Validation { .. }
+        | CoreError::InvalidTarget(_) => "invalid_request",
         _ => "server_error",
     };
     error_page(state, tenant, status_of(err), key, "")
@@ -236,6 +238,19 @@ mod tests {
             assert_eq!(resp.headers()[header::CACHE_CONTROL], "no-store", "{err:?}");
             assert_eq!(resp.status().as_u16(), err.http_status());
         }
+    }
+
+    #[tokio::test]
+    async fn phase4_oauth_errors_map_through_the_single_table() {
+        let resp = oauth_json(&CoreError::InvalidTarget("resource not allowed".into()));
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = body_json(resp).await;
+        assert_eq!(body["error"], "invalid_target");
+        assert_eq!(body["error_description"], "resource not allowed");
+        let resp = oauth_json(&CoreError::UnmetAuthenticationRequirements);
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = body_json(resp).await;
+        assert_eq!(body["error"], "unmet_authentication_requirements");
     }
 
     #[tokio::test]

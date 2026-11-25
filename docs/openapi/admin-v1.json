@@ -3060,7 +3060,22 @@
           "email_template_reset",
           "smtp_settings_updated",
           "smtp_test_sent",
-          "admin_setup_completed"
+          "admin_setup_completed",
+          "identity_linked",
+          "identity_unlinked",
+          "upstream_login_failed",
+          "connection_created",
+          "connection_updated",
+          "connection_deleted",
+          "connection_secret_rotated",
+          "branding_updated",
+          "logout",
+          "backchannel_logout_failed",
+          "email_change_requested",
+          "email_changed",
+          "profile_updated",
+          "step_up_completed",
+          "email_code_sent"
         ]
       },
       "AuditActorView": {
@@ -3618,7 +3633,10 @@
           "recovery",
           "invitation",
           "password_changed",
-          "recovery_code_used"
+          "recovery_code_used",
+          "login_code",
+          "email_change",
+          "email_changed"
         ]
       },
       "EmailTemplateList": {

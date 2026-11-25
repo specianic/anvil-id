@@ -360,7 +360,7 @@ export interface components {
          * @description An audited action.
          * @enum {string}
          */
-        AuditAction: "login_succeeded" | "login_failed" | "second_factor_failed" | "passkey_registered" | "passkey_removed" | "passkey_clone_suspected" | "totp_enrolled" | "totp_removed" | "recovery_code_used" | "recovery_codes_regenerated" | "password_changed" | "user_registered" | "email_verified" | "consent_granted" | "consent_revoked" | "session_revoked" | "sessions_revoked_all" | "token_revoked" | "refresh_reuse_detected" | "code_reuse_detected" | "key_generated" | "key_activated" | "key_retired" | "key_rotation_requested" | "rate_limit_lockout" | "captcha_failed" | "user_created" | "user_updated" | "user_deleted" | "client_created" | "client_updated" | "client_deleted" | "client_secret_rotated" | "tenant_created" | "tenant_updated" | "tenant_deleted" | "email_template_updated" | "email_template_reset" | "smtp_settings_updated" | "smtp_test_sent" | "admin_setup_completed";
+        AuditAction: "login_succeeded" | "login_failed" | "second_factor_failed" | "passkey_registered" | "passkey_removed" | "passkey_clone_suspected" | "totp_enrolled" | "totp_removed" | "recovery_code_used" | "recovery_codes_regenerated" | "password_changed" | "user_registered" | "email_verified" | "consent_granted" | "consent_revoked" | "session_revoked" | "sessions_revoked_all" | "token_revoked" | "refresh_reuse_detected" | "code_reuse_detected" | "key_generated" | "key_activated" | "key_retired" | "key_rotation_requested" | "rate_limit_lockout" | "captcha_failed" | "user_created" | "user_updated" | "user_deleted" | "client_created" | "client_updated" | "client_deleted" | "client_secret_rotated" | "tenant_created" | "tenant_updated" | "tenant_deleted" | "email_template_updated" | "email_template_reset" | "smtp_settings_updated" | "smtp_test_sent" | "admin_setup_completed" | "identity_linked" | "identity_unlinked" | "upstream_login_failed" | "connection_created" | "connection_updated" | "connection_deleted" | "connection_secret_rotated" | "branding_updated" | "logout" | "backchannel_logout_failed" | "email_change_requested" | "email_changed" | "profile_updated" | "step_up_completed" | "email_code_sent";
         /** @description Who performed an audited action. */
         AuditActorView: {
             id?: string | null;
@@ -555,7 +555,7 @@ export interface components {
          * @description Kind of a transactional email.
          * @enum {string}
          */
-        EmailKind: "verification" | "recovery" | "invitation" | "password_changed" | "recovery_code_used";
+        EmailKind: "verification" | "recovery" | "invitation" | "password_changed" | "recovery_code_used" | "login_code" | "email_change" | "email_changed";
         /** @description Every email template of a tenant. */
         EmailTemplateList: {
             items: components["schemas"]["EmailTemplateView"][];

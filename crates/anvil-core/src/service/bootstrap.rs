@@ -173,6 +173,11 @@ pub fn build_mgmt_client(now: OffsetDateTime) -> (NewClient, SecretString) {
         consent_mode: crate::model::ConsentMode::Required,
         id_token_signed_response_alg: None,
         can_introspect: false,
+        post_logout_redirect_uris: vec![],
+        backchannel_logout_uri: None,
+        backchannel_logout_session_required: false,
+        allowed_resources: vec![],
+        mfa_policy: None,
     };
     (client, secret)
 }
@@ -210,6 +215,11 @@ pub fn build_console_client(now: OffsetDateTime, public_url: &PublicUrl) -> NewC
         consent_mode: ConsentMode::SkipFirstParty,
         id_token_signed_response_alg: None,
         can_introspect: false,
+        post_logout_redirect_uris: vec![],
+        backchannel_logout_uri: None,
+        backchannel_logout_session_required: false,
+        allowed_resources: vec![],
+        mfa_policy: None,
     }
 }
 
@@ -623,6 +633,11 @@ mod tests {
             consent_mode: new.consent_mode,
             id_token_signed_response_alg: new.id_token_signed_response_alg.clone(),
             can_introspect: new.can_introspect,
+            post_logout_redirect_uris: vec![],
+            backchannel_logout_uri: None,
+            backchannel_logout_session_required: false,
+            allowed_resources: vec![],
+            mfa_policy: None,
         }
     }
 
@@ -743,6 +758,11 @@ mod tests {
             consent_mode: crate::model::ConsentMode::Required,
             id_token_signed_response_alg: None,
             can_introspect: false,
+            post_logout_redirect_uris: vec![],
+            backchannel_logout_uri: None,
+            backchannel_logout_session_required: false,
+            allowed_resources: vec![],
+            mfa_policy: None,
         };
         let expected_secret = secret.expose_secret().to_owned();
         let r = setup_outcome(SetupOutcome::Completed { user, client }, secret).unwrap();

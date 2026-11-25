@@ -78,6 +78,12 @@ impl ClientRow {
             can_introspect: self.can_introspect,
             created_at: self.created_at,
             updated_at: self.updated_at,
+            // TRANSITIONAL(04-05): no column yet; non-default writes refused (pending.rs).
+            post_logout_redirect_uris: vec![],
+            backchannel_logout_uri: None,
+            backchannel_logout_session_required: false,
+            allowed_resources: vec![],
+            mfa_policy: None,
         })
     }
 }
@@ -104,6 +110,12 @@ pub(crate) fn client_from_new(tenant: TenantId, c: &NewClient) -> Client {
         can_introspect: c.can_introspect,
         created_at: c.created_at,
         updated_at: c.created_at,
+        // TRANSITIONAL(04-05): no column yet; non-default writes refused (pending.rs).
+        post_logout_redirect_uris: vec![],
+        backchannel_logout_uri: None,
+        backchannel_logout_session_required: false,
+        allowed_resources: vec![],
+        mfa_policy: None,
     }
 }
 
@@ -116,6 +128,7 @@ pub(crate) async fn insert_client<'e, E>(
 where
     E: sqlx::PgExecutor<'e>,
 {
+    crate::pending::refuse_phase4_client(c)?;
     let secret_hash = c.secret_hash.as_ref().map(|h| h.as_bytes().as_slice());
     let grant_types = enum_names(&c.grant_types, GrantType::as_str);
     sqlx::query!(
@@ -214,6 +227,7 @@ impl ClientRepo for PgClients {
         update: &ClientUpdate,
         now: OffsetDateTime,
     ) -> Result<Option<Client>, StorageError> {
+        crate::pending::refuse_phase4_client_update(update)?;
         let grant_types = update
             .grant_types
             .as_ref()

@@ -97,6 +97,9 @@ impl EmailRenderer {
         kind: EmailKind,
         payload: &BTreeMap<String, String>,
     ) -> Result<(String, String, String), MailError> {
+        if !crate::check::has_contract(kind) {
+            return Err(MailError::Template(crate::check::no_contract_message(kind)));
+        }
         let Some(t) = override_ else {
             return self.render(kind.as_str(), payload);
         };
@@ -234,6 +237,33 @@ mod tests {
             ("link".to_owned(), link.to_owned()),
             ("expires_in".to_owned(), "1 hour".to_owned()),
         ])
+    }
+
+    #[test]
+    fn kinds_without_contract_are_explicit_errors() {
+        use anvil_core::ports::EmailTemplateCheck as _;
+        let r = EmailRenderer::embedded();
+        let t = EmailTemplate {
+            kind: EmailKind::LoginCode,
+            subject: "Code".into(),
+            body_html: "<p>hi</p>".into(),
+            body_text: "hi".into(),
+            updated_at: time::OffsetDateTime::UNIX_EPOCH,
+        };
+        for kind in [
+            EmailKind::LoginCode,
+            EmailKind::EmailChange,
+            EmailKind::EmailChanged,
+        ] {
+            let err = r.render_with(None, kind, &payload("x")).unwrap_err();
+            assert!(err.to_string().contains("no template contract"), "{err}");
+            let err = r.render_with(Some(&t), kind, &payload("x")).unwrap_err();
+            assert!(err.to_string().contains("no template contract"), "{err}");
+            let issue = crate::check::TemplateChecker
+                .check(kind, "Subject", "<p>x</p>", "x")
+                .unwrap_err();
+            assert!(issue.message.contains("no template contract"), "{issue:?}");
+        }
     }
 
     #[test]

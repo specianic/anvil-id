@@ -161,6 +161,11 @@ pub async fn register(app: &TestApp, tenant: TenantId, input: ClientInput) -> Rp
                 consent_mode: anvil_core::model::ConsentMode::Required,
                 id_token_signed_response_alg: None,
                 can_introspect: false,
+                post_logout_redirect_uris: vec![],
+                backchannel_logout_uri: None,
+                backchannel_logout_session_required: false,
+                allowed_resources: vec![],
+                mfa_policy: None,
             },
         )
         .await
@@ -275,6 +280,7 @@ pub fn params(scope: &str, challenge: Option<&str>) -> AuthorizationParams {
         ui_locales: None,
         claims: None,
         response_mode: Default::default(),
+        resource: vec![],
     }
 }
 

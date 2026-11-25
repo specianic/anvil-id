@@ -43,6 +43,13 @@ pub enum CoreError {
     RequestNotSupported,
     #[error("request_uri_not_supported")]
     RequestUriNotSupported,
+    /// RFC 8707 §2: a `resource` is invalid, not allowed for the client or not combinable.
+    #[error("invalid_target: {0}")]
+    InvalidTarget(String),
+    /// OpenID Connect Unmet Authentication Requirements 1.0: an essential `acr` cannot be met.
+    /// Delivered to the RP like `login_required`.
+    #[error("unmet_authentication_requirements")]
+    UnmetAuthenticationRequirements,
     /// RFC 6750 bearer token error.
     #[error("invalid_token: {0}")]
     InvalidToken(String),
@@ -90,6 +97,8 @@ impl CoreError {
             Self::UnsupportedTokenType => "unsupported_token_type",
             Self::RequestNotSupported => "request_not_supported",
             Self::RequestUriNotSupported => "request_uri_not_supported",
+            Self::InvalidTarget(_) => "invalid_target",
+            Self::UnmetAuthenticationRequirements => "unmet_authentication_requirements",
             Self::InvalidToken(_) => "invalid_token",
             Self::InsufficientScope(_) => "insufficient_scope",
             Self::Validation { .. } => "invalid_request",
@@ -123,7 +132,9 @@ impl CoreError {
             | Self::ConsentRequired
             | Self::UnsupportedTokenType
             | Self::RequestNotSupported
-            | Self::RequestUriNotSupported => 400,
+            | Self::RequestUriNotSupported
+            | Self::InvalidTarget(_)
+            | Self::UnmetAuthenticationRequirements => 400,
         }
     }
 
@@ -138,6 +149,7 @@ impl CoreError {
             | Self::AccessDenied(m)
             | Self::InvalidToken(m)
             | Self::InsufficientScope(m)
+            | Self::InvalidTarget(m)
             | Self::Conflict(m) => m.clone(),
             Self::InvalidClient { reason, .. } => reason.clone(),
             Self::Validation { field, message } => format!("{field}: {message}"),
@@ -149,6 +161,9 @@ impl CoreError {
             Self::UnsupportedTokenType => "the token type is not supported".to_owned(),
             Self::RequestNotSupported => "the request parameter is not supported".to_owned(),
             Self::RequestUriNotSupported => "the request_uri parameter is not supported".to_owned(),
+            Self::UnmetAuthenticationRequirements => {
+                "the requested authentication requirements cannot be met".to_owned()
+            }
             Self::NotFound => "not found".to_owned(),
             Self::Forbidden => "forbidden".to_owned(),
             Self::Overloaded => "the server is temporarily overloaded, retry later".to_owned(),
@@ -207,6 +222,12 @@ mod tests {
             (
                 CoreError::RequestUriNotSupported,
                 "request_uri_not_supported",
+                400,
+            ),
+            (CoreError::InvalidTarget(s("x")), "invalid_target", 400),
+            (
+                CoreError::UnmetAuthenticationRequirements,
+                "unmet_authentication_requirements",
                 400,
             ),
             (CoreError::InvalidToken(s("x")), "invalid_token", 401),

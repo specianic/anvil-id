@@ -93,9 +93,10 @@ impl FlowState {
     /// The initial state and form of a new flow. For verification and recovery, `token` (from
     /// the emailed link) goes into a hidden field unvalidated; it is only consumed on POST.
     ///
-    /// `Settings` and `Consent` flows have their own state machines (`flow::settings`, driven by
-    /// `service::account`, and `flow::consent`, driven by `service::consent`) and are never
-    /// started here: asking this engine for one is an explicit error.
+    /// `Settings`, `Consent` and `Logout` flows have their own state machines (`flow::settings`,
+    /// driven by `service::account`, `flow::consent`, driven by `service::consent`, and
+    /// `flow::logout`, driven by `service::logout`) and are never started here: asking this
+    /// engine for one is an explicit error.
     pub fn initial(
         kind: FlowKind,
         token: Option<String>,
@@ -115,7 +116,7 @@ impl FlowState {
                 let f = setup::form(&s, Vec::new(), Vec::new(), Vec::new());
                 (Self::Setup(s), f)
             }
-            FlowKind::Settings | FlowKind::Consent => {
+            FlowKind::Settings | FlowKind::Consent | FlowKind::Logout => {
                 return Err(CoreError::Internal(format!(
                     "the {} flow is not started by the flow engine",
                     kind.as_str()
@@ -694,7 +695,10 @@ mod tests {
         for kind in FlowKind::ALL {
             for token in [None, Some("tok".to_owned())] {
                 let Ok((state, _)) = FlowState::initial(*kind, token, &env) else {
-                    assert!(matches!(kind, FlowKind::Settings | FlowKind::Consent));
+                    assert!(matches!(
+                        kind,
+                        FlowKind::Settings | FlowKind::Consent | FlowKind::Logout
+                    ));
                     continue;
                 };
                 let json = serde_json::to_string(&state).unwrap();
@@ -808,7 +812,10 @@ mod tests {
         for kind in FlowKind::ALL {
             for token in [None, Some("tok".to_owned())] {
                 let Ok((_, form)) = FlowState::initial(*kind, token, &env) else {
-                    assert!(matches!(kind, FlowKind::Settings | FlowKind::Consent));
+                    assert!(matches!(
+                        kind,
+                        FlowKind::Settings | FlowKind::Consent | FlowKind::Logout
+                    ));
                     continue;
                 };
                 assert_form_invariants(&form, &[]);

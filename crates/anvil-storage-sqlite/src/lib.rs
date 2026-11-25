@@ -20,6 +20,7 @@ mod keys;
 mod mail_settings;
 pub mod migrate;
 mod outbox;
+mod pending;
 mod sessions;
 mod setup;
 mod tenants;

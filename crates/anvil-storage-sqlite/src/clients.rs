@@ -69,6 +69,12 @@ impl TryFrom<ClientRow> for Client {
             can_introspect: r.can_introspect,
             created_at: ms_to_odt(r.created_at)?,
             updated_at: ms_to_odt(r.updated_at)?,
+            // TRANSITIONAL(04-04): no column yet; non-default writes refused (pending.rs).
+            post_logout_redirect_uris: vec![],
+            backchannel_logout_uri: None,
+            backchannel_logout_session_required: false,
+            allowed_resources: vec![],
+            mfa_policy: None,
         })
     }
 }
@@ -80,6 +86,7 @@ pub(crate) async fn insert_client(
     tenant: TenantId,
     client: &NewClient,
 ) -> Result<Client, StorageError> {
+    crate::pending::refuse_phase4_client(client)?;
     let client_type = client.client_type.as_str();
     let application_type = client.application_type.as_str();
     let auth_method = client.auth_method.as_str();
@@ -140,6 +147,12 @@ pub(crate) async fn insert_client(
         can_introspect: client.can_introspect,
         created_at: client.created_at,
         updated_at: client.created_at,
+        // TRANSITIONAL(04-04): no column yet; non-default writes refused (pending.rs).
+        post_logout_redirect_uris: vec![],
+        backchannel_logout_uri: None,
+        backchannel_logout_session_required: false,
+        allowed_resources: vec![],
+        mfa_policy: None,
     })
 }
 
@@ -218,6 +231,7 @@ impl ClientRepo for SqliteClients {
         update: &ClientUpdate,
         now: OffsetDateTime,
     ) -> Result<Option<Client>, StorageError> {
+        crate::pending::refuse_phase4_client_update(update)?;
         let redirect_uris = update
             .redirect_uris
             .as_ref()

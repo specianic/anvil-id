@@ -110,6 +110,12 @@ governor = "0.10.4"
 moka = { version = "0.12.16", features = ["sync"] }
 ipnet = "2.12"
 
+# Phase 4 (release 0.3). Every crate Phase 4 needs is declared here once.
+# Fluent message catalogs for page i18n (UI-04); moka (above) caches upstream discovery/JWKS.
+fluent-bundle = "0.16.0"
+fluent-langneg = "0.14.2"
+unic-langid = "0.9.6"
+
 # Dev-only (tests).
 proptest = "1.12.0"
 insta = { version = "1.49.0", features = ["json"] }

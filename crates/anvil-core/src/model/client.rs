@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use super::ids::{ClientId, SecretHash, TenantId, str_enum};
+use super::tenant::MfaPolicy;
 
 /// RFC 6749 §2.1 client type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -121,6 +122,16 @@ pub struct Client {
     /// May introspect any token of the tenant. A confidential client may always introspect
     /// tokens issued to itself.
     pub can_introspect: bool,
+    /// Registered `post_logout_redirect_uri` values (exact match).
+    pub post_logout_redirect_uris: Vec<String>,
+    /// OIDC Back-Channel Logout endpoint of the RP.
+    pub backchannel_logout_uri: Option<String>,
+    /// The RP requires `sid` in logout tokens.
+    pub backchannel_logout_session_required: bool,
+    /// RFC 8707 resource indicators this client may request (exact match).
+    pub allowed_resources: Vec<String>,
+    /// MFA policy of this client; `None` = inherit the tenant's. Strictest wins.
+    pub mfa_policy: Option<MfaPolicy>,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
 }
@@ -144,6 +155,11 @@ pub struct NewClient {
     pub consent_mode: ConsentMode,
     pub id_token_signed_response_alg: Option<String>,
     pub can_introspect: bool,
+    pub post_logout_redirect_uris: Vec<String>,
+    pub backchannel_logout_uri: Option<String>,
+    pub backchannel_logout_session_required: bool,
+    pub allowed_resources: Vec<String>,
+    pub mfa_policy: Option<MfaPolicy>,
     pub created_at: OffsetDateTime,
 }
 
@@ -162,6 +178,13 @@ pub struct ClientUpdate {
     /// `Some(None)` resets to RS256.
     pub id_token_signed_response_alg: Option<Option<String>>,
     pub can_introspect: Option<bool>,
+    pub post_logout_redirect_uris: Option<Vec<String>>,
+    /// `Some(None)` clears the back-channel logout URI.
+    pub backchannel_logout_uri: Option<Option<String>>,
+    pub backchannel_logout_session_required: Option<bool>,
+    pub allowed_resources: Option<Vec<String>>,
+    /// `Some(None)` resets to inheriting the tenant policy.
+    pub mfa_policy: Option<Option<MfaPolicy>>,
 }
 
 #[cfg(test)]

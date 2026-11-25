@@ -9,6 +9,8 @@
 //! - [`hash`]: per-algorithm `at_hash`/`c_hash`.
 //! - [`otp`]: TOTP secrets, `otpauth://` URIs and code checks (totp-rs).
 //! - [`recovery_code`]: MFA recovery-code generation, normalisation and peppered hashing.
+//! - [`email_code`]: one-time email sign-in codes and their flow-bound peppered hash.
+//! - [`pem`]: THE PKCS#8 `PRIVATE KEY` PEM parser (Apple `.p8` keys).
 //! - [`jws`]: strict compact-JWS parsing and signature verification against a JWK Set.
 //! - [`client_assertion`]: `private_key_jwt` client assertion rules.
 //! - [`op_token`]: verification of tokens this OP issued (access tokens, `id_token_hint`).
@@ -17,6 +19,7 @@
 //! This crate performs no I/O.
 
 pub mod client_assertion;
+pub mod email_code;
 pub mod encoding;
 pub mod error;
 pub mod hash;
@@ -26,10 +29,14 @@ pub mod kek;
 pub mod keys;
 pub mod op_token;
 pub mod otp;
+pub mod pem;
 pub mod pkce;
 pub mod recovery_code;
 
 pub use client_assertion::{AssertionRules, VerifiedAssertion, verify_client_assertion};
+pub use email_code::{
+    EMAIL_OTP_PEPPER_INFO, email_code_hash, generate_email_code, normalize_email_code,
+};
 pub use error::JoseError;
 pub use hash::token_hash;
 pub use jwk::{Jwk, Jwks, thumbprint};
@@ -40,4 +47,5 @@ pub use keys::{
 };
 pub use op_token::{ExpiryCheck, verify_op_token, verify_op_token_algs};
 pub use otp::{TotpSecret, check_code, otpauth_uri};
+pub use pem::pkcs8_der_from_pem;
 pub use recovery_code::{generate_recovery_codes, normalize_recovery_code, recovery_code_hash};

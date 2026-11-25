@@ -240,6 +240,11 @@ pub fn new_client() -> NewClient {
         id_token_signed_response_alg: None,
         can_introspect: false,
         created_at: now_ms(),
+        post_logout_redirect_uris: vec![],
+        backchannel_logout_uri: None,
+        backchannel_logout_session_required: false,
+        allowed_resources: vec![],
+        mfa_policy: None,
     }
 }
 
@@ -265,6 +270,11 @@ pub fn expected_client(tenant: TenantId, c: &NewClient) -> Client {
         can_introspect: c.can_introspect,
         created_at: c.created_at,
         updated_at: c.created_at,
+        post_logout_redirect_uris: vec![],
+        backchannel_logout_uri: None,
+        backchannel_logout_session_required: false,
+        allowed_resources: vec![],
+        mfa_policy: None,
     }
 }
 
@@ -363,6 +373,7 @@ pub fn full_params() -> AuthorizationParams {
         ui_locales: Some("de en".into()),
         claims: Some(full_claims_request()),
         response_mode: anvil_core::oauth::response_mode::ResponseMode::FormPost,
+        resource: vec![],
     }
 }
 
@@ -443,6 +454,7 @@ pub fn new_family(ctx: &GrantCtx, absolute_in: Duration) -> NewTokenFamily {
         claims: Some(full_claims_request()),
         created_at: now,
         absolute_expires_at: now + absolute_in,
+        resource: vec![],
     }
 }
 
@@ -468,6 +480,7 @@ pub fn new_code(
         token_family_id: family.id,
         expires_at: now + expires_in,
         created_at: now,
+        resource: vec![],
     }
 }
 
@@ -489,6 +502,7 @@ pub fn expected_code(tenant: TenantId, code: &NewAuthorizationCode) -> Authoriza
         token_family_id: code.token_family_id,
         expires_at: code.expires_at,
         created_at: code.created_at,
+        resource: vec![],
     }
 }
 
@@ -509,6 +523,7 @@ pub fn expected_family(tenant: TenantId, f: &NewTokenFamily) -> TokenFamily {
         absolute_expires_at: f.absolute_expires_at,
         revoked_at: None,
         revoked_reason: None,
+        resource: vec![],
     }
 }
 
@@ -663,6 +678,7 @@ pub fn new_service_family(client_id: &str, absolute_in: Duration) -> NewTokenFam
         claims: None,
         created_at: now,
         absolute_expires_at: now + absolute_in,
+        resource: vec![],
     }
 }
 
@@ -682,6 +698,7 @@ pub fn new_access_token(
         scope: "openid profile".to_owned(),
         created_at: now,
         expires_at: now + expires_in,
+        resource: vec![],
     }
 }
 
@@ -697,6 +714,7 @@ pub fn expected_access_token(tenant: TenantId, t: &NewAccessToken) -> AccessToke
         created_at: t.created_at,
         expires_at: t.expires_at,
         revoked_at: None,
+        resource: vec![],
     }
 }
 

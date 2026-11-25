@@ -226,6 +226,7 @@ async fn seed(storage: &SqliteStorage) -> Seeded {
                 scope: "openid".to_owned(),
                 created_at: now_ms(),
                 expires_at: now_ms() + Duration::minutes(10),
+                resource: vec![],
             },
         )
         .await

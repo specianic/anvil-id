@@ -344,6 +344,7 @@ pub fn new_opaque_access_token(
         scope: scope.to_string(),
         created_at: now,
         expires_at: now + ACCESS_TOKEN_TTL,
+        resource: vec![],
     }
 }
 
@@ -777,6 +778,7 @@ mod tests {
             token_family_id: TokenFamilyId::new_v7(),
             expires_at: now() + Duration::seconds(60),
             created_at: now(),
+            resource: vec![],
         }
     }
 
@@ -863,6 +865,7 @@ mod tests {
             absolute_expires_at: now() + Duration::days(30),
             revoked_at: None,
             revoked_reason: None,
+            resource: vec![],
         }
     }
 

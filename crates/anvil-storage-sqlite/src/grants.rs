@@ -63,6 +63,8 @@ impl TryFrom<FamilyRow> for TokenFamily {
                 .as_deref()
                 .map(|s| parse_enum(s, RevokeReason::parse, "revoked_reason"))
                 .transpose()?,
+            // TRANSITIONAL(04-04): no column yet; non-default writes refused (pending.rs).
+            resource: vec![],
         })
     }
 }
@@ -132,6 +134,7 @@ async fn insert_family(
     tenant: TenantId,
     family: &NewTokenFamily,
 ) -> Result<(), StorageError> {
+    crate::pending::refuse_resource(&family.resource)?;
     let amr = to_json(&family.amr, "token_family.amr")?;
     let claims = family
         .claims
@@ -278,6 +281,7 @@ impl GrantRepo for SqliteGrants {
         code: &NewAuthorizationCode,
         family: &NewTokenFamily,
     ) -> Result<(), StorageError> {
+        crate::pending::refuse_resource(&code.resource)?;
         if code.token_family_id != family.id {
             return Err(StorageError::Conflict(
                 "authorization code token_family_id does not match the family".to_owned(),
@@ -375,6 +379,8 @@ impl GrantRepo for SqliteGrants {
                 token_family_id: TokenFamilyId(r.token_family_id),
                 expires_at: ms_to_odt(r.expires_at)?,
                 created_at: ms_to_odt(r.created_at)?,
+                // TRANSITIONAL(04-04): no column yet; non-default writes refused (pending.rs).
+                resource: vec![],
             }));
         }
 
@@ -597,6 +603,7 @@ impl GrantRepo for SqliteGrants {
         tenant: TenantId,
         token: &NewAccessToken,
     ) -> Result<(), StorageError> {
+        crate::pending::refuse_resource(&token.resource)?;
         let hash = token.token_hash.as_bytes().as_slice();
         let family = token.family_id.map(|f| f.0);
         let user = token.user_id.map(|u| u.0);
@@ -655,6 +662,8 @@ impl GrantRepo for SqliteGrants {
             created_at: ms_to_odt(r.created_at)?,
             expires_at: ms_to_odt(r.expires_at)?,
             revoked_at: opt_ms_to_odt(r.revoked_at)?,
+            // TRANSITIONAL(04-04): no column yet; non-default writes refused (pending.rs).
+            resource: vec![],
         };
         let family = match r.family_id {
             Some(id) => Some(family_on(&mut conn, tenant, id).await?.ok_or_else(|| {

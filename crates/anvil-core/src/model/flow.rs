@@ -16,6 +16,8 @@ pub enum FlowKind {
     Settings,
     /// OAuth consent screen.
     Consent,
+    /// RP-initiated logout confirmation.
+    Logout,
 }
 
 str_enum!(FlowKind {
@@ -26,6 +28,7 @@ str_enum!(FlowKind {
     Setup => "setup",
     Settings => "settings",
     Consent => "consent",
+    Logout => "logout",
 });
 
 /// A persisted flow. `state` is opaque to storage (JSON produced by the flow engine).

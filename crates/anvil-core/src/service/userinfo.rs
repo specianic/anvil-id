@@ -368,6 +368,7 @@ mod tests {
             created_at: now() - Duration::minutes(1),
             expires_at: now() + Duration::minutes(9),
             revoked_at: None,
+            resource: vec![],
         }
     }
 
@@ -569,6 +570,7 @@ mod tests {
             absolute_expires_at: now() + Duration::days(30),
             revoked_at: None,
             revoked_reason: None,
+            resource: vec![],
         }
     }
 

@@ -17,6 +17,12 @@ pub enum EmailKind {
     Invitation,
     PasswordChanged,
     RecoveryCodeUsed,
+    /// One-time sign-in code / magic link.
+    LoginCode,
+    /// Confirmation link sent to a new address.
+    EmailChange,
+    /// Notice to the old address after an email change.
+    EmailChanged,
 }
 
 str_enum!(EmailKind {
@@ -25,6 +31,9 @@ str_enum!(EmailKind {
     Invitation => "invitation",
     PasswordChanged => "password_changed",
     RecoveryCodeUsed => "recovery_code_used",
+    LoginCode => "login_code",
+    EmailChange => "email_change",
+    EmailChanged => "email_changed",
 });
 
 /// A tenant override of one email template.

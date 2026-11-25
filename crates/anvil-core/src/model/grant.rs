@@ -124,6 +124,9 @@ pub struct AuthorizationParams {
     /// How the authorization response is delivered; absent in requests stored by 0.1.
     #[serde(default)]
     pub response_mode: ResponseMode,
+    /// RFC 8707 resource indicators (absolute URIs); absent in requests stored by 0.2.
+    #[serde(default)]
+    pub resource: Vec<String>,
 }
 
 /// A stored authorization request.
@@ -157,6 +160,8 @@ pub struct NewAuthorizationCode {
     pub session_id: SessionId,
     pub redirect_uri: String,
     pub scope: String,
+    /// RFC 8707 resources the tokens are audience-bound to (empty = the client).
+    pub resource: Vec<String>,
     pub nonce: Option<String>,
     pub code_challenge: Option<String>,
     pub auth_time: OffsetDateTime,
@@ -177,6 +182,8 @@ pub struct AuthorizationCode {
     pub session_id: SessionId,
     pub redirect_uri: String,
     pub scope: String,
+    /// RFC 8707 resources the tokens are audience-bound to (empty = the client).
+    pub resource: Vec<String>,
     pub nonce: Option<String>,
     pub code_challenge: Option<String>,
     pub auth_time: OffsetDateTime,
@@ -224,6 +231,8 @@ pub struct TokenFamily {
     pub client_id: String,
     pub user_id: Option<UserId>,
     pub scope: String,
+    /// RFC 8707 resources the tokens are audience-bound to (empty = the client).
+    pub resource: Vec<String>,
     pub auth_time: Option<OffsetDateTime>,
     pub acr: Option<String>,
     pub amr: Vec<String>,
@@ -242,6 +251,8 @@ pub struct NewTokenFamily {
     pub client_id: String,
     pub user_id: Option<UserId>,
     pub scope: String,
+    /// RFC 8707 resources the tokens are audience-bound to (empty = the client).
+    pub resource: Vec<String>,
     pub auth_time: Option<OffsetDateTime>,
     pub acr: Option<String>,
     pub amr: Vec<String>,
@@ -285,6 +296,8 @@ pub struct AccessTokenRecord {
     pub client_id: String,
     pub user_id: Option<UserId>,
     pub scope: String,
+    /// RFC 8707 resources the tokens are audience-bound to (empty = the client).
+    pub resource: Vec<String>,
     pub created_at: OffsetDateTime,
     pub expires_at: OffsetDateTime,
     pub revoked_at: Option<OffsetDateTime>,
@@ -298,6 +311,8 @@ pub struct NewAccessToken {
     pub client_id: String,
     pub user_id: Option<UserId>,
     pub scope: String,
+    /// RFC 8707 resources the tokens are audience-bound to (empty = the client).
+    pub resource: Vec<String>,
     pub created_at: OffsetDateTime,
     pub expires_at: OffsetDateTime,
 }
@@ -319,12 +334,15 @@ pub enum SelfServiceKind {
     Verification,
     Recovery,
     Invitation,
+    /// Confirms a new email address (`email` = the new address).
+    EmailChange,
 }
 
 str_enum!(SelfServiceKind {
     Verification => "verification",
     Recovery => "recovery",
     Invitation => "invitation",
+    EmailChange => "email_change",
 });
 
 /// A stored self-service token. `email` is the address the token was sent to; verification only
@@ -390,6 +408,13 @@ mod tests {
         let big = Scope::parse("openid profile").unwrap();
         assert!(small.is_subset(&big));
         assert!(!big.is_subset(&small));
+    }
+
+    #[test]
+    fn params_stored_by_0_2_parse_without_resource() {
+        let json = r#"{"redirect_uri":"https://rp/cb","scope":"openid","state":null,"nonce":null,"code_challenge":null,"max_age":null,"login_hint":null,"ui_locales":null,"claims":null}"#;
+        let p: AuthorizationParams = serde_json::from_str(json).unwrap();
+        assert!(p.resource.is_empty());
     }
 
     #[test]

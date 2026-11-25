@@ -394,6 +394,11 @@ impl ClientService {
             consent_mode: options.consent_mode,
             id_token_signed_response_alg: options.id_token_signed_response_alg,
             can_introspect: options.can_introspect,
+            post_logout_redirect_uris: vec![],
+            backchannel_logout_uri: None,
+            backchannel_logout_session_required: false,
+            allowed_resources: vec![],
+            mfa_policy: None,
         };
         // A client_id collision is astronomically unlikely; retry once with a fresh id.
         let client = match self.storage.clients().create(tenant.id, &new).await {
@@ -512,6 +517,11 @@ impl ClientService {
             consent_mode: options.consent_mode,
             id_token_signed_response_alg: options.id_token_signed_response_alg.clone(),
             can_introspect: options.can_introspect,
+            post_logout_redirect_uris: None,
+            backchannel_logout_uri: None,
+            backchannel_logout_session_required: None,
+            allowed_resources: None,
+            mfa_policy: None,
         };
         let client = self
             .storage

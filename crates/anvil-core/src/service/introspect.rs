@@ -259,6 +259,7 @@ mod tests {
             absolute_expires_at: now() + Duration::days(30),
             revoked_at: None,
             revoked_reason: None,
+            resource: vec![],
         }
     }
 

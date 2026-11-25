@@ -179,6 +179,12 @@ pub async fn tenant_update_settings_round_trip(s: &TestStorage) {
             site_key: "site-key".into(),
             secret_sealed: "c2VhbGVkLXNlY3JldA".into(),
         }),
+        mfa_policy: anvil_core::model::MfaPolicy::Optional,
+        email_otp: false,
+        magic_link: false,
+        auto_link: true,
+        upstream_registration: None,
+        default_locale: "en".to_owned(),
     };
     let updated = repo
         .update(

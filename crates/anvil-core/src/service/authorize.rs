@@ -97,6 +97,7 @@ pub fn build_code(
         claims: params.claims.clone(),
         created_at: now,
         absolute_expires_at: now + FAMILY_TTL,
+        resource: vec![],
     };
     let code = NewAuthorizationCode {
         code_hash,
@@ -113,6 +114,7 @@ pub fn build_code(
         token_family_id: family_id,
         expires_at: now + CODE_TTL,
         created_at: now,
+        resource: vec![],
     };
     (SecretString::from(plaintext), code, family)
 }
@@ -548,6 +550,7 @@ mod tests {
             ui_locales: None,
             claims: None,
             response_mode: ResponseMode::Query,
+            resource: vec![],
         }
     }
 

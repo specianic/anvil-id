@@ -74,6 +74,11 @@ pub async fn client(app: &TestApp, tenant: &Tenant, input: ClientInput) -> Clien
         consent_mode: anvil_core::model::ConsentMode::SkipFirstParty,
         id_token_signed_response_alg: None,
         can_introspect: false,
+        post_logout_redirect_uris: vec![],
+        backchannel_logout_uri: None,
+        backchannel_logout_session_required: false,
+        allowed_resources: vec![],
+        mfa_policy: None,
     };
     app.storage()
         .clients()

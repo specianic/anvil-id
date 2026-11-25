@@ -27,6 +27,36 @@ str_enum!(RegistrationMode {
     Disabled => "disabled",
 });
 
+/// Whether a second factor is required at sign-in (AUTH-08). Across tenant and client (and org
+/// in Phase 6) the strictest policy wins: `Required` > `Optional` > `Off`.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum MfaPolicy {
+    /// Never ask for a second factor.
+    Off,
+    /// Ask users who enrolled one (0.2 behaviour).
+    #[default]
+    Optional,
+    /// Every sign-in needs a second factor; users without one enrol first.
+    Required,
+}
+
+str_enum!(MfaPolicy {
+    Off => "off",
+    Optional => "optional",
+    Required => "required",
+});
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_locale() -> String {
+    "en".to_owned()
+}
+
 /// The signing algorithm every tenant always offers (OIDC Core default; certification needs it).
 pub const DEFAULT_SIGNING_ALG: &str = "RS256";
 
@@ -45,6 +75,21 @@ pub struct TenantSettings {
     pub signing_algs: Vec<String>,
     /// CAPTCHA on registration and after repeated failed sign-ins; `None` = disabled.
     pub captcha: Option<CaptchaSettings>,
+    /// Tenant MFA policy (default `Optional`, the 0.2 behaviour).
+    pub mfa_policy: MfaPolicy,
+    /// Sign-in with a one-time code sent by email.
+    pub email_otp: bool,
+    /// Sign-in with a magic link sent by email.
+    pub magic_link: bool,
+    /// Link an upstream identity automatically when it asserts a trusted verified email equal to
+    /// an existing account's verified email.
+    #[serde(default = "default_true")]
+    pub auto_link: bool,
+    /// Whether upstream sign-in may create accounts; `None` follows `registration`.
+    pub upstream_registration: Option<bool>,
+    /// Page language when neither `ui_locales` nor `Accept-Language` matches.
+    #[serde(default = "default_locale")]
+    pub default_locale: String,
 }
 
 impl Default for TenantSettings {
@@ -54,6 +99,12 @@ impl Default for TenantSettings {
             require_verified_email: false,
             signing_algs: vec![DEFAULT_SIGNING_ALG.to_owned()],
             captcha: None,
+            mfa_policy: MfaPolicy::default(),
+            email_otp: false,
+            magic_link: false,
+            auto_link: true,
+            upstream_registration: None,
+            default_locale: default_locale(),
         }
     }
 }
@@ -416,6 +467,25 @@ mod tests {
         assert_eq!(s.captcha, None);
         let empty: TenantSettings = serde_json::from_str("{}").unwrap();
         assert_eq!(empty, TenantSettings::default());
+    }
+
+    #[test]
+    fn settings_written_by_0_2_still_parse() {
+        let v02 = r#"{"registration":"open","require_verified_email":false,"signing_algs":["RS256","ES256"],"captcha":{"provider":"turnstile","site_key":"s","secret_sealed":"x"}}"#;
+        let s: TenantSettings = serde_json::from_str(v02).unwrap();
+        assert_eq!(s.signing_algs, vec!["RS256".to_owned(), "ES256".to_owned()]);
+        assert!(s.captcha.is_some());
+        assert_eq!(s.mfa_policy, MfaPolicy::Optional);
+        assert!(!s.email_otp);
+        assert!(!s.magic_link);
+        assert!(s.auto_link);
+        assert_eq!(s.upstream_registration, None);
+        assert_eq!(s.default_locale, "en");
+        for p in MfaPolicy::ALL {
+            assert_eq!(MfaPolicy::parse(p.as_str()), Some(*p));
+        }
+        assert!(MfaPolicy::Required > MfaPolicy::Optional);
+        assert!(MfaPolicy::Optional > MfaPolicy::Off);
     }
 
     #[test]

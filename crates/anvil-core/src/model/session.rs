@@ -20,6 +20,8 @@ pub const AMR_USER: &str = "user";
 pub const AMR_OTP: &str = "otp";
 /// RFC 8176: multiple-factor authentication.
 pub const AMR_MFA: &str = "mfa";
+/// Federated sign-in through an upstream identity provider (not RFC 8176-registered; documented).
+pub const AMR_FED: &str = "fed";
 
 /// A persisted browser session, looked up by the hash of its cookie.
 #[derive(Debug, Clone, PartialEq, Eq)]

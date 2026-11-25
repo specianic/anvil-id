@@ -404,6 +404,11 @@ pub(crate) mod tests {
             consent_mode: crate::model::ConsentMode::Required,
             id_token_signed_response_alg: None,
             can_introspect: false,
+            post_logout_redirect_uris: vec![],
+            backchannel_logout_uri: None,
+            backchannel_logout_session_required: false,
+            allowed_resources: vec![],
+            mfa_policy: None,
         }
     }
 

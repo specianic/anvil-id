@@ -154,6 +154,21 @@ wire_enum!(
         SmtpSettingsUpdated,
         SmtpTestSent,
         AdminSetupCompleted,
+        IdentityLinked,
+        IdentityUnlinked,
+        UpstreamLoginFailed,
+        ConnectionCreated,
+        ConnectionUpdated,
+        ConnectionDeleted,
+        ConnectionSecretRotated,
+        BrandingUpdated,
+        Logout,
+        BackchannelLogoutFailed,
+        EmailChangeRequested,
+        EmailChanged,
+        ProfileUpdated,
+        StepUpCompleted,
+        EmailCodeSent,
     }
 );
 wire_enum!(
@@ -164,6 +179,9 @@ wire_enum!(
         Invitation,
         PasswordChanged,
         RecoveryCodeUsed,
+        LoginCode,
+        EmailChange,
+        EmailChanged,
     }
 );
 wire_enum!(
@@ -330,6 +348,8 @@ impl From<NewTenantSettings> for CoreTenantSettings {
             require_verified_email: s.require_verified_email,
             signing_algs: s.signing_algs,
             captcha: None,
+            // Phase 4 settings are not on the wire yet (04-11 / 04-18 expose them).
+            ..CoreTenantSettings::default()
         }
     }
 }
@@ -375,6 +395,8 @@ impl TenantSettingsPatch {
                 .signing_algs
                 .unwrap_or_else(|| current.signing_algs.clone()),
             captcha: current.captcha.clone(),
+            // Settings not (yet) patchable over the API keep their current value.
+            ..current.clone()
         });
         (settings, captcha)
     }

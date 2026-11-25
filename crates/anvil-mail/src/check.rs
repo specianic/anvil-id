@@ -38,7 +38,8 @@ use minijinja::{Environment, ErrorKind};
 
 use crate::render::{clean_subject, environment};
 
-/// The variables a template of `kind` may use (see the module docs).
+/// The variables a template of `kind` may use (see the module docs). Empty for kinds without a
+/// contract yet ([`has_contract`]); those are rejected by [`TemplateChecker`] and the renderer.
 pub fn variables(kind: EmailKind) -> &'static [&'static str] {
     match kind {
         EmailKind::Verification | EmailKind::Recovery | EmailKind::Invitation => {
@@ -46,7 +47,24 @@ pub fn variables(kind: EmailKind) -> &'static [&'static str] {
         }
         EmailKind::PasswordChanged => &["tenant_name", "email"],
         EmailKind::RecoveryCodeUsed => &["tenant_name", "remaining"],
+        // TRANSITIONAL(04-15): the Phase 4 kinds get their variable contracts and default
+        // templates in plan 04-15. Until then checking or rendering them is an explicit error.
+        EmailKind::LoginCode | EmailKind::EmailChange | EmailKind::EmailChanged => &[],
     }
+}
+
+/// Whether `kind` has a variable contract (and default templates).
+pub fn has_contract(kind: EmailKind) -> bool {
+    // TRANSITIONAL(04-15): see `variables`.
+    !matches!(
+        kind,
+        EmailKind::LoginCode | EmailKind::EmailChange | EmailKind::EmailChanged
+    )
+}
+
+/// The error for a kind without a contract.
+pub(crate) fn no_contract_message(kind: EmailKind) -> String {
+    format!("no template contract for kind {} yet", kind.as_str())
 }
 
 /// Sample values for every variable of `kind`, used for the test render.
@@ -79,6 +97,9 @@ impl EmailTemplateCheck for TemplateChecker {
         html: &str,
         text: &str,
     ) -> Result<(), TemplateIssue> {
+        if !has_contract(kind) {
+            return Err(issue("subject", None, &no_contract_message(kind)));
+        }
         if subject.contains(['\r', '\n']) {
             return Err(issue("subject", None, "the subject must be a single line"));
         }
