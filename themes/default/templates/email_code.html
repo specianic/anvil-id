@@ -3,10 +3,12 @@
 {#- "Check your email" page (AUTH-06): shown after a sign-in email was requested, whether or not
     an account exists for the address (the first message, `email_code.sent`, says so). Variables
     besides `page` and `form` (form id `email-code`, field `code`): `factor_token` (hidden limiter
-    token, or none) and `resend_action` (the "Send a new code" form, or none). Selectors: form
+    token, or none) and `resend_action` (the "Send a new email" form, or none). Selectors: form
     `email-code`, input `code`, button `email-code-submit`, messages `email-code-msg-N`, form
-    `email-code-resend` with button `email-code-resend-submit`, link `link-login`. Works without
-    JavaScript. -#}
+    `email-code-resend` with button `email-code-resend-submit`, link `link-login`. When the tenant
+    sends only a sign-in link (`magic_link` without `email_otp`) the form has no `code` field: the
+    code hint, input and submit button are left out and `link-hint` explains that the email holds
+    a link. Works without JavaScript. -#}
 {% block heading %}{{ t("title.email_code") }}{% endblock %}
 {% block content %}
 {% set has_error = "error" in form.messages|map(attribute="level")|list %}
@@ -18,12 +20,16 @@
 {{ forms.messages(form.messages, form.id) }}
 </div>
 {% endif %}
+{% if "code" in form.fields|map(attribute="name")|list %}
 <p id="code-hint">{{ t("email_code.code_hint") }}</p>
 <div class="anvil-field{% if has_error %} anvil-field-invalid{% endif %}">
 <label for="code">{{ t("field.code") }}</label>
 <input id="code" name="code" type="text" inputmode="numeric" maxlength="7" autocomplete="one-time-code" spellcheck="false" required aria-describedby="code-hint"{% if has_error %} aria-invalid="true"{% endif %}>
 </div>
 <button type="submit" id="{{ form.id }}-submit">{{ t("email_code.submit") }}</button>
+{% else %}
+<p id="link-hint">{{ t("email_code.link_hint") }}</p>
+{% endif %}
 </form>
 {% if resend_action %}
 <form id="email-code-resend" method="post" action="{{ resend_action }}">

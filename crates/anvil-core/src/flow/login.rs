@@ -381,7 +381,7 @@ pub(super) fn on_failure(state: &LoginState, failure: Failure) -> FormDescriptio
                 Failure::Overloaded => "service.overloaded",
                 _ => email_code::WRONG,
             };
-            email_code::form(vec![error(key)])
+            email_code::form_for(state.email_code.as_deref(), vec![error(key)])
         }
     }
 }
@@ -392,7 +392,7 @@ pub(super) fn current_form(state: &LoginState, messages: Vec<FormMessage>) -> Fo
         LoginStep::Identify => form(state, messages),
         LoginStep::SecondFactor { methods, .. } => second_factor_form(methods, messages),
         LoginStep::Enroll { .. } => enroll_form(messages),
-        LoginStep::EmailCode => email_code::form(messages),
+        LoginStep::EmailCode => email_code::form_for(state.email_code.as_deref(), messages),
     }
 }
 

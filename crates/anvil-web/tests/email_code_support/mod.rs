@@ -42,12 +42,17 @@ pub async fn setup_with(f: impl FnOnce(&mut AppConfig)) -> TestApp {
     app
 }
 
-/// Turns email sign-in (`email_otp`) on or off for the default tenant (through storage; the admin
-/// API's SMTP requirement is tested in 04-11).
+/// Turns email sign-in on (both the code and the link) or off for the default tenant (through
+/// storage; the admin API's SMTP requirement is tested in 04-11).
 pub async fn enable(app: &TestApp, on: bool) {
+    set_email_methods(app, on, on).await;
+}
+
+/// Sets the default tenant's `email_otp` (the code) and `magic_link` (the link) independently.
+pub async fn set_email_methods(app: &TestApp, code: bool, link: bool) {
     update_settings(app, |s| {
-        s.email_otp = on;
-        s.magic_link = false;
+        s.email_otp = code;
+        s.magic_link = link;
     })
     .await;
 }
@@ -168,7 +173,8 @@ pub async fn submit_code(app: &TestApp, page: &TestResponse, code: &str) -> Test
     .await
 }
 
-/// A sent sign-in email.
+/// A sent sign-in email. `code` and `link` are empty when the email did not carry them; the raw
+/// opened payload is in `payload`.
 #[derive(Debug, Clone)]
 pub struct LoginCode {
     pub to: String,
@@ -176,6 +182,7 @@ pub struct LoginCode {
     /// The magic link as a path.
     pub link: String,
     pub expires_minutes: String,
+    pub payload: std::collections::BTreeMap<String, String>,
 }
 
 /// Every `login_code` email in the outbox since the last call.
@@ -186,9 +193,14 @@ pub async fn login_codes(app: &TestApp) -> Vec<LoginCode> {
         .filter(|e| e.template == "login_code")
         .map(|e| LoginCode {
             to: e.to.clone(),
-            code: e.payload["code"].clone(),
-            link: to_path(app, &e.payload["link"]),
+            code: e.payload.get("code").cloned().unwrap_or_default(),
+            link: e
+                .payload
+                .get("link")
+                .map(|l| to_path(app, l))
+                .unwrap_or_default(),
             expires_minutes: e.payload["expires_minutes"].clone(),
+            payload: e.payload.clone(),
         })
         .collect()
 }

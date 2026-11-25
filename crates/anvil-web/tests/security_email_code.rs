@@ -9,6 +9,9 @@
 //!   (no flow cookie) consumes nothing, wrong CSRF tokens are 403;
 //! - the code is not stored in clear; the limiter escalates per address across peers and locks code
 //!   attempts per user; `amr` never contains `mfa`.
+//! - `email_otp` and `magic_link` are separate: a method that is off (or was off when the email
+//!   was sent) cannot sign in, at the route (404) and in core (the code is refused before any
+//!   attempt is counted, the link consumes nothing).
 
 mod email_code_support;
 mod support;
@@ -443,4 +446,132 @@ async fn email_sign_in_never_claims_mfa() {
     assert_eq!(s.acr, ACR_PWD);
     assert!(!s.amr.contains(&"mfa".to_owned()), "{:?}", s.amr);
     assert!(!s.amr.contains(&"pwd".to_owned()), "{:?}", s.amr);
+}
+
+// ---------------------------------------------------------------------------------------------
+// email_otp and magic_link are enforced separately: at the route and in core
+// ---------------------------------------------------------------------------------------------
+
+/// The flow id of a "check your email" page.
+fn page_flow(app: &TestApp, page: &support::TestResponse) -> String {
+    flow_in(&action_of(app, &page.html(), "email-code"))
+}
+
+async fn failed_logins(app: &TestApp) -> usize {
+    audit(app, AuditAction::LoginFailed).await.len()
+}
+
+#[tokio::test]
+async fn code_only_tenant_refuses_the_link_routes() {
+    let app = setup().await;
+    set_email_methods(&app, true, false).await;
+    let page = request_code(&app, ALICE).await;
+    let mail = one_code(&app).await;
+    assert!(mail.link.is_empty(), "no link in a code-only email");
+    let flow = page_flow(&app, &page);
+    let link = format!("/ui/login/email-link?flow={flow}&token=internal-token");
+    let resp = app.get(&link).await;
+    assert_eq!(resp.status, 404, "{}", resp.text());
+    let csrf = csrf_from(&page.html());
+    let resp = app
+        .post_form(
+            &format!("/ui/login/email-link?flow={flow}"),
+            &[("csrf_token", csrf.as_str()), ("token", "internal-token")],
+        )
+        .await;
+    assert_eq!(resp.status, 404, "{}", resp.text());
+    assert!(session(&app).await.is_none());
+    assert_eq!(sign_ins(&app).await, 0);
+    // Nothing was consumed: the code still signs in.
+    let resp = submit_code(&app, &page, &mail.code).await;
+    assert_eq!(message_keys(&resp.html()), vec!["login.signed_in"]);
+}
+
+#[tokio::test]
+async fn link_only_tenant_refuses_the_code_route() {
+    let app = setup().await;
+    set_email_methods(&app, false, true).await;
+    let page = request_code(&app, ALICE).await;
+    let mail = one_code(&app).await;
+    assert!(mail.code.is_empty(), "no code in a link-only email");
+    // The page has no code input, but the form (csrf, factor_token) is there: post a code anyway.
+    let resp = submit_code(&app, &page, "123456").await;
+    assert_eq!(resp.status, 404, "{}", resp.text());
+    assert!(session(&app).await.is_none());
+    assert_eq!(failed_logins(&app).await, 0, "no attempt counted");
+    // Nothing was consumed: the link still signs in.
+    let (_, resp) = open_link(&app, &mail.link).await;
+    assert_eq!(message_keys(&resp.html()), vec!["login.signed_in"]);
+    assert_eq!(sign_ins(&app).await, 1);
+}
+
+#[tokio::test]
+async fn a_method_switched_off_after_the_send_is_refused() {
+    let app = setup().await;
+    let page = request_code(&app, ALICE).await;
+    let mail = one_code(&app).await;
+    assert!(!mail.code.is_empty() && !mail.link.is_empty());
+    let link_page = app.get(&mail.link).await;
+    assert_eq!(link_page.status, 200);
+
+    // email_otp off: the right code is refused at the route.
+    set_email_methods(&app, false, true).await;
+    let resp = submit_code(&app, &page, &mail.code).await;
+    assert_eq!(resp.status, 404, "{}", resp.text());
+    assert!(session(&app).await.is_none());
+
+    // magic_link off: the link page and its POST are refused.
+    set_email_methods(&app, true, false).await;
+    assert_eq!(app.get(&mail.link).await.status, 404);
+    let resp = post_link(&app, &link_page, None).await;
+    assert_eq!(resp.status, 404, "{}", resp.text());
+    assert!(session(&app).await.is_none());
+    assert_eq!(sign_ins(&app).await, 0);
+    assert_eq!(failed_logins(&app).await, 0, "no attempt counted");
+
+    // Both back on: nothing was consumed.
+    set_email_methods(&app, true, true).await;
+    let resp = submit_code(&app, &page, &mail.code).await;
+    assert_eq!(message_keys(&resp.html()), vec!["login.signed_in"]);
+}
+
+#[tokio::test]
+async fn core_refuses_a_code_the_email_did_not_carry() {
+    let app = setup().await;
+    set_email_methods(&app, false, true).await;
+    let page = request_code(&app, ALICE).await;
+    let mail = one_code(&app).await;
+    // email_otp switched on after a link-only send: the route lets the POST through, the core
+    // refuses (the email had no code), before any attempt is counted.
+    set_email_methods(&app, true, true).await;
+    for code in ["123456", "000000"] {
+        let resp = submit_code(&app, &page, code).await;
+        assert_eq!(resp.status, 404, "{}", resp.text());
+    }
+    assert!(session(&app).await.is_none());
+    assert_eq!(failed_logins(&app).await, 0, "no attempt counted");
+    let (_, resp) = open_link(&app, &mail.link).await;
+    assert_eq!(message_keys(&resp.html()), vec!["login.signed_in"]);
+}
+
+#[tokio::test]
+async fn core_refuses_a_link_the_email_did_not_carry() {
+    let app = setup().await;
+    set_email_methods(&app, true, false).await;
+    let page = request_code(&app, ALICE).await;
+    let mail = one_code(&app).await;
+    // magic_link switched on after a code-only send: the link page opens for any token, but the
+    // POST is refused (the email had no link) and consumes nothing.
+    set_email_methods(&app, true, true).await;
+    let flow = page_flow(&app, &page);
+    let link_page = app
+        .get(&format!("/ui/login/email-link?flow={flow}&token=guessed"))
+        .await;
+    assert_eq!(link_page.status, 200, "{}", link_page.text());
+    let resp = post_link(&app, &link_page, None).await;
+    assert_eq!(resp.status, 400, "{}", resp.text());
+    assert_eq!(message_keys(&resp.html()), vec!["email_code.link_invalid"]);
+    assert!(session(&app).await.is_none());
+    let resp = submit_code(&app, &page, &mail.code).await;
+    assert_eq!(message_keys(&resp.html()), vec!["login.signed_in"]);
 }

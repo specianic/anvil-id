@@ -7,10 +7,14 @@
 //! | `GET  /ui/login/email-link?flow=&token=` | the emailed link: only a "Continue signing in" button (consumes nothing) |
 //! | `POST /ui/login/email-link?flow=` | `token` plus the page's `csrf_token`: consumes the link in the browser holding the flow cookie |
 //!
-//! Every route answers 404 unless the tenant enables `email_otp` or `magic_link`. The sign-in
-//! page offers "Email me a sign-in code" (prefilled from a `login_hint` email address). Asking
-//! for a code always shows the same "if an account exists for that address, we sent a code" page;
-//! only an active account gets the email (`flow::email_code`, `FlowService` module docs).
+//! The two tenant settings are enforced separately: sending (and "Send a new email") answers 404
+//! unless `email_otp` or `magic_link` is on, the code route unless `email_otp` is on, and both
+//! link routes unless `magic_link` is on. The email carries only the enabled methods, and the core
+//! refuses a method the email did not carry (`flow::email_code`). The sign-in page offers email
+//! sign-in when either is on (prefilled from a `login_hint` email address). Asking for an email
+//! always shows the same "if an account exists for that address, we sent a sign-in email" page;
+//! only an active account gets the email (`FlowService` module docs). With the link only, that
+//! page has no code field.
 //!
 //! # Limiter
 //!
@@ -214,7 +218,8 @@ async fn request(
     outcome_response_with(&state, &tenant, &loc, result.outcome, &extras)
 }
 
-/// `POST /ui/login/email-code/verify?flow=`: the code from the email (module docs).
+/// `POST /ui/login/email-code/verify?flow=`: the code from the email (module docs). 404 unless
+/// `email_otp` is on.
 async fn verify(
     State(state): State<AppState>,
     tenant: ResolvedTenant,
@@ -224,7 +229,7 @@ async fn verify(
     Query(q): Query<UiQuery>,
     form: Result<Form<UiForm>, FormRejection>,
 ) -> Response {
-    if !email_code_enabled(&tenant.tenant) {
+    if !tenant.tenant.settings.email_otp {
         return not_found(&state, &tenant, &loc);
     }
     let Ok(Form(form)) = form else {
@@ -304,13 +309,14 @@ fn link_headers(mut resp: Response) -> Response {
 }
 
 /// `GET /ui/login/email-link?flow=&token=`: the "Continue signing in" button. Consumes nothing.
+/// 404 unless `magic_link` is on.
 async fn link_page(
     State(state): State<AppState>,
     tenant: ResolvedTenant,
     RequestLocale(loc, _): RequestLocale,
     Query(q): Query<UiQuery>,
 ) -> Response {
-    if !email_code_enabled(&tenant.tenant) {
+    if !tenant.tenant.settings.magic_link {
         return link_headers(not_found(&state, &tenant, &loc));
     }
     let (Some(flow_id), Some(token)) = (q.flow_id(), q.token()) else {
@@ -348,6 +354,7 @@ async fn link_page(
 }
 
 /// `POST /ui/login/email-link?flow=`: consume the link in the browser that started the sign-in.
+/// 404 unless `magic_link` is on.
 async fn link_submit(
     State(state): State<AppState>,
     tenant: ResolvedTenant,
@@ -357,7 +364,7 @@ async fn link_submit(
     Query(q): Query<UiQuery>,
     form: Result<Form<UiForm>, FormRejection>,
 ) -> Response {
-    if !email_code_enabled(&tenant.tenant) {
+    if !tenant.tenant.settings.magic_link {
         return not_found(&state, &tenant, &loc);
     }
     let Ok(Form(form)) = form else {

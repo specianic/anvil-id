@@ -10,6 +10,16 @@
 //! account holder) gets the same state, the same work (a code and a link token are generated and hashed)
 //! and the same page, but no email.
 //!
+//! # Code, link or both
+//!
+//! The tenant settings `email_otp` (the 6-digit code) and `magic_link` (the link) are independent.
+//! The service always does the same work (a code, a link token and both hashes, for every
+//! configuration and every address) but the email carries only the enabled methods, and the state
+//! records which ones it carried ([`EmailCodeState::code`], [`EmailCodeState::link`]). A method the
+//! email did not carry is refused here ([`check_code`], [`check_link`]) as well as by the service
+//! and the routes (which also refuse a method switched off after the send). With the link only,
+//! the "check your email" form has no `code` field ([`form_for`]).
+//!
 //! The code ([`verify`]) or the link ([`link`]) is then the primary authentication: single factor
 //! (`amr` `[otp]`, pwd `acr`, never `mfa`), followed by the effective MFA policy like a password
 //! (`flow::login::after_primary_auth`).
@@ -90,6 +100,17 @@ pub struct EmailCodeState {
     /// Wrong codes against the current code.
     #[serde(default)]
     pub failed_attempts: u8,
+    /// Whether the email carried the code (tenant `email_otp` at send time). A state stored
+    /// before this field existed carried both.
+    #[serde(default = "carried")]
+    pub code: bool,
+    /// Whether the email carried the magic link (tenant `magic_link` at send time).
+    #[serde(default = "carried")]
+    pub link: bool,
+}
+
+fn carried() -> bool {
+    true
 }
 
 impl EmailCodeState {
@@ -112,7 +133,16 @@ impl EmailCodeState {
             expires_at: (now + EMAIL_CODE_TTL).unix_timestamp(),
             sends: previous.map_or(0, |p| p.sends).saturating_add(1),
             failed_attempts: 0,
+            code: true,
+            link: true,
         }
+    }
+
+    /// The same state recording which methods the email carries (`code`: the 6-digit code,
+    /// `link`: the magic link).
+    #[must_use]
+    pub fn with_methods(self, code: bool, link: bool) -> Self {
+        Self { code, link, ..self }
     }
 
     fn expired(&self, now: OffsetDateTime) -> bool {
@@ -143,13 +173,14 @@ pub enum Check {
 }
 
 /// Checks a presented code hash (`None`: input that cannot be a code, a wrong attempt). Returns the
-/// verdict and the state to store.
+/// verdict and the state to store. A code the email did not carry is [`Check::Unavailable`] and
+/// counts no attempt.
 pub fn check_code(
     state: &EmailCodeState,
     presented: Option<[u8; 32]>,
     now: OffsetDateTime,
 ) -> (Check, EmailCodeState) {
-    let Some(stored) = state.code_hash else {
+    let (true, Some(stored)) = (state.code, state.code_hash) else {
         return (Check::Unavailable, state.clone());
     };
     if state.expired(now) {
@@ -169,13 +200,14 @@ pub fn check_code(
 }
 
 /// Checks the SHA-256 of a presented link token. A wrong token changes nothing (it is 256 bits:
-/// no attempt counting) and reports [`Check::Unavailable`].
+/// no attempt counting) and reports [`Check::Unavailable`]; so does any token when the email did
+/// not carry the link.
 pub fn check_link(
     state: &EmailCodeState,
     presented: [u8; 32],
     now: OffsetDateTime,
 ) -> (Check, EmailCodeState) {
-    let Some(stored) = state.link_hash else {
+    let (true, Some(stored)) = (state.link, state.link_hash) else {
         return (Check::Unavailable, state.clone());
     };
     if !ct_eq(&presented, &stored) {
@@ -273,12 +305,10 @@ pub(super) fn request(
             _ => return super::login::invalid_input(state),
         },
     };
-    if state
-        .email_code
-        .as_ref()
-        .is_some_and(|ec| ec.sends >= MAX_SENDS)
+    if let Some(ec) = state.email_code.as_deref()
+        && ec.sends >= MAX_SENDS
     {
-        let f = form(vec![error(TOO_MANY_SENDS)]);
+        let f = form_for(Some(ec), vec![error(TOO_MANY_SENDS)]);
         return (FlowState::Login(state), vec![Effect::Render(f)]);
     }
     (
@@ -317,12 +347,18 @@ pub(super) fn link(state: LoginState, token: String) -> (FlowState, Vec<Effect>)
     (FlowState::Login(state), effects)
 }
 
-/// The "check your email" form: the `code` field (themes render it with
+/// The "check your email" form with the `code` field (themes render it with
 /// `autocomplete=one-time-code` and `inputmode=numeric`).
 pub fn form(messages: Vec<FormMessage>) -> FormDescription {
-    build_form(
-        EMAIL_CODE_FORM_ID,
-        VERIFY_ACTION,
+    form_for(None, messages)
+}
+
+/// The "check your email" form for the email described by `ec`: the `code` field only when the
+/// email carried the code (`None`: the code field, as for a state without the method flags).
+/// Without it the page only explains that the email holds a sign-in link (and offers a new
+/// email).
+pub fn form_for(ec: Option<&EmailCodeState>, messages: Vec<FormMessage>) -> FormDescription {
+    let fields = if ec.is_none_or(|ec| ec.code) {
         vec![field(
             "code",
             FieldKind::Text,
@@ -331,14 +367,17 @@ pub fn form(messages: Vec<FormMessage>) -> FormDescription {
             true,
             Some("one-time-code"),
             Vec::new(),
-        )],
-        messages,
-    )
+        )]
+    } else {
+        Vec::new()
+    };
+    build_form(EMAIL_CODE_FORM_ID, VERIFY_ACTION, fields, messages)
 }
 
-/// The form after a code was sent: the enumeration-safe "if an account exists" message.
-pub fn sent_form() -> FormDescription {
-    form(vec![FormMessage::new(MessageLevel::Info, SENT)])
+/// The form after an email was requested for `ec`: the enumeration-safe "if an account exists"
+/// message.
+pub fn sent_form(ec: &EmailCodeState) -> FormDescription {
+    form_for(Some(ec), vec![FormMessage::new(MessageLevel::Info, SENT)])
 }
 
 /// The key of the form answering a check that did not sign in.
@@ -658,8 +697,79 @@ mod tests {
     }
 
     #[test]
+    fn code_is_refused_when_the_email_carried_none() {
+        let k = kek();
+        let flow = FlowId::new_v7();
+        let ec = issued(&k, flow, "123456", "tok").with_methods(false, true);
+        // The right code: refused, nothing changes, no attempt counted.
+        let (c, next) = check_code(&ec, code_hash(&k, flow, "123456"), t0());
+        assert_eq!((c, &next), (Check::Unavailable, &ec));
+        let (c, next) = check_code(&ec, code_hash(&k, flow, "654321"), t0());
+        assert_eq!((c, &next), (Check::Unavailable, &ec));
+        // The link still works.
+        assert_eq!(check_link(&ec, link_hash("tok"), t0()).0, Check::Accepted);
+    }
+
+    #[test]
+    fn link_is_refused_when_the_email_carried_none() {
+        let k = kek();
+        let flow = FlowId::new_v7();
+        let ec = issued(&k, flow, "123456", "tok").with_methods(true, false);
+        let (c, next) = check_link(&ec, link_hash("tok"), t0());
+        assert_eq!((c, &next), (Check::Unavailable, &ec));
+        // The code still works.
+        assert_eq!(
+            check_code(&ec, code_hash(&k, flow, "123456"), t0()).0,
+            Check::Accepted
+        );
+    }
+
+    #[test]
+    fn state_without_method_flags_parses_as_both() {
+        let k = kek();
+        let ec = issued(&k, FlowId::new_v7(), "123456", "tok").with_methods(false, true);
+        let mut json: serde_json::Value = serde_json::to_value(&ec).unwrap();
+        assert_eq!(json["code"], false);
+        assert_eq!(json["link"], true);
+        let obj = json.as_object_mut().unwrap();
+        obj.remove("code");
+        obj.remove("link");
+        let old: EmailCodeState = serde_json::from_value(json).unwrap();
+        assert!(old.code && old.link);
+        assert_eq!(old, ec.with_methods(true, true));
+    }
+
+    #[test]
+    fn link_only_form_has_no_code_field() {
+        let k = kek();
+        let flow = FlowId::new_v7();
+        let link_only = issued(&k, flow, "123456", "t").with_methods(false, true);
+        let f = sent_form(&link_only);
+        assert_eq!(f.id, EMAIL_CODE_FORM_ID);
+        assert!(f.fields.is_empty(), "{f:?}");
+        assert_eq!(all_keys(&f), vec![SENT]);
+        let s = FlowState::Login(email_state(link_only.clone()));
+        assert!(current_form(&s, Vec::new(), &env()).fields.is_empty());
+        let code_only = issued(&k, flow, "123456", "t").with_methods(true, false);
+        assert_eq!(sent_form(&code_only).fields[0].name, "code");
+        // The too-many-sends form follows the state too.
+        let capped = EmailCodeState {
+            sends: MAX_SENDS,
+            ..link_only
+        };
+        let (_, effects) = transition(
+            FlowState::Login(email_state(capped)),
+            FlowInput::EmailCodeRequest { email: None },
+            &env(),
+        );
+        assert!(
+            matches!(&effects[..], [Effect::Render(f)] if f.fields.is_empty() && all_keys(f) == [TOO_MANY_SENDS])
+        );
+    }
+
+    #[test]
     fn forms_and_current_form_of_the_email_step() {
-        let f = sent_form();
+        let f = sent_form(&issued(&kek(), FlowId::new_v7(), "123456", "t"));
         assert_eq!(f.id, EMAIL_CODE_FORM_ID);
         assert_eq!(f.action, VERIFY_ACTION);
         assert_eq!(all_keys(&f), vec![SENT]);

@@ -3,7 +3,8 @@
 //! verified user gets one sealed `login_code` email (code, link, 10 minutes), the code and the
 //! link sign in single-factor (`amr` `[otp]`, pwd `acr`), the MFA policy applies afterwards
 //! (`[otp, mfa]` after enrolment), the authorization request continues, and `login_hint`
-//! prefills the address. The negative controls are in `security_email_code.rs`.
+//! prefills the address. `email_otp` and `magic_link` each put their own method in the email
+//! (code only, link only, both). The negative controls are in `security_email_code.rs`.
 
 mod email_code_support;
 mod support;
@@ -268,4 +269,83 @@ async fn login_hint_prefills_the_address_and_the_request_continues() {
     let resp = app.follow(&resp).await;
     assert_eq!(resp.status, 303, "{}", resp.text());
     assert!(location(&resp).starts_with(REDIRECT), "{}", location(&resp));
+}
+
+// ---------------------------------------------------------------------------------------------
+// email_otp and magic_link are independent (the negative controls are in security_email_code.rs)
+// ---------------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn code_only_tenant_emails_only_the_code_and_the_code_signs_in() {
+    let app = setup().await;
+    set_email_methods(&app, true, false).await;
+    let page = request_code(&app, ALICE).await;
+    assert_eq!(page.status, 200, "{}", page.text());
+    let html = page.html();
+    assert_eq!(message_keys(&html), vec!["email_code.sent"]);
+    assert!(html.contains("id=\"code\""), "{html}");
+    assert!(html.contains("id=\"email-code-submit\""), "{html}");
+    assert!(!html.contains("id=\"link-hint\""), "{html}");
+
+    let mail = one_code(&app).await;
+    assert_eq!(mail.code.len(), 6);
+    assert!(!mail.payload.contains_key("link"), "{:?}", mail.payload);
+    assert_eq!(
+        mail.payload.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["code", "expires_minutes", "tenant_name"]
+    );
+
+    let resp = submit_code(&app, &page, &mail.code).await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_eq!(message_keys(&resp.html()), vec!["login.signed_in"]);
+    let s = session(&app).await.expect("signed in");
+    assert_eq!(s.amr, strs(&["otp"]));
+}
+
+#[tokio::test]
+async fn link_only_tenant_emails_only_the_link_and_the_link_signs_in() {
+    let app = setup().await;
+    set_email_methods(&app, false, true).await;
+    let page = request_code(&app, ALICE).await;
+    assert_eq!(page.status, 200, "{}", page.text());
+    let html = page.html();
+    assert_eq!(message_keys(&html), vec!["email_code.sent"]);
+    // No code input or code submit; the hint explains the link; "Send a new email" stays.
+    assert!(!html.contains("id=\"code\""), "{html}");
+    assert!(!html.contains("id=\"email-code-submit\""), "{html}");
+    assert!(!html.contains("id=\"code-hint\""), "{html}");
+    assert!(html.contains("id=\"link-hint\""), "{html}");
+    assert!(html.contains("id=\"email-code-resend-submit\""), "{html}");
+    assert!(html.contains("id=\"link-login\""), "{html}");
+
+    let mail = one_code(&app).await;
+    assert!(!mail.payload.contains_key("code"), "{:?}", mail.payload);
+    assert!(
+        mail.link.starts_with("/ui/login/email-link?flow="),
+        "{}",
+        mail.link
+    );
+    // "Send a new email" works in link-only mode too.
+    let again = resend(&app, &page).await;
+    assert_eq!(again.status, 200, "{}", again.text());
+    assert!(!again.html().contains("id=\"code\""));
+    let mail = one_code(&app).await;
+    assert!(!mail.payload.contains_key("code"));
+
+    let (_, resp) = open_link(&app, &mail.link).await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_eq!(message_keys(&resp.html()), vec!["login.signed_in"]);
+    let s = session(&app).await.expect("signed in");
+    assert_eq!(s.amr, strs(&["otp"]));
+}
+
+#[tokio::test]
+async fn both_methods_email_the_code_and_the_link() {
+    let app = setup().await;
+    set_email_methods(&app, true, true).await;
+    let page = request_code(&app, ALICE).await;
+    assert!(page.html().contains("id=\"code\""));
+    let mail = one_code(&app).await;
+    assert_eq!(mail.code.len(), 6);
+    assert!(mail.link.starts_with("/ui/login/email-link?flow="));
 }

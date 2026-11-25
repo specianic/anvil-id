@@ -84,6 +84,13 @@
 //! continued like an upstream sign-in (a second factor or enrolment goes on in a fresh flow). Email
 //! sign-in is `[otp]` with the pwd `acr`; the effective MFA policy then applies.
 //!
+//! The tenant settings are independent: `email_otp` puts the code in the email, `magic_link` the
+//! link ([`email_code_enabled`] is true when either is on, so email sign-in is offered). The send
+//! does the same work in every configuration; the state records what the email carried, and a
+//! code is verified only while `email_otp` is on and the email carried one (a link likewise with
+//! `magic_link`). Otherwise verify answers `NotFound` before any attempt is counted and the link
+//! is rejected without consuming anything.
+//!
 //! # Audit
 //!
 //! `login_succeeded`, `login_failed`, `second_factor_failed`, `passkey_clone_suspected`,
@@ -1090,7 +1097,7 @@ impl FlowService {
         if !ct_eq(expected.as_bytes(), csrf_token.as_bytes()) {
             return Err(CoreError::Forbidden);
         }
-        if !email_code_enabled(cx.tenant) {
+        if !cx.tenant.settings.magic_link {
             return Ok(EmailLinkOutcome::Rejected(email_code::LINK_INVALID));
         }
         let state: FlowState = serde_json::from_str(&flow.state)
@@ -1106,7 +1113,7 @@ impl FlowService {
         else {
             return Ok(EmailLinkOutcome::Rejected(email_code::LINK_INVALID));
         };
-        let Some(ec) = s.email_code.as_deref() else {
+        let Some(ec) = s.email_code.as_deref().filter(|ec| ec.link) else {
             return Ok(EmailLinkOutcome::Rejected(email_code::LINK_INVALID));
         };
         let (check, next) = email_code::check_link(ec, email_code::link_hash(token), now);
@@ -1199,6 +1206,7 @@ impl FlowService {
         let token = random_token();
         let code_hash = email_code::code_hash(&self.kek, flow.id, &code)
             .ok_or_else(|| CoreError::Internal("generated email code is malformed".into()))?;
+        let (with_code, with_link) = (cx.tenant.settings.email_otp, cx.tenant.settings.magic_link);
         let next = EmailCodeState::issue(
             s.email_code.as_deref(),
             email,
@@ -1206,7 +1214,11 @@ impl FlowService {
             code_hash,
             email_code::link_hash(&token),
             now,
-        );
+        )
+        .with_methods(with_code, with_link);
+        let sent = email_code::sent_form(&next);
+        let lost =
+            email_code::form_for(Some(&next), vec![FormMessage::error("flow.invalid_input")]);
         s.step = LoginStep::EmailCode;
         s.passkey_challenge = None;
         s.email_code = Some(Box::new(next));
@@ -1217,16 +1229,23 @@ impl FlowService {
             .swap_state(tenant, flow.id, &flow.state, &json, now)
             .await?
         {
-            let f = email_code::form(vec![FormMessage::error("flow.invalid_input")]);
             return Ok(Step::Done(Box::new(FlowOutcome::Render(bind_form(
-                f,
+                lost,
                 cx,
                 flow.id,
                 exec.csrf_token,
             )))));
         }
         if let Some(user) = &user {
-            let mail = login_code_email(&self.kek, cx, flow.id, &user.email, &code, &token, now)?;
+            let mail = login_code_email(
+                &self.kek,
+                cx,
+                flow.id,
+                &user.email,
+                with_code.then_some(code.as_str()),
+                with_link.then_some(token.as_str()),
+                now,
+            )?;
             self.storage.outbox().enqueue(tenant, &mail).await?;
             self.audit_user(
                 cx,
@@ -1246,7 +1265,7 @@ impl FlowService {
             ),
         });
         Ok(Step::Done(Box::new(FlowOutcome::Render(bind_form(
-            email_code::sent_form(),
+            sent,
             cx,
             flow.id,
             exec.csrf_token,
@@ -1269,6 +1288,10 @@ impl FlowService {
         let Some(ec) = s.email_code.as_deref() else {
             return Err(CoreError::Internal("email code step without a code".into()));
         };
+        // The code method is off (now, or for the email that was sent): not found, no attempt.
+        if !cx.tenant.settings.email_otp || !ec.code {
+            return Err(CoreError::NotFound);
+        }
         let subject = email_code::limit_subject(&self.kek, tenant, &ec.email, ec.user_id);
         let presented = email_code::code_hash(&self.kek, flow.id, code.expose_secret());
         let (check, next) = email_code::check_code(ec, presented, now);
@@ -1310,7 +1333,7 @@ impl FlowService {
             self.audit_login_failed(cx, ec.user_id, AuditDetails::login("email_code"))
                 .await?;
         }
-        let f = email_code::form(vec![FormMessage::error(key)]);
+        let f = email_code::form_for(Some(ec), vec![FormMessage::error(key)]);
         Ok(Step::Done(Box::new(FlowOutcome::Render(bind_form(
             f,
             cx,
@@ -2155,8 +2178,8 @@ fn recovery_code_used_email(
     })
 }
 
-/// Whether email code / magic-link sign-in is enabled for the tenant (either setting; the email
-/// always carries both the code and the link).
+/// Whether email sign-in is offered for the tenant: either setting. Each method is then enforced
+/// on its own (`email_otp`: the code, `magic_link`: the link; module docs).
 pub fn email_code_enabled(tenant: &Tenant) -> bool {
     tenant.settings.email_otp || tenant.settings.magic_link
 }
@@ -2176,24 +2199,28 @@ fn email_primary(state: &mut LoginState, method: &str) {
     }
 }
 
-/// The `login_code` email (payload `tenant_name`, `code`, `link`, `expires_minutes`, sealed: it
-/// carries the code and the link token).
+/// The `login_code` email (payload `tenant_name`, `code` when `code` is given, `link` when `token`
+/// is given, `expires_minutes`; sealed: it carries the code and/or the link token).
 fn login_code_email(
     kek: &Kek,
     cx: &FlowContext<'_>,
     flow: FlowId,
     to: &str,
-    code: &str,
-    token: &str,
+    code: Option<&str>,
+    token: Option<&str>,
     now: OffsetDateTime,
 ) -> Result<NewEmail, CoreError> {
     let mut payload = BTreeMap::new();
     payload.insert("tenant_name".to_owned(), cx.tenant.display_name.clone());
-    payload.insert("code".to_owned(), code.to_owned());
-    payload.insert(
-        "link".to_owned(),
-        format!("{}/login/email-link?flow={flow}&token={token}", cx.ui_base),
-    );
+    if let Some(code) = code {
+        payload.insert("code".to_owned(), code.to_owned());
+    }
+    if let Some(token) = token {
+        payload.insert(
+            "link".to_owned(),
+            format!("{}/login/email-link?flow={flow}&token={token}", cx.ui_base),
+        );
+    }
     payload.insert(
         "expires_minutes".to_owned(),
         email_code::EMAIL_CODE_TTL.whole_minutes().to_string(),
