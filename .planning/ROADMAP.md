@@ -43,8 +43,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: 8 plans in 5 waves
 
 Plans:
-- [ ] 01-01-PLAN.md — Workspace skeleton, toolchain, Cargo.lock, storage ports in anvil-core, justfile (wave 1)
-- [ ] 01-02-PLAN.md — cargo-deny policy, dependency-rule checker + self-test, ci.yml (wave 2)
+- [x] 01-01-PLAN.md — Workspace skeleton, toolchain, Cargo.lock, storage ports in anvil-core, justfile (wave 1)
+- [x] 01-02-PLAN.md — cargo-deny policy, dependency-rule checker + self-test, ci.yml (wave 2)
 - [x] 01-03-PLAN.md — Spike A: shared contract suite + SQLite backend + .sqlx (wave 2)
 - [x] 01-04-PLAN.md — anvil-web router (discovery, assets, 501s) + `anvilid serve` with mimalloc (wave 2)
 - [ ] 01-05-PLAN.md — Spike A: Postgres backend on testcontainers + duplication cost (wave 3)
