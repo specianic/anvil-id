@@ -14,6 +14,7 @@ use crate::convert::{
     from_json, into_page, map_err, ms_to_odt, now_ms, odt_to_ms, opt_ms_to_odt, parse_enum, to_json,
 };
 use crate::credentials;
+use crate::logout::enqueue_deliveries;
 use crate::outbox::insert_email;
 
 #[derive(Debug, Clone)]
@@ -184,9 +185,6 @@ impl UserRepo for SqliteUsers {
         token: Option<&NewSelfServiceToken>,
         email: Option<&NewEmail>,
     ) -> Result<User, StorageError> {
-        if let Some(t) = token {
-            crate::pending::refuse_phase4_token_kind(t.kind)?;
-        }
         let mut tx = self.writer.begin().await.map_err(map_err)?;
         // Any error drops `tx` uncommitted: nothing at all is persisted.
         let created = insert_user(&mut tx, tenant, user).await?;
@@ -323,8 +321,23 @@ impl UserRepo for SqliteUsers {
     }
 
     async fn delete(&self, tenant: TenantId, id: UserId) -> Result<bool, StorageError> {
+        let now = now_ms();
         let mut tx = self.writer.begin().await.map_err(map_err)?;
-        // Credentials, sessions, self-service tokens and codes go by ON DELETE CASCADE.
+        // Log out the user's live sessions first: their RP sessions cascade away with the user,
+        // the deliveries do not (logout_delivery has no foreign key to session or user).
+        let sessions: Vec<uuid::Uuid> = sqlx::query_scalar!(
+            r#"SELECT id AS "id!: uuid::Uuid" FROM browser_session
+                WHERE tenant_id = ?1 AND user_id = ?2 AND revoked_at IS NULL
+                ORDER BY id"#,
+            tenant.0,
+            id.0,
+        )
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(map_err)?;
+        enqueue_deliveries(&mut tx, tenant, id, &sessions, now).await?;
+        // Credentials, sessions, identity links, self-service tokens and codes go by ON DELETE
+        // CASCADE.
         let done = sqlx::query!(
             "DELETE FROM user WHERE tenant_id = ?1 AND id = ?2",
             tenant.0,
@@ -337,7 +350,7 @@ impl UserRepo for SqliteUsers {
             tx.rollback().await.map_err(map_err)?;
             return Ok(false);
         }
-        revoke_user_families(&mut tx, tenant, id, RevokeReason::UserDeleted, now_ms()).await?;
+        revoke_user_families(&mut tx, tenant, id, RevokeReason::UserDeleted, now).await?;
         tx.commit().await.map_err(map_err)?;
         Ok(true)
     }
@@ -405,7 +418,6 @@ impl UserRepo for SqliteUsers {
         token: &NewSelfServiceToken,
         email: Option<&NewEmail>,
     ) -> Result<(), StorageError> {
-        crate::pending::refuse_phase4_token_kind(token.kind)?;
         let mut tx = self.writer.begin().await.map_err(map_err)?;
         insert_self_service_token(&mut tx, tenant, token).await?;
         if let Some(email) = email {
@@ -508,17 +520,19 @@ impl UserRepo for SqliteUsers {
         .fetch_one(&mut *tx)
         .await
         .map_err(map_err)?;
-        sqlx::query!(
-            "UPDATE browser_session SET revoked_at = ?3
-              WHERE tenant_id = ?1 AND user_id = ?2 AND revoked_at IS NULL",
+        let revoked: Vec<uuid::Uuid> = sqlx::query_scalar!(
+            r#"UPDATE browser_session SET revoked_at = ?3
+                WHERE tenant_id = ?1 AND user_id = ?2 AND revoked_at IS NULL
+            RETURNING id AS "id!: uuid::Uuid""#,
             tenant.0,
             user.0,
             now_ms,
         )
-        .execute(&mut *tx)
+        .fetch_all(&mut *tx)
         .await
         .map_err(map_err)?;
         revoke_user_families(&mut tx, tenant, user, RevokeReason::UserRecovery, now).await?;
+        enqueue_deliveries(&mut tx, tenant, user, &revoked, now).await?;
         if let Some(notice) = notice {
             // The recipient is the address the consumed token was sent to.
             insert_email(&mut tx, tenant, &notice.to_email(&token_email)).await?;
@@ -641,13 +655,63 @@ impl UserRepo for SqliteUsers {
 
     async fn complete_email_change(
         &self,
-        _tenant: TenantId,
-        _token_hash: &SecretHash,
-        _now: OffsetDateTime,
-        _notice: Option<&RecoveryNotice>,
+        tenant: TenantId,
+        token_hash: &SecretHash,
+        now: OffsetDateTime,
+        notice: Option<&RecoveryNotice>,
     ) -> Result<Option<User>, StorageError> {
-        // TRANSITIONAL(04-04)
-        crate::pending::complete_email_change_unsupported()
+        let mut tx = self.writer.begin().await.map_err(map_err)?;
+        let Some((user_id, new_email)) = consume_self_service_token(
+            &mut tx,
+            tenant,
+            token_hash,
+            [SelfServiceKind::EmailChange; 2],
+            now,
+        )
+        .await?
+        else {
+            tx.rollback().await.map_err(map_err)?;
+            return Ok(None);
+        };
+        let Some(old_email) = sqlx::query_scalar!(
+            r#"SELECT email AS "email!" FROM user WHERE tenant_id = ?1 AND id = ?2"#,
+            tenant.0,
+            user_id,
+        )
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(map_err)?
+        else {
+            tx.rollback().await.map_err(map_err)?;
+            return Ok(None);
+        };
+        let now_ms = odt_to_ms(now);
+        // A unique violation (another user holds the address) is `Conflict`; returning early
+        // drops `tx` uncommitted, so the token stays unconsumed.
+        let row = sqlx::query_as!(
+            UserRow,
+            r#"UPDATE user SET email = ?3, email_verified = 1, updated_at = ?4
+                WHERE tenant_id = ?1 AND id = ?2
+            RETURNING id AS "id!: uuid::Uuid", tenant_id AS "tenant_id!: uuid::Uuid",
+                      email AS "email!", email_verified AS "email_verified!: bool",
+                      username AS "username?", claims AS "claims!", status AS "status!",
+                      created_at AS "created_at!", updated_at AS "updated_at!",
+                      last_login_at AS "last_login_at?""#,
+            tenant.0,
+            user_id,
+            new_email,
+            now_ms,
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(map_err)?;
+        if let Some(notice) = notice {
+            // The notice goes to the address before the change.
+            insert_email(&mut tx, tenant, &notice.to_email(&old_email)).await?;
+        }
+        let changed = User::try_from(row)?;
+        tx.commit().await.map_err(map_err)?;
+        Ok(Some(changed))
     }
 }
 

@@ -11,6 +11,7 @@ use time::OffsetDateTime;
 use crate::convert::{
     blob_to_hash, from_json, into_page, map_err, ms_to_odt, odt_to_ms, opt_ms_to_odt, to_json,
 };
+use crate::logout::enqueue_deliveries;
 
 #[derive(Debug, Clone)]
 pub(crate) struct SqliteSessions {
@@ -79,6 +80,29 @@ async fn revoke_session_families(
     .await
     .map_err(map_err)?;
     Ok(())
+}
+
+/// Revokes session `id` on `conn` if it is not revoked yet. Returns its user, or `None` if the
+/// session is unknown or already revoked (nothing changed).
+async fn revoke_session_on(
+    conn: &mut SqliteConnection,
+    tenant: TenantId,
+    id: SessionId,
+    now: OffsetDateTime,
+) -> Result<Option<UserId>, StorageError> {
+    let now_ms = odt_to_ms(now);
+    let row = sqlx::query!(
+        r#"UPDATE browser_session SET revoked_at = ?3
+            WHERE tenant_id = ?1 AND id = ?2 AND revoked_at IS NULL
+        RETURNING user_id AS "user_id!: uuid::Uuid""#,
+        tenant.0,
+        id.0,
+        now_ms,
+    )
+    .fetch_optional(conn)
+    .await
+    .map_err(map_err)?;
+    Ok(row.map(|r| UserId(r.user_id)))
 }
 
 #[async_trait::async_trait]
@@ -178,18 +202,14 @@ impl SessionRepo for SqliteSessions {
         id: SessionId,
         now: OffsetDateTime,
     ) -> Result<bool, StorageError> {
-        let now_ms = odt_to_ms(now);
-        let done = sqlx::query!(
-            "UPDATE browser_session SET revoked_at = ?3
-              WHERE tenant_id = ?1 AND id = ?2 AND revoked_at IS NULL",
-            tenant.0,
-            id.0,
-            now_ms,
-        )
-        .execute(&self.writer)
-        .await
-        .map_err(map_err)?;
-        Ok(done.rows_affected() > 0)
+        let mut tx = self.writer.begin().await.map_err(map_err)?;
+        let Some(user) = revoke_session_on(&mut tx, tenant, id, now).await? else {
+            tx.rollback().await.map_err(map_err)?;
+            return Ok(false);
+        };
+        enqueue_deliveries(&mut tx, tenant, user, &[id.0], now).await?;
+        tx.commit().await.map_err(map_err)?;
+        Ok(true)
     }
 
     async fn get(
@@ -295,21 +315,12 @@ impl SessionRepo for SqliteSessions {
     ) -> Result<bool, StorageError> {
         let now_ms = odt_to_ms(now);
         let mut tx = self.writer.begin().await.map_err(map_err)?;
-        let done = sqlx::query!(
-            "UPDATE browser_session SET revoked_at = ?3
-              WHERE tenant_id = ?1 AND id = ?2 AND revoked_at IS NULL",
-            tenant.0,
-            id.0,
-            now_ms,
-        )
-        .execute(&mut *tx)
-        .await
-        .map_err(map_err)?;
-        if done.rows_affected() == 0 {
+        let Some(user) = revoke_session_on(&mut tx, tenant, id, now).await? else {
             tx.rollback().await.map_err(map_err)?;
             return Ok(false);
-        }
+        };
         revoke_session_families(&mut tx, tenant, id.0, now_ms).await?;
+        enqueue_deliveries(&mut tx, tenant, user, &[id.0], now).await?;
         tx.commit().await.map_err(map_err)?;
         Ok(true)
     }
@@ -340,20 +351,40 @@ impl SessionRepo for SqliteSessions {
         for row in &revoked {
             revoke_session_families(&mut tx, tenant, row.id, now_ms).await?;
         }
+        // Only the sessions this statement revoked are logged out.
+        let ids: Vec<uuid::Uuid> = revoked.iter().map(|r| r.id).collect();
+        enqueue_deliveries(&mut tx, tenant, user, &ids, now).await?;
         tx.commit().await.map_err(map_err)?;
         Ok(revoked.len() as u64)
     }
 
     async fn upgrade_auth(
         &self,
-        _tenant: TenantId,
-        _id: SessionId,
-        _acr: &str,
-        _amr: &[String],
-        _auth_time: OffsetDateTime,
-        _now: OffsetDateTime,
+        tenant: TenantId,
+        id: SessionId,
+        acr: &str,
+        amr: &[String],
+        auth_time: OffsetDateTime,
+        now: OffsetDateTime,
     ) -> Result<bool, StorageError> {
-        // TRANSITIONAL(04-04)
-        crate::pending::upgrade_auth_unsupported()
+        let amr = to_json(amr, "browser_session.amr")?;
+        let auth_time = odt_to_ms(auth_time);
+        let now_ms = odt_to_ms(now);
+        // One conditional UPDATE: only an active session is stepped up.
+        let done = sqlx::query!(
+            "UPDATE browser_session SET acr = ?3, amr = ?4, auth_time = ?5
+              WHERE tenant_id = ?1 AND id = ?2 AND revoked_at IS NULL
+                AND expires_at > ?6 AND idle_expires_at > ?6",
+            tenant.0,
+            id.0,
+            acr,
+            amr,
+            auth_time,
+            now_ms,
+        )
+        .execute(&self.writer)
+        .await
+        .map_err(map_err)?;
+        Ok(done.rows_affected() > 0)
     }
 }

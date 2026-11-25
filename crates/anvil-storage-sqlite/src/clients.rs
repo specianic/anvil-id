@@ -2,7 +2,7 @@
 
 use anvil_core::model::{
     ApplicationType, Client, ClientAuthMethod, ClientId, ClientType, ClientUpdate, ConsentMode,
-    NewClient, Page, PageRequest, RevokeReason, SecretHash, TenantId, TokenFormat,
+    MfaPolicy, NewClient, Page, PageRequest, RevokeReason, SecretHash, TenantId, TokenFormat,
 };
 use anvil_core::ports::{ClientRepo, StorageError};
 use sqlx::{SqliteConnection, SqlitePool};
@@ -39,6 +39,11 @@ pub(crate) struct ClientRow {
     can_introspect: bool,
     created_at: i64,
     updated_at: i64,
+    post_logout_redirect_uris: String,
+    backchannel_logout_uri: Option<String>,
+    backchannel_logout_session_required: bool,
+    allowed_resources: String,
+    mfa_policy: Option<String>,
 }
 
 impl TryFrom<ClientRow> for Client {
@@ -69,12 +74,18 @@ impl TryFrom<ClientRow> for Client {
             can_introspect: r.can_introspect,
             created_at: ms_to_odt(r.created_at)?,
             updated_at: ms_to_odt(r.updated_at)?,
-            // TRANSITIONAL(04-04): no column yet; non-default writes refused (pending.rs).
-            post_logout_redirect_uris: vec![],
-            backchannel_logout_uri: None,
-            backchannel_logout_session_required: false,
-            allowed_resources: vec![],
-            mfa_policy: None,
+            post_logout_redirect_uris: from_json(
+                &r.post_logout_redirect_uris,
+                "client.post_logout_redirect_uris",
+            )?,
+            backchannel_logout_uri: r.backchannel_logout_uri,
+            backchannel_logout_session_required: r.backchannel_logout_session_required,
+            allowed_resources: from_json(&r.allowed_resources, "client.allowed_resources")?,
+            mfa_policy: r
+                .mfa_policy
+                .as_deref()
+                .map(|p| parse_enum(p, MfaPolicy::parse, "client.mfa_policy"))
+                .transpose()?,
         })
     }
 }
@@ -86,7 +97,6 @@ pub(crate) async fn insert_client(
     tenant: TenantId,
     client: &NewClient,
 ) -> Result<Client, StorageError> {
-    crate::pending::refuse_phase4_client(client)?;
     let client_type = client.client_type.as_str();
     let application_type = client.application_type.as_str();
     let auth_method = client.auth_method.as_str();
@@ -96,15 +106,22 @@ pub(crate) async fn insert_client(
     let scopes = to_json(&client.scopes, "client.scopes")?;
     let token_format = client.token_format.as_str();
     let consent_mode = client.consent_mode.as_str();
+    let post_logout = to_json(
+        &client.post_logout_redirect_uris,
+        "client.post_logout_redirect_uris",
+    )?;
+    let allowed_resources = to_json(&client.allowed_resources, "client.allowed_resources")?;
+    let mfa_policy = client.mfa_policy.map(|p| p.as_str());
     let created_at = odt_to_ms(client.created_at);
     sqlx::query!(
         "INSERT INTO client
              (id, tenant_id, client_id, name, client_type, application_type, auth_method,
               secret_hash, jwks, redirect_uris, grant_types, scopes, require_pkce, created_at,
               updated_at, token_format, consent_mode, id_token_signed_response_alg,
-              can_introspect)
+              can_introspect, post_logout_redirect_uris, backchannel_logout_uri,
+              backchannel_logout_session_required, allowed_resources, mfa_policy)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14, ?15, ?16, ?17,
-                 ?18)",
+                 ?18, ?19, ?20, ?21, ?22, ?23)",
         client.id.0,
         tenant.0,
         client.client_id,
@@ -123,6 +140,11 @@ pub(crate) async fn insert_client(
         consent_mode,
         client.id_token_signed_response_alg,
         client.can_introspect,
+        post_logout,
+        client.backchannel_logout_uri,
+        client.backchannel_logout_session_required,
+        allowed_resources,
+        mfa_policy,
     )
     .execute(conn)
     .await
@@ -147,12 +169,11 @@ pub(crate) async fn insert_client(
         can_introspect: client.can_introspect,
         created_at: client.created_at,
         updated_at: client.created_at,
-        // TRANSITIONAL(04-04): no column yet; non-default writes refused (pending.rs).
-        post_logout_redirect_uris: vec![],
-        backchannel_logout_uri: None,
-        backchannel_logout_session_required: false,
-        allowed_resources: vec![],
-        mfa_policy: None,
+        post_logout_redirect_uris: client.post_logout_redirect_uris.clone(),
+        backchannel_logout_uri: client.backchannel_logout_uri.clone(),
+        backchannel_logout_session_required: client.backchannel_logout_session_required,
+        allowed_resources: client.allowed_resources.clone(),
+        mfa_policy: client.mfa_policy,
     })
 }
 
@@ -175,7 +196,13 @@ impl ClientRepo for SqliteClients {
                       token_format AS "token_format!", consent_mode AS "consent_mode!",
                       id_token_signed_response_alg AS "id_token_signed_response_alg?",
                       can_introspect AS "can_introspect!: bool",
-                      created_at AS "created_at!", updated_at AS "updated_at!"
+                      created_at AS "created_at!", updated_at AS "updated_at!",
+                      post_logout_redirect_uris AS "post_logout_redirect_uris!",
+                      backchannel_logout_uri AS "backchannel_logout_uri?",
+                      backchannel_logout_session_required
+                        AS "backchannel_logout_session_required!: bool",
+                      allowed_resources AS "allowed_resources!",
+                      mfa_policy AS "mfa_policy?"
                  FROM client WHERE tenant_id = ?1 AND client_id = ?2"#,
             tenant.0,
             client_id,
@@ -205,7 +232,13 @@ impl ClientRepo for SqliteClients {
                       token_format AS "token_format!", consent_mode AS "consent_mode!",
                       id_token_signed_response_alg AS "id_token_signed_response_alg?",
                       can_introspect AS "can_introspect!: bool",
-                      created_at AS "created_at!", updated_at AS "updated_at!"
+                      created_at AS "created_at!", updated_at AS "updated_at!",
+                      post_logout_redirect_uris AS "post_logout_redirect_uris!",
+                      backchannel_logout_uri AS "backchannel_logout_uri?",
+                      backchannel_logout_session_required
+                        AS "backchannel_logout_session_required!: bool",
+                      allowed_resources AS "allowed_resources!",
+                      mfa_policy AS "mfa_policy?"
                  FROM client
                 WHERE tenant_id = ?1 AND (?2 IS NULL OR id > ?2)
                 ORDER BY id
@@ -231,7 +264,6 @@ impl ClientRepo for SqliteClients {
         update: &ClientUpdate,
         now: OffsetDateTime,
     ) -> Result<Option<Client>, StorageError> {
-        crate::pending::refuse_phase4_client_update(update)?;
         let redirect_uris = update
             .redirect_uris
             .as_ref()
@@ -253,6 +285,20 @@ impl ClientRepo for SqliteClients {
         let consent_mode = update.consent_mode.map(|m| m.as_str());
         let set_alg = update.id_token_signed_response_alg.is_some();
         let alg = update.id_token_signed_response_alg.clone().flatten();
+        let post_logout = update
+            .post_logout_redirect_uris
+            .as_ref()
+            .map(|v| to_json(v, "client.post_logout_redirect_uris"))
+            .transpose()?;
+        let set_bc_uri = update.backchannel_logout_uri.is_some();
+        let bc_uri = update.backchannel_logout_uri.clone().flatten();
+        let allowed_resources = update
+            .allowed_resources
+            .as_ref()
+            .map(|v| to_json(v, "client.allowed_resources"))
+            .transpose()?;
+        let set_mfa = update.mfa_policy.is_some();
+        let mfa_policy = update.mfa_policy.flatten().map(|p| p.as_str());
         let now_ms = odt_to_ms(now);
         sqlx::query_as!(
             ClientRow,
@@ -268,7 +314,14 @@ impl ClientRepo for SqliteClients {
                       consent_mode = COALESCE(?12, consent_mode),
                       id_token_signed_response_alg =
                         CASE WHEN ?13 THEN ?14 ELSE id_token_signed_response_alg END,
-                      can_introspect = COALESCE(?15, can_introspect)
+                      can_introspect = COALESCE(?15, can_introspect),
+                      post_logout_redirect_uris = COALESCE(?16, post_logout_redirect_uris),
+                      backchannel_logout_uri =
+                        CASE WHEN ?17 THEN ?18 ELSE backchannel_logout_uri END,
+                      backchannel_logout_session_required =
+                        COALESCE(?19, backchannel_logout_session_required),
+                      allowed_resources = COALESCE(?20, allowed_resources),
+                      mfa_policy = CASE WHEN ?21 THEN ?22 ELSE mfa_policy END
                 WHERE tenant_id = ?1 AND client_id = ?2
             RETURNING id AS "id!: uuid::Uuid", tenant_id AS "tenant_id!: uuid::Uuid",
                       client_id AS "client_id!", name AS "name!", client_type AS "client_type!",
@@ -279,7 +332,13 @@ impl ClientRepo for SqliteClients {
                       token_format AS "token_format!", consent_mode AS "consent_mode!",
                       id_token_signed_response_alg AS "id_token_signed_response_alg?",
                       can_introspect AS "can_introspect!: bool",
-                      created_at AS "created_at!", updated_at AS "updated_at!""#,
+                      created_at AS "created_at!", updated_at AS "updated_at!",
+                      post_logout_redirect_uris AS "post_logout_redirect_uris!",
+                      backchannel_logout_uri AS "backchannel_logout_uri?",
+                      backchannel_logout_session_required
+                        AS "backchannel_logout_session_required!: bool",
+                      allowed_resources AS "allowed_resources!",
+                      mfa_policy AS "mfa_policy?""#,
             tenant.0,
             client_id,
             update.name,
@@ -295,6 +354,13 @@ impl ClientRepo for SqliteClients {
             set_alg,
             alg,
             update.can_introspect,
+            post_logout,
+            set_bc_uri,
+            bc_uri,
+            update.backchannel_logout_session_required,
+            allowed_resources,
+            set_mfa,
+            mfa_policy,
         )
         .fetch_optional(&self.writer)
         .await

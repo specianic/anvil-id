@@ -16,6 +16,7 @@ use crate::convert::{
     blob_to_hash, from_json, map_err, ms_to_odt, odt_to_ms, opt_blob_to_hash, opt_from_json,
     opt_ms_to_odt, opt_odt_to_ms, parse_enum, to_json,
 };
+use crate::logout::record_rp_session;
 
 #[derive(Debug, Clone)]
 pub(crate) struct SqliteGrants {
@@ -38,6 +39,7 @@ struct FamilyRow {
     absolute_expires_at: i64,
     revoked_at: Option<i64>,
     revoked_reason: Option<String>,
+    resource: String,
 }
 
 impl TryFrom<FamilyRow> for TokenFamily {
@@ -63,8 +65,7 @@ impl TryFrom<FamilyRow> for TokenFamily {
                 .as_deref()
                 .map(|s| parse_enum(s, RevokeReason::parse, "revoked_reason"))
                 .transpose()?,
-            // TRANSITIONAL(04-04): no column yet; non-default writes refused (pending.rs).
-            resource: vec![],
+            resource: from_json(&r.resource, "token_family.resource")?,
         })
     }
 }
@@ -82,7 +83,8 @@ async fn family_on(
                   auth_time AS "auth_time?", acr AS "acr?", amr AS "amr!",
                   session_id AS "session_id?: uuid::Uuid", claims AS "claims?",
                   created_at AS "created_at!", absolute_expires_at AS "absolute_expires_at!",
-                  revoked_at AS "revoked_at?", revoked_reason AS "revoked_reason?"
+                  revoked_at AS "revoked_at?", revoked_reason AS "revoked_reason?",
+                  resource AS "resource!"
              FROM token_family WHERE tenant_id = ?1 AND id = ?2"#,
         tenant.0,
         id,
@@ -134,8 +136,8 @@ async fn insert_family(
     tenant: TenantId,
     family: &NewTokenFamily,
 ) -> Result<(), StorageError> {
-    crate::pending::refuse_resource(&family.resource)?;
     let amr = to_json(&family.amr, "token_family.amr")?;
+    let resource = to_json(&family.resource, "token_family.resource")?;
     let claims = family
         .claims
         .as_ref()
@@ -149,8 +151,8 @@ async fn insert_family(
     sqlx::query!(
         "INSERT INTO token_family
              (id, tenant_id, client_id, user_id, scope, auth_time, acr, amr, session_id,
-              claims, created_at, absolute_expires_at, revoked_at, revoked_reason)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL, NULL)",
+              claims, created_at, absolute_expires_at, revoked_at, revoked_reason, resource)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL, NULL, ?13)",
         family.id.0,
         tenant.0,
         family.client_id,
@@ -163,6 +165,7 @@ async fn insert_family(
         claims,
         created_at,
         absolute,
+        resource,
     )
     .execute(conn)
     .await
@@ -281,7 +284,6 @@ impl GrantRepo for SqliteGrants {
         code: &NewAuthorizationCode,
         family: &NewTokenFamily,
     ) -> Result<(), StorageError> {
-        crate::pending::refuse_resource(&code.resource)?;
         if code.token_family_id != family.id {
             return Err(StorageError::Conflict(
                 "authorization code token_family_id does not match the family".to_owned(),
@@ -292,6 +294,7 @@ impl GrantRepo for SqliteGrants {
         let code_auth_time = odt_to_ms(code.auth_time);
         let code_expires_at = odt_to_ms(code.expires_at);
         let code_created_at = odt_to_ms(code.created_at);
+        let code_resource = to_json(&code.resource, "authorization_code.resource")?;
 
         let mut tx = self.writer.begin().await.map_err(map_err)?;
         // Any error drops `tx` uncommitted: neither the family nor the code is stored.
@@ -300,8 +303,9 @@ impl GrantRepo for SqliteGrants {
             "INSERT INTO authorization_code
                  (code_hash, tenant_id, client_id, user_id, session_id, redirect_uri, scope, nonce,
                   code_challenge, auth_time, acr, amr, token_family_id, expires_at, consumed_at,
-                  created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, NULL, ?15)",
+                  created_at, resource)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, NULL, ?15,
+                     ?16)",
             code_hash,
             tenant.0,
             code.client_id,
@@ -317,10 +321,20 @@ impl GrantRepo for SqliteGrants {
             code.token_family_id.0,
             code_expires_at,
             code_created_at,
+            code_resource,
         )
         .execute(&mut *tx)
         .await
         .map_err(map_err)?;
+        // The browser session signed in to this client (back-channel logout targets).
+        record_rp_session(
+            &mut tx,
+            tenant,
+            code.session_id,
+            &code.client_id,
+            code.created_at,
+        )
+        .await?;
         tx.commit().await.map_err(map_err)
     }
 
@@ -353,7 +367,8 @@ impl GrantRepo for SqliteGrants {
                       amr             AS "amr!",
                       token_family_id AS "token_family_id!: uuid::Uuid",
                       expires_at      AS "expires_at!",
-                      created_at      AS "created_at!""#,
+                      created_at      AS "created_at!",
+                      resource        AS "resource!""#,
             tenant.0,
             hash,
             now_ms,
@@ -379,8 +394,7 @@ impl GrantRepo for SqliteGrants {
                 token_family_id: TokenFamilyId(r.token_family_id),
                 expires_at: ms_to_odt(r.expires_at)?,
                 created_at: ms_to_odt(r.created_at)?,
-                // TRANSITIONAL(04-04): no column yet; non-default writes refused (pending.rs).
-                resource: vec![],
+                resource: from_json(&r.resource, "authorization_code.resource")?,
             }));
         }
 
@@ -603,8 +617,8 @@ impl GrantRepo for SqliteGrants {
         tenant: TenantId,
         token: &NewAccessToken,
     ) -> Result<(), StorageError> {
-        crate::pending::refuse_resource(&token.resource)?;
         let hash = token.token_hash.as_bytes().as_slice();
+        let resource = to_json(&token.resource, "access_token.resource")?;
         let family = token.family_id.map(|f| f.0);
         let user = token.user_id.map(|u| u.0);
         let created_at = odt_to_ms(token.created_at);
@@ -612,8 +626,8 @@ impl GrantRepo for SqliteGrants {
         sqlx::query!(
             "INSERT INTO access_token
                  (token_hash, tenant_id, family_id, client_id, user_id, scope, created_at,
-                  expires_at, revoked_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL)",
+                  expires_at, revoked_at, resource)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9)",
             hash,
             tenant.0,
             family,
@@ -622,6 +636,7 @@ impl GrantRepo for SqliteGrants {
             token.scope,
             created_at,
             expires_at,
+            resource,
         )
         .execute(&self.writer)
         .await
@@ -641,7 +656,7 @@ impl GrantRepo for SqliteGrants {
                       family_id AS "family_id?: uuid::Uuid", client_id AS "client_id!",
                       user_id AS "user_id?: uuid::Uuid", scope AS "scope!",
                       created_at AS "created_at!", expires_at AS "expires_at!",
-                      revoked_at AS "revoked_at?"
+                      revoked_at AS "revoked_at?", resource AS "resource!"
                  FROM access_token WHERE tenant_id = ?1 AND token_hash = ?2"#,
             tenant.0,
             hash,
@@ -662,8 +677,7 @@ impl GrantRepo for SqliteGrants {
             created_at: ms_to_odt(r.created_at)?,
             expires_at: ms_to_odt(r.expires_at)?,
             revoked_at: opt_ms_to_odt(r.revoked_at)?,
-            // TRANSITIONAL(04-04): no column yet; non-default writes refused (pending.rs).
-            resource: vec![],
+            resource: from_json(&r.resource, "access_token.resource")?,
         };
         let family = match r.family_id {
             Some(id) => Some(family_on(&mut conn, tenant, id).await?.ok_or_else(|| {

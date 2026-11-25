@@ -16,7 +16,6 @@ pub(crate) struct SqliteFlows {
 #[async_trait::async_trait]
 impl FlowRepo for SqliteFlows {
     async fn create(&self, tenant: TenantId, flow: &NewFlow) -> Result<(), StorageError> {
-        crate::pending::refuse_phase4_flow_kind(flow.kind)?;
         let kind = flow.kind.as_str();
         let csrf = flow.csrf_hash.as_bytes().as_slice();
         let cookie = flow.cookie_hash.as_bytes().as_slice();

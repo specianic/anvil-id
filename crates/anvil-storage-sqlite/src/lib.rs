@@ -6,10 +6,15 @@
 //! `UserRepo::create`, `complete_recovery`, `install`, `complete_setup`, `create_totp`,
 //! `revoke_consent`, `revoke_with_families`, `KeyRepo::promote`, ...) runs as one transaction on
 //! that writer. Compare-and-swap methods (`update_passkey`, `advance_totp_step`,
-//! `consume_recovery_code`, `swap_state`, `try_lease`) are single conditional statements.
+//! `consume_recovery_code`, `swap_state`, `try_lease`, `upgrade_auth`) are single conditional
+//! statements. Every intent that revokes browser sessions enqueues its back-channel logout
+//! deliveries in its own transaction (`logout::enqueue_deliveries`), and `create_code` records
+//! the RP session in its transaction.
 
 mod audit;
+mod branding;
 mod clients;
+mod connections;
 mod consent;
 mod convert;
 mod credentials;
@@ -17,10 +22,10 @@ mod flows;
 mod grants;
 mod jobs;
 mod keys;
+mod logout;
 mod mail_settings;
 pub mod migrate;
 mod outbox;
-mod pending;
 mod sessions;
 mod setup;
 mod tenants;
@@ -38,12 +43,15 @@ use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 
 use crate::audit::SqliteAudit;
+use crate::branding::SqliteBranding;
 use crate::clients::SqliteClients;
+use crate::connections::SqliteConnections;
 use crate::convert::{map_err, odt_to_ms};
 use crate::flows::SqliteFlows;
 use crate::grants::SqliteGrants;
 use crate::jobs::SqliteJobs;
 use crate::keys::SqliteKeys;
+use crate::logout::SqliteLogout;
 use crate::mail_settings::SqliteMailSettings;
 use crate::outbox::SqliteOutbox;
 use crate::sessions::SqliteSessions;
@@ -75,6 +83,9 @@ pub struct SqliteStorage {
     audit: SqliteAudit,
     mail_settings: SqliteMailSettings,
     jobs: SqliteJobs,
+    connections: SqliteConnections,
+    branding: SqliteBranding,
+    logout: SqliteLogout,
 }
 
 fn is_memory_url(url: &str) -> bool {
@@ -162,6 +173,18 @@ impl SqliteStorage {
             jobs: SqliteJobs {
                 writer: writer.clone(),
             },
+            connections: SqliteConnections {
+                writer: writer.clone(),
+                reader: reader.clone(),
+            },
+            branding: SqliteBranding {
+                writer: writer.clone(),
+                reader: reader.clone(),
+            },
+            logout: SqliteLogout {
+                writer: writer.clone(),
+                reader: reader.clone(),
+            },
             setup: SqliteSetup {
                 writer: writer.clone(),
                 reader,
@@ -212,15 +235,14 @@ impl Storage for SqliteStorage {
     fn jobs(&self) -> &dyn JobRepo {
         &self.jobs
     }
-    // TRANSITIONAL(04-04): the Phase 4 repositories are explicit `Unsupported` shims.
     fn connections(&self) -> &dyn ConnectionRepo {
-        &crate::pending::PendingConnections
+        &self.connections
     }
     fn branding(&self) -> &dyn BrandingRepo {
-        &crate::pending::PendingBranding
+        &self.branding
     }
     fn logout(&self) -> &dyn LogoutRepo {
-        &crate::pending::PendingLogout
+        &self.logout
     }
 
     async fn purge_expired(&self, now: time::OffsetDateTime) -> Result<u64, StorageError> {
@@ -287,6 +309,17 @@ impl Storage for SqliteStorage {
             "DELETE FROM email_outbox WHERE rowid IN
                (SELECT rowid FROM email_outbox
                  WHERE sent_at IS NOT NULL OR expires_at <= ?1 LIMIT ?2)"
+        );
+        // Back-channel logout deliveries stay visible (delivered or not) until give_up_at.
+        total += purge!(
+            "DELETE FROM logout_delivery WHERE rowid IN
+               (SELECT rowid FROM logout_delivery WHERE give_up_at <= ?1 LIMIT ?2)"
+        );
+        // Expired preview drafts: clear the draft, drop rows that hold nothing else.
+        total += purge!(
+            "DELETE FROM branding WHERE rowid IN
+               (SELECT rowid FROM branding
+                 WHERE tokens IS NULL AND preview_expires_at <= ?1 LIMIT ?2)"
         );
         // Families past their absolute lifetime can never issue tokens again; keep any that a
         // still-valid code references. Their (unusable) refresh tokens go by cascade.
