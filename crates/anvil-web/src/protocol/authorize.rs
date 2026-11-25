@@ -2,7 +2,11 @@
 //! continuation after login (`GET {issuer}/authorize/continue?request={id}`).
 //!
 //! The handlers only translate HTTP into [`AuthorizeService`] calls and outcomes into responses:
-//! - `Redirect` → `303 See Other` to the client's redirect URI (success and error, always with `iss`);
+//! - `Respond` → the authorization response (success and error, always with `iss`), delivered in
+//!   its response mode: `query` → `303 See Other` to the redirect URI with the parameters in the
+//!   query; `form_post` → a `200` HTML page whose form auto-submits the parameters to the
+//!   redirect URI (self-hosted script, `<noscript>` button, per-response CSP whose `form-action`
+//!   allows only the redirect URI's origin);
 //! - `Login` → `303` to `{issuer}/ui/login?request={id}`;
 //! - `ErrorPage` → the themed `400` error page, never a redirect (unknown client, unregistered
 //!   redirect URI, malformed request before the redirect URI is trusted, expired request).
@@ -13,6 +17,7 @@
 use anvil_core::error::CoreError;
 use anvil_core::model::{AuthRequestId, BrowserSession};
 use anvil_core::oauth::authorize_request::{RawParams, parse_raw};
+use anvil_core::oauth::response_mode::{AuthorizationResponse, ResponseMode};
 use anvil_core::service::authorize::{AuthorizeOutcome, AuthorizeService};
 use anvil_core::service::session::SessionService;
 use axum::Router;
@@ -24,6 +29,7 @@ use axum::routing::get;
 use axum_extra::extract::cookie::CookieJar;
 
 use crate::errors::{core_error_page, error_page};
+use crate::render::PageContext;
 use crate::state::AppState;
 use crate::tenant::ResolvedTenant;
 
@@ -66,14 +72,79 @@ fn see_other(location: &str) -> Response {
             // Redirect URIs are validated at registration and built with percent-encoding, so a
             // header-invalid location is a server bug, not client input.
             tracing::error!("authorization redirect is not a valid header value");
-            (StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response()
+            server_error()
+        }
+    }
+}
+
+/// The CSP `form-action` source for a redirect URI: its origin (`scheme://host[:port]`) for
+/// http(s), `scheme:` for the custom schemes of native apps. `None` when the URI does not parse.
+fn form_action_source(redirect_uri: &str) -> Option<String> {
+    let url = url::Url::parse(redirect_uri).ok()?;
+    match url.scheme() {
+        "http" | "https" => {
+            let origin = url.origin();
+            origin.is_tuple().then(|| origin.ascii_serialization())
+        }
+        scheme => Some(format!("{scheme}:")),
+    }
+}
+
+/// The CSP of a form_post page: only the self-hosted script and stylesheet, and the form may
+/// only be submitted to the redirect URI's origin.
+fn form_post_csp(form_action: &str) -> String {
+    format!(
+        "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; \
+         form-action {form_action}; frame-ancestors 'none'; base-uri 'none'"
+    )
+}
+
+fn server_error() -> Response {
+    (StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response()
+}
+
+/// Renders the auto-submitting form of a `form_post` response.
+fn form_post(state: &AppState, tenant: &ResolvedTenant, r: &AuthorizationResponse) -> Response {
+    // Registered redirect URIs are absolute URLs (validated at registration), so a failure here
+    // is a server bug, not client input.
+    let Some(csp) = form_action_source(&r.redirect_uri)
+        .map(|source| form_post_csp(&source))
+        .and_then(|csp| HeaderValue::from_str(&csp).ok())
+    else {
+        tracing::error!("form_post redirect URI has no usable origin");
+        return server_error();
+    };
+    let ctx = minijinja::context! {
+        page => PageContext::for_tenant(state, tenant, "Continuing").into_value(),
+        action => &r.redirect_uri,
+        fields => &r.params,
+    };
+    match state.renderer().page("form_post.html", ctx) {
+        Ok(html) => {
+            let mut resp = (StatusCode::OK, html).into_response();
+            let headers = resp.headers_mut();
+            headers.insert(header::CONTENT_SECURITY_POLICY, csp);
+            headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            headers.insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
+            headers.insert(
+                header::REFERRER_POLICY,
+                HeaderValue::from_static("no-referrer"),
+            );
+            resp
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "rendering the form_post page failed");
+            server_error()
         }
     }
 }
 
 fn respond(state: &AppState, tenant: &ResolvedTenant, outcome: AuthorizeOutcome) -> Response {
     match outcome {
-        AuthorizeOutcome::Redirect(location) => see_other(&location),
+        AuthorizeOutcome::Respond(r) => match r.mode {
+            ResponseMode::Query => see_other(&r.to_redirect_url()),
+            ResponseMode::FormPost => form_post(state, tenant, &r),
+        },
         AuthorizeOutcome::Login { request_id } => {
             see_other(&tenant.ui_url(&format!("/ui/login?request={request_id}")))
         }
@@ -209,5 +280,31 @@ mod tests {
             HeaderValue::from_static("application/json"),
         );
         assert!(!is_form(&h));
+    }
+
+    #[test]
+    fn form_action_is_the_redirect_origin() {
+        assert_eq!(
+            form_action_source("https://rp.test/cb?x=1").as_deref(),
+            Some("https://rp.test")
+        );
+        assert_eq!(
+            form_action_source("https://rp.test:8443/a/b").as_deref(),
+            Some("https://rp.test:8443")
+        );
+        assert_eq!(
+            form_action_source("http://127.0.0.1:1234/cb").as_deref(),
+            Some("http://127.0.0.1:1234")
+        );
+        assert_eq!(
+            form_action_source("com.example.app:/oauth").as_deref(),
+            Some("com.example.app:")
+        );
+        assert_eq!(form_action_source("not a url"), None);
+        let csp = form_post_csp("https://rp.test");
+        assert!(csp.contains("form-action https://rp.test;"), "{csp}");
+        assert!(csp.contains("script-src 'self'"));
+        assert!(!csp.contains("unsafe-inline"));
+        assert!(HeaderValue::from_str(&csp).is_ok());
     }
 }

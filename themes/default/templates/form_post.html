@@ -1,0 +1,15 @@
+{#- OAuth 2.0 Form Post Response Mode: posts the authorization response to the client.
+    Context: page, action (the client's redirect URI), fields (list of [name, value]).
+    No inline script: form_post.js submits the form; <noscript> users press Continue. -#}
+{% extends "base.html" %}
+{% block heading %}Continuing…{% endblock %}
+{% block content %}
+<form id="form-post" method="post" action="{{ action }}">
+{% for field in fields %}
+<input type="hidden" name="{{ field[0] }}" value="{{ field[1] }}">
+{% endfor %}
+<p class="anvil-lead" id="form-post-status" role="status">Returning you to the application.</p>
+<noscript><button type="submit" id="form-post-continue">Continue</button></noscript>
+</form>
+<script src="{{ page.asset_base }}/form_post.js" defer></script>
+{% endblock %}
