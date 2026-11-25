@@ -1,13 +1,14 @@
-# OpenID conformance pipeline (FND-05, Spike C). Starts the pinned conformance suite and a fresh anvilid,
-# runs the Basic OP and Config OP plans and enforces the committed expected-failures file exactly.
-# Same entry point as local runs: `just conformance` (tests/conformance/run.sh). Dev mode, no secrets.
+# OpenID conformance: starts the pinned conformance suite and a fresh anvilid over TLS (throwaway
+# self-signed certificate generated at run time), provisions it through /setup and the admin API, runs
+# the Basic OP and Config OP plans and enforces the committed expected-skips and expected-failures files
+# exactly. Same entry point as local runs: `just conformance` (tests/conformance/run.sh). No secrets.
 name: conformance
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
-  # Phase 1: prove the spike before merge on PRs that can affect it.
+  # PRs that touch protocol code, the theme (browser automation selectors) or the harness.
   pull_request:
     paths:
       - "crates/**"
