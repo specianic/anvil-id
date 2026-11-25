@@ -1,0 +1,4 @@
+# The image is built from the prebuilt static binary only (see Dockerfile).
+*
+!target/x86_64-unknown-linux-musl/release/anvilid
+!target/docker/data
