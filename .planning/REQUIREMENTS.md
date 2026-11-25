@@ -49,7 +49,7 @@ Source of truth for wording and detail: [docs/PRD.md](../docs/PRD.md) §8–9. I
 - [x] **AUTH-04**: User can register and log in with passkeys, including usernameless; clone detection via signature counter [0.2]
 - [x] **AUTH-05**: User can enroll TOTP with recovery codes and use it as a second factor [0.2]
 - [ ] **AUTH-06**: User can log in with email OTP or magic link [0.3]
-- [x] **AUTH-07**: User can log in with Google, Apple, Microsoft, GitHub or any generic OIDC/OAuth2 provider [0.3]
+- [ ] **AUTH-07**: User can log in with Google, Apple, Microsoft, GitHub or any generic OIDC/OAuth2 provider [0.3]
 - [ ] **AUTH-08**: Admin can set MFA policy (off/optional/required) per tenant, org or client; clients can request step-up via acr_values [0.3]
 - [x] **AUTH-09**: Brute-force attempts are throttled per account and per IP with progressive delays; CAPTCHA (Turnstile/hCaptcha) can be enabled [0.2]
 - [x] **AUTH-10**: User can list and revoke their sessions; idle and absolute timeouts apply; admins can revoke sessions [0.2]
@@ -108,7 +108,7 @@ Source of truth for wording and detail: [docs/PRD.md](../docs/PRD.md) §8–9. I
 
 - [x] **SEC-01**: Defaults follow RFC 9700 and OAuth 2.1
 - [x] **SEC-02**: Signing keys are generated at first start, encrypted at rest with a KEK, and rotated on schedule with overlap
-- [x] **SEC-03**: All secrets are stored hashed; TOTP seeds and upstream IdP secrets are encrypted
+- [ ] **SEC-03**: All secrets are stored hashed; TOTP seeds and upstream IdP secrets are encrypted
 - [x] **SEC-04**: Browser endpoints have CSRF protection, hardened cookies and a strict CSP
 - [x] **SEC-05**: Authentication and token endpoints are rate limited by default
 - [x] **SEC-06**: Release builds contain no test-only behavior
@@ -201,7 +201,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | AUTH-04 | Phase 3 | Complete |
 | AUTH-05 | Phase 3 | Complete |
 | AUTH-06 | Phase 4 | Pending |
-| AUTH-07 | Phase 4 | Complete |
+| AUTH-07 | Phase 4 | Pending |
 | AUTH-08 | Phase 4 | Pending |
 | AUTH-09 | Phase 3 | Complete |
 | AUTH-10 | Phase 3 | Complete |
@@ -242,7 +242,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | OPS-09 | Phase 5 | Pending |
 | SEC-01 | Phase 2 | Complete |
 | SEC-02 | Phase 3 | Complete |
-| SEC-03 | Phase 4 | Complete |
+| SEC-03 | Phase 4 | Pending |
 | SEC-04 | Phase 2 | Complete |
 | SEC-05 | Phase 3 | Complete |
 | SEC-06 | Phase 2 | Complete |
