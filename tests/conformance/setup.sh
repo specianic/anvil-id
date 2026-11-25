@@ -120,6 +120,7 @@ admin_post() {
 # require_pkce=false: the Basic OP plan does not send PKCE (confidential clients may opt out, C1).
 # consent_mode=skip_first_party: the suite's browser automation signs in but does not answer a
 # consent screen (new clients default to consent_mode=required).
+# token_format=jwt: the default, stated explicitly so the suite always sees JWT access tokens.
 create_client() {
   # $1 = client name, $2 = auth method; prints "client_id client_secret"
   local body
@@ -135,6 +136,7 @@ print(json.dumps({
     "grant_types": ["authorization_code", "refresh_token"],
     "scopes": ["openid", "profile", "email", "address", "phone"],
     "consent_mode": "skip_first_party",
+    "token_format": "jwt",
 }))
 PY
 )

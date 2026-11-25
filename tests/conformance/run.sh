@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Runs the OpenID conformance suite (Basic OP + Config OP) against a freshly started anvilid over TLS.
+# Runs the OpenID conformance suite (Basic OP, Config OP and Form Post OP) against a freshly started
+# anvilid over TLS.
+#
+# Usage: tests/conformance/run.sh [basic|config|formpost|all]   (default: all)
 #
 # Local runs and CI run this same script (`just conformance`). It:
 #   1. fetches the suite's scripts + prebuilt compose file at the pinned tag into ./suite,
@@ -8,7 +11,7 @@
 #      anvilid (new temporary data dir) on the built-in TLS listener at 0.0.0.0:$ANVILID_PORT with
 #      public URL https://host.docker.internal:$ANVILID_PORT,
 #   4. provisions it through /setup and the admin API (setup.sh), which writes the suite config,
-#   5. runs both plans through the suite's own run-test-plan.py with the expected-skips and
+#   5. runs the selected plans through the suite's own run-test-plan.py with the expected-skips and
 #      expected-failures files, exporting results to $RESULTS_DIR,
 #   6. tears everything down (logs saved to $RESULTS_DIR, generated secrets deleted) and exits with
 #      the runner's code.
@@ -32,10 +35,27 @@ EXPECTED_FAILURES="tests/conformance/expected-failures.json"
 EXPECTED_SKIPS="tests/conformance/expected-skips.json"
 BASIC_PLAN="oidcc-basic-certification-test-plan[server_metadata=discovery][client_registration=static_client]"
 CONFIG_PLAN="oidcc-config-certification-test-plan"
+# The Basic plan's module list with response_mode=form_post (suite: OIDCCFormPostBasicTestPlan).
+FORMPOST_PLAN="oidcc-formpost-basic-certification-test-plan[server_metadata=discovery][client_registration=static_client]"
+# Login quota for the conformance instance. Rate limiting stays on, but the default Auth class
+# (10 logins per minute and IP, burst 5) is sized for humans: every suite module signs in through
+# the scripted browser, and all of them arrive from the one Docker gateway address.
+CONFORMANCE_AUTH_PER_MINUTE="${CONFORMANCE_AUTH_PER_MINUTE:-600}"
 PUBLIC_URL="https://host.docker.internal:${ANVILID_PORT}"
 
 log() { printf '[conformance] %s\n' "$*" >&2; }
 die() { log "ERROR: $*"; exit 2; }
+
+[[ $# -le 1 ]] || die "usage: run.sh [basic|config|formpost|all]"
+SELECTION="${1:-all}"
+PLAN_ARGS=()
+case "$SELECTION" in
+  basic) PLAN_NAMES=("$BASIC_PLAN") ;;
+  config) PLAN_NAMES=("$CONFIG_PLAN") ;;
+  formpost) PLAN_NAMES=("$FORMPOST_PLAN") ;;
+  all) PLAN_NAMES=("$BASIC_PLAN" "$CONFIG_PLAN" "$FORMPOST_PLAN") ;;
+  *) die "unknown plan selection '$SELECTION' (expected basic, config, formpost or all)" ;;
+esac
 
 [[ -f Cargo.toml && -d tests/conformance ]] || die "run from the repository root"
 command -v docker >/dev/null || die "docker is required"
@@ -119,8 +139,9 @@ openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 2 \
 ANVILID_DATA=$(mktemp -d)
 # Binary invocation: keep on ONE line.
 ANVILID_ARGS=(serve --listen "0.0.0.0:$ANVILID_PORT" --public-url "$PUBLIC_URL" --tls-cert "$TMP_DIR/tls.crt" --tls-key "$TMP_DIR/tls.key" --data-dir "$ANVILID_DATA" --breach-check off)
-log "starting $ANVILID_BIN ${ANVILID_ARGS[*]}"
-"$ANVILID_BIN" "${ANVILID_ARGS[@]}" > "$RESULTS_DIR/anvilid.log" 2>&1 &
+log "starting $ANVILID_BIN ${ANVILID_ARGS[*]} (ANVILID_RATE_LIMIT_AUTH_PER_MINUTE=$CONFORMANCE_AUTH_PER_MINUTE)"
+ANVILID_RATE_LIMIT_AUTH_PER_MINUTE="$CONFORMANCE_AUTH_PER_MINUTE" \
+  "$ANVILID_BIN" "${ANVILID_ARGS[@]}" > "$RESULTS_DIR/anvilid.log" 2>&1 &
 ANVILID_PID=$!
 
 # The host may not resolve host.docker.internal; pin it to loopback for local checks.
@@ -153,14 +174,26 @@ fi
 "$SUITE_DIR/.venv/bin/python3" -m pip install --quiet --disable-pip-version-check \
   -r "$SUITE_DIR/scripts/requirements.txt"
 
-log "running $BASIC_PLAN and $CONFIG_PLAN"
+# The reviewed skip is a Basic/Form Post module. The Config plan has none, and run-test-plan.py fails
+# on unused skip entries, so a Config-only run checks against an empty skip list.
+SKIPS_FILE="$EXPECTED_SKIPS"
+if [[ "$SELECTION" == "config" ]]; then
+  SKIPS_FILE="$TMP_DIR/no-skips.json"
+  printf '[]\n' > "$SKIPS_FILE"
+fi
+
+# All selected plans share one config file (same clients, user and browser automation).
+for plan in "${PLAN_NAMES[@]}"; do
+  PLAN_ARGS+=("$plan" "$CFG")
+done
+log "running ${PLAN_NAMES[*]}"
 set +e
 CONFORMANCE_SERVER="https://localhost.emobix.co.uk:8443/" CONFORMANCE_DEV_MODE=1 \
   "$SUITE_DIR/.venv/bin/python3" "$SUITE_DIR/scripts/run-test-plan.py" --verbose \
-    --expected-skips-file "$EXPECTED_SKIPS" \
+    --expected-skips-file "$SKIPS_FILE" \
     --expected-failures-file "$EXPECTED_FAILURES" \
     --export-dir "$RESULTS_DIR" \
-    "$BASIC_PLAN" "$CFG" "$CONFIG_PLAN" "$CFG" 2>&1 | tee "$RESULTS_DIR/run-test-plan.log"
+    "${PLAN_ARGS[@]}" 2>&1 | tee "$RESULTS_DIR/run-test-plan.log"
 runner_rc=${PIPESTATUS[0]}
 set -e
 

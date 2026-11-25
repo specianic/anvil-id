@@ -3,6 +3,6 @@
     "test-name": "oidcc-unsigned-request-object-supported-correctly-or-rejected-as-unsupported",
     "variant": "*",
     "configuration-filename": "*anvilid-oidcc.json",
-    "comment": "Request objects are not supported in release 0.1 (request_parameter_supported: false). The OP answers request_not_supported (OIDC Core 3.1.2.6), which the suite reports as a skip."
+    "comment": "Request objects are not supported in releases 0.1 and 0.2 (request_parameter_supported: false). Applies to the Basic and Form Post plans (variant *). The OP answers request_not_supported (OIDC Core 3.1.2.6), which the suite reports as a skip."
   }
 ]

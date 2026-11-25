@@ -1,6 +1,6 @@
 {
   "alias": "anvilid",
-  "description": "anvilid release 0.1 (Basic OP + Config OP). Rendered by tests/conformance/setup.sh; placeholders are replaced with per-run values.",
+  "description": "anvilid (Basic OP, Config OP and Form Post OP). Rendered by tests/conformance/setup.sh; placeholders are replaced with per-run values.",
   "server": {
     "discoveryUrl": "@BASE_URL@/.well-known/openid-configuration"
   },
