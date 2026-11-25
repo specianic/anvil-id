@@ -1,18 +1,44 @@
-//! Branding policy: validation of theme tokens, logos and custom CSS sanitisation (UI-03).
+//! Branding policy (UI-03): validation of theme tokens, custom CSS and logos, per-scope token
+//! merging and deterministic generation of the theme stylesheet. Pure functions, std only.
 //!
-//! RED: signatures only (plan 04-09).
+//! # Threat model
+//!
+//! The only author of theme input is a tenant administrator. That person already controls what their
+//! users see, so the goal is not to contain a hostile admin. The validators exist to:
+//!
+//! - stop accidental tracking pixels and external loads (`url(`, `@import`, `image-set(`, ...);
+//! - keep a branding record from breaking out of its place in the generated stylesheet (unbalanced
+//!   braces, strings or comments, `</style>`, escape obfuscation with backslashes);
+//! - keep the login pages at the UI-02 AA commitment (contrast below 3:1 is refused, below 4.5:1 is a
+//!   warning the console shows).
+//!
+//! CSS is served per tenant only, so one tenant's CSS can never reach another tenant's pages. The strict
+//! page CSP (`default-src 'none'; style-src 'self'; img-src 'self'`) stays the real control: even a
+//! validator bypass cannot load an external resource or run script. The custom CSS validator is an
+//! allow-list for at-rules and functions, plus a deny-list of known-dangerous substrings that is
+//! matched case-insensitively both in the raw text (including comments and strings) and in a view with
+//! comments and whitespace removed.
+//!
+//! SVG logos are refused: navigating to an SVG served from our origin would execute its script.
 
 use serde::Serialize;
 
 use crate::model::{ThemeColors, ThemeTokens};
 
+/// Maximum size of custom CSS in bytes (32 KiB).
 pub const MAX_CUSTOM_CSS_BYTES: usize = 32 * 1024;
+/// Maximum size of a logo in bytes (256 KiB).
 pub const MAX_LOGO_BYTES: usize = 256 * 1024;
+/// Largest accepted corner radius in px.
 pub const MAX_RADIUS_PX: u8 = 32;
+/// Longest accepted font-family value in characters.
 pub const MAX_FONT_FAMILY_LEN: usize = 200;
+/// Contrast below this ratio is refused.
 pub const MIN_CONTRAST: f64 = 3.0;
+/// Contrast below this ratio (WCAG AA for normal text) yields a warning.
 pub const AA_CONTRAST: f64 = 4.5;
 
+/// The colour scheme a contrast finding belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ColorScheme {
@@ -20,14 +46,38 @@ pub enum ColorScheme {
     Dark,
 }
 
+impl std::fmt::Display for ColorScheme {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Light => "light",
+            Self::Dark => "dark",
+        })
+    }
+}
+
+/// A foreground/background pair whose contrast is checked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ContrastPair {
+    /// `text` on `bg`.
     TextOnBackground,
+    /// `text` on `surface` (the card the forms sit on).
     TextOnSurface,
+    /// `primary_text` on `primary` (buttons).
     PrimaryText,
 }
 
+impl std::fmt::Display for ContrastPair {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::TextOnBackground => "text on background",
+            Self::TextOnSurface => "text on surface",
+            Self::PrimaryText => "primary text on primary",
+        })
+    }
+}
+
+/// A contrast between 3:1 and 4.5:1: accepted, but shown to the admin.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ThemeWarning {
     pub scheme: ColorScheme,
@@ -35,6 +85,7 @@ pub struct ThemeWarning {
     pub ratio: f64,
 }
 
+/// Why custom CSS was refused; `line` is 1-based.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("line {line}: {message}")]
 pub struct CssError {
@@ -42,15 +93,19 @@ pub struct CssError {
     pub message: String,
 }
 
+/// Why theme input was refused.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum ThemeError {
-    #[error("{field} must be a hex colour")]
+    #[error("{field} must be a hex colour (#rgb, #rrggbb or #rrggbbaa)")]
     Color { field: String },
-    #[error("radius {value} out of range")]
+    #[error("radius {value} px is out of range (0 to 32 px)")]
     Radius { value: u8 },
-    #[error("font family invalid")]
+    #[error(
+        "font family may only contain letters, digits, spaces, commas, hyphens and balanced quotes \
+         (1 to 200 characters)"
+    )]
     FontFamily,
-    #[error("contrast too low")]
+    #[error("{scheme} {pair} contrast is {ratio:.2}:1, below the minimum of 3:1")]
     Contrast {
         scheme: ColorScheme,
         pair: ContrastPair,
@@ -60,16 +115,19 @@ pub enum ThemeError {
     Css(CssError),
 }
 
+/// Why a logo was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum LogoError {
-    #[error("empty")]
+    #[error("the logo is empty")]
     Empty,
-    #[error("too large")]
+    #[error("the logo is larger than 256 KiB")]
     TooLarge,
-    #[error("unsupported")]
+    #[error("the logo must be a PNG, JPEG or WebP image")]
     Unsupported,
 }
 
+/// An sRGB colour parsed from `#rgb`, `#rrggbb` or `#rrggbbaa`. The alpha channel is accepted for
+/// styling but ignored for contrast (the page background is opaque in every theme).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rgb {
     pub r: u8,
@@ -78,58 +136,675 @@ pub struct Rgb {
 }
 
 impl Rgb {
-    pub fn parse(_s: &str) -> Option<Self> {
-        todo!("04-09 GREEN")
+    /// Parses `#rgb`, `#rrggbb` or `#rrggbbaa` (hex digits in any case); `None` otherwise.
+    pub fn parse(s: &str) -> Option<Self> {
+        let hex = s.strip_prefix('#')?.as_bytes();
+        if !hex.iter().all(u8::is_ascii_hexdigit) {
+            return None;
+        }
+        let nib = |b: u8| match b {
+            b'0'..=b'9' => b - b'0',
+            b'a'..=b'f' => b - b'a' + 10,
+            _ => b - b'A' + 10,
+        };
+        match hex.len() {
+            3 => {
+                let [r, g, b] = [hex[0], hex[1], hex[2]].map(|c| nib(c) * 17);
+                Some(Self { r, g, b })
+            }
+            6 | 8 => {
+                let byte = |i: usize| nib(hex[i]) << 4 | nib(hex[i + 1]);
+                Some(Self {
+                    r: byte(0),
+                    g: byte(2),
+                    b: byte(4),
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// WCAG 2.x relative luminance.
+    fn luminance(self) -> f64 {
+        let lin = |c: u8| {
+            let c = f64::from(c) / 255.0;
+            if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * lin(self.r) + 0.7152 * lin(self.g) + 0.0722 * lin(self.b)
     }
 }
 
+/// The generated theme stylesheet and the lowercase hex SHA-256 of its bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThemeCss {
     pub css: String,
     pub hash: String,
 }
 
-pub fn is_hex_color(_s: &str) -> bool {
-    todo!("04-09 GREEN")
+/// Whether `s` is `#rgb`, `#rrggbb` or `#rrggbbaa`.
+pub fn is_hex_color(s: &str) -> bool {
+    Rgb::parse(s).is_some()
 }
 
-pub fn contrast_ratio(_a: Rgb, _b: Rgb) -> f64 {
-    todo!("04-09 GREEN")
+/// WCAG contrast ratio between two colours (1.0 to 21.0, order-independent).
+pub fn contrast_ratio(a: Rgb, b: Rgb) -> f64 {
+    let (la, lb) = (a.luminance(), b.luminance());
+    let (hi, lo) = if la >= lb { (la, lb) } else { (lb, la) };
+    (hi + 0.05) / (lo + 0.05)
 }
 
-pub fn validate_tokens(_t: &ThemeTokens) -> Result<Vec<ThemeWarning>, ThemeError> {
-    todo!("04-09 GREEN")
+// ---------------------------------------------------------------------------------------------
+// Defaults (mirrors themes/default/static/anvil.css; a test keeps them in sync)
+
+/// Light palette of the default theme, in output order.
+const LIGHT_DEFAULTS: &[(&str, &str)] = &[
+    ("--anvil-bg", "#f6f7f9"),
+    ("--anvil-surface", "#ffffff"),
+    ("--anvil-text", "#1c1f24"),
+    ("--anvil-muted", "#5b6270"),
+    ("--anvil-border", "#d6dae1"),
+    ("--anvil-input-border", "#6b7280"),
+    ("--anvil-primary", "#2f5bd3"),
+    ("--anvil-primary-text", "#ffffff"),
+    ("--anvil-danger", "#b42318"),
+    ("--anvil-focus", "#1d4ed8"),
+    ("--anvil-danger-bg", "#fef3f2"),
+    ("--anvil-warning-bg", "#fffaeb"),
+    ("--anvil-warning-border", "#b54708"),
+    ("--anvil-warning-text", "#7a2e0e"),
+    ("--anvil-code-bg", "#eef0f4"),
+];
+
+/// Dark palette of the default theme.
+const DARK_DEFAULTS: &[(&str, &str)] = &[
+    ("--anvil-bg", "#14161a"),
+    ("--anvil-surface", "#1d2026"),
+    ("--anvil-text", "#e7e9ee"),
+    ("--anvil-muted", "#a0a7b4"),
+    ("--anvil-border", "#343944"),
+    ("--anvil-input-border", "#8a92a1"),
+    ("--anvil-primary", "#6d8ef0"),
+    ("--anvil-primary-text", "#0d1020"),
+    ("--anvil-danger", "#f97066"),
+    ("--anvil-focus", "#a9c0ff"),
+    ("--anvil-danger-bg", "#2a1614"),
+    ("--anvil-warning-bg", "#2a2010"),
+    ("--anvil-warning-border", "#f79009"),
+    ("--anvil-warning-text", "#fedf89"),
+    ("--anvil-code-bg", "#262a32"),
+];
+
+fn default_of(table: &[(&str, &'static str)], var: &str) -> &'static str {
+    table
+        .iter()
+        .find(|(v, _)| *v == var)
+        .map(|(_, value)| *value)
+        .unwrap_or_default()
 }
 
-pub fn validate_custom_css(_css: &str) -> Result<(), CssError> {
-    todo!("04-09 GREEN")
+/// The colour fields of [`ThemeColors`] with their field name and CSS variable, in output order.
+fn color_fields(c: &ThemeColors) -> [(&'static str, &'static str, Option<&str>); 9] {
+    [
+        ("primary", "--anvil-primary", c.primary.as_deref()),
+        (
+            "primary_text",
+            "--anvil-primary-text",
+            c.primary_text.as_deref(),
+        ),
+        ("bg", "--anvil-bg", c.bg.as_deref()),
+        ("surface", "--anvil-surface", c.surface.as_deref()),
+        ("text", "--anvil-text", c.text.as_deref()),
+        ("muted", "--anvil-muted", c.muted.as_deref()),
+        ("border", "--anvil-border", c.border.as_deref()),
+        ("focus", "--anvil-focus", c.focus.as_deref()),
+        ("danger", "--anvil-danger", c.danger.as_deref()),
+    ]
 }
 
+fn has_any_color(c: &ThemeColors) -> bool {
+    color_fields(c).iter().any(|(_, _, v)| v.is_some())
+}
+
+/// `colors_dark` only counts when it customises at least one colour.
+fn dark_set(t: &ThemeTokens) -> Option<&ThemeColors> {
+    t.colors_dark.as_ref().filter(|c| has_any_color(c))
+}
+
+// ---------------------------------------------------------------------------------------------
+// Tokens
+
+fn check_colors(prefix: &str, c: &ThemeColors) -> Result<(), ThemeError> {
+    for (name, _, value) in color_fields(c) {
+        if let Some(v) = value
+            && !is_hex_color(v)
+        {
+            return Err(ThemeError::Color {
+                field: format!("{prefix}.{name}"),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// System font stacks only: `[A-Za-z0-9 ,'"-]`, 1 to 200 characters, not blank, quotes balanced
+/// (a quote is closed by the same kind of quote).
+fn is_valid_font_family(f: &str) -> bool {
+    if f.is_empty() || f.len() > MAX_FONT_FAMILY_LEN || f.trim().is_empty() {
+        return false;
+    }
+    let mut open: Option<u8> = None;
+    for b in f.bytes() {
+        if !(b.is_ascii_alphanumeric() || matches!(b, b' ' | b',' | b'\'' | b'"' | b'-')) {
+            return false;
+        }
+        if matches!(b, b'\'' | b'"') {
+            match open {
+                None => open = Some(b),
+                Some(q) if q == b => open = None,
+                Some(_) => return false,
+            }
+        }
+    }
+    open.is_none()
+}
+
+/// Syntax checks only (colours, radius, font); no contrast.
+fn check_syntax(t: &ThemeTokens) -> Result<(), ThemeError> {
+    check_colors("colors", &t.colors)?;
+    if let Some(dark) = &t.colors_dark {
+        check_colors("colors_dark", dark)?;
+    }
+    if let Some(value) = t.radius_px
+        && value > MAX_RADIUS_PX
+    {
+        return Err(ThemeError::Radius { value });
+    }
+    if let Some(f) = &t.font_family
+        && !is_valid_font_family(f)
+    {
+        return Err(ThemeError::FontFamily);
+    }
+    Ok(())
+}
+
+fn check_contrast(
+    scheme: ColorScheme,
+    c: &ThemeColors,
+    warnings: &mut Vec<ThemeWarning>,
+) -> Result<(), ThemeError> {
+    let defaults = match scheme {
+        ColorScheme::Light => LIGHT_DEFAULTS,
+        ColorScheme::Dark => DARK_DEFAULTS,
+    };
+    // (custom value, CSS variable) -> effective colour.
+    let eff = |v: Option<&String>, var: &str| -> Rgb {
+        v.and_then(|s| Rgb::parse(s))
+            .or_else(|| Rgb::parse(default_of(defaults, var)))
+            .unwrap_or(Rgb { r: 0, g: 0, b: 0 })
+    };
+    let pairs = [
+        (
+            ContrastPair::TextOnBackground,
+            (c.text.as_ref(), "--anvil-text"),
+            (c.bg.as_ref(), "--anvil-bg"),
+        ),
+        (
+            ContrastPair::TextOnSurface,
+            (c.text.as_ref(), "--anvil-text"),
+            (c.surface.as_ref(), "--anvil-surface"),
+        ),
+        (
+            ContrastPair::PrimaryText,
+            (c.primary_text.as_ref(), "--anvil-primary-text"),
+            (c.primary.as_ref(), "--anvil-primary"),
+        ),
+    ];
+    for (pair, (fg, fg_var), (bg, bg_var)) in pairs {
+        if fg.is_none() && bg.is_none() {
+            continue;
+        }
+        let ratio = contrast_ratio(eff(fg, fg_var), eff(bg, bg_var));
+        if ratio < MIN_CONTRAST {
+            return Err(ThemeError::Contrast {
+                scheme,
+                pair,
+                ratio,
+            });
+        }
+        if ratio < AA_CONTRAST {
+            warnings.push(ThemeWarning {
+                scheme,
+                pair,
+                ratio,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Validates theme tokens: colour syntax, radius 0 to 32 px, font family charset, and WCAG contrast
+/// for text/bg, text/surface and primary_text/primary in the light set and (when present) the dark
+/// set. A pair is checked when either of its colours is customised; the other comes from the default
+/// palette of that scheme. Below 3:1 is an error, below 4.5:1 a warning.
+pub fn validate_tokens(t: &ThemeTokens) -> Result<Vec<ThemeWarning>, ThemeError> {
+    check_syntax(t)?;
+    let mut warnings = Vec::new();
+    check_contrast(ColorScheme::Light, &t.colors, &mut warnings)?;
+    if let Some(dark) = &t.colors_dark {
+        check_contrast(ColorScheme::Dark, dark, &mut warnings)?;
+    }
+    Ok(warnings)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Custom CSS
+
+/// Refused anywhere (raw text, including comments and strings, and the comment/whitespace-free view),
+/// matched case-insensitively.
+const FORBIDDEN: &[(&str, &str)] = &[
+    ("@import", "@import is not allowed"),
+    ("@font-face", "@font-face is not allowed"),
+    ("@namespace", "@namespace is not allowed"),
+    (
+        "url(",
+        "url() is not allowed: themes cannot load external or data resources",
+    ),
+    ("image-set(", "image-set() is not allowed"),
+    ("expression(", "expression() is not allowed"),
+    ("-moz-binding", "-moz-binding is not allowed"),
+    ("behavior:", "behavior is not allowed"),
+    ("javascript:", "javascript: is not allowed"),
+    ("\\", "backslash escapes are not allowed"),
+    ("<", "'<' is not allowed"),
+];
+
+/// At-rules custom CSS may use.
+const ALLOWED_AT_RULES: &[&str] = &["media", "supports", "keyframes", "layer", "container"];
+
+/// Functions (and functional pseudo-classes) custom CSS may use. Everything that can reference a
+/// resource (`url`, `src`, `image`, `image-set`, `cross-fade`, `element`, `paint`) or read document
+/// data (`attr`) is absent.
+#[rustfmt::skip]
+const ALLOWED_FUNCTIONS: &[&str] = &[
+    // colours and values
+    "rgb", "rgba", "hsl", "hsla", "hwb", "lab", "lch", "oklab", "oklch", "color", "color-mix", "var",
+    "calc", "min", "max", "clamp", "round", "abs", "sign", "mod", "rem",
+    // gradients
+    "linear-gradient", "radial-gradient", "conic-gradient", "repeating-linear-gradient",
+    "repeating-radial-gradient", "repeating-conic-gradient",
+    // transforms and timing
+    "translate", "translatex", "translatey", "translatez", "translate3d", "rotate", "rotatex",
+    "rotatey", "rotatez", "rotate3d", "scale", "scalex", "scaley", "scalez", "scale3d", "skew",
+    "skewx", "skewy", "matrix", "matrix3d", "perspective", "cubic-bezier", "steps",
+    // grid
+    "minmax", "repeat", "fit-content",
+    // filters
+    "blur", "brightness", "contrast", "drop-shadow", "grayscale", "hue-rotate", "invert", "opacity",
+    "saturate", "sepia",
+    // selectors
+    "not", "is", "where", "has", "nth-child", "nth-last-child", "nth-of-type", "nth-last-of-type",
+    "lang", "dir", "selector",
+];
+
+/// Ident bytes for function/at-rule names (non-ASCII bytes count, as in CSS).
+fn is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b >= 0x80
+}
+
+fn css_err(line: u32, message: impl Into<String>) -> CssError {
+    CssError {
+        line,
+        message: message.into(),
+    }
+}
+
+/// Earliest forbidden needle in `hay` (already lowercase), as (offset, message).
+fn find_forbidden(hay: &[u8]) -> Option<(usize, &'static str)> {
+    FORBIDDEN
+        .iter()
+        .filter_map(|(needle, msg)| {
+            hay.windows(needle.len())
+                .position(|w| w == needle.as_bytes())
+                .map(|pos| (pos, *msg))
+        })
+        .min_by_key(|(pos, _)| *pos)
+}
+
+fn line_at(bytes: &[u8], offset: usize) -> u32 {
+    let n = bytes[..offset.min(bytes.len())]
+        .iter()
+        .filter(|b| **b == b'\n')
+        .count();
+    u32::try_from(n + 1).unwrap_or(u32::MAX)
+}
+
+/// Validates tenant custom CSS (conservative allow-list; see the module docs):
+///
+/// - at most 32 KiB; no control characters (tab, LF and CRLF are fine);
+/// - none of `@import`, `@font-face`, `@namespace`, `url(`, `image-set(`, `expression(`,
+///   `-moz-binding`, `behavior:`, `javascript:`, a backslash or `<`, in any case, also inside comments
+///   and strings and with comments or whitespace in between;
+/// - only allow-listed at-rules and functions;
+/// - balanced and properly nested `{}`, `()`, `[]`; terminated comments and single-line strings.
+///
+/// Errors carry the 1-based line of the offending construct.
+pub fn validate_custom_css(css: &str) -> Result<(), CssError> {
+    let bytes = css.as_bytes();
+    if bytes.len() > MAX_CUSTOM_CSS_BYTES {
+        return Err(css_err(
+            line_at(bytes, MAX_CUSTOM_CSS_BYTES),
+            "custom CSS is larger than 32 KiB",
+        ));
+    }
+
+    // Control characters.
+    let mut line = 1u32;
+    let mut chars = css.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\n' => line += 1,
+            '\t' => {}
+            '\r' if chars.peek() == Some(&'\n') => {}
+            c if c.is_control() => {
+                return Err(css_err(line, "control characters are not allowed"));
+            }
+            _ => {}
+        }
+    }
+
+    // Forbidden substrings in the raw text (comments and strings included).
+    let lower = css.to_ascii_lowercase();
+    if let Some((pos, msg)) = find_forbidden(lower.as_bytes()) {
+        return Err(css_err(line_at(bytes, pos), msg));
+    }
+
+    // Structure pass; also builds the view without comments and whitespace.
+    let lb = lower.as_bytes();
+    let mut compact: Vec<u8> = Vec::with_capacity(lb.len());
+    let mut compact_lines: Vec<u32> = Vec::with_capacity(lb.len());
+    let mut stack: Vec<(u8, u32)> = Vec::new();
+    let mut structural: Option<CssError> = None;
+    let mut line = 1u32;
+    let mut i = 0usize;
+    while i < lb.len() && structural.is_none() {
+        let b = lb[i];
+        match b {
+            b'/' if lb.get(i + 1) == Some(&b'*') => {
+                let start = line;
+                i += 2;
+                loop {
+                    match lb.get(i) {
+                        None => {
+                            structural = Some(css_err(start, "unterminated comment"));
+                            break;
+                        }
+                        Some(b'*') if lb.get(i + 1) == Some(&b'/') => {
+                            i += 2;
+                            break;
+                        }
+                        Some(c) => {
+                            if *c == b'\n' {
+                                line += 1;
+                            }
+                            i += 1;
+                        }
+                    }
+                }
+                continue;
+            }
+            b'"' | b'\'' => {
+                let start = line;
+                compact.push(b);
+                compact_lines.push(line);
+                i += 1;
+                loop {
+                    match lb.get(i) {
+                        None | Some(b'\n' | b'\r') => {
+                            structural = Some(css_err(start, "unterminated string"));
+                            break;
+                        }
+                        Some(c) => {
+                            compact.push(*c);
+                            compact_lines.push(line);
+                            i += 1;
+                            if *c == b {
+                                break;
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+            b'{' | b'(' | b'[' => {
+                if b == b'(' {
+                    let start = lb[..i]
+                        .iter()
+                        .rposition(|c| !is_ident_byte(*c))
+                        .map_or(0, |p| p + 1);
+                    let name = &css[start..i];
+                    if !name.is_empty()
+                        && !ALLOWED_FUNCTIONS.contains(&name.to_ascii_lowercase().as_str())
+                    {
+                        structural =
+                            Some(css_err(line, format!("function {name}() is not allowed")));
+                    }
+                }
+                stack.push((b, line));
+            }
+            b'}' | b')' | b']' => {
+                let open = match b {
+                    b'}' => b'{',
+                    b')' => b'(',
+                    _ => b'[',
+                };
+                match stack.pop() {
+                    Some((o, _)) if o == open => {}
+                    _ => {
+                        structural = Some(css_err(line, format!("unbalanced '{}'", b as char)));
+                    }
+                }
+            }
+            b'@' => {
+                let end = lb[i + 1..]
+                    .iter()
+                    .position(|c| !is_ident_byte(*c))
+                    .map_or(lb.len(), |p| i + 1 + p);
+                let name = &css[i + 1..end];
+                if !ALLOWED_AT_RULES.contains(&name.to_ascii_lowercase().as_str()) {
+                    structural = Some(css_err(line, format!("at-rule @{name} is not allowed")));
+                }
+            }
+            _ => {}
+        }
+        if b == b'\n' {
+            line += 1;
+        }
+        if !b.is_ascii_whitespace() {
+            compact.push(b);
+            compact_lines.push(line);
+        }
+        i += 1;
+    }
+
+    // Forbidden substrings hidden by comments or whitespace (`u/**/rl(`, `behavior : x`).
+    if let Some((pos, msg)) = find_forbidden(&compact) {
+        let at = compact_lines.get(pos).copied().unwrap_or(line);
+        if structural.as_ref().is_none_or(|e| at <= e.line) {
+            return Err(css_err(at, msg));
+        }
+    }
+    if let Some(e) = structural {
+        return Err(e);
+    }
+    if let Some((open, at)) = stack.last() {
+        return Err(css_err(*at, format!("unclosed '{}'", *open as char)));
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------------------------
+// Merge and stylesheet
+
+fn merge_colors(layers: &[&ThemeColors]) -> ThemeColors {
+    let pick =
+        |f: fn(&ThemeColors) -> &Option<String>| layers.iter().rev().find_map(|c| f(c).clone());
+    ThemeColors {
+        primary: pick(|c| &c.primary),
+        primary_text: pick(|c| &c.primary_text),
+        bg: pick(|c| &c.bg),
+        surface: pick(|c| &c.surface),
+        text: pick(|c| &c.text),
+        muted: pick(|c| &c.muted),
+        border: pick(|c| &c.border),
+        focus: pick(|c| &c.focus),
+        danger: pick(|c| &c.danger),
+    }
+}
+
+/// Merges tokens per field with precedence client > tenant > `default`. `colors_dark` is merged per
+/// colour across the layers that define it and stays `None` when none does.
 pub fn merge_tokens(
-    _default: &ThemeTokens,
-    _tenant: Option<&ThemeTokens>,
-    _client: Option<&ThemeTokens>,
+    default: &ThemeTokens,
+    tenant: Option<&ThemeTokens>,
+    client: Option<&ThemeTokens>,
 ) -> ThemeTokens {
-    todo!("04-09 GREEN")
+    // Lowest precedence first.
+    let layers: Vec<&ThemeTokens> = [Some(default), tenant, client]
+        .into_iter()
+        .flatten()
+        .collect();
+    let light: Vec<&ThemeColors> = layers.iter().map(|t| &t.colors).collect();
+    let dark: Vec<&ThemeColors> = layers
+        .iter()
+        .filter_map(|t| t.colors_dark.as_ref())
+        .collect();
+    ThemeTokens {
+        colors: merge_colors(&light),
+        colors_dark: (!dark.is_empty()).then(|| merge_colors(&dark)),
+        font_family: layers.iter().rev().find_map(|t| t.font_family.clone()),
+        radius_px: layers.iter().rev().find_map(|t| t.radius_px),
+    }
 }
 
+fn push_block(out: &mut String, decls: &[(String, String)]) {
+    out.push_str(":root{");
+    for (n, (var, value)) in decls.iter().enumerate() {
+        if n > 0 {
+            out.push(';');
+        }
+        out.push_str(var);
+        out.push(':');
+        out.push_str(value);
+    }
+    out.push('}');
+}
+
+fn color_decls(c: &ThemeColors) -> Vec<(String, String)> {
+    color_fields(c)
+        .into_iter()
+        .filter_map(|(_, var, v)| v.map(|v| (var.to_owned(), v.to_ascii_lowercase())))
+        .collect()
+}
+
+fn hex(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push(DIGITS[usize::from(b >> 4)] as char);
+        s.push(DIGITS[usize::from(b & 0xf)] as char);
+    }
+    s
+}
+
+/// Generates the theme stylesheet served after `anvil.css`:
+///
+/// 1. `:root{…}` with the customised light colours, `--anvil-font` and `--anvil-radius` (fixed order,
+///    colours lowercased), omitted when nothing is customised;
+/// 2. with a dark set, `@media (prefers-color-scheme: dark){:root{…}}` with its colours; without one
+///    but with custom light colours, `:root{color-scheme: light}` plus a dark-media block that pins the
+///    whole light palette, so the default theme's dark block cannot override the brand;
+/// 3. the custom CSS verbatim.
+///
+/// The input is re-checked (syntax and custom CSS, not contrast) so stored data can never break out of
+/// its declaration. Same input, same bytes, same hash.
 pub fn theme_stylesheet(
-    _tokens: &ThemeTokens,
-    _custom_css: Option<&str>,
+    tokens: &ThemeTokens,
+    custom_css: Option<&str>,
 ) -> Result<ThemeCss, ThemeError> {
-    todo!("04-09 GREEN")
+    check_syntax(tokens)?;
+    if let Some(css) = custom_css {
+        validate_custom_css(css).map_err(ThemeError::Css)?;
+    }
+
+    let mut out = String::new();
+    let mut decls = color_decls(&tokens.colors);
+    if let Some(font) = &tokens.font_family {
+        decls.push(("--anvil-font".to_owned(), font.clone()));
+    }
+    if let Some(radius) = tokens.radius_px {
+        decls.push(("--anvil-radius".to_owned(), format!("{radius}px")));
+    }
+    if !decls.is_empty() {
+        push_block(&mut out, &decls);
+        out.push('\n');
+    }
+
+    if let Some(dark) = dark_set(tokens) {
+        out.push_str("@media (prefers-color-scheme: dark){");
+        push_block(&mut out, &color_decls(dark));
+        out.push_str("}\n");
+    } else if has_any_color(&tokens.colors) {
+        out.push_str(":root{color-scheme: light}\n");
+        let custom = color_decls(&tokens.colors);
+        let pinned: Vec<(String, String)> = LIGHT_DEFAULTS
+            .iter()
+            .map(|(var, default)| {
+                custom
+                    .iter()
+                    .find(|(v, _)| v == var)
+                    .cloned()
+                    .unwrap_or_else(|| ((*var).to_owned(), (*default).to_owned()))
+            })
+            .collect();
+        out.push_str("@media (prefers-color-scheme: dark){");
+        push_block(&mut out, &pinned);
+        out.push_str("}\n");
+    }
+
+    if let Some(css) = custom_css {
+        out.push_str(css);
+    }
+
+    let hash = hex(&anvil_jose::encoding::sha256(out.as_bytes()));
+    Ok(ThemeCss { css: out, hash })
 }
 
-pub fn sniff_logo(_bytes: &[u8]) -> Result<&'static str, LogoError> {
-    todo!("04-09 GREEN")
-}
+// ---------------------------------------------------------------------------------------------
+// Logo
 
-#[allow(dead_code)]
-const LIGHT_DEFAULTS: &[(&str, &str)] = &[];
-#[allow(dead_code)]
-const DARK_DEFAULTS: &[(&str, &str)] = &[];
-#[allow(dead_code)]
-fn _unused(_c: &ThemeColors) {}
+/// Identifies a logo by its magic bytes: PNG, JPEG or WebP, at most 256 KiB. SVG, GIF and anything
+/// else are refused. Returns the content type to store and serve.
+pub fn sniff_logo(bytes: &[u8]) -> Result<&'static str, LogoError> {
+    if bytes.is_empty() {
+        return Err(LogoError::Empty);
+    }
+    if bytes.len() > MAX_LOGO_BYTES {
+        return Err(LogoError::TooLarge);
+    }
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]) {
+        Ok("image/png")
+    } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        Ok("image/jpeg")
+    } else if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        Ok("image/webp")
+    } else {
+        Err(LogoError::Unsupported)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -359,9 +1034,13 @@ mod tests {
         let mid = contrast_ratio(rgb("#808080"), rgb("#ffffff"));
         assert!((3.0..4.5).contains(&mid), "{mid}");
         let warnings = validate_tokens(&on_white("#808080")).unwrap();
-        assert!(warnings.iter().any(|w| w.pair == ContrastPair::TextOnBackground
-            && w.scheme == ColorScheme::Light
-            && (w.ratio - mid).abs() < 1e-9));
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.pair == ContrastPair::TextOnBackground
+                    && w.scheme == ColorScheme::Light
+                    && (w.ratio - mid).abs() < 1e-9)
+        );
 
         let high = contrast_ratio(rgb("#595959"), rgb("#ffffff"));
         assert!(high > 6.9, "{high}");
@@ -649,7 +1328,11 @@ mod tests {
              a{color:red}"
         );
         assert_eq!(c.hash.len(), 64);
-        assert!(c.hash.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()));
+        assert!(
+            c.hash
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        );
     }
 
     #[test]
@@ -698,7 +1381,7 @@ mod tests {
             ..ThemeTokens::default()
         };
         let c = theme_stylesheet(&t, None).unwrap();
-        assert!(!c.css.contains("color-scheme"));
+        assert!(!c.css.contains("color-scheme: light"));
         assert!(c.css.contains("--anvil-primary:#abcdef"));
     }
 
@@ -724,7 +1407,9 @@ mod tests {
     #[test]
     fn default_tables_match_anvil_css() {
         let css = include_str!("../../../../themes/default/static/anvil.css");
-        let (light_part, rest) = css.split_once("@media (prefers-color-scheme: dark)").unwrap();
+        let (light_part, rest) = css
+            .split_once("@media (prefers-color-scheme: dark)")
+            .unwrap();
         let dark_part = &rest[..rest.find("\n}\n").unwrap()];
         for (table, part) in [(LIGHT_DEFAULTS, light_part), (DARK_DEFAULTS, dark_part)] {
             assert!(table.len() >= 15);
@@ -823,9 +1508,39 @@ mod tests {
 
     fn fragment() -> impl Strategy<Value = &'static str> {
         prop::sample::select(vec![
-            "a", ".x", "{", "}", "color:red;", "/*", "*/", "\"", "'", "(", ")", "[", "]", "@media",
-            "@import", " ", "\n", "rgb(", "url(", "uRl(", "<", "</style>", "\\", ":root", "--anvil-x:1",
-            "var(", "@x", "\r", "\u{0}", ";", ":", "behavior", "expression(",
+            "a",
+            ".x",
+            "{",
+            "}",
+            "color:red;",
+            "/*",
+            "*/",
+            "\"",
+            "'",
+            "(",
+            ")",
+            "[",
+            "]",
+            "@media",
+            "@import",
+            " ",
+            "\n",
+            "rgb(",
+            "url(",
+            "uRl(",
+            "<",
+            "</style>",
+            "\\",
+            ":root",
+            "--anvil-x:1",
+            "var(",
+            "@x",
+            "\r",
+            "\u{0}",
+            ";",
+            ":",
+            "behavior",
+            "expression(",
         ])
     }
 
