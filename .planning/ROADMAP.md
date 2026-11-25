@@ -109,7 +109,7 @@ Plans:
 - [x] 03-04-PLAN.md — E2E infra (CDP authenticator, axe, TOTP helper, nojs project) + WCAG 2.2 AA baseline of Phase 2 pages (wave 1)
 - [ ] 03-05-PLAN.md — SQLite 0.2 migrations (incl. no-transaction token_family rebuild) + all new repos, contract green (wave 2)
 - [ ] 03-06-PLAN.md — Postgres 0.2 migration + all new repos, contract green (wave 2)
-- [ ] 03-07-PLAN.md — The single keyed limiter in anvil-cache (governor GCRA + progressive backoff, two-tier gate) (wave 2)
+- [x] 03-07-PLAN.md — The single keyed limiter in anvil-cache (governor GCRA + progressive backoff, two-tier gate) (wave 2)
 - [ ] 03-08-PLAN.md — Trusted-proxy client IP + RequestContext, ConnectInfo in the binary, skeleton route modules, TestApp::storage_arc (wave 2)
 - [ ] 03-09-PLAN.md — webauthn-rs adapter for PasskeyCeremonies, SVG QR renderer, webauthn.js (wave 2)
 - [ ] 03-10-PLAN.md — Rotation planner + KeyRotationService, per-client ID-token alg, JWKS cache headers (wave 3)
@@ -189,7 +189,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 |-------|----------------|--------|-----------|
 | 1. Foundations and Spikes (M0) | 8/8 | Complete    | 2026-11-25 |
 | 2. Release 0.1 "First login" | 22/22 | Complete   | 2026-11-25 |
-| 3. Release 0.2 "Secure by default" | 4/29 | In Progress|  |
+| 3. Release 0.2 "Secure by default" | 5/29 | In Progress|  |
 | 4. Release 0.3 "Real-world logins" | 0/TBD | Not started | - |
 | 5. Release 0.4 "Operate it" | 0/TBD | Not started | - |
 | 6. Release 1.0 (Organizations and SSO) | 0/TBD | Not started | - |

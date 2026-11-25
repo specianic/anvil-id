@@ -6,14 +6,14 @@ current_phase: 2
 current_phase_name: Release 0.1 "First login" (M1)
 current_plan: 22
 status: verifying
-stopped_at: Completed 03-02-PLAN.md
-last_updated: "2026-11-25T06:05:03.158Z"
+stopped_at: Completed 03-07-PLAN.md
+last_updated: "2026-11-25T06:11:44.492Z"
 last_activity: 2026-11-25
 progress:
   total_phases: 7
   completed_phases: 1
   total_plans: 60
-  completed_plans: 34
+  completed_plans: 35
   percent: 51
 ---
 
@@ -92,6 +92,7 @@ Phase 2 plans 02-01 through 02-22 are all complete (22/22 summaries). Next: Phas
 | Phase 03 P01 | 13min | 3 tasks | 16 files |
 | Phase 03 P04 | 55min | 2 tasks | 15 files |
 | Phase 03 P02 | 110min | 3 tasks | 74 files |
+| Phase 03 P07 | 15min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -185,6 +186,7 @@ Recent decisions affecting current work:
 - [Phase 03]: 03-02: Audit events appended right after the state change commits; anvil-core mirrors via a process-wide AuditMirror (install_mirror) because core cannot depend on tracing; the binary emits tracing target audit (03-24)
 - [Phase 03]: 03-02: Open questions resolved: can_introspect for tenant-wide introspection (confidential clients always for own tokens); family claim is fid; passkey amr [hwk|swk,user,mfa], password+TOTP/recovery [pwd,otp,mfa], acr urn:anvilid:acr:mfa
 - [Phase 03]: 03-02: complete_recovery takes RecoveryNotice addressed by storage to the consumed token email; backends refuse non-default Phase 3 client/session values with Unsupported until 03-05/03-06
+- [Phase 03]: 03-07: one RateLimiter (anvil-cache) - governor GCRA per route class via CoreClock adapter over the core Clock; moka progressive backoff (6th failure 1 s, doubling, cap 15 min, forgotten after 2*cap); identifier-only tier never locks, escalates to CAPTCHA/delay at 50/h
 
 ### Pending Todos
 
@@ -197,6 +199,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-25T06:05:03.157Z
-Stopped at: Completed 03-02-PLAN.md
+Last session: 2026-11-25T06:11:44.490Z
+Stopped at: Completed 03-07-PLAN.md
 Resume file: None
