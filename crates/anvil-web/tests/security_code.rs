@@ -24,11 +24,15 @@ async fn code_reuse_is_rejected_and_revokes_the_family() {
     let first = exchange(&app, &flow.rp, &flow.code).await;
     assert_eq!(first.status, 200, "{}", first.text());
     let first = json(&first);
+    let access_token = first["access_token"].as_str().expect("access token");
+    assert_eq!(userinfo_get(&app, access_token).await.status, 200);
 
     let second = exchange(&app, &flow.rp, &flow.code).await;
     assert_oauth_error(&second, 400, "invalid_grant");
 
-    // Everything issued from the first exchange is now dead: the refresh token...
+    // Everything issued from the first exchange is now dead: the access token at /userinfo...
+    assert_invalid_token(&userinfo_get(&app, access_token).await);
+    // ...and the refresh token.
     let rt = first["refresh_token"].as_str().expect("refresh token");
     assert_oauth_error(
         &refresh(&app, &flow.rp, rt, None).await,

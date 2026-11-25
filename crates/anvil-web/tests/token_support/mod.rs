@@ -528,3 +528,43 @@ pub fn forged(header: &Value, claims: &Value, sig: &[u8]) -> String {
         b64url(sig)
     )
 }
+
+// ---------------------------------------------------------------------------------------------
+// UserInfo
+// ---------------------------------------------------------------------------------------------
+
+/// `GET {path}` with an `Authorization` header value.
+pub async fn get_with_auth(app: &TestApp, path: &str, authorization: &str) -> TestResponse {
+    app.send(
+        Request::get(path)
+            .header(header::AUTHORIZATION, authorization)
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await
+}
+
+/// `GET /userinfo` with `Authorization: Bearer {token}`.
+pub async fn userinfo_get(app: &TestApp, token: &str) -> TestResponse {
+    get_with_auth(app, "/userinfo", &format!("Bearer {token}")).await
+}
+
+/// `POST /userinfo` with the token in the header and an empty form body.
+pub async fn userinfo_post_header(app: &TestApp, token: &str) -> TestResponse {
+    post_raw(app, "/userinfo", Some(&format!("Bearer {token}")), &[]).await
+}
+
+/// `POST /userinfo` with the token as the `access_token` form field (RFC 6750 §2.2).
+pub async fn userinfo_post_body(app: &TestApp, token: &str) -> TestResponse {
+    post_raw(app, "/userinfo", None, &[("access_token", token)]).await
+}
+
+/// Asserts a 401 RFC 6750 `invalid_token` response.
+pub fn assert_invalid_token(resp: &TestResponse) {
+    assert_eq!(resp.status, 401, "{}", resp.text());
+    assert_eq!(
+        resp.header("www-authenticate"),
+        Some("Bearer error=\"invalid_token\"")
+    );
+    assert_eq!(json(resp)["error"], "invalid_token");
+}
