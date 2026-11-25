@@ -6,7 +6,8 @@
 
 ## Gate list (orchestrator, for 04-32 or a gap plan)
 
-- Replaced branding logos are never purged (found by 04-04); 04-18 was asked to add a purge of unreferenced logos.
+- Replaced branding logos are never purged (04-04); 04-18 could not do it within its files. Needs storage work: `purge_unreferenced_logos` (or extend `purge_expired`) in both backends with a contract test; delete only `branding_logo` rows no branding/draft row references (SQL sketch in 04-18-SUMMARY). Same gap plan: deleting a client leaves its branding row behind.
+- Review 04-18's replacement of the global 64 KiB body limit with a per-request middleware (400 KiB only for the logo route): confirm every route still gets 413 above 64 KiB.
 - Saved consent covers scopes only: a client already consented to is not re-prompted when it requests a different allowed resource (04-12). Phase 5 or a gap plan.
 - Console: the read-only client detail card (`admin-ui/src/routes/clients/$clientId.tsx`) does not show the 0.3 client fields; the edit form does (04-19).
 - `themes/default/README.md` should document `page.lang`/`page.dir`, `t()`, the `locales/` override directory and the logout pages (04-06, 04-13).
