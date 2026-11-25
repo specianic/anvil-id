@@ -1,15 +1,24 @@
-//! Browser-facing self-service pages. Every route here is behind the Fetch-Metadata CSRF layer.
+//! Browser-facing self-service pages. Every route here is behind the Fetch-Metadata CSRF layer,
+//! except the upstream sign-in callback ([`upstream::callback_routes`]): a provider may return with
+//! a cross-site `form_post`; that callback is protected by state, binding cookie and nonce.
 
 mod account_apps;
+mod account_linked;
+mod account_profile;
 mod account_security;
 mod account_sessions;
 mod consent;
+mod email_code;
 mod format;
 mod login;
+mod logout;
 mod mfa;
+mod preview;
 mod recovery;
 mod registration;
+mod select_account;
 mod setup;
+mod upstream;
 mod verification;
 
 use axum::Router;
@@ -17,7 +26,8 @@ use axum::Router;
 use crate::layers::csrf::fetch_metadata_layer;
 use crate::state::AppState;
 
-/// All UI routes (tenant-relative paths), behind the Fetch-Metadata CSRF layer.
+/// All UI routes (tenant-relative paths), behind the Fetch-Metadata CSRF layer; the upstream
+/// callback is merged after the layer and is not covered by it.
 pub fn routes() -> Router<AppState> {
     Router::new()
         .merge(login::routes())
@@ -30,7 +40,16 @@ pub fn routes() -> Router<AppState> {
         .merge(account_security::routes())
         .merge(account_sessions::routes())
         .merge(account_apps::routes())
+        .merge(account_profile::routes())
+        .merge(account_linked::routes())
+        .merge(select_account::routes())
+        .merge(email_code::routes())
+        .merge(logout::routes())
+        .merge(preview::routes())
+        .merge(upstream::routes())
         .layer(fetch_metadata_layer())
+        // After the layer: exempt from the Fetch-Metadata check (cross-site `form_post`).
+        .merge(upstream::callback_routes())
 }
 
 #[cfg(test)]

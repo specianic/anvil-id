@@ -12,12 +12,14 @@ pub mod cookies;
 pub mod errors;
 mod health;
 mod http_cache;
+pub(crate) mod i18n;
 pub mod layers;
 pub mod protocol;
 pub mod render;
 pub mod request_context;
 pub mod state;
 pub mod tenant;
+mod theme;
 pub mod ui;
 
 use axum::Router;
@@ -48,6 +50,7 @@ pub fn app(config: AppConfig, deps: AppDeps) -> Result<Router, WebError> {
     let inner = Router::new()
         .merge(protocol::routes())
         .merge(ui::routes())
+        .merge(theme::routes())
         .merge(admin::routes())
         .merge(health::routes())
         .route("/assets/{*path}", get(assets::handler))

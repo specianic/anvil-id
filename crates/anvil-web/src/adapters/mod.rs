@@ -5,6 +5,7 @@
 //! SSRF-guarded client in [`outbound`].
 
 pub mod argon2;
+pub mod backchannel;
 pub mod captcha;
 pub mod hibp;
 pub mod outbound;

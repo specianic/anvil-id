@@ -9,7 +9,9 @@
 
 mod audit;
 mod auth;
+mod branding;
 mod clients;
+mod connections;
 pub mod dto;
 mod email;
 mod sessions;
