@@ -1,0 +1,16 @@
+{#- CAPTCHA widget partial (AUTH-09). Included by login.html only when the brute-force gate asks
+    for a CAPTCHA. Variables: `captcha.provider` ("turnstile" | "hcaptcha") and `captcha.site_key`.
+    Enabling CAPTCHA loads the provider's script by operator choice; the page that includes this
+    partial must send the CSP of `anvil_web::adapters::captcha::captcha_csp(provider)`, every other
+    page keeps the strict default CSP. Prefer Turnstile's managed (non-interactive) mode: interactive
+    challenges conflict with WCAG 3.3.8 (accessible authentication). -#}
+{% if captcha and captcha.provider == "turnstile" %}
+<div class="anvil-captcha cf-turnstile" id="captcha-widget" data-sitekey="{{ captcha.site_key }}"></div>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+{% elif captcha and captcha.provider == "hcaptcha" %}
+<div class="anvil-captcha h-captcha" id="captcha-widget" data-sitekey="{{ captcha.site_key }}"></div>
+<script src="https://js.hcaptcha.com/1/api.js" async defer></script>
+{% endif %}
+{% if captcha %}
+<noscript><p class="anvil-muted" id="captcha-noscript">This sign-in needs a security check that requires JavaScript. Enable JavaScript and reload the page to continue.</p></noscript>
+{% endif %}
