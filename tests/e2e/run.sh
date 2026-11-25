@@ -8,8 +8,8 @@
 #      ANVILID_SMTP_URL=smtp://127.0.0.1:1025 and --breach-check off (Postgres variant: a throwaway
 #      postgres:18-alpine container and a random KEK passed through the environment)
 #   3. the setup URL from the logs; the specs complete /setup once and share the credential
-#   4. `playwright test` on the given specs (default: every spec below), in both Playwright projects
-#      (chromium, and nojs with JavaScript disabled)
+#   4. `playwright test` on the given specs (default: every tests/e2e/specs/*.spec.ts, sorted, with
+#      a11y.spec.ts first and qual04.spec.ts left to scripts/qual04.sh), in both Playwright projects (chromium, and nojs with JavaScript disabled)
 #
 # Requires Docker, Node.js, `npm ci` in tests/e2e and examples/node-rp (nojs.spec.ts starts the
 # sample RP) and Playwright's chromium.
@@ -28,13 +28,20 @@ case "$BACKEND" in
         ;;
 esac
 (($# > 0)) && shift
-# a11y first: on a fresh instance it audits the setup pages before the setup token is used.
+# Default: every specs/*.spec.ts (sorted glob), so new spec files need no edit here. a11y runs first:
+# on a fresh instance it audits the setup pages before the setup token is used. qual04.spec.ts is
+# excluded: scripts/qual04.sh drives it against its own zero-config instance.
 SPECS=("$@")
-((${#SPECS[@]} > 0)) || SPECS=(
-    specs/a11y.spec.ts specs/registration.spec.ts specs/recovery.spec.ts specs/login.spec.ts
-    specs/keyboard.spec.ts specs/nojs.spec.ts specs/fixtures.spec.ts specs/passkey.spec.ts specs/totp.spec.ts
-    specs/consent.spec.ts specs/sessions.spec.ts specs/console.spec.ts
-)
+if ((${#SPECS[@]} == 0)); then
+    SPECS=(specs/a11y.spec.ts)
+    for path in "$ROOT"/tests/e2e/specs/*.spec.ts; do
+        spec=specs/${path##*/}
+        case "$spec" in
+            specs/a11y.spec.ts | specs/qual04.spec.ts) ;;
+            *) SPECS+=("$spec") ;;
+        esac
+    done
+fi
 
 MAILPIT_IMAGE=axllent/mailpit:v1.29.7
 POSTGRES_IMAGE=postgres:18-alpine
