@@ -1,8 +1,51 @@
 {% extends "base.html" %}
 {% import "form.html" as forms %}
+{#- Sign-in page. Variables besides `page` and `form`:
+    - `passkey` ({options_url, action} or none): the usernameless passkey form for webauthn.js. Its
+      button (`login-passkey-submit`) is hidden until the script finds WebAuthn support, so pages
+      without JavaScript show only the password form.
+    - `captcha` ({provider, site_key} or none): the brute-force gate asks for a CAPTCHA; the widget
+      is rendered inside the password form so its response is posted with it.
+    The password form is written out here (instead of forms.render) so the CAPTCHA widget can sit
+    inside it; its markup matches form.html. -#}
 {% block heading %}Sign in{% endblock %}
 {% block content %}
+{% if captcha %}
+<form id="{{ form.id }}" method="post" action="{{ form.action }}" novalidate>
+<input type="hidden" name="csrf_token" value="{{ form.csrf_token }}">
+{% for field in form.fields %}
+{% set invalid = "error" in field.messages|map(attribute="level")|list %}
+<div class="anvil-field{% if invalid %} anvil-field-invalid{% endif %}">
+<label for="{{ field.name }}">{{ field.label }}{% if not field.required %} <span class="anvil-optional">(optional)</span>{% endif %}</label>
+<input id="{{ field.name }}" name="{{ field.name }}" type="{{ field.kind }}"
+{%- if field.value is not none and field.kind != "password" %} value="{{ field.value }}"{% endif %}
+{%- if field.required %} required{% endif %}
+{%- if field.autocomplete %} autocomplete="{{ field.autocomplete }}"{% endif %}
+{%- if field.messages %} aria-describedby="{% for m in field.messages %}{{ field.name }}-msg-{{ loop.index }}{% if not loop.last %} {% endif %}{% endfor %}"{% endif %}
+{%- if invalid %} aria-invalid="true"{% endif %}>
+{{ forms.messages(field.messages, field.name) }}
+</div>
+{% endfor %}
+{% include "captcha.html" %}
+{% if form.messages %}
+<div class="anvil-form-messages">
+{{ forms.messages(form.messages, form.id) }}
+</div>
+{% endif %}
+<button type="submit" id="{{ form.id }}-submit">Sign in</button>
+</form>
+{% else %}
 {{ forms.render(form, "Sign in") }}
+{% endif %}
+{% if passkey %}
+<form id="login-passkey" class="anvil-passkey" method="post" action="{{ passkey.action }}" data-webauthn="authenticate" data-options-url="{{ passkey.options_url }}" data-webauthn-msg-cancelled="The passkey request was cancelled or timed out. Try again, or sign in with your password." data-webauthn-msg-failed="Your passkey could not be used. Try again, or sign in with your password.">
+<input type="hidden" name="csrf_token" value="{{ form.csrf_token }}">
+<input type="hidden" name="response" value="">
+<button type="button" id="login-passkey-submit" class="anvil-secondary" data-webauthn-trigger hidden>Sign in with a passkey</button>
+<p id="login-passkey-status" class="anvil-muted" data-webauthn-status aria-live="polite"></p>
+</form>
+<script src="{{ page.asset_base }}/webauthn.js" defer></script>
+{% endif %}
 {% if page.links.recovery or page.links.registration %}
 <nav class="anvil-links" aria-label="Account help">
 {% if page.links.recovery %}<a id="link-recovery" href="{{ page.links.recovery }}">Forgot your password?</a>{% endif %}

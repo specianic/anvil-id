@@ -168,12 +168,17 @@ impl CaptchaVerifier {
         if token.len() > MAX_TOKEN {
             return Err(CaptchaError::Rejected);
         }
-        let mut form = url::form_urlencoded::Serializer::new(String::new());
-        form.append_pair("secret", secret.expose_secret())
-            .append_pair("response", token);
-        if let Some(ip) = ip {
-            form.append_pair("remoteip", &ip.to_string());
-        }
+        // The serializer is not `Send`: finish it before the request is awaited, so the
+        // verification future can run on a multi-threaded runtime (a handler future).
+        let body = {
+            let mut form = url::form_urlencoded::Serializer::new(String::new());
+            form.append_pair("secret", secret.expose_secret())
+                .append_pair("response", token);
+            if let Some(ip) = ip {
+                form.append_pair("remoteip", &ip.to_string());
+            }
+            form.finish()
+        };
         let url = self.endpoints.url(settings.provider);
         let mut resp = self
             .client
@@ -182,7 +187,7 @@ impl CaptchaVerifier {
                 reqwest::header::CONTENT_TYPE,
                 "application/x-www-form-urlencoded",
             )
-            .body(form.finish())
+            .body(body)
             .send()
             .await
             .map_err(|e| unavailable(format!("siteverify request failed: {e}")))?;

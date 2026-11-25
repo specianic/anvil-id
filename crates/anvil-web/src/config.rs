@@ -6,6 +6,7 @@ use anvil_cache::limiter::LimiterConfig;
 use anvil_core::model::PublicUrl;
 use anvil_core::policy::PasswordPolicy;
 
+use crate::adapters::captcha::CaptchaEndpoints;
 use crate::client_ip::TrustedProxies;
 
 /// Settings the web layer needs. The binary builds it from its own configuration (02-18).
@@ -26,6 +27,9 @@ pub struct AppConfig {
     /// Rate limits (SEC-05): on by default with the documented quotas of
     /// [`LimiterConfig::default`]. `enabled = false` is the operator switch that turns limiting off.
     pub rate_limits: LimiterConfig,
+    /// CAPTCHA siteverify endpoints (AUTH-09). Default: the providers' public endpoints. Only
+    /// used for tenants that configure a CAPTCHA; tests point them at a local mock.
+    pub captcha_endpoints: CaptchaEndpoints,
 }
 
 impl AppConfig {
@@ -43,6 +47,7 @@ impl AppConfig {
             password_policy: PasswordPolicy::default(),
             insecure_http: false,
             rate_limits: LimiterConfig::default(),
+            captcha_endpoints: CaptchaEndpoints::default(),
         }
     }
 

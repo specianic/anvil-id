@@ -1,5 +1,7 @@
 //! Every UI page carries the strict CSP, `frame-ancestors 'none'` and `Referrer-Policy:
-//! no-referrer`, contains no script and references no external host (SEC-04, UI-01).
+//! no-referrer`, contains no inline script (only self-hosted script files such as the sign-in
+//! page's webauthn.js, which the password form does not need) and references no external host
+//! (SEC-04, UI-01).
 //! Selected backend via `ANVILID_TEST_DB`.
 
 mod support;
@@ -33,7 +35,26 @@ fn check(name: &str, resp: &TestResponse) {
     );
 
     let html = resp.html();
-    assert!(!html.to_ascii_lowercase().contains("<script"), "{name}");
+    // Only `<script src="/…/assets/…" defer></script>`: a same-origin file, no inline code.
+    let lower = html.to_ascii_lowercase();
+    let mut rest = lower.as_str();
+    while let Some(i) = rest.find("<script") {
+        let tag = &rest[i..];
+        let end = tag
+            .find("</script>")
+            .map_or(tag.len(), |e| e + "</script>".len());
+        let tag = &tag[..end];
+        let src = tag
+            .strip_prefix("<script src=\"")
+            .and_then(|t| t.split_once('"'));
+        assert!(
+            src.is_some_and(|(src, after)| src.starts_with('/')
+                && src.contains("/assets/")
+                && after == " defer></script>"),
+            "{name}: only self-hosted script files are allowed: {tag}"
+        );
+        rest = &rest[i + end..];
+    }
     for scheme in ["http://", "https://"] {
         let mut rest = html.as_str();
         while let Some(i) = rest.find(scheme) {
