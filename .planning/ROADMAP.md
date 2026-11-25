@@ -149,7 +149,42 @@ Plans:
   3. An admin edits theme settings in the console and sees the login pages change live; pages render in the language chosen from `ui_locales` or the browser
   4. A user can log in with email OTP or magic link, and manage profile, email, password, passkeys, MFA, sessions and connected apps from the account page
   5. Admin MFA policy (off/optional/required) is enforced per tenant and client, and clients can request step-up via `acr_values`, `prompt` and `max_age`, and audience-bound tokens via resource indicators
-**Plans**: TBD
+**Plans**: 33 plans in 9 waves
+
+Plans:
+- [ ] 04-01-PLAN.md — Core foundation: all Phase 4 model/ports (connections, branding, logout deliveries, UpstreamClient), errors, audit actions, anvil-jose email code, Fluent/moka deps, contract suite, backend shims (wave 1)
+- [ ] 04-02-PLAN.md — The single SSRF-guarded outbound client + operator config, CAPTCHA/HIBP migrated, AppState handles, pre-registered web modules (wave 1)
+- [ ] 04-03-PLAN.md — E2E infra: Node mock IdP (Apple-like, GitHub-like), upstream/logout helpers, sample RP logout + back-channel endpoint, run.sh spec glob (wave 1)
+- [ ] 04-04-PLAN.md — SQLite 0005 (CHECK rebuilds, new tables/columns), repos, enqueue-on-revoke, upgrade + plaintext tests (wave 2)
+- [ ] 04-05-PLAN.md — Postgres 0004, repos (SKIP LOCKED delivery leasing), enqueue-on-revoke, upgrade + plaintext tests (wave 2)
+- [ ] 04-06-PLAN.md — i18n infrastructure: Fluent catalogs, negotiation, t(), localized forms, all templates converted, en catalog, ui_locales_supported (wave 2)
+- [ ] 04-07-PLAN.md — Pure upstream logic: provider presets, ID-token validation, claim normalisation, link decision (TDD) (wave 2)
+- [ ] 04-08-PLAN.md — Pure protocol decisions: end-session table, logout token + delivery classification, RFC 8707, MFA policy (TDD) (wave 2)
+- [ ] 04-09-PLAN.md — Pure theming rules: token/contrast validation, CSS validator, merge, stylesheet, logo sniffing (TDD) (wave 2)
+- [ ] 04-10-PLAN.md — Conformance harness: logout/backchannel selections, callback CA + leaf, outbound settings, browser tasks (wave 2)
+- [ ] 04-11-PLAN.md — Admin API 0.3: connections CRUD with sealed write-only secrets, client logout/resource/MFA fields, tenant settings, OpenAPI regen (wave 3)
+- [ ] 04-12-PLAN.md — Resource indicators end to end: multi-valued resource, invalid_target, downscoping, aud, introspection, UserInfo audience rule (wave 3)
+- [ ] 04-13-PLAN.md — RP-initiated logout: /logout GET+POST, hint validation, confirmation flow, signed-out/error pages, discovery fields (wave 3)
+- [ ] 04-14-PLAN.md — Upstream transport adapter on the guarded client: discovery, JWKS cache, token exchange, API calls, MockProvider (wave 3)
+- [ ] 04-15-PLAN.md — Account page: profile, email change with re-verification, password change, nav; login_code/email_change/email_changed emails (wave 3)
+- [ ] 04-16-PLAN.md — Login engine: MFA policy enforcement, in-flow enrolment, acr_values step-up, unmet acr, session switch, login_hint (wave 4)
+- [ ] 04-17-PLAN.md — Back-channel logout delivery worker: sign at send, status classification, retries, binary wiring with wake (wave 4)
+- [ ] 04-18-PLAN.md — Theming backend: BrandingService, theme CSS/logo routes, base.html link, branding API + preview, OpenAPI regen (wave 4)
+- [ ] 04-19-PLAN.md — Console: connections pages, client logout/resource/MFA fields, tenant login settings (wave 4)
+- [ ] 04-20-PLAN.md — prompt=select_account and prompt=create, discovery prompt/acr values (wave 5)
+- [ ] 04-21-PLAN.md — Upstream sign-in + account linking: Lax binding cookie, Apple form_post hop, link confirmation, JIT, Link purpose (wave 5)
+- [ ] 04-22-PLAN.md — Console theme editor with live preview (wave 5)
+- [ ] 04-23-PLAN.md — Conformance: RP-Initiated Logout + Back-Channel Logout plans green and in `all` (wave 5)
+- [ ] 04-24-PLAN.md — Email OTP + magic link sign-in (wave 6)
+- [ ] 04-25-PLAN.md — Linked identities on the account page (connect, guarded unlink) (wave 6)
+- [ ] 04-26-PLAN.md — Provider suites against wiremock mocks: Google, Microsoft, Apple, GitHub, generic OAuth2 (wave 6)
+- [ ] 04-27-PLAN.md — E2E: social sign-in across sites, linking journeys, console connections (wave 7)
+- [ ] 04-28-PLAN.md — E2E: RP-initiated + back-channel logout, MFA policy/step-up, prompt values (wave 7)
+- [ ] 04-29-PLAN.md — E2E: email code/magic link, account page, live theming (wave 7)
+- [ ] 04-30-PLAN.md — German catalog, catalog parity test, i18n e2e (wave 7)
+- [ ] 04-31-PLAN.md — Docs: ARCHITECTURE (incl. sid divergence, SSRF), PRD, UPGRADING 0.2→0.3, theme README, manual social-login checklist (wave 7)
+- [ ] 04-32-PLAN.md — Phase gate: security-test map, `just ci`, version 0.3.0 + migration pins, push main, all workflows green (wave 8)
+- [ ] 04-33-PLAN.md — Release: manual real-provider checklist sign-off (checkpoint), tag + verify v0.3.0 (wave 9)
 
 ### Phase 5: Release 0.4 "Operate it"
 **Goal**: Operators can run AnvilID for many tenants in production with high availability, and integrators can automate and extend it (RBAC, webhooks, declarative config, DCR, MCP clients)
@@ -196,7 +231,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 1. Foundations and Spikes (M0) | 8/8 | Complete    | 2026-11-25 |
 | 2. Release 0.1 "First login" | 23/23 | Complete    | 2026-11-25 |
 | 3. Release 0.2 "Secure by default" | 34/34 | Complete    | 2026-11-25 |
-| 4. Release 0.3 "Real-world logins" | 0/TBD | Not started | - |
+| 4. Release 0.3 "Real-world logins" | 0/33 | Planned | - |
 | 5. Release 0.4 "Operate it" | 0/TBD | Not started | - |
 | 6. Release 1.0 (Organizations and SSO) | 0/TBD | Not started | - |
 | 7. Release 1.0 (Certification and release) | 0/TBD | Not started | - |
