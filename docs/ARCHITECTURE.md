@@ -825,8 +825,11 @@ listener).
   localizes right before rendering. Output is auto-escaped; plurals use Fluent selectors. Bidi
   isolation marks are off (user values inside translated text are wrapped in `<bdi>`).
 - Two files of one locale defining the same id, or a malformed file, fail startup with the file
-  name. A missing message renders its dotted key. Operators override single messages, or add
-  locales, with `{theme_dir}/locales/{lang}/*.ftl`.
+  name. A missing message falls back to English, then renders its dotted key. Every locale shipped
+  in the binary must have exactly the English message ids per file, with the same variables and
+  plural selectors (`crates/anvil-web/tests/i18n_catalogs.rs`), so a shipped translation is never
+  partial. Operators override single messages, or add locales, with
+  `{theme_dir}/locales/{lang}/*.ftl`.
 - Negotiation: `ui_locales` (from the authorization request, or the `ui_locales` query parameter of
   a page) > the user's `locale` claim (account pages only) > `Accept-Language` (by q-value) > the
   tenant's `default_locale` > `en`. Unknown or malformed tags fall through and are never an error.
