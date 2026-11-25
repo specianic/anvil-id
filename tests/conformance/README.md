@@ -18,8 +18,11 @@ downloads about 1 GB of images (MongoDB, the suite server and nginx). After that
 2. It builds `anvilid` (`cargo build --locked -p anvilid`).
 3. It starts the suite with `docker compose -p anvil-conformance`. `compose.override.yml` maps
    `host.docker.internal` to the host gateway so the suite server can reach the binary.
-4. It starts a fresh `anvilid serve --listen 0.0.0.0:9090 --issuer http://host.docker.internal:9090`
-   and waits for discovery to answer.
+4. It starts a fresh `anvilid serve --listen 0.0.0.0:9090 --public-url http://host.docker.internal:9090
+   --insecure-http --data-dir <new temporary directory>` and waits for discovery to answer. The data
+   directory is created with `mktemp -d` and removed on exit, so every run is a zero-config first start
+   (new SQLite database, KEK and signing keys). `--insecure-http` is needed because the public URL is
+   plain http on a non-loopback name.
 5. It runs the suite's own driver, `scripts/run-test-plan.py`, in dev mode (no API token) against
    `https://localhost.emobix.co.uk:8443/`. That hostname is the suite's public name for loopback: it
    resolves to 127.0.0.1, so traffic stays on the machine. The plan is
@@ -57,9 +60,18 @@ unexpected failures. Add a `comment` to each entry.
 are not credentials. The Config OP plan only checks discovery and never authenticates a client, but the
 suite requires a `client` block. JSON has no comments, so this note lives here.
 
+## Ratchet state
+
+The harness runs the release 0.1 binary (plan 02-18): discovery advertises RS256 and `userinfo_endpoint`,
+and `/jwks` serves the default tenant's keys, so `oidcc-discovery-endpoint-verification` now runs to the
+end (FINISHED). The seven remaining entries are all caused by the plain-http issuer:
+`CheckDiscEndpointDiscoveryUrl`, `CheckDiscEndpointIssuerIsValidUrl`,
+`CheckDiscEndpointAuthorizationEndpoint`, `CheckDiscEndpointTokenEndpoint`,
+`CheckDiscEndpointUserinfoEndpoint`, `CheckJwksUri` and `CheckDiscEndpointAllEndpointsAreHttps`.
+
 ## Known limitation: plain-http issuer
 
-In M0 the issuer is `http://host.docker.internal:9090`, so `CheckDiscEndpointAllEndpointsAreHttps` is
-expected to fail. Passing the Basic and Config OP plans (Phase 2) needs an https issuer. The planned
-approach is a self-signed rustls listener used only by this job. Its key is generated in a temporary
-directory at run time and is never committed.
+The issuer is `http://host.docker.internal:9090`, so every https check above is expected to fail.
+Plan 02-19 switches the job to the built-in TLS listener (`--tls-cert`/`--tls-key`, rustls with aws-lc-rs)
+with a self-signed certificate. The key is generated in a temporary directory at run time and is never
+committed. The http entries are removed from the ratchet in the same change.

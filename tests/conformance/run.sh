@@ -4,7 +4,7 @@
 # Local runs and CI run this same script (`just conformance`). It:
 #   1. fetches the suite's scripts + prebuilt compose file at the pinned tag into ./suite,
 #   2. starts the suite (prebuilt images, same tag) with docker compose,
-#   3. starts a fresh anvilid listening on 0.0.0.0:$ANVILID_PORT,
+#   3. starts a fresh anvilid (new temporary data dir) listening on 0.0.0.0:$ANVILID_PORT,
 #   4. runs the Config OP plan through the suite's own run-test-plan.py with the
 #      expected-failures ratchet, exporting results to $RESULTS_DIR,
 #   5. tears everything down (logs saved to $RESULTS_DIR) and exits with the runner's code.
@@ -71,12 +71,16 @@ fi
 
 # --- Cleanup (registered before anything is started) ------------------------------------------------
 ANVILID_PID=""
+ANVILID_DATA=""
 cleanup() {
   local rc=$?
   set +e
   if [[ -n "$ANVILID_PID" ]] && kill -0 "$ANVILID_PID" 2>/dev/null; then
     kill -TERM "$ANVILID_PID" 2>/dev/null
     wait "$ANVILID_PID" 2>/dev/null
+  fi
+  if [[ -n "$ANVILID_DATA" && -d "$ANVILID_DATA" ]]; then
+    rm -rf "$ANVILID_DATA"
   fi
   compose logs --no-color > "$RESULTS_DIR/suite.log" 2>&1
   if [[ "$KEEP_SUITE" == "1" ]]; then
@@ -94,8 +98,11 @@ log "starting conformance suite (images $CONFORMANCE_TAG)"
 compose up -d
 
 # --- 4. Start a fresh anvilid -------------------------------------------------------------------------
-# Binary invocation: keep on ONE line (plan 07 appends --database-url here).
-ANVILID_ARGS=(serve --listen "0.0.0.0:$ANVILID_PORT" --issuer "http://host.docker.internal:$ANVILID_PORT" --database-url "sqlite::memory:")
+# A fresh data dir per run keeps the run zero-config (new SQLite database, KEK and setup token).
+# --insecure-http: the issuer is plain http on a non-loopback name until 02-19 switches to TLS.
+ANVILID_DATA=$(mktemp -d)
+# Binary invocation: keep on ONE line.
+ANVILID_ARGS=(serve --listen "0.0.0.0:$ANVILID_PORT" --public-url "http://host.docker.internal:$ANVILID_PORT" --insecure-http --data-dir "$ANVILID_DATA")
 log "starting $ANVILID_BIN ${ANVILID_ARGS[*]}"
 "$ANVILID_BIN" "${ANVILID_ARGS[@]}" > "$RESULTS_DIR/anvilid.log" 2>&1 &
 ANVILID_PID=$!
