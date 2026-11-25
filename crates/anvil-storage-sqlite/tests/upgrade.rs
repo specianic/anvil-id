@@ -365,3 +365,419 @@ pub async fn upgraded_sqlite() -> TestStorage {
 mod upgraded_contract {
     anvil_storage::storage_contract_tests!(crate::upgraded_sqlite);
 }
+
+// ---------------------------------------------------------------------------------------------
+// 0.2 → 0.3 (migration 0005: CHECK-widening rebuilds of flow, self_service_token and
+// email_template, new tables, new client/code/family/access-token columns).
+
+/// Last schema version shipped in 0.2.
+const LAST_V0_2_VERSION: i64 = 4;
+
+const V02_TENANT: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0002_0001);
+const V02_USER: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0002_0010);
+const V02_SESSION: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0002_0030);
+const V02_FAMILY: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0002_0040);
+const V02_CODE_HASH: [u8; 32] = [0x21; 32];
+const V02_AT_HASH: [u8; 32] = [0x23; 32];
+
+/// A populated 0.2 database (schema version 4), hand-written in the 0.2 shape: rows in every
+/// table that 0005 rebuilds (a flow of every 0.2 kind, a self-service token of every 0.2 kind,
+/// custom email templates) plus clients, a session, a family, a code, a refresh token and an
+/// opaque access token. Timestamps: 2025-01-01 created, 2100-01-01 "far future".
+const V0_2_FIXTURES: &str = r#"
+INSERT INTO tenant (id, slug, display_name, created_at, host, settings) VALUES
+  (x'00000000000070008000000000020001', 'v02', 'Release 0.2', 1735689600000, 'id.v02.example.test',
+   '{"registration":"open","require_verified_email":true,"signing_algs":["RS256","ES256"]}');
+
+INSERT INTO user (id, tenant_id, email, email_verified, username, claims, status, created_at,
+                  updated_at, last_login_at) VALUES
+  (x'00000000000070008000000000020010', x'00000000000070008000000000020001',
+   'grace@example.test', 1, 'grace', '{"name":"Grace"}', 'active', 1735689600000, 1735689600000,
+   NULL);
+
+INSERT INTO credential (id, tenant_id, user_id, kind, secret, external_id, counter,
+                        backup_eligible, label, created_at, updated_at, last_used_at) VALUES
+  (x'00000000000070008000000000020011', x'00000000000070008000000000020001',
+   x'00000000000070008000000000020010', 'password', '$argon2id$v=19$v02', NULL, NULL, 0, '',
+   1735689600000, 1735689600000, NULL),
+  (x'00000000000070008000000000020012', x'00000000000070008000000000020001',
+   x'00000000000070008000000000020010', 'totp', 'c2VhbGVkLXNlZWQ', NULL, 42, 0, 'phone',
+   1735689600000, 1735689600000, 1735689600001);
+
+INSERT INTO client (id, tenant_id, client_id, name, client_type, application_type, auth_method,
+                    secret_hash, jwks, redirect_uris, grant_types, scopes, require_pkce,
+                    created_at, updated_at, token_format, consent_mode,
+                    id_token_signed_response_alg, can_introspect) VALUES
+  (x'00000000000070008000000000020020', x'00000000000070008000000000020001', 'v02-web',
+   'Web', 'confidential', 'web', 'client_secret_basic',
+   x'abababababababababababababababababababababababababababababababab', NULL,
+   '["https://rp.example.test/cb"]', '["authorization_code","refresh_token"]',
+   '["openid","offline_access"]', 1, 1735689600000, 1735689600000, 'opaque',
+   'skip_first_party', 'ES256', 1);
+
+INSERT INTO browser_session (id, tenant_id, user_id, token_hash, auth_time, acr, amr, created_at,
+                             last_seen_at, expires_at, idle_expires_at, revoked_at, ip,
+                             user_agent) VALUES
+  (x'00000000000070008000000000020030', x'00000000000070008000000000020001',
+   x'00000000000070008000000000020010',
+   x'3232323232323232323232323232323232323232323232323232323232323232', 1735689600000,
+   'urn:anvilid:acr:mfa', '["pwd","otp","mfa"]', 1735689600000, 1735689600000, 4102444800000,
+   4102444800000, NULL, '192.0.2.1', 'Test agent');
+
+INSERT INTO flow (id, tenant_id, kind, state, csrf_hash, cookie_hash, auth_request_id,
+                  created_at, expires_at) VALUES
+  (x'00000000000070008000000000021001', x'00000000000070008000000000020001', 'login',
+   '{"k":"login"}', zeroblob(32), x'0101010101010101010101010101010101010101010101010101010101010101',
+   x'00000000000070008000000000021101', 1735689600000, 4102444800000),
+  (x'00000000000070008000000000021002', x'00000000000070008000000000020001', 'registration',
+   '{"k":"registration"}', zeroblob(32), zeroblob(32), NULL, 1735689600000, 4102444800000),
+  (x'00000000000070008000000000021003', x'00000000000070008000000000020001', 'verification',
+   '{"k":"verification"}', zeroblob(32), zeroblob(32), NULL, 1735689600000, 4102444800000),
+  (x'00000000000070008000000000021004', x'00000000000070008000000000020001', 'recovery',
+   '{"k":"recovery"}', zeroblob(32), zeroblob(32), NULL, 1735689600000, 4102444800000),
+  (x'00000000000070008000000000021005', x'00000000000070008000000000020001', 'setup',
+   '{"k":"setup"}', zeroblob(32), zeroblob(32), NULL, 1735689600000, 4102444800000),
+  (x'00000000000070008000000000021006', x'00000000000070008000000000020001', 'settings',
+   '{"k":"settings"}', zeroblob(32), zeroblob(32), NULL, 1735689600000, 4102444800000),
+  (x'00000000000070008000000000021007', x'00000000000070008000000000020001', 'consent',
+   '{"k":"consent"}', zeroblob(32), zeroblob(32), NULL, 1735689600000, 1735689600001);
+
+INSERT INTO self_service_token (token_hash, tenant_id, kind, user_id, email, created_at,
+                                expires_at, consumed_at) VALUES
+  (x'4141414141414141414141414141414141414141414141414141414141414141',
+   x'00000000000070008000000000020001', 'verification', x'00000000000070008000000000020010',
+   'grace@example.test', 1735689600000, 4102444800000, NULL),
+  (x'4242424242424242424242424242424242424242424242424242424242424242',
+   x'00000000000070008000000000020001', 'recovery', x'00000000000070008000000000020010',
+   'grace@example.test', 1735689600000, 4102444800000, 1735689600500),
+  (x'4343434343434343434343434343434343434343434343434343434343434343',
+   x'00000000000070008000000000020001', 'invitation', x'00000000000070008000000000020010',
+   'grace@example.test', 1735689600000, 4102444800000, NULL);
+
+INSERT INTO email_template (tenant_id, kind, subject, body_html, body_text, updated_at) VALUES
+  (x'00000000000070008000000000020001', 'verification', 'Verify {{ tenant_name }}',
+   '<p>{{ link }}</p>', '{{ link }}', 1735689600000),
+  (x'00000000000070008000000000020001', 'recovery_code_used', 'Code used',
+   '<p>{{ remaining }}</p>', '{{ remaining }}', 1735689600001);
+
+INSERT INTO token_family (id, tenant_id, client_id, user_id, scope, auth_time, acr, amr,
+                          session_id, claims, created_at, absolute_expires_at, revoked_at,
+                          revoked_reason) VALUES
+  (x'00000000000070008000000000020040', x'00000000000070008000000000020001', 'v02-web',
+   x'00000000000070008000000000020010', 'openid offline_access', 1735689600000,
+   'urn:anvilid:acr:mfa', '["pwd","otp","mfa"]', x'00000000000070008000000000020030', NULL,
+   1735689600000, 4102444800000, NULL, NULL),
+  (x'00000000000070008000000000020041', x'00000000000070008000000000020001', 'v02-web',
+   x'00000000000070008000000000020010', 'openid', NULL, NULL, '[]', NULL, NULL,
+   1735689600000, 4102444800000, 1735689600002, 'consent_revoked');
+
+INSERT INTO authorization_code (code_hash, tenant_id, client_id, user_id, session_id,
+                                redirect_uri, scope, nonce, code_challenge, auth_time, acr, amr,
+                                token_family_id, expires_at, consumed_at, created_at) VALUES
+  (x'2121212121212121212121212121212121212121212121212121212121212121',
+   x'00000000000070008000000000020001', 'v02-web', x'00000000000070008000000000020010',
+   x'00000000000070008000000000020030', 'https://rp.example.test/cb', 'openid offline_access',
+   'n-v02', 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM', 1735689600000,
+   'urn:anvilid:acr:mfa', '["pwd","otp","mfa"]', x'00000000000070008000000000020040',
+   4102444800000, NULL, 1735689600000);
+
+INSERT INTO refresh_token (token_hash, tenant_id, family_id, parent_hash, scope, created_at,
+                           expires_at, consumed_at) VALUES
+  (x'2222222222222222222222222222222222222222222222222222222222222222',
+   x'00000000000070008000000000020001', x'00000000000070008000000000020040', NULL,
+   'openid offline_access', 1735689600000, 4102444800000, NULL);
+
+INSERT INTO access_token (token_hash, tenant_id, family_id, client_id, user_id, scope,
+                          created_at, expires_at, revoked_at) VALUES
+  (x'2323232323232323232323232323232323232323232323232323232323232323',
+   x'00000000000070008000000000020001', x'00000000000070008000000000020040', 'v02-web',
+   x'00000000000070008000000000020010', 'openid offline_access', 1735689600000, 4102444800000,
+   NULL);
+
+INSERT INTO consent_grant (id, tenant_id, user_id, client_id, scopes, created_at, updated_at,
+                           revoked_at) VALUES
+  (x'00000000000070008000000000020050', x'00000000000070008000000000020001',
+   x'00000000000070008000000000020010', 'v02-web', '["openid","offline_access"]',
+   1735689600000, 1735689600000, NULL);
+
+INSERT INTO audit_event (id, tenant_id, at, actor_kind, actor_id, action, target, outcome, ip,
+                         user_agent, trace_id, details) VALUES
+  (x'00000000000070008000000000020060', x'00000000000070008000000000020001', 1735689600000,
+   'user', 'grace', 'login', NULL, 'success', '192.0.2.1', NULL, NULL, '{}');
+"#;
+
+/// Every row of every application table, each value rendered with SQLite's `quote()` over the
+/// columns the table had before the upgrade, sorted. Equal snapshots = no row or value lost.
+async fn snapshot(
+    pool: &sqlx::SqlitePool,
+    columns: &BTreeMap<String, Vec<String>>,
+) -> BTreeMap<String, Vec<String>> {
+    let mut out = BTreeMap::new();
+    for (table, cols) in columns {
+        let expr = cols
+            .iter()
+            .map(|c| format!("quote(\"{c}\")"))
+            .collect::<Vec<_>>()
+            .join(" || '|' || ");
+        // Table and column names come from sqlite_master of the test database itself.
+        let sql = sqlx::AssertSqlSafe(format!("SELECT {expr} FROM \"{table}\""));
+        let mut rows: Vec<String> = sqlx::query_scalar(sql)
+            .fetch_all(pool)
+            .await
+            .unwrap_or_else(|e| panic!("snapshot {table}: {e}"));
+        rows.sort();
+        out.insert(table.clone(), rows);
+    }
+    out
+}
+
+/// Application tables and their columns (sqlx bookkeeping excluded).
+async fn table_columns(pool: &sqlx::SqlitePool) -> BTreeMap<String, Vec<String>> {
+    let tables: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM sqlite_master
+          WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name <> '_sqlx_migrations'",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("tables");
+    let mut out = BTreeMap::new();
+    for t in tables {
+        let cols: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info(?1)")
+            .bind(&t)
+            .fetch_all(pool)
+            .await
+            .expect("columns");
+        out.insert(t, cols);
+    }
+    out
+}
+
+struct UpgradedV02 {
+    storage: SqliteStorage,
+    url: String,
+    before: BTreeMap<String, Vec<String>>,
+    columns: BTreeMap<String, Vec<String>>,
+    _dir: tempfile::TempDir,
+}
+
+/// Builds a file database through the 0.2 → latest upgrade path.
+async fn upgraded_from_v0_2() -> UpgradedV02 {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let url = format!("sqlite://{}", dir.path().join("anvil.db").display());
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::from_str(&url)
+                .expect("url")
+                .create_if_missing(true)
+                .foreign_keys(true),
+        )
+        .await
+        .expect("open raw pool");
+    sqlx::migrate!()
+        .run_to(LAST_V0_2_VERSION, &pool)
+        .await
+        .expect("0.2 migrations apply");
+    let version: i64 = sqlx::query_scalar("SELECT max(version) FROM _sqlx_migrations")
+        .fetch_one(&pool)
+        .await
+        .expect("version");
+    assert_eq!(version, LAST_V0_2_VERSION);
+    sqlx::raw_sql(V0_2_FIXTURES)
+        .execute(&pool)
+        .await
+        .expect("0.2 fixtures load");
+    let columns = table_columns(&pool).await;
+    let before = snapshot(&pool, &columns).await;
+    for table in [
+        "flow",
+        "self_service_token",
+        "email_template",
+        "client",
+        "authorization_code",
+        "token_family",
+        "access_token",
+    ] {
+        assert!(!before[table].is_empty(), "fixture rows in {table}");
+    }
+    pool.close().await;
+
+    // The 0.3 binary starts: connect and migrate with the defaults (destructive refused).
+    let storage = SqliteStorage::connect(&url).await.expect("connect");
+    storage
+        .migrate_with(MigrateOptions::default())
+        .await
+        .expect("0.2 → latest upgrade applies without the destructive flag");
+    UpgradedV02 {
+        storage,
+        url,
+        before,
+        columns,
+        _dir: dir,
+    }
+}
+
+#[tokio::test]
+async fn upgrade_from_0_2_keeps_every_row_and_widens_checks() {
+    let up = upgraded_from_v0_2().await;
+    let s = &up.storage;
+    let tenant = TenantId(V02_TENANT);
+
+    // Every row and every value of every 0.2 table survives (rebuilt tables included).
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::from_str(&up.url)
+                .expect("url")
+                .foreign_keys(true),
+        )
+        .await
+        .expect("open raw pool");
+    let after = snapshot(&pool, &up.columns).await;
+    assert_eq!(
+        after, up.before,
+        "the upgrade must not lose or change any row"
+    );
+    let fk_violations: i64 = sqlx::query_scalar("SELECT count(*) FROM pragma_foreign_key_check")
+        .fetch_one(&pool)
+        .await
+        .expect("fk check");
+    assert_eq!(fk_violations, 0);
+
+    // New columns take their defaults on existing rows.
+    let web = s
+        .clients()
+        .get(tenant, "v02-web")
+        .await
+        .expect("get client")
+        .expect("client survives");
+    assert_eq!(web.token_format, TokenFormat::Opaque);
+    assert_eq!(web.consent_mode, ConsentMode::SkipFirstParty);
+    assert!(web.post_logout_redirect_uris.is_empty());
+    assert_eq!(web.backchannel_logout_uri, None);
+    assert!(!web.backchannel_logout_session_required);
+    assert!(web.allowed_resources.is_empty());
+    assert_eq!(web.mfa_policy, None);
+    let family = s
+        .grants()
+        .get_family(tenant, TokenFamilyId(V02_FAMILY))
+        .await
+        .expect("get family")
+        .expect("family survives");
+    assert!(family.resource.is_empty());
+    assert_eq!(family.session_id, Some(SessionId(V02_SESSION)));
+    let (at, at_family) = s
+        .grants()
+        .find_access_token(tenant, &SecretHash(V02_AT_HASH))
+        .await
+        .expect("find access token")
+        .expect("access token survives");
+    assert!(at.resource.is_empty());
+    assert_eq!(at.user_id, Some(UserId(V02_USER)));
+    assert_eq!(at_family.map(|f| f.id), Some(TokenFamilyId(V02_FAMILY)));
+    match s
+        .grants()
+        .consume_code(tenant, &SecretHash(V02_CODE_HASH), now())
+        .await
+        .expect("consume code")
+    {
+        ConsumeOutcome::Consumed(code) => {
+            assert!(code.resource.is_empty());
+            assert_eq!(code.nonce.as_deref(), Some("n-v02"));
+        }
+        other => panic!("fixture code not consumable: {other:?}"),
+    }
+
+    // The widened CHECK constraints accept the 0.3 kinds.
+    sqlx::query(
+        "INSERT INTO flow (id, tenant_id, kind, state, csrf_hash, cookie_hash, auth_request_id,
+                           created_at, expires_at)
+         VALUES (x'00000000000070008000000000021008', ?1, 'logout', '{}', zeroblob(32),
+                 zeroblob(32), NULL, 1735689600000, 4102444800000)",
+    )
+    .bind(V02_TENANT)
+    .execute(&pool)
+    .await
+    .expect("a logout flow is accepted");
+    sqlx::query(
+        "INSERT INTO self_service_token (token_hash, tenant_id, kind, user_id, email, created_at,
+                                         expires_at, consumed_at)
+         VALUES (x'4444444444444444444444444444444444444444444444444444444444444444', ?1,
+                 'email_change', ?2, 'new@example.test', 1735689600000, 4102444800000, NULL)",
+    )
+    .bind(V02_TENANT)
+    .bind(V02_USER)
+    .execute(&pool)
+    .await
+    .expect("an email_change token is accepted");
+    for kind in ["login_code", "email_change", "email_changed"] {
+        sqlx::query(
+            "INSERT INTO email_template (tenant_id, kind, subject, body_html, body_text,
+                                         updated_at)
+             VALUES (?1, ?2, 's', 'h', 't', 1735689600000)",
+        )
+        .bind(V02_TENANT)
+        .bind(kind)
+        .execute(&pool)
+        .await
+        .unwrap_or_else(|e| panic!("a {kind} template is accepted: {e}"));
+    }
+    // ... and still reject unknown kinds.
+    assert!(
+        sqlx::query(
+            "INSERT INTO flow (id, tenant_id, kind, state, csrf_hash, cookie_hash, created_at,
+                               expires_at)
+             VALUES (x'00000000000070008000000000021009', ?1, 'bogus', '{}', zeroblob(32),
+                     zeroblob(32), 0, 1)",
+        )
+        .bind(V02_TENANT)
+        .execute(&pool)
+        .await
+        .is_err(),
+        "the flow kind CHECK still rejects unknown kinds"
+    );
+
+    // The rebuilt self-service token table still cascades from the user.
+    sqlx::query("DELETE FROM user WHERE id = ?1")
+        .bind(V02_USER)
+        .execute(&pool)
+        .await
+        .expect("delete user");
+    let tokens: i64 = sqlx::query_scalar("SELECT count(*) FROM self_service_token")
+        .fetch_one(&pool)
+        .await
+        .expect("count");
+    assert_eq!(tokens, 0, "self-service tokens cascade from the user");
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn upgrade_from_0_2_is_idempotent_on_restart() {
+    let up = upgraded_from_v0_2().await;
+    up.storage
+        .migrate()
+        .await
+        .expect("a second start finds nothing pending");
+}
+
+/// Contract-suite factory: a database built through the 0.2 upgrade path, with the fixture
+/// tenant deleted through the storage traits (the contract tests start uninstalled).
+pub async fn upgraded_v0_2_sqlite() -> TestStorage {
+    let up = upgraded_from_v0_2().await;
+    assert!(
+        up.storage
+            .tenants()
+            .delete(TenantId(V02_TENANT))
+            .await
+            .expect("delete fixture tenant"),
+        "fixture tenant missing"
+    );
+    TestStorage {
+        storage: Arc::new(up.storage),
+        _guard: Box::new(up._dir),
+    }
+}
+
+mod upgraded_v0_2_contract {
+    anvil_storage::storage_contract_tests!(crate::upgraded_v0_2_sqlite);
+}
