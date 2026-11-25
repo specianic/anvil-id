@@ -13,6 +13,7 @@ use axum::routing::get;
 use axum_extra::extract::cookie::CookieJar;
 
 use super::login::{UiForm, UiQuery, bad_form, start_page, submit_page};
+use crate::request_context::AuditContext;
 use crate::state::AppState;
 use crate::tenant::ResolvedTenant;
 
@@ -31,6 +32,7 @@ async fn show(
 async fn submit(
     State(state): State<AppState>,
     tenant: ResolvedTenant,
+    AuditContext(ctx): AuditContext,
     jar: CookieJar,
     Query(q): Query<UiQuery>,
     form: Result<Form<UiForm>, FormRejection>,
@@ -41,5 +43,5 @@ async fn submit(
     let input = FlowInput::ConfirmVerification {
         token: form.token.clone().unwrap_or_default(),
     };
-    submit_page(&state, &tenant, &jar, &q, &form, input).await
+    submit_page(&state, &tenant, &ctx, &jar, &q, &form, input).await
 }

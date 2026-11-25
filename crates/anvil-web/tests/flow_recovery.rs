@@ -4,8 +4,9 @@
 mod support;
 mod ui_helpers;
 
-use anvil_core::model::SecretHash;
+use anvil_core::model::{ActorKind, AuditAction, AuditOutcome, AuditQuery, SecretHash};
 use anvil_core::ports::Clock as _;
+use std::time::Duration;
 use support::TestApp;
 use ui_helpers::*;
 
@@ -57,6 +58,10 @@ async fn recovery_resets_the_password_revokes_sessions_and_is_single_use() {
     assert_eq!(message_keys(&resp.html()), vec!["recovery.done".to_owned()]);
     assert!(!resp.html().contains(NEW), "password never echoed");
 
+    // The auth route class allows a burst of 5 POSTs per client IP; let the bucket refill
+    // instead of disabling the limiter.
+    app.clock().advance(Duration::from_secs(60));
+
     // Old password fails, new one works.
     app.clear_cookies();
     assert_eq!(login(&app, "", EMAIL, OLD).await.status, 400);
@@ -70,6 +75,7 @@ async fn recovery_resets_the_password_revokes_sessions_and_is_single_use() {
     );
 
     // The token cannot be reused.
+    app.clock().advance(Duration::from_secs(60));
     app.clear_cookies();
     let resp = submit_form(&app, &link, &[("password", "yet another passphrase")]).await;
     assert_eq!(resp.status, 400);
@@ -87,6 +93,64 @@ async fn recovery_resets_the_password_revokes_sessions_and_is_single_use() {
         .collect();
     assert_eq!(notices.len(), 1, "{emails:?}");
     assert_eq!(notices[0].to, EMAIL);
+    // Sealed payload (take_emails opened it with the KEK) addressed to the token's email.
+    assert_eq!(notices[0].payload["email"], EMAIL);
+    assert_eq!(
+        notices[0].payload["tenant_name"],
+        default_tenant(&app).display_name
+    );
+
+    // The change is audited once, for the user.
+    let changed: Vec<_> = audit(&app)
+        .await
+        .into_iter()
+        .filter(|e| e.action == AuditAction::PasswordChanged)
+        .collect();
+    assert_eq!(changed.len(), 1);
+    assert_eq!(changed[0].outcome, AuditOutcome::Success);
+    assert_eq!(changed[0].actor.kind, ActorKind::User);
+    assert_eq!(changed[0].target, changed[0].actor.id);
+    assert_eq!(changed[0].ctx.ip, Some(support::DEFAULT_PEER.ip()));
+}
+
+async fn audit(app: &TestApp) -> Vec<anvil_core::model::AuditEvent> {
+    app.storage()
+        .audit()
+        .query(
+            default_tenant(app).id,
+            &AuditQuery {
+                limit: 100,
+                ..AuditQuery::default()
+            },
+        )
+        .await
+        .expect("audit query")
+        .items
+}
+
+#[tokio::test]
+async fn reset_with_an_invalid_token_enqueues_no_notice_and_audits_nothing() {
+    let app = TestApp::new().await;
+    register(&app, "", EMAIL, OLD).await;
+    take_emails(&app).await;
+    let resp = submit_form(
+        &app,
+        "/ui/recovery?token=not-a-real-token",
+        &[("password", NEW)],
+    )
+    .await;
+    assert_eq!(resp.status, 400);
+    assert!(message_keys(&resp.html()).contains(&"recovery.invalid_token".to_owned()));
+    assert!(take_emails(&app).await.is_empty(), "no outbox row");
+    assert!(
+        !audit(&app)
+            .await
+            .iter()
+            .any(|e| e.action == AuditAction::PasswordChanged)
+    );
+    // The old password still works.
+    app.clear_cookies();
+    assert_eq!(login(&app, "", EMAIL, OLD).await.status, 200);
 }
 
 #[tokio::test]

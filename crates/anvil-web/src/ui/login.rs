@@ -5,11 +5,19 @@
 //! → 303 See Other to `{issuer}/authorize/continue?request=…` (or the signed-in message page when
 //! the login is not bound to an authorization request). `CoreError::Forbidden` (wrong or missing
 //! CSRF token or flow cookie) → the `csrf` error page with 403. Form values are never logged.
+//!
+//! Submissions carry the request context (client IP, user agent, request id; [`AuditContext`])
+//! into the flow service, which records it on sessions and audit events.
 
 use anvil_core::error::CoreError;
 use anvil_core::flow::engine::FlowInput;
 use anvil_core::flow::form::{FormDescription, MessageLevel};
-use anvil_core::model::{AuthRequestId, FlowId, FlowKind, RegistrationMode, SessionId};
+use std::sync::Arc;
+
+use anvil_core::model::{
+    AuthRequestId, FlowId, FlowKind, RegistrationMode, RequestContext, SessionId,
+};
+use anvil_core::ports::RelyingParty;
 use anvil_core::service::flow::{FlowContext, FlowOutcome, FlowService, StartedFlow};
 use anvil_core::service::session::SessionService;
 use axum::Router;
@@ -23,8 +31,10 @@ use minijinja::value::{Serde, Value};
 use secrecy::ExposeSecret as _;
 use serde::Deserialize;
 
+use crate::adapters::passkey::{WebauthnPasskeys, relying_party};
 use crate::errors::{core_error_page, error_page};
 use crate::render::{PageContext, PageLinks};
+use crate::request_context::AuditContext;
 use crate::state::AppState;
 use crate::tenant::ResolvedTenant;
 
@@ -38,6 +48,7 @@ impl AppState {
             breach: self.breach_arc(),
             policy: self.config().password_policy,
             kek: self.kek_arc(),
+            passkeys: Arc::new(WebauthnPasskeys),
         }
     }
 
@@ -69,6 +80,7 @@ async fn show(
 async fn submit(
     State(state): State<AppState>,
     tenant: ResolvedTenant,
+    AuditContext(ctx): AuditContext,
     jar: CookieJar,
     Query(q): Query<UiQuery>,
     form: Result<Form<UiForm>, FormRejection>,
@@ -76,11 +88,23 @@ async fn submit(
     let Ok(Form(form)) = form else {
         return bad_form(&state, &tenant);
     };
-    let input = FlowInput::Login {
-        identifier: form.identifier.clone().unwrap_or_default(),
-        password: form.password.clone().unwrap_or_default(),
-    };
-    submit_page(&state, &tenant, &jar, &q, &form, input).await
+    submit_page(&state, &tenant, &ctx, &jar, &q, &form, login_input(&form)).await
+}
+
+/// The login input a form posts: a recovery code or a TOTP code (second-factor form), else the
+/// email/password form. The engine refuses inputs that do not belong to the current step.
+fn login_input(form: &UiForm) -> FlowInput {
+    let present = |v: &Option<String>| v.clone().filter(|s| !s.trim().is_empty());
+    if let Some(code) = present(&form.recovery_code) {
+        FlowInput::RecoveryCode { code }
+    } else if let Some(code) = form.code.clone() {
+        FlowInput::Totp { code }
+    } else {
+        FlowInput::Login {
+            identifier: form.identifier.clone().unwrap_or_default(),
+            password: form.password.clone().unwrap_or_default(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -153,6 +177,10 @@ pub(super) struct UiForm {
     pub(super) email: Option<String>,
     pub(super) name: Option<String>,
     pub(super) token: Option<String>,
+    /// TOTP code (second-factor form).
+    pub(super) code: Option<String>,
+    /// Recovery code (second-factor form).
+    pub(super) recovery_code: Option<String>,
 }
 
 /// An unparseable form body.
@@ -197,6 +225,9 @@ pub(super) fn form_status(form: &FormDescription) -> StatusCode {
 pub(super) fn form_template(form_id: &str) -> (&'static str, &'static str) {
     match form_id {
         "login" => ("login.html", "Sign in"),
+        // Rendered with the generic sign-in template until the dedicated second-factor page
+        // lands (03-20).
+        "second-factor" => ("login.html", "Two-step verification"),
         "registration" => ("registration.html", "Create an account"),
         "verification" => ("verification.html", "Confirm your email address"),
         "recovery" => ("recovery.html", "Reset your password"),
@@ -344,10 +375,15 @@ pub(super) async fn start_page(
     token: Option<String>,
 ) -> Response {
     let base = ui_base(tenant);
+    let rp = tenant_relying_party(tenant);
+    // Starting a flow records nothing (no session, no audit event), so no request context.
+    let ctx = RequestContext::default();
     let cx = FlowContext {
         tenant: &tenant.tenant,
         issuer: &tenant.issuer,
         ui_base: &base,
+        rp: &rp,
+        ctx: &ctx,
     };
     match state
         .ui_flow_service()
@@ -374,11 +410,18 @@ async fn current_session(
         .map(|s| s.id))
 }
 
+/// The tenant's WebAuthn relying party. An issuer that cannot be one is an error only for the
+/// passkey steps (the flow service propagates it there).
+pub(super) fn tenant_relying_party(tenant: &ResolvedTenant) -> Result<RelyingParty, CoreError> {
+    relying_party(&tenant.tenant, &tenant.issuer)
+}
+
 /// `POST` of a self-service page: binds the submission to its flow, runs it and maps the
 /// outcome to a response.
 pub(super) async fn submit_page(
     state: &AppState,
     tenant: &ResolvedTenant,
+    ctx: &RequestContext,
     jar: &CookieJar,
     query: &UiQuery,
     form: &UiForm,
@@ -394,17 +437,21 @@ pub(super) async fn submit_page(
         Err(e) => return core_error_page(state, Some(tenant), &e),
     };
     let base = ui_base(tenant);
+    let rp = tenant_relying_party(tenant);
     let cx = FlowContext {
         tenant: &tenant.tenant,
         issuer: &tenant.issuer,
         ui_base: &base,
+        rp: &rp,
+        ctx,
     };
     let outcome = state
         .ui_flow_service()
         .submit(&cx, flow_id, cookie.as_deref(), csrf, input, session)
         .await;
+    // `result.attempt` drives the brute-force limiter once the login routes use it (03-20).
     match outcome {
-        Ok(outcome) => outcome_response(state, tenant, outcome),
+        Ok(result) => outcome_response(state, tenant, result.outcome),
         Err(CoreError::Forbidden) => csrf_page(state, Some(tenant)),
         Err(e) => core_error_page(state, Some(tenant), &e),
     }

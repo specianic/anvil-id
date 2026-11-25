@@ -12,7 +12,7 @@
 use anvil_core::error::CoreError;
 use anvil_core::flow::engine::FlowInput;
 use anvil_core::flow::form::{FieldKind, FormDescription, FormField};
-use anvil_core::model::{FlowKind, SYSTEM_TENANT_SLUG, Tenant, TenantBase, issuer};
+use anvil_core::model::{FlowKind, RequestContext, SYSTEM_TENANT_SLUG, Tenant, TenantBase, issuer};
 use anvil_core::service::bootstrap::BootstrapService;
 use anvil_core::service::flow::{FlowContext, FlowOutcome};
 use axum::Router;
@@ -25,6 +25,7 @@ use axum_extra::extract::cookie::CookieJar;
 use secrecy::ExposeSecret as _;
 
 use super::login::{UiForm, UiQuery, csrf_page, form_status, render_form};
+use crate::adapters::passkey::relying_party;
 use crate::errors::{core_error_page, error_page};
 use crate::render::PageContext;
 use crate::state::AppState;
@@ -136,10 +137,16 @@ async fn show(
         &TenantBase::Path(SYSTEM_TENANT_SLUG.to_owned()),
     );
     let base = state.config().public_url.as_str().to_owned();
+    let rp = relying_party(&system, &iss);
+    // The setup flow creates no session and records no audit event (bootstrap does that), so
+    // it carries no request context.
+    let ctx = RequestContext::default();
     let cx = FlowContext {
         tenant: &system,
         issuer: &iss,
         ui_base: &base,
+        rp: &rp,
+        ctx: &ctx,
     };
     match state
         .ui_flow_service()
@@ -199,10 +206,16 @@ async fn submit(
         &TenantBase::Path(SYSTEM_TENANT_SLUG.to_owned()),
     );
     let base = state.config().public_url.as_str().to_owned();
+    let rp = relying_party(&system, &iss);
+    // The setup flow creates no session and records no audit event (bootstrap does that), so
+    // it carries no request context.
+    let ctx = RequestContext::default();
     let cx = FlowContext {
         tenant: &system,
         issuer: &iss,
         ui_base: &base,
+        rp: &rp,
+        ctx: &ctx,
     };
     let input = FlowInput::Setup {
         email: form.email.clone().unwrap_or_default(),
@@ -212,7 +225,7 @@ async fn submit(
         .ui_flow_service()
         .submit(&cx, flow_id, cookie.as_deref(), csrf, input, None)
         .await;
-    match outcome {
+    match outcome.map(|r| r.outcome) {
         Ok(FlowOutcome::SetupSubmitted { email, password }) => {
             complete(&state, &system, &token, &email, &password).await
         }
