@@ -22,6 +22,11 @@ use anvil_core::model::{
     SmtpSettings, SmtpTls, StandardClaims, TenantId, TenantSettings, TokenFamily, TokenFamilyId,
     TokenFormat, User, UserId, UserStatus, truncate_to_ms,
 };
+use anvil_core::model::{
+    BrandingDraft, BrandingUpdate, ConnectionConfig, ConnectionId, IdentityLinkId, LogoChange,
+    LogoutDelivery, NewConnection, NewIdentityLink, OidcConfig, SocialConfig, SocialProvider,
+    ThemeColors, ThemeTokens,
+};
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
@@ -233,13 +238,12 @@ pub fn new_client() -> NewClient {
         grant_types: vec![GrantType::AuthorizationCode, GrantType::RefreshToken],
         scopes: vec!["openid".into(), "profile".into(), "email".into()],
         require_pkce: true,
-        // Defaults until both backends store the Phase 3 client columns (03-05/03-06); the
-        // dedicated client_phase3_fields_round_trip test covers non-default values.
         token_format: TokenFormat::Jwt,
         consent_mode: ConsentMode::Required,
         id_token_signed_response_alg: None,
         can_introspect: false,
         created_at: now_ms(),
+        // Phase 4 defaults; client_phase4_fields_round_trip covers non-default values.
         post_logout_redirect_uris: vec![],
         backchannel_logout_uri: None,
         backchannel_logout_session_required: false,
@@ -268,13 +272,13 @@ pub fn expected_client(tenant: TenantId, c: &NewClient) -> Client {
         consent_mode: c.consent_mode,
         id_token_signed_response_alg: c.id_token_signed_response_alg.clone(),
         can_introspect: c.can_introspect,
+        post_logout_redirect_uris: c.post_logout_redirect_uris.clone(),
+        backchannel_logout_uri: c.backchannel_logout_uri.clone(),
+        backchannel_logout_session_required: c.backchannel_logout_session_required,
+        allowed_resources: c.allowed_resources.clone(),
+        mfa_policy: c.mfa_policy,
         created_at: c.created_at,
         updated_at: c.created_at,
-        post_logout_redirect_uris: vec![],
-        backchannel_logout_uri: None,
-        backchannel_logout_session_required: false,
-        allowed_resources: vec![],
-        mfa_policy: None,
     }
 }
 
@@ -502,7 +506,7 @@ pub fn expected_code(tenant: TenantId, code: &NewAuthorizationCode) -> Authoriza
         token_family_id: code.token_family_id,
         expires_at: code.expires_at,
         created_at: code.created_at,
-        resource: vec![],
+        resource: code.resource.clone(),
     }
 }
 
@@ -523,7 +527,7 @@ pub fn expected_family(tenant: TenantId, f: &NewTokenFamily) -> TokenFamily {
         absolute_expires_at: f.absolute_expires_at,
         revoked_at: None,
         revoked_reason: None,
-        resource: vec![],
+        resource: f.resource.clone(),
     }
 }
 
@@ -714,7 +718,7 @@ pub fn expected_access_token(tenant: TenantId, t: &NewAccessToken) -> AccessToke
         created_at: t.created_at,
         expires_at: t.expires_at,
         revoked_at: None,
-        resource: vec![],
+        resource: t.resource.clone(),
     }
 }
 
@@ -806,4 +810,207 @@ where
         out.push(joined.expect("race task panicked"));
     }
     out
+}
+
+// ---------------------------------------------------------------------------------------------
+// Phase 4: connections, identity links, branding, back-channel logout
+
+/// A generic OIDC connection with a unique slug and a (fake) sealed secret.
+pub fn new_connection() -> NewConnection {
+    let tag = short();
+    NewConnection {
+        id: ConnectionId::new_v7(),
+        slug: format!("oidc-{tag}"),
+        display_name: format!("Corporate {tag}"),
+        enabled: true,
+        config: ConnectionConfig::Oidc(OidcConfig {
+            issuer: format!("https://idp-{tag}.example.test"),
+            client_id: format!("rp-{tag}"),
+            scopes: vec!["openid".into(), "email".into()],
+            use_pkce: true,
+            fetch_userinfo: true,
+        }),
+        secret_enc: Some(Uuid::now_v7().as_bytes().repeat(3)),
+        trust_email_verified: false,
+        created_at: now_ms(),
+    }
+}
+
+/// A Google preset connection with every optional field populated.
+pub fn new_social_connection() -> NewConnection {
+    let tag = short();
+    NewConnection {
+        id: ConnectionId::new_v7(),
+        slug: format!("google-{tag}"),
+        display_name: "Google".to_owned(),
+        enabled: false,
+        config: ConnectionConfig::Social(SocialConfig {
+            provider: SocialProvider::Google,
+            client_id: format!("g-{tag}"),
+            scopes: vec!["openid".into()],
+            endpoints: anvil_core::model::EndpointOverrides {
+                issuer: Some("https://mock-google.example.test".into()),
+                ..Default::default()
+            },
+            microsoft_tenant: None,
+            allowed_tenants: vec![],
+            hosted_domains: vec!["example.test".into()],
+            apple: None,
+        }),
+        secret_enc: None,
+        trust_email_verified: true,
+        created_at: now_ms(),
+    }
+}
+
+/// The connection record `ConnectionRepo::create` must return.
+pub fn expected_connection(tenant: TenantId, c: &NewConnection) -> anvil_core::model::Connection {
+    anvil_core::model::Connection {
+        id: c.id,
+        tenant_id: tenant,
+        slug: c.slug.clone(),
+        display_name: c.display_name.clone(),
+        enabled: c.enabled,
+        config: c.config.clone(),
+        secret_enc: c.secret_enc.clone(),
+        trust_email_verified: c.trust_email_verified,
+        created_at: c.created_at,
+        updated_at: c.created_at,
+    }
+}
+
+/// Creates a connection.
+pub async fn seed_connection(s: &TestStorage, tenant: TenantId) -> NewConnection {
+    let c = new_connection();
+    s.storage
+        .connections()
+        .create(tenant, &c)
+        .await
+        .expect("creating a seed connection must succeed");
+    c
+}
+
+/// A link of `user` to upstream `subject` at `connection`, with metadata.
+pub fn new_identity_link(user: UserId, connection: ConnectionId, subject: &str) -> NewIdentityLink {
+    let mut metadata = serde_json::Map::new();
+    metadata.insert("tid".into(), serde_json::Value::from("tenant-guid"));
+    NewIdentityLink {
+        id: IdentityLinkId::new_v7(),
+        user_id: user,
+        connection_id: connection,
+        subject: subject.to_owned(),
+        email_at_link: Some(format!("up-{}@example.test", short())),
+        metadata,
+        created_at: now_ms(),
+    }
+}
+
+/// The link record `ConnectionRepo::create_link` must return.
+pub fn expected_link(tenant: TenantId, l: &NewIdentityLink) -> anvil_core::model::IdentityLink {
+    anvil_core::model::IdentityLink {
+        id: l.id,
+        tenant_id: tenant,
+        user_id: l.user_id,
+        connection_id: l.connection_id,
+        subject: l.subject.clone(),
+        email_at_link: l.email_at_link.clone(),
+        metadata: l.metadata.clone(),
+        created_at: l.created_at,
+        last_used_at: None,
+    }
+}
+
+/// Theme tokens with light and dark colours.
+pub fn theme_tokens(primary: &str) -> ThemeTokens {
+    ThemeTokens {
+        colors: ThemeColors {
+            primary: Some(primary.to_owned()),
+            bg: Some("#ffffff".into()),
+            ..ThemeColors::default()
+        },
+        colors_dark: Some(ThemeColors {
+            primary: Some("#99ccff".into()),
+            ..ThemeColors::default()
+        }),
+        font_family: Some("Inter, sans-serif".into()),
+        radius_px: Some(6),
+    }
+}
+
+/// A logo with a unique content hash (fake hex; storage does not recompute it).
+pub fn new_logo() -> anvil_core::model::Logo {
+    let bytes = Uuid::now_v7().as_bytes().repeat(4);
+    let sha256 = format!("{}{}", Uuid::now_v7().simple(), Uuid::now_v7().simple());
+    anvil_core::model::Logo {
+        content_type: "image/png".to_owned(),
+        sha256,
+        bytes,
+    }
+}
+
+/// A branding update with custom CSS and the given logo change.
+pub fn new_branding_update(primary: &str, logo: LogoChange) -> BrandingUpdate {
+    BrandingUpdate {
+        tokens: theme_tokens(primary),
+        custom_css: Some(format!(".brand-{} {{ color: red; }}", short())),
+        logo,
+    }
+}
+
+/// A branding draft previewable until `expires_in` from now.
+pub fn new_branding_draft(expires_in: Duration) -> BrandingDraft {
+    BrandingDraft {
+        tokens: theme_tokens("#123456"),
+        custom_css: Some(".draft { color: blue; }".to_owned()),
+        preview_token_hash: unique_hash(),
+        preview_expires_at: now_ms() + expires_in,
+    }
+}
+
+/// A client registered for back-channel logout at `uri`.
+pub fn new_backchannel_client(uri: &str) -> NewClient {
+    NewClient {
+        backchannel_logout_uri: Some(uri.to_owned()),
+        backchannel_logout_session_required: true,
+        post_logout_redirect_uris: vec!["https://app.example.test/logged-out".into()],
+        ..new_client()
+    }
+}
+
+/// Creates a client registered for back-channel logout at `uri`.
+pub async fn seed_backchannel_client(s: &TestStorage, tenant: TenantId, uri: &str) -> Client {
+    s.storage
+        .clients()
+        .create(tenant, &new_backchannel_client(uri))
+        .await
+        .expect("creating a back-channel client must succeed")
+}
+
+/// Issues a code for (`session`, `client`), which records the RP session.
+pub async fn sign_in_to_rp(
+    s: &TestStorage,
+    tenant: TenantId,
+    user: &User,
+    session: &NewBrowserSession,
+    client: &Client,
+) {
+    let ctx = GrantCtx {
+        tenant,
+        user: user.clone(),
+        client: client.clone(),
+        session: session.clone(),
+    };
+    seed_code(s, &ctx, Duration::minutes(5)).await;
+}
+
+/// Every delivery of `client_id`, sorted by session id (`sid`).
+pub async fn deliveries(s: &TestStorage, tenant: TenantId, client_id: &str) -> Vec<LogoutDelivery> {
+    let mut d = s
+        .storage
+        .logout()
+        .deliveries_for_client(tenant, client_id)
+        .await
+        .expect("deliveries_for_client");
+    d.sort_by(|a, b| a.sid.cmp(&b.sid));
+    d
 }

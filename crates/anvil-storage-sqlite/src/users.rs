@@ -184,6 +184,9 @@ impl UserRepo for SqliteUsers {
         token: Option<&NewSelfServiceToken>,
         email: Option<&NewEmail>,
     ) -> Result<User, StorageError> {
+        if let Some(t) = token {
+            crate::pending::refuse_phase4_token_kind(t.kind)?;
+        }
         let mut tx = self.writer.begin().await.map_err(map_err)?;
         // Any error drops `tx` uncommitted: nothing at all is persisted.
         let created = insert_user(&mut tx, tenant, user).await?;
@@ -402,6 +405,7 @@ impl UserRepo for SqliteUsers {
         token: &NewSelfServiceToken,
         email: Option<&NewEmail>,
     ) -> Result<(), StorageError> {
+        crate::pending::refuse_phase4_token_kind(token.kind)?;
         let mut tx = self.writer.begin().await.map_err(map_err)?;
         insert_self_service_token(&mut tx, tenant, token).await?;
         if let Some(email) = email {

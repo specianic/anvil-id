@@ -995,3 +995,229 @@ pub async fn recovery_notice_not_enqueued_for_invalid_token(s: &TestStorage) {
     assert_eq!(after.phc, "$first", "the replay changed nothing");
     assert_ne!(before.phc, after.phc);
 }
+
+// ---- Phase 4 (plan 04-01); backends implement it in 04-04 / 04-05 ----
+
+/// Issues an `EmailChange` token for `user` to the new address `to`.
+async fn issue_email_change(
+    s: &TestStorage,
+    tenant: anvil_core::model::TenantId,
+    user: UserId,
+    to: &str,
+    expires_in: Duration,
+) -> anvil_core::model::NewSelfServiceToken {
+    let token = new_self_service_token(SelfServiceKind::EmailChange, user, to, expires_in);
+    s.storage
+        .users()
+        .issue_self_service_token(tenant, &token, None)
+        .await
+        .expect("issue");
+    token
+}
+
+pub async fn email_change_completes_and_notifies_old_address(s: &TestStorage) {
+    let tenant = seed_tenant(s).await;
+    let user = seed_user(s, tenant).await;
+    let users = s.storage.users();
+    let new_email = format!("changed-{}", user.email);
+    let token = issue_email_change(s, tenant, user.id, &new_email, Duration::hours(1)).await;
+    let notice = anvil_core::model::RecoveryNotice {
+        template: "email_changed".to_owned(),
+        ..new_recovery_notice()
+    };
+    let changed = users
+        .complete_email_change(tenant, &token.token_hash, now_ms(), Some(&notice))
+        .await
+        .expect("complete_email_change")
+        .expect("a valid email change token must complete");
+    assert_eq!(changed.id, user.id);
+    assert_eq!(changed.email, new_email);
+    assert!(changed.email_verified, "the link proves the new address");
+    assert_eq!(
+        users
+            .get_by_email(tenant, &new_email)
+            .await
+            .expect("get_by_email")
+            .map(|u| u.id),
+        Some(user.id)
+    );
+    assert_eq!(
+        users
+            .get_by_email(tenant, &user.email)
+            .await
+            .expect("get_by_email"),
+        None
+    );
+    let claimed = s
+        .storage
+        .outbox()
+        .claim_due(now_ms(), 10, LEASE)
+        .await
+        .expect("claim_due");
+    assert_eq!(
+        claimed.iter().map(|e| e.id).collect::<Vec<_>>(),
+        vec![notice.id]
+    );
+    assert_eq!(
+        claimed[0].to, user.email,
+        "the notice goes to the address before the change"
+    );
+    assert_eq!(claimed[0].template, "email_changed");
+    assert_eq!(claimed[0].payload, notice.payload);
+    assert_eq!(
+        users
+            .complete_email_change(tenant, &token.token_hash, now_ms(), None)
+            .await
+            .expect("complete_email_change"),
+        None,
+        "an email change token is single-use"
+    );
+}
+
+pub async fn email_change_rejects_invalid_tokens(s: &TestStorage) {
+    let tenant = seed_tenant(s).await;
+    let other = seed_tenant(s).await;
+    let user = seed_user(s, tenant).await;
+    let users = s.storage.users();
+    let target = format!("never-{}", user.email);
+
+    let wrong_kind = new_self_service_token(
+        SelfServiceKind::Verification,
+        user.id,
+        &target,
+        Duration::hours(1),
+    );
+    users
+        .issue_self_service_token(tenant, &wrong_kind, None)
+        .await
+        .expect("issue");
+    let expired = issue_email_change(s, tenant, user.id, &target, Duration::seconds(-1)).await;
+    let valid = issue_email_change(s, tenant, user.id, &target, Duration::hours(1)).await;
+
+    for (hash, t, why) in [
+        (wrong_kind.token_hash, tenant, "a verification token"),
+        (expired.token_hash, tenant, "an expired token"),
+        (unique_hash(), tenant, "an unknown token"),
+        (valid.token_hash, other, "another tenant's token"),
+    ] {
+        let notice = new_recovery_notice();
+        assert_eq!(
+            users
+                .complete_email_change(t, &hash, now_ms(), Some(&notice))
+                .await
+                .expect("complete_email_change"),
+            None,
+            "{why} must not change the email"
+        );
+    }
+    let still = users
+        .get(tenant, user.id)
+        .await
+        .expect("get")
+        .expect("user");
+    assert_eq!(still.email, user.email, "nothing changed");
+    assert!(
+        s.storage
+            .outbox()
+            .claim_due(now_ms(), 10, LEASE)
+            .await
+            .expect("claim_due")
+            .is_empty(),
+        "no notice for a failed email change"
+    );
+}
+
+pub async fn email_change_conflict_keeps_token(s: &TestStorage) {
+    let tenant = seed_tenant(s).await;
+    let user = seed_user(s, tenant).await;
+    let holder = seed_user(s, tenant).await;
+    let users = s.storage.users();
+    let token = issue_email_change(s, tenant, user.id, &holder.email, Duration::hours(1)).await;
+
+    assert!(
+        matches!(
+            users
+                .complete_email_change(
+                    tenant,
+                    &token.token_hash,
+                    now_ms(),
+                    Some(&new_recovery_notice())
+                )
+                .await,
+            Err(StorageError::Conflict(_))
+        ),
+        "another user holds the new email"
+    );
+    assert_eq!(
+        users
+            .get(tenant, user.id)
+            .await
+            .expect("get")
+            .expect("user")
+            .email,
+        user.email,
+        "nothing changed on conflict"
+    );
+    assert!(
+        s.storage
+            .outbox()
+            .claim_due(now_ms(), 10, LEASE)
+            .await
+            .expect("claim_due")
+            .is_empty(),
+        "no notice on conflict"
+    );
+
+    // The holder moves away; the unconsumed token now completes.
+    users
+        .update(
+            tenant,
+            holder.id,
+            &UserUpdate {
+                email: Some(format!("moved-{}", holder.email)),
+                ..UserUpdate::default()
+            },
+            now_ms(),
+        )
+        .await
+        .expect("update")
+        .expect("holder");
+    let changed = users
+        .complete_email_change(tenant, &token.token_hash, now_ms(), None)
+        .await
+        .expect("complete_email_change")
+        .expect("the token was not consumed by the conflict");
+    assert_eq!(changed.email, holder.email);
+}
+
+pub async fn email_change_concurrent_single_winner(s: &TestStorage) {
+    const N: usize = 8;
+    let tenant = seed_tenant(s).await;
+    let user = seed_user(s, tenant).await;
+    let new_email = format!("race-{}", user.email);
+    let token = issue_email_change(s, tenant, user.id, &new_email, Duration::hours(1)).await;
+    let hash = token.token_hash;
+    let storage = Arc::clone(&s.storage);
+    let results = race(N, move |_| {
+        let storage = Arc::clone(&storage);
+        async move {
+            storage
+                .users()
+                .complete_email_change(tenant, &hash, now_ms(), None)
+                .await
+        }
+    })
+    .await;
+    let mut won = 0usize;
+    for r in results {
+        match r {
+            Ok(Some(u)) => {
+                assert_eq!(u.email, new_email);
+                won += 1;
+            }
+            Ok(None) => {}
+            Err(e) => panic!("no storage errors allowed, got {e:?}"),
+        }
+    }
+    assert_eq!(won, 1, "exactly one concurrent email change must win");
+}

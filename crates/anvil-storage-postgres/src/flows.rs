@@ -15,6 +15,7 @@ pub(crate) struct PgFlows {
 #[async_trait::async_trait]
 impl FlowRepo for PgFlows {
     async fn create(&self, tenant: TenantId, flow: &NewFlow) -> Result<(), StorageError> {
+        crate::pending::refuse_phase4_flow_kind(flow.kind)?;
         sqlx::query!(
             "INSERT INTO flow
                  (id, tenant_id, kind, state, csrf_hash, cookie_hash, auth_request_id,

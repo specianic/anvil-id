@@ -316,3 +316,92 @@ pub async fn client_phase3_fields_round_trip(s: &TestStorage) {
     assert_eq!(updated.id_token_signed_response_alg, None);
     assert!(!updated.can_introspect);
 }
+
+// ---- Phase 4 (plan 04-01); backends implement it in 04-04 / 04-05 ----
+
+pub async fn client_phase4_fields_round_trip(s: &TestStorage) {
+    let tenant = seed_tenant(s).await;
+    // Defaults first: empty, false, None.
+    let plain = seed_client(s, tenant).await;
+    assert!(plain.post_logout_redirect_uris.is_empty());
+    assert_eq!(plain.backchannel_logout_uri, None);
+    assert!(!plain.backchannel_logout_session_required);
+    assert!(plain.allowed_resources.is_empty());
+    assert_eq!(plain.mfa_policy, None);
+
+    let new = NewClient {
+        post_logout_redirect_uris: vec![
+            "https://app.example.test/bye".into(),
+            "https://app.example.test/bye2".into(),
+        ],
+        backchannel_logout_uri: Some("https://app.example.test/bc".into()),
+        backchannel_logout_session_required: true,
+        allowed_resources: vec!["https://api.example.test/".into()],
+        mfa_policy: Some(anvil_core::model::MfaPolicy::Required),
+        ..new_client()
+    };
+    let created = s
+        .storage
+        .clients()
+        .create(tenant, &new)
+        .await
+        .expect("create");
+    assert_eq!(created, expected_client(tenant, &new));
+    assert_eq!(
+        s.storage
+            .clients()
+            .get(tenant, &new.client_id)
+            .await
+            .expect("get"),
+        Some(expected_client(tenant, &new))
+    );
+
+    let updated = s
+        .storage
+        .clients()
+        .update(
+            tenant,
+            &new.client_id,
+            &ClientUpdate {
+                post_logout_redirect_uris: Some(vec!["https://app.example.test/other".into()]),
+                backchannel_logout_uri: Some(None),
+                backchannel_logout_session_required: Some(false),
+                allowed_resources: Some(vec![]),
+                mfa_policy: Some(Some(anvil_core::model::MfaPolicy::Off)),
+                ..ClientUpdate::default()
+            },
+            now_ms(),
+        )
+        .await
+        .expect("update")
+        .expect("client");
+    assert_eq!(
+        updated.post_logout_redirect_uris,
+        vec!["https://app.example.test/other".to_owned()]
+    );
+    assert_eq!(updated.backchannel_logout_uri, None);
+    assert!(!updated.backchannel_logout_session_required);
+    assert!(updated.allowed_resources.is_empty());
+    assert_eq!(updated.mfa_policy, Some(anvil_core::model::MfaPolicy::Off));
+
+    let reset = s
+        .storage
+        .clients()
+        .update(
+            tenant,
+            &new.client_id,
+            &ClientUpdate {
+                mfa_policy: Some(None),
+                ..ClientUpdate::default()
+            },
+            now_ms(),
+        )
+        .await
+        .expect("update")
+        .expect("client");
+    assert_eq!(reset.mfa_policy, None, "Some(None) resets to inherit");
+    assert_eq!(
+        reset.post_logout_redirect_uris, updated.post_logout_redirect_uris,
+        "absent fields are unchanged"
+    );
+}

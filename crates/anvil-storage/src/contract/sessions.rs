@@ -435,3 +435,89 @@ pub async fn session_revoke_all_for_user_keeps_except(s: &TestStorage) {
         1
     );
 }
+
+// ---- Phase 4 (plan 04-01); backends implement it in 04-04 / 04-05 ----
+
+pub async fn session_upgrade_auth(s: &TestStorage) {
+    let tenant = seed_tenant(s).await;
+    let other = seed_tenant(s).await;
+    let user = seed_user(s, tenant).await;
+    let session = seed_session(s, tenant, user.id).await;
+    let sessions = s.storage.sessions();
+    let amr = vec!["pwd".to_owned(), "otp".to_owned(), "mfa".to_owned()];
+    let auth_time = now_ms();
+
+    assert!(
+        sessions
+            .upgrade_auth(
+                tenant,
+                session.id,
+                anvil_core::model::ACR_MFA,
+                &amr,
+                auth_time,
+                now_ms()
+            )
+            .await
+            .expect("upgrade_auth")
+    );
+    let got = sessions
+        .get(tenant, session.id)
+        .await
+        .expect("get")
+        .expect("session");
+    assert_eq!(got.acr, anvil_core::model::ACR_MFA);
+    assert_eq!(got.amr, amr);
+    assert_eq!(got.auth_time, auth_time);
+    assert_eq!(got.user_id, user.id, "nothing else changes");
+
+    assert!(
+        !sessions
+            .upgrade_auth(other, session.id, "x", &amr, auth_time, now_ms())
+            .await
+            .expect("upgrade_auth"),
+        "another tenant's session is missing"
+    );
+    assert!(
+        !sessions
+            .upgrade_auth(tenant, SessionId::new_v7(), "x", &amr, auth_time, now_ms())
+            .await
+            .expect("upgrade_auth"),
+        "unknown session"
+    );
+
+    let expired = new_session(user.id, Duration::seconds(-1), Duration::minutes(30));
+    sessions.create(tenant, &expired).await.expect("create");
+    let idle = new_session(user.id, Duration::hours(1), Duration::seconds(-1));
+    sessions.create(tenant, &idle).await.expect("create");
+    for id in [expired.id, idle.id] {
+        assert!(
+            !sessions
+                .upgrade_auth(tenant, id, "x", &amr, auth_time, now_ms())
+                .await
+                .expect("upgrade_auth"),
+            "an expired session cannot be upgraded"
+        );
+    }
+
+    sessions
+        .revoke(tenant, session.id, now_ms())
+        .await
+        .expect("revoke");
+    assert!(
+        !sessions
+            .upgrade_auth(tenant, session.id, "x", &amr, auth_time, now_ms())
+            .await
+            .expect("upgrade_auth"),
+        "a revoked session cannot be upgraded"
+    );
+    assert_eq!(
+        sessions
+            .get(tenant, session.id)
+            .await
+            .expect("get")
+            .expect("session")
+            .acr,
+        anvil_core::model::ACR_MFA,
+        "a refused upgrade changes nothing"
+    );
+}

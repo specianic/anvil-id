@@ -184,3 +184,52 @@ pub async fn create_family_without_code(s: &TestStorage) {
         Some(expected_family(ctx.tenant, &with_user))
     );
 }
+
+// ---- Phase 4 (plan 04-01); backends implement it in 04-04 / 04-05 ----
+
+pub async fn access_token_resource_round_trip(s: &TestStorage) {
+    let ctx = seed_grant_ctx(s).await;
+    let grants = s.storage.grants();
+    let resource = vec![
+        "https://api.example.test/".to_owned(),
+        "https://files.example.test/".to_owned(),
+    ];
+    let family = anvil_core::model::NewTokenFamily {
+        resource: resource.clone(),
+        ..new_service_family(&ctx.client.client_id, Duration::days(1))
+    };
+    grants
+        .create_family(ctx.tenant, &family)
+        .await
+        .expect("create_family");
+    assert_eq!(
+        grants
+            .get_family(ctx.tenant, family.id)
+            .await
+            .expect("get_family")
+            .expect("family")
+            .resource,
+        resource
+    );
+    let token = anvil_core::model::NewAccessToken {
+        resource: resource.clone(),
+        ..new_access_token(
+            Some(family.id),
+            &ctx.client.client_id,
+            None,
+            Duration::hours(1),
+        )
+    };
+    grants
+        .create_access_token(ctx.tenant, &token)
+        .await
+        .expect("create_access_token");
+    let (record, fam) = grants
+        .find_access_token(ctx.tenant, &token.token_hash)
+        .await
+        .expect("find")
+        .expect("token");
+    assert_eq!(record, expected_access_token(ctx.tenant, &token));
+    assert_eq!(record.resource, resource);
+    assert_eq!(fam.expect("family").resource, resource);
+}

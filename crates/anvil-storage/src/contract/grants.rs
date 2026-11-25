@@ -993,3 +993,64 @@ pub async fn purge_expired_removes_only_expired_rows(s: &TestStorage) {
         vec![live_email.id]
     );
 }
+
+// ---- Phase 4 (plan 04-01); backends implement it in 04-04 / 04-05 ----
+
+pub async fn code_and_family_resource_round_trip(s: &TestStorage) {
+    let ctx = seed_grant_ctx(s).await;
+    let grants = s.storage.grants();
+    let resource = vec!["https://api.example.test/".to_owned()];
+    let family = anvil_core::model::NewTokenFamily {
+        resource: resource.clone(),
+        ..new_family(&ctx, Duration::days(30))
+    };
+    let code = anvil_core::model::NewAuthorizationCode {
+        resource: resource.clone(),
+        ..new_code(&ctx, &family, Duration::minutes(5))
+    };
+    grants
+        .create_code(ctx.tenant, &code, &family)
+        .await
+        .expect("create_code");
+    assert_eq!(
+        grants
+            .get_family(ctx.tenant, family.id)
+            .await
+            .expect("get_family"),
+        Some(expected_family(ctx.tenant, &family))
+    );
+    match grants
+        .consume_code(ctx.tenant, &code.code_hash, now_ms())
+        .await
+        .expect("consume")
+    {
+        ConsumeOutcome::Consumed(c) => {
+            assert_eq!(c, expected_code(ctx.tenant, &code));
+            assert_eq!(c.resource, resource);
+        }
+        other => panic!("expected Consumed, got {other:?}"),
+    }
+
+    // The stored authorization request keeps its resource indicators.
+    let req = NewAuthorizationRequest {
+        params: anvil_core::model::AuthorizationParams {
+            resource: resource.clone(),
+            ..full_params()
+        },
+        ..new_auth_request(&ctx.client.client_id, Duration::minutes(10))
+    };
+    grants
+        .create_authorization_request(ctx.tenant, &req)
+        .await
+        .expect("create_authorization_request");
+    assert_eq!(
+        grants
+            .get_authorization_request(ctx.tenant, req.id, now_ms())
+            .await
+            .expect("get")
+            .expect("request")
+            .params
+            .resource,
+        resource
+    );
+}

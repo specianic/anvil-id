@@ -22,7 +22,9 @@ use anvil_core::ports::Storage;
 
 mod access_tokens;
 mod audit;
+mod branding;
 mod clients;
+mod connections;
 mod consent;
 mod credentials;
 pub mod fixtures;
@@ -30,6 +32,7 @@ mod flows;
 mod grants;
 mod jobs;
 mod keys;
+mod logout;
 mod mail_settings;
 mod outbox;
 mod sessions;
@@ -39,7 +42,9 @@ mod users;
 
 pub use access_tokens::*;
 pub use audit::*;
+pub use branding::*;
 pub use clients::*;
+pub use connections::*;
 pub use consent::*;
 pub use credentials::*;
 pub use fixtures::*;
@@ -47,6 +52,7 @@ pub use flows::*;
 pub use grants::*;
 pub use jobs::*;
 pub use keys::*;
+pub use logout::*;
 pub use mail_settings::*;
 pub use outbox::*;
 pub use sessions::*;
@@ -209,6 +215,47 @@ macro_rules! storage_contract_tests {
             job_lease_exclusive_renew_and_release,
             job_expired_lease_taken_over,
             job_lease_concurrent_single_holder,
+            // ---- Phase 4 (plan 04-01); backends implement them in 04-04 / 04-05 and fail with
+            // StorageError::Unsupported from their TRANSITIONAL shims until then ----
+            // clients, grants, access tokens: new fields
+            client_phase4_fields_round_trip,
+            code_and_family_resource_round_trip,
+            access_token_resource_round_trip,
+            // flows
+            flow_logout_kind_round_trip,
+            // sessions: step-up
+            session_upgrade_auth,
+            // users: email change
+            email_change_completes_and_notifies_old_address,
+            email_change_rejects_invalid_tokens,
+            email_change_conflict_keeps_token,
+            email_change_concurrent_single_winner,
+            // connections and identity links
+            connection_create_get_list_update,
+            connection_slug_conflict_per_tenant,
+            connection_set_secret_round_trip,
+            connection_delete_cascades_links,
+            identity_link_create_find_and_conflict,
+            identity_link_delete_only_own,
+            create_user_with_link_is_atomic,
+            connections_isolated_by_tenant,
+            // branding
+            branding_put_get_scopes,
+            branding_logo_keep_clear_set,
+            branding_draft_replace_and_preview,
+            branding_delete,
+            branding_isolated_by_tenant,
+            // back-channel logout: RP sessions, enqueue on every revoking intent, delivery queue
+            create_code_records_rp_session_once,
+            revoke_enqueues_backchannel_delivery,
+            revoke_with_families_enqueues_backchannel_delivery,
+            revoke_all_for_user_enqueues_backchannel_delivery,
+            complete_recovery_enqueues_backchannel_delivery,
+            user_delete_enqueues_backchannel_delivery,
+            revoke_noop_enqueues_nothing,
+            delivery_claim_leases_due_rows,
+            delivery_claim_concurrent_each_row_once,
+            delivery_complete_semantics,
         );
     };
     (@each $factory:path; $($name:ident),+ $(,)?) => {

@@ -160,6 +160,9 @@ impl UserRepo for PgUsers {
         token: Option<&NewSelfServiceToken>,
         email: Option<&NewEmail>,
     ) -> Result<User, StorageError> {
+        if let Some(t) = token {
+            crate::pending::refuse_phase4_token_kind(t.kind)?;
+        }
         // One transaction; any error drops `tx` and rolls everything back.
         let mut tx = self.pool.begin().await.map_err(map_err)?;
         insert_user(&mut *tx, tenant, user).await?;
@@ -374,6 +377,7 @@ impl UserRepo for PgUsers {
         token: &NewSelfServiceToken,
         email: Option<&NewEmail>,
     ) -> Result<(), StorageError> {
+        crate::pending::refuse_phase4_token_kind(token.kind)?;
         let mut tx = self.pool.begin().await.map_err(map_err)?;
         insert_self_service_token(&mut *tx, tenant, token).await?;
         if let Some(e) = email {

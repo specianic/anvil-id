@@ -5,9 +5,9 @@
 
 use anvil_core::model::{
     Branding, BrandingDraft, BrandingUpdate, ClientUpdate, Connection, ConnectionId,
-    ConnectionUpdate, DeliveryResult, IdentityLink, IdentityLinkId, Logo, LogoutDelivery,
+    ConnectionUpdate, DeliveryResult, FlowKind, IdentityLink, IdentityLinkId, Logo, LogoutDelivery,
     LogoutDeliveryId, NewClient, NewConnection, NewIdentityLink, NewUser, RpSession, SecretHash,
-    SessionId, TenantId, User, UserId,
+    SelfServiceKind, SessionId, TenantId, User, UserId,
 };
 use anvil_core::ports::{BrandingRepo, ConnectionRepo, LogoutRepo, StorageError};
 use time::OffsetDateTime;
@@ -51,6 +51,26 @@ pub(crate) fn refuse_resource(resource: &[String]) -> Result<(), StorageError> {
             "resource indicators are not stored by this backend yet",
         ))
     }
+}
+
+/// TRANSITIONAL(04-04): the `logout` flow kind is not allowed by the flow table yet.
+pub(crate) fn refuse_phase4_flow_kind(kind: FlowKind) -> Result<(), StorageError> {
+    if kind == FlowKind::Logout {
+        return Err(StorageError::Unsupported(
+            "logout flows are not stored by this backend yet",
+        ));
+    }
+    Ok(())
+}
+
+/// TRANSITIONAL(04-04): `email_change` self-service tokens are not allowed by the table yet.
+pub(crate) fn refuse_phase4_token_kind(kind: SelfServiceKind) -> Result<(), StorageError> {
+    if kind == SelfServiceKind::EmailChange {
+        return Err(StorageError::Unsupported(
+            "email change tokens are not stored by this backend yet",
+        ));
+    }
+    Ok(())
 }
 
 /// TRANSITIONAL(04-04): `SessionRepo::upgrade_auth` until the backend implements it.

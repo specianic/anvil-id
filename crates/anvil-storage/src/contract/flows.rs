@@ -226,3 +226,41 @@ pub async fn flow_swap_state_concurrent_single_winner(s: &TestStorage) {
         .count();
     assert_eq!(won, 1, "exactly one concurrent swap must win");
 }
+
+// ---- Phase 4 (plan 04-01); the SQLite CHECK constraint is rebuilt in 04-04 ----
+
+pub async fn flow_logout_kind_round_trip(s: &TestStorage) {
+    let tenant = seed_tenant(s).await;
+    let repo = s.storage.flows();
+    let flow = NewFlow {
+        kind: anvil_core::model::FlowKind::Logout,
+        state: r#"{"client_id":"rp","state":"s"}"#.to_owned(),
+        ..new_flow(None, Duration::minutes(10))
+    };
+    repo.create(tenant, &flow)
+        .await
+        .expect("create a logout flow");
+    assert_eq!(
+        repo.get(tenant, flow.id, now_ms()).await.expect("get"),
+        Some(expected_flow(tenant, &flow))
+    );
+    assert!(
+        repo.swap_state(
+            tenant,
+            flow.id,
+            &flow.state,
+            r#"{"confirmed":true}"#,
+            now_ms()
+        )
+        .await
+        .expect("swap_state")
+    );
+    assert_eq!(
+        repo.get(tenant, flow.id, now_ms())
+            .await
+            .expect("get")
+            .expect("flow")
+            .kind,
+        anvil_core::model::FlowKind::Logout
+    );
+}
