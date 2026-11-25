@@ -6,14 +6,14 @@ current_phase: 03
 current_phase_name: release 0 2 secure by default
 current_plan: Not started
 status: planning
-stopped_at: Completed 03-21-PLAN.md
-last_updated: "2026-11-25T07:39:33.074Z"
+stopped_at: Completed 03-17-PLAN.md
+last_updated: "2026-11-25T07:40:57.395Z"
 last_activity: 2026-11-25
 progress:
   total_phases: 7
   completed_phases: 2
   total_plans: 61
-  completed_plans: 52
+  completed_plans: 53
   percent: 80
 ---
 
@@ -109,6 +109,7 @@ Phase 2 plans 02-01 through 02-22 are all complete (22/22 summaries). Next: Phas
 | Phase 03 P30 | 15min | 2 tasks | 5 files |
 | Phase 03 P18 | 75min | 2 tasks | 10 files |
 | Phase 03 P21 | 50min | 2 tasks | 13 files |
+| Phase 03 P17 | 75min | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -233,6 +234,8 @@ Recent decisions affecting current work:
 - [Phase 03]: 03-21: Tenant admin events audited in the system tenant (target = tenant id); client/user events in the owning tenant; admin actor = AuditActor::admin(token sub)
 - [Phase 03]: 03-21: OQ5 - system-tenant users are admins; console = public client anvil-console of the system tenant, reconciled every start by ensure_console_client(public_url); system registration forced disabled
 - [Phase 03]: 03-21: 0.2 client options in ClientOptions/ClientOptionsPatch and CAPTCHA via Option<CaptchaChange> beside the 0.1 structs (dto.rs untouched); signing algs via TenantPatch.settings, ensure_tenant on change
+- [Phase 03]: 03-17: Consent is its own state machine (FlowKind::Consent, flow/consent.rs + service/consent.rs) reusing check_binding; the consent POST continues the request via AuthorizeService::finish_consent + AppState::authorize_response
+- [Phase 03]: 03-17: id_token_hint verified with verify_op_token_algs over enabled_algs(tenant); authz test fixture clients are skip_first_party; API-created clients default to required consent (e2e/conformance clients must opt into skip_first_party)
 
 ### Pending Todos
 
@@ -245,6 +248,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-25T07:39:33.071Z
-Stopped at: Completed 03-21-PLAN.md
+Last session: 2026-11-25T07:40:57.392Z
+Stopped at: Completed 03-17-PLAN.md
 Resume file: None
