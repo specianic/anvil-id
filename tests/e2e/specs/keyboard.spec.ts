@@ -24,6 +24,17 @@ import {
 } from '../lib/anvil';
 import { totp } from '../lib/totp';
 
+/** The account navigation, in DOM order (themes/default/templates/account_base.html). */
+const ACCOUNT_NAV = [
+  'account-nav-profile',
+  'account-nav-email',
+  'account-nav-password',
+  'account-nav-security',
+  'account-nav-sessions',
+  'account-nav-apps',
+  'account-nav-linked',
+];
+
 test.beforeAll(async ({ browser }) => {
   // Make sure the instance is installed (setup completed once for the whole run).
   await sharedManagementCredential(browser);
@@ -401,11 +412,7 @@ for (const vp of PHASE3_VIEWPORTS) {
 
       await page.goto(`${anvilUrl()}/ui/account/security`);
       const overview = await expectDomTabOrder(page);
-      expect(overview.slice(0, 3)).toEqual([
-        'account-nav-security',
-        'account-nav-sessions',
-        'account-nav-apps',
-      ]);
+      expect(overview.slice(0, ACCOUNT_NAV.length)).toEqual(ACCOUNT_NAV);
       expect(overview).toContain('totp-begin-submit');
       await expectTargetSizes(page);
 
@@ -414,7 +421,7 @@ for (const vp of PHASE3_VIEWPORTS) {
       await page.keyboard.press('Enter');
       await expect(page.locator('#totp-qr')).toBeVisible();
       const enrol = await expectDomTabOrder(page);
-      expect(enrol.slice(3)).toEqual(['code', 'totp-confirm-submit', 'link-account-security']);
+      expect(enrol.slice(ACCOUNT_NAV.length)).toEqual(['code', 'totp-confirm-submit', 'link-account-security']);
       await expect(page.locator('#code')).toHaveAttribute('autocomplete', 'one-time-code');
       await expectPasteAllowed(page, '#code');
       await expectTargetSizes(page);
@@ -425,7 +432,7 @@ for (const vp of PHASE3_VIEWPORTS) {
       await page.keyboard.press('Enter');
       await expect(page.locator('#recovery-codes li')).toHaveCount(10);
       const codes = await expectDomTabOrder(page);
-      expect(codes.slice(3)).toEqual(['recovery-codes-text', 'link-account-security']);
+      expect(codes.slice(ACCOUNT_NAV.length)).toEqual(['recovery-codes-text', 'link-account-security']);
       await expectTargetSizes(page);
 
       await page.locator('#link-account-security').focus();
@@ -448,11 +455,7 @@ for (const vp of PHASE3_VIEWPORTS) {
         await page.goto(`${anvilUrl()}/ui/account/sessions`);
         await expect(page.locator('#session-list tbody tr')).toHaveCount(2);
         const order = await expectDomTabOrder(page);
-        expect(order.slice(0, 3)).toEqual([
-          'account-nav-security',
-          'account-nav-sessions',
-          'account-nav-apps',
-        ]);
+        expect(order.slice(0, ACCOUNT_NAV.length)).toEqual(ACCOUNT_NAV);
         expect(order.at(-1)).toBe('sessions-revoke-others-submit');
         expect(order.filter((id) => /^session-revoke-.+-submit$/.test(id))).toHaveLength(2);
         await expectTargetSizes(page);

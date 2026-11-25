@@ -160,7 +160,7 @@ test('admin console: users, sessions, audit, clients, email and SMTP', async ({ 
     await expect(page.getByText('The client was not saved. Fix the errors below.')).toBeVisible();
 
     await page.getByLabel('Name', { exact: true }).fill(clientName);
-    await page.getByLabel('Redirect URIs').fill('https://rp.example.test/callback');
+    await page.getByLabel('Redirect URIs', { exact: true }).fill('https://rp.example.test/callback');
     await page.getByLabel('Access token format').selectOption('opaque');
     await page.getByLabel('Consent').selectOption('skip_first_party');
     await page.getByRole('button', { name: 'Create client' }).click();
