@@ -20,28 +20,59 @@
 //!
 //! `CoreError::Overloaded` from the hasher or breach checker renders the form with
 //! `service.overloaded`; it is never a bypass.
+//!
+//! # Passkeys and second factors
+//!
+//! - A WebAuthn challenge lives in the login flow state ([`FlowService::passkey_options`]) and
+//!   is single-use: before an assertion is verified, the state is swapped (compare-and-swap) to
+//!   the state without the challenge; a replayed or concurrent finish loses the swap and fails.
+//!   The passkey is looked up tenant-scoped by credential id and must belong to the asserted
+//!   user handle; its counter advances with a compare-and-swap. A possible clone (counter not
+//!   advancing) records `passkey_clone_suspected`. Every passkey failure is the same
+//!   [`Failure::PasskeyInvalid`].
+//! - A TOTP code is accepted only if its time step is newer than the last accepted one
+//!   (`UserRepo::advance_totp_step`). A recovery code is consumed atomically together with its
+//!   sealed `recovery_code_used` notification email.
+//! - Throttling of attempts is the web layer's job: every [`SubmitResult`] carries the
+//!   [`AuthAttempt`] it represents.
+//!
+//! # Audit
+//!
+//! `login_succeeded`, `login_failed`, `second_factor_failed`, `passkey_clone_suspected`,
+//! `recovery_code_used`, `password_changed`, `user_registered` and `email_verified` are
+//! recorded right after the corresponding state change. Identifiers are never written to the
+//! audit log: a failed login targets the user id when the account exists, otherwise nothing.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 
 use anvil_jose::Kek;
 use anvil_jose::encoding::{ct_eq, random_token, secret_hash};
+use anvil_jose::otp::{TotpSecret, check_code};
+use anvil_jose::recovery_code::{normalize_recovery_code, recovery_code_hash};
 use secrecy::{ExposeSecret as _, SecretString};
 use time::{Duration, OffsetDateTime};
 
+use super::audit::AuditService;
 use super::session::{NewSessionCookie, SessionService};
 use crate::error::CoreError;
 use crate::flow::engine::{
-    Effect, EmailKind, Failure, FlowEnv, FlowInput, FlowState, message_text, on_failure, transition,
+    Effect, EmailKind, Failure, FlowEnv, FlowInput, FlowState, SecondFactorMethods, message_text,
+    on_failure, second_factor_required, session_acr_amr, transition,
 };
 use crate::flow::form::{FormDescription, FormMessage, MessageLevel};
 use crate::model::{
-    AuthRequestId, Flow, FlowId, FlowKind, NewEmail, NewFlow, NewPasswordCredential,
-    NewSelfServiceToken, NewUser, OutboxId, SecretHash, SelfServiceKind, SessionId, StandardClaims,
-    Tenant, User, UserId, UserStatus, seal_payload,
+    ActorKind, AuditAction, AuditActor, AuditDetails, AuditOutcome, AuthRequestId, CounterOutcome,
+    CredentialKind, Flow, FlowId, FlowKind, NewEmail, NewFlow, NewPasswordCredential,
+    NewSelfServiceToken, NewUser, OutboxId, PasskeyCredential, RecoveryCodeHash, RequestContext,
+    SecretHash, SelfServiceKind, SessionId, StandardClaims, TOTP_SEED_PURPOSE, Tenant, TenantId,
+    TotpCredential, User, UserId, UserStatus, credential_aad, seal_payload,
 };
 use crate::policy::PasswordPolicy;
-use crate::ports::{BreachChecker, Clock, PasswordCheck, PasswordHasher, Storage, StorageError};
+use crate::ports::{
+    AssertionIdentity, BreachChecker, Clock, PasskeyCeremonies, PasskeyError, PasswordCheck,
+    PasswordHasher, RelyingParty, Storage, StorageError,
+};
 
 /// Lifetime of a self-service flow.
 pub const FLOW_LIFETIME: Duration = Duration::minutes(15);
@@ -49,16 +80,32 @@ pub const FLOW_LIFETIME: Duration = Duration::minutes(15);
 pub const VERIFICATION_TOKEN_TTL: Duration = Duration::hours(24);
 /// Lifetime of a recovery token.
 pub const RECOVERY_TOKEN_TTL: Duration = Duration::hours(1);
-/// How long an informational email (password changed) stays deliverable in the outbox.
+/// How long an informational email (password changed, recovery code used) stays deliverable in
+/// the outbox.
 pub const NOTICE_EMAIL_TTL: Duration = Duration::hours(24);
 
-/// Per-request context: the resolved tenant and its URLs.
+/// Per-request context: the resolved tenant, its URLs, its WebAuthn relying party and the
+/// request context recorded on sessions and audit events.
 #[derive(Debug, Clone, Copy)]
 pub struct FlowContext<'a> {
     pub tenant: &'a Tenant,
     pub issuer: &'a str,
     /// `issuer + "/ui"`: base of the self-service pages and of the emailed links.
     pub ui_base: &'a str,
+    /// The tenant's relying party (`adapters::passkey::relying_party`). An issuer that cannot
+    /// be a relying party (IP-literal host) is an error that only passkey effects propagate;
+    /// password sign-in keeps working.
+    pub rp: &'a Result<RelyingParty, CoreError>,
+    /// Client IP, user agent and request id of the submission.
+    pub ctx: &'a RequestContext,
+}
+
+impl FlowContext<'_> {
+    fn relying_party(&self) -> Result<&RelyingParty, CoreError> {
+        self.rp
+            .as_ref()
+            .map_err(|e| CoreError::Internal(format!("passkeys unavailable: {e}")))
+    }
 }
 
 /// A newly created flow. `cookie_token` goes into the flow cookie; the form carries the CSRF
@@ -91,6 +138,56 @@ pub enum FlowOutcome {
     /// The flow had expired or did not exist: a fresh flow of the same kind was started (set its
     /// cookie) and its form shows `flow.expired`.
     Restarted(StartedFlow),
+}
+
+/// An authentication attempt a submission represents, for rate limiting by the web layer.
+/// `ident_hash` is the SHA-256 of the normalised identifier ([`identifier_hash`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthAttempt {
+    /// Wrong password, unknown, blocked or password-less account (indistinguishable).
+    PasswordFailed {
+        ident_hash: [u8; 32],
+    },
+    /// The password was correct (a second factor may still be required).
+    PasswordSucceeded {
+        ident_hash: [u8; 32],
+        user: UserId,
+    },
+    /// Wrong, replayed or malformed TOTP or recovery code.
+    SecondFactorFailed {
+        user: UserId,
+    },
+    SecondFactorSucceeded {
+        user: UserId,
+    },
+    /// Any rejected passkey assertion.
+    PasskeyFailed,
+    PasskeySucceeded {
+        user: UserId,
+    },
+}
+
+/// SHA-256 of a normalised login identifier (the rate-limit key; never stored or logged).
+pub fn identifier_hash(normalized: &str) -> [u8; 32] {
+    secret_hash(normalized)
+}
+
+/// Outcome of a submission plus the authentication attempt it represents (`None` for
+/// submissions that are not an authentication attempt, e.g. registration, invalid input or an
+/// overloaded hasher).
+#[derive(Debug)]
+pub struct SubmitResult {
+    pub outcome: FlowOutcome,
+    pub attempt: Option<AuthAttempt>,
+}
+
+impl SubmitResult {
+    fn plain(outcome: FlowOutcome) -> Self {
+        Self {
+            outcome,
+            attempt: None,
+        }
+    }
 }
 
 /// Why a submission does not match its flow.
@@ -147,6 +244,48 @@ pub fn password_login_result(
     }
 }
 
+/// The stored passkey a discoverable assertion may be verified against: it must exist in the
+/// tenant (the lookup is tenant-scoped) and belong to the asserted user handle. `None` → the
+/// assertion is rejected before any signature check.
+pub fn bound_passkey(
+    identity: &AssertionIdentity,
+    found: Option<PasskeyCredential>,
+) -> Option<PasskeyCredential> {
+    found.filter(|pk| pk.user_id == identity.user_id && pk.credential_id == identity.credential_id)
+}
+
+/// The time step a TOTP `code` matches for the sealed credential at `now`, if any. Whitespace in
+/// the code is ignored. Replay protection (step newer than the last accepted) is done by the
+/// caller with `UserRepo::advance_totp_step`.
+pub fn totp_step(
+    kek: &Kek,
+    totp: &TotpCredential,
+    code: &str,
+    now: OffsetDateTime,
+) -> Result<Option<u64>, CoreError> {
+    let seed = kek
+        .open(
+            TOTP_SEED_PURPOSE,
+            &credential_aad(totp.id),
+            &totp.secret_enc,
+        )
+        .map_err(|_| CoreError::Internal("TOTP seed could not be opened".into()))?;
+    let secret = TotpSecret::from_bytes(&seed)
+        .map_err(|_| CoreError::Internal("stored TOTP seed is invalid".into()))?;
+    let Ok(unix) = u64::try_from(now.unix_timestamp()) else {
+        return Ok(None);
+    };
+    let code: String = code.chars().filter(|c| !c.is_whitespace()).collect();
+    Ok(check_code(&secret, &code, unix))
+}
+
+/// The stored hash of a recovery code as typed by the user; `None` if it cannot be a recovery
+/// code.
+pub fn recovery_code_lookup(kek: &Kek, input: &str) -> Option<RecoveryCodeHash> {
+    let normalized = normalize_recovery_code(input).ok()?;
+    Some(RecoveryCodeHash(recovery_code_hash(kek, &normalized)))
+}
+
 /// Binds an engine form to a flow: absolute action URL and the real CSRF token.
 pub fn bind_form(
     mut form: FormDescription,
@@ -166,14 +305,38 @@ pub struct FlowService {
     pub hasher: Arc<dyn PasswordHasher>,
     pub breach: Arc<dyn BreachChecker>,
     pub policy: PasswordPolicy,
-    /// Seals outbox email payloads (verification and recovery links carry single-use tokens).
+    /// Seals outbox email payloads (verification and recovery links carry single-use tokens)
+    /// and opens TOTP seeds.
     pub kek: Arc<Kek>,
+    /// WebAuthn ceremonies (webauthn-rs adapter in the web layer).
+    pub passkeys: Arc<dyn PasskeyCeremonies>,
 }
 
 enum Step {
     Continue,
     Fail(Failure),
     Done(Box<FlowOutcome>),
+    /// The established user must present a second factor.
+    SecondFactor(SecondFactorMethods),
+}
+
+/// Per-submission execution state threaded through the effect runner.
+struct Exec<'a> {
+    flow: &'a Flow,
+    /// The flow state after the transition, encoded (the swap target of `FinishPasskey`).
+    state_json: &'a str,
+    current_session: Option<SessionId>,
+    /// The user established by the last successful effect.
+    subject: Option<User>,
+    attempt: Option<AuthAttempt>,
+    /// Login method for the audit log (`password`, `totp`, `recovery_code`, `passkey`).
+    method: &'static str,
+    passkey_backup_eligible: bool,
+}
+
+enum Loaded {
+    Flow(Flow, FlowState),
+    Restarted(FlowOutcome),
 }
 
 impl FlowService {
@@ -190,6 +353,56 @@ impl FlowService {
             storage: self.storage.clone(),
             clock: self.clock.clone(),
         }
+    }
+
+    fn audit(&self) -> AuditService {
+        AuditService {
+            storage: self.storage.clone(),
+            clock: self.clock.clone(),
+        }
+    }
+
+    /// Records an event about `user` (actor and target) with the submission's request context.
+    async fn audit_user(
+        &self,
+        cx: &FlowContext<'_>,
+        action: AuditAction,
+        user: UserId,
+        outcome: AuditOutcome,
+        details: AuditDetails,
+    ) -> Result<(), CoreError> {
+        self.audit()
+            .record(
+                cx.tenant.id,
+                AuditActor::user(user),
+                action,
+                Some(user.to_string()),
+                outcome,
+                cx.ctx,
+                details,
+            )
+            .await
+    }
+
+    /// `login_failed`: anonymous actor (the caller is not authenticated); the target is the
+    /// account when it exists.
+    async fn audit_login_failed(
+        &self,
+        cx: &FlowContext<'_>,
+        target: Option<UserId>,
+        details: AuditDetails,
+    ) -> Result<(), CoreError> {
+        self.audit()
+            .record(
+                cx.tenant.id,
+                AuditActor::anonymous(ActorKind::User),
+                AuditAction::LoginFailed,
+                target.map(|u| u.to_string()),
+                AuditOutcome::Failure,
+                cx.ctx,
+                details,
+            )
+            .await
     }
 
     /// Starts a flow. For verification and recovery, `token` (from the emailed link) is placed
@@ -252,26 +465,30 @@ impl FlowService {
         Ok(FlowOutcome::Restarted(started))
     }
 
-    /// Submits user input to a flow. `current_session` (the caller's existing session, if any)
-    /// is revoked when the user signs in.
-    pub async fn submit(
+    /// Loads a flow for a submission and checks its binding. An unknown or expired flow is
+    /// restarted (kind of the input, or of the expired flow).
+    async fn load(
         &self,
         cx: &FlowContext<'_>,
         flow_id: FlowId,
         cookie_token: Option<&str>,
         csrf_token: &str,
-        input: FlowInput,
-        current_session: Option<SessionId>,
-    ) -> Result<FlowOutcome, CoreError> {
+        kind: FlowKind,
+    ) -> Result<Loaded, CoreError> {
         let now = self.clock.now();
-        let tenant = cx.tenant.id;
-        let Some(flow) = self.storage.flows().get(tenant, flow_id, now).await? else {
-            return self.restart(cx, input.kind(), None).await;
+        let Some(flow) = self.storage.flows().get(cx.tenant.id, flow_id, now).await? else {
+            return Ok(Loaded::Restarted(self.restart(cx, kind, None).await?));
         };
+        // A flow this engine does not run (settings, consent: another service owns their
+        // state) is treated like an unknown flow, never decoded.
+        if !engine_kind(flow.kind) {
+            return Ok(Loaded::Restarted(self.restart(cx, kind, None).await?));
+        }
         match check_binding(&flow, cookie_token, csrf_token, now) {
             Ok(()) => {}
             Err(BindingError::Expired) => {
-                return self.restart(cx, flow.kind, flow.auth_request_id).await;
+                let outcome = self.restart(cx, flow.kind, flow.auth_request_id).await?;
+                return Ok(Loaded::Restarted(outcome));
             }
             Err(BindingError::Forbidden) => return Err(CoreError::Forbidden),
         }
@@ -280,46 +497,125 @@ impl FlowService {
         if state.kind() != flow.kind {
             return Err(CoreError::Internal("flow state kind mismatch".into()));
         }
+        Ok(Loaded::Flow(flow, state))
+    }
 
+    /// Creates a discoverable passkey challenge for a login flow and returns the options JSON
+    /// for `navigator.credentials.get`. The challenge's server-side state replaces any earlier
+    /// one in the flow state (compare-and-swap). Errors: `Forbidden` (binding),
+    /// `InvalidRequest` (expired or unknown flow, not a login flow in its identify step, or a
+    /// concurrent change of the flow), `Internal` (the issuer cannot be a relying party).
+    pub async fn passkey_options(
+        &self,
+        cx: &FlowContext<'_>,
+        flow_id: FlowId,
+        cookie_token: Option<&str>,
+        csrf_token: &str,
+    ) -> Result<String, CoreError> {
+        let (flow, state) = match self
+            .load(cx, flow_id, cookie_token, csrf_token, FlowKind::Login)
+            .await?
+        {
+            Loaded::Flow(f, s) => (f, s),
+            Loaded::Restarted(_) => {
+                return Err(CoreError::InvalidRequest("the sign-in flow expired".into()));
+            }
+        };
+        let (state, effects) = transition(state, FlowInput::PasskeyOptions, &self.env(cx));
+        match (state, effects.as_slice()) {
+            (FlowState::Login(mut s), [Effect::StartPasskey]) => {
+                let challenge = self.passkeys.start_discoverable(cx.relying_party()?)?;
+                s.passkey_challenge = Some(challenge.state_json);
+                let json = encode_state(&FlowState::Login(s))?;
+                let swapped = self
+                    .storage
+                    .flows()
+                    .swap_state(cx.tenant.id, flow.id, &flow.state, &json, self.clock.now())
+                    .await?;
+                if !swapped {
+                    return Err(CoreError::InvalidRequest(
+                        "the sign-in flow changed concurrently".into(),
+                    ));
+                }
+                Ok(challenge.options_json)
+            }
+            _ => Err(CoreError::InvalidRequest(
+                "passkey sign-in is not available in this step".into(),
+            )),
+        }
+    }
+
+    /// Submits user input to a flow. `current_session` (the caller's existing session, if any)
+    /// is revoked when the user signs in. Passkey options are requested with
+    /// [`FlowService::passkey_options`], not here.
+    pub async fn submit(
+        &self,
+        cx: &FlowContext<'_>,
+        flow_id: FlowId,
+        cookie_token: Option<&str>,
+        csrf_token: &str,
+        input: FlowInput,
+        current_session: Option<SessionId>,
+    ) -> Result<SubmitResult, CoreError> {
+        if matches!(input, FlowInput::PasskeyOptions) {
+            return Err(CoreError::InvalidRequest(
+                "passkey options are requested separately".into(),
+            ));
+        }
+        let (flow, state) = match self
+            .load(cx, flow_id, cookie_token, csrf_token, input.kind())
+            .await?
+        {
+            Loaded::Flow(f, s) => (f, s),
+            Loaded::Restarted(outcome) => return Ok(SubmitResult::plain(outcome)),
+        };
+        let tenant = cx.tenant.id;
         let env = self.env(cx);
         let (state, effects) = transition(state, input, &env);
+        let state_json = encode_state(&state)?;
         let mut queue: VecDeque<Effect> = effects.into();
-        let mut subject: Option<User> = None;
+        let mut exec = Exec {
+            flow: &flow,
+            state_json: &state_json,
+            current_session,
+            subject: None,
+            attempt: None,
+            method: "password",
+            passkey_backup_eligible: false,
+        };
 
         while let Some(effect) = queue.pop_front() {
-            match effect {
-                Effect::Render(form) => {
-                    return self.render(cx, &flow, csrf_token, &state, form).await;
-                }
+            let outcome = match effect {
+                Effect::Render(form) => self.render(cx, &flow, csrf_token, &state, form).await?,
                 Effect::Message(key) => {
                     self.storage.flows().delete(tenant, flow.id).await?;
-                    return Ok(FlowOutcome::Message { key });
+                    FlowOutcome::Message { key }
                 }
-                effect => {
-                    let step = self
-                        .run(
-                            cx,
-                            &flow,
-                            &effect,
-                            &mut queue,
-                            &mut subject,
-                            current_session,
-                            &env,
-                        )
-                        .await?;
-                    match step {
-                        Step::Continue => {}
-                        Step::Done(outcome) => return Ok(*outcome),
-                        Step::Fail(failure) => {
-                            let mut pending = Vec::with_capacity(queue.len() + 1);
-                            pending.push(effect);
-                            pending.extend(queue.drain(..));
-                            let (state, form) = on_failure(state, &pending, failure, &env);
-                            return self.render(cx, &flow, csrf_token, &state, form).await;
-                        }
+                effect => match self.run(cx, &effect, &mut queue, &mut exec, &env).await? {
+                    Step::Continue => continue,
+                    Step::Done(outcome) => *outcome,
+                    Step::Fail(failure) => {
+                        let mut pending = Vec::with_capacity(queue.len() + 1);
+                        pending.push(effect);
+                        pending.extend(queue.drain(..));
+                        let (state, form) = on_failure(state, &pending, failure, &env);
+                        self.render(cx, &flow, csrf_token, &state, form).await?
                     }
-                }
-            }
+                    Step::SecondFactor(methods) => {
+                        let (FlowState::Login(s), Some(user)) = (state, exec.subject.take()) else {
+                            return Err(CoreError::Internal(
+                                "second factor outside a login with an established user".into(),
+                            ));
+                        };
+                        let (state, form) = second_factor_required(s, user.id, methods);
+                        self.render(cx, &flow, csrf_token, &state, form).await?
+                    }
+                },
+            };
+            return Ok(SubmitResult {
+                outcome,
+                attempt: exec.attempt,
+            });
         }
         Err(CoreError::Internal(
             "flow effects ended without a terminal effect".into(),
@@ -346,25 +642,21 @@ impl FlowService {
         )))
     }
 
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "effect runner threads the per-submission context"
-    )]
     async fn run(
         &self,
         cx: &FlowContext<'_>,
-        flow: &Flow,
         effect: &Effect,
         queue: &mut VecDeque<Effect>,
-        subject: &mut Option<User>,
-        current_session: Option<SessionId>,
+        exec: &mut Exec<'_>,
         env: &FlowEnv,
     ) -> Result<Step, CoreError> {
         let tenant = cx.tenant.id;
         let users = self.storage.users();
         match effect {
             Effect::VerifyPassword { email, password } => {
+                let ident_hash = identifier_hash(email);
                 let user = users.get_by_email(tenant, email).await?;
+                let target = user.as_ref().map(|u| u.id);
                 // Blocked users and users without a password take the dummy-hash path.
                 let phc = match &user {
                     Some(u) if u.status == UserStatus::Active => {
@@ -387,11 +679,106 @@ impl FlowService {
                         if check.needs_rehash {
                             self.rehash(tenant, u.id, password).await?;
                         }
-                        *subject = Some(u);
+                        exec.attempt = Some(AuthAttempt::PasswordSucceeded {
+                            ident_hash,
+                            user: u.id,
+                        });
+                        exec.method = "password";
+                        exec.subject = Some(u);
                         Ok(Step::Continue)
                     }
-                    Err(f) => Ok(Step::Fail(f)),
+                    Err(Failure::EmailNotVerified) => {
+                        self.audit_login_failed(
+                            cx,
+                            target,
+                            AuditDetails::login("password")
+                                .with(AuditDetails::reason("email_not_verified")),
+                        )
+                        .await?;
+                        Ok(Step::Fail(Failure::EmailNotVerified))
+                    }
+                    Err(f) => {
+                        exec.attempt = Some(AuthAttempt::PasswordFailed { ident_hash });
+                        self.audit_login_failed(cx, target, AuditDetails::login("password"))
+                            .await?;
+                        Ok(Step::Fail(f))
+                    }
                 }
+            }
+            Effect::CheckSecondFactor => {
+                let Some(user) = exec.subject.as_ref() else {
+                    return Err(CoreError::Internal(
+                        "CheckSecondFactor without an established user".into(),
+                    ));
+                };
+                if users.totp(tenant, user.id).await?.is_none() {
+                    return Ok(Step::Continue);
+                }
+                let remaining = users.recovery_codes_remaining(tenant, user.id).await?;
+                Ok(Step::SecondFactor(SecondFactorMethods {
+                    totp: true,
+                    recovery: remaining > 0,
+                }))
+            }
+            Effect::StartPasskey => Err(CoreError::Internal(
+                "StartPasskey runs only through passkey_options".into(),
+            )),
+            Effect::FinishPasskey {
+                response_json,
+                challenge,
+            } => {
+                self.finish_passkey(cx, exec, env, response_json, challenge)
+                    .await
+            }
+            Effect::VerifyTotp { user_id, code } => {
+                let now = self.clock.now();
+                let accepted = match self.second_factor_user(tenant, *user_id).await? {
+                    Some(user) => match users.totp(tenant, user.id).await? {
+                        Some(totp) => match totp_step(&self.kek, &totp, code.expose_secret(), now)?
+                        {
+                            Some(step) => {
+                                users.advance_totp_step(tenant, user.id, step, now).await?
+                                    == CounterOutcome::Advanced
+                            }
+                            None => false,
+                        },
+                        None => false,
+                    }
+                    .then_some(user),
+                    None => None,
+                };
+                self.second_factor_result(cx, exec, *user_id, accepted, "totp")
+                    .await
+            }
+            Effect::ConsumeRecoveryCode { user_id, code } => {
+                let now = self.clock.now();
+                let mut accepted = None;
+                if let Some(user) = self.second_factor_user(tenant, *user_id).await?
+                    && let Some(hash) = recovery_code_lookup(&self.kek, code.expose_secret())
+                {
+                    let remaining = users
+                        .recovery_codes_remaining(tenant, user.id)
+                        .await?
+                        .saturating_sub(1);
+                    let notice =
+                        recovery_code_used_email(&self.kek, cx, &user.email, remaining, now)?;
+                    if users
+                        .consume_recovery_code(tenant, user.id, &hash, now, Some(&notice))
+                        .await?
+                    {
+                        self.audit_user(
+                            cx,
+                            AuditAction::RecoveryCodeUsed,
+                            user.id,
+                            AuditOutcome::Success,
+                            AuditDetails::count("remaining", u64::from(remaining)),
+                        )
+                        .await?;
+                        accepted = Some(user);
+                    }
+                }
+                self.second_factor_result(cx, exec, *user_id, accepted, "recovery_code")
+                    .await
             }
             Effect::CheckBreach { password } => {
                 match self.breach.is_breached(password.expose_secret()).await {
@@ -457,7 +844,16 @@ impl FlowService {
                     .await;
                 match result {
                     Ok(u) => {
-                        *subject = Some(u);
+                        self.audit_user(
+                            cx,
+                            AuditAction::UserRegistered,
+                            u.id,
+                            AuditOutcome::Success,
+                            AuditDetails::empty(),
+                        )
+                        .await?;
+                        exec.method = "password";
+                        exec.subject = Some(u);
                         Ok(Step::Continue)
                     }
                     Err(StorageError::Conflict(_)) => Ok(Step::Fail(Failure::EmailTaken)),
@@ -467,44 +863,32 @@ impl FlowService {
             Effect::EnqueueEmail(kind) => Err(CoreError::Internal(format!(
                 "EnqueueEmail({kind:?}) is only valid directly after CreateUser"
             ))),
-            Effect::CheckSecondFactor => {
-                // Fails closed until the second-factor step is executed (next commit).
-                let Some(user) = subject.as_ref() else {
-                    return Err(CoreError::Internal(
-                        "CheckSecondFactor without an established user".into(),
-                    ));
-                };
-                if users.totp(tenant, user.id).await?.is_some() {
-                    return Err(CoreError::Internal(
-                        "second-factor login is not executed yet".into(),
-                    ));
-                }
-                Ok(Step::Continue)
-            }
-            Effect::StartPasskey
-            | Effect::FinishPasskey { .. }
-            | Effect::VerifyTotp { .. }
-            | Effect::ConsumeRecoveryCode { .. } => Err(CoreError::Internal(
-                "passkey and second-factor effects are not executed yet".into(),
-            )),
             Effect::CreateSession(auth) => {
-                let (acr, amr) = crate::flow::engine::session_acr_amr(*auth, false);
-                let Some(user) = subject.take() else {
+                let Some(user) = exec.subject.take() else {
                     return Err(CoreError::Internal(
                         "CreateSession without an established user".into(),
                     ));
                 };
+                let (acr, amr) = session_acr_amr(*auth, exec.passkey_backup_eligible);
                 let cookie = self
                     .sessions()
-                    .create(tenant, user.id, acr, &amr, current_session)
+                    .create(tenant, user.id, acr, &amr, exec.current_session, cx.ctx)
                     .await?;
                 users
                     .record_login(tenant, user.id, self.clock.now())
                     .await?;
-                self.storage.flows().delete(tenant, flow.id).await?;
+                self.storage.flows().delete(tenant, exec.flow.id).await?;
+                self.audit_user(
+                    cx,
+                    AuditAction::LoginSucceeded,
+                    user.id,
+                    AuditOutcome::Success,
+                    AuditDetails::login(exec.method),
+                )
+                .await?;
                 Ok(Step::Done(Box::new(FlowOutcome::SignedIn {
                     cookie,
-                    continue_to: flow.auth_request_id,
+                    continue_to: exec.flow.auth_request_id,
                 })))
             }
             Effect::IssueRecovery { email } => {
@@ -533,7 +917,17 @@ impl FlowService {
                     .complete_verification(tenant, &hash, self.clock.now())
                     .await?
                 {
-                    Some(_) => Ok(Step::Continue),
+                    Some(user) => {
+                        self.audit_user(
+                            cx,
+                            AuditAction::EmailVerified,
+                            user.id,
+                            AuditOutcome::Success,
+                            AuditDetails::empty(),
+                        )
+                        .await?;
+                        Ok(Step::Continue)
+                    }
                     None => Ok(Step::Fail(Failure::InvalidToken)),
                 }
             }
@@ -545,16 +939,26 @@ impl FlowService {
                 };
                 let hash = SecretHash(secret_hash(token.expose_secret()));
                 let now = self.clock.now();
+                // The password_changed template contract includes `email`, which is only known
+                // once the token is consumed, so the notice is still enqueued right after the
+                // recovery transaction (a RecoveryNotice is built before it and cannot carry the
+                // address; see the 03-12 summary).
                 let Some(user) = users
                     .complete_recovery(tenant, &hash, &phc, now, None)
                     .await?
                 else {
                     return Ok(Step::Fail(Failure::InvalidToken));
                 };
-                // The recipient is only known once the token is consumed, so the notice is
-                // enqueued right after the recovery transaction.
                 let notice = password_changed_email(&self.kek, cx, &user.email, now)?;
                 self.storage.outbox().enqueue(tenant, &notice).await?;
+                self.audit_user(
+                    cx,
+                    AuditAction::PasswordChanged,
+                    user.id,
+                    AuditOutcome::Success,
+                    AuditDetails::reason("recovery"),
+                )
+                .await?;
                 Ok(Step::Continue)
             }
             Effect::SubmitSetup { email, password } => {
@@ -569,11 +973,167 @@ impl FlowService {
         }
     }
 
+    /// The user a second-factor step is for, if still active.
+    async fn second_factor_user(
+        &self,
+        tenant: TenantId,
+        user: UserId,
+    ) -> Result<Option<User>, CoreError> {
+        Ok(self
+            .storage
+            .users()
+            .get(tenant, user)
+            .await?
+            .filter(|u| u.status == UserStatus::Active))
+    }
+
+    /// Records the result of a TOTP or recovery-code check.
+    async fn second_factor_result(
+        &self,
+        cx: &FlowContext<'_>,
+        exec: &mut Exec<'_>,
+        user_id: UserId,
+        accepted: Option<User>,
+        method: &'static str,
+    ) -> Result<Step, CoreError> {
+        match accepted {
+            Some(user) => {
+                exec.attempt = Some(AuthAttempt::SecondFactorSucceeded { user: user.id });
+                exec.method = method;
+                exec.subject = Some(user);
+                Ok(Step::Continue)
+            }
+            None => {
+                exec.attempt = Some(AuthAttempt::SecondFactorFailed { user: user_id });
+                self.audit_user(
+                    cx,
+                    AuditAction::SecondFactorFailed,
+                    user_id,
+                    AuditOutcome::Failure,
+                    AuditDetails::login(method),
+                )
+                .await?;
+                Ok(Step::Fail(Failure::SecondFactorInvalid))
+            }
+        }
+    }
+
+    /// Verifies a passkey assertion (see the module docs). The challenge is taken out of the
+    /// stored flow state before anything else.
+    async fn finish_passkey(
+        &self,
+        cx: &FlowContext<'_>,
+        exec: &mut Exec<'_>,
+        env: &FlowEnv,
+        response_json: &str,
+        challenge: &str,
+    ) -> Result<Step, CoreError> {
+        let tenant = cx.tenant.id;
+        let users = self.storage.users();
+        let now = self.clock.now();
+        exec.attempt = Some(AuthAttempt::PasskeyFailed);
+        let rejected = Ok(Step::Fail(Failure::PasskeyInvalid));
+
+        // Single use: of concurrent or replayed finishes with the same challenge, at most one
+        // wins this swap.
+        if !self
+            .storage
+            .flows()
+            .swap_state(tenant, exec.flow.id, &exec.flow.state, exec.state_json, now)
+            .await?
+        {
+            return rejected;
+        }
+        let rp = cx.relying_party()?;
+        let Ok(identity) = self.passkeys.identify(response_json) else {
+            self.audit_login_failed(cx, None, AuditDetails::login("passkey"))
+                .await?;
+            return rejected;
+        };
+        let found = users.find_passkey(tenant, &identity.credential_id).await?;
+        let Some(passkey) = bound_passkey(&identity, found) else {
+            self.audit_login_failed(cx, None, AuditDetails::login("passkey"))
+                .await?;
+            return rejected;
+        };
+        let verified = match self.passkeys.finish_discoverable(
+            rp,
+            response_json,
+            challenge,
+            &passkey.passkey_json,
+        ) {
+            Ok(v) if v.user_verified => v,
+            Ok(_) | Err(PasskeyError::Invalid) => {
+                self.audit_login_failed(cx, Some(passkey.user_id), AuditDetails::login("passkey"))
+                    .await?;
+                return rejected;
+            }
+            Err(PasskeyError::PossibleClone) => {
+                self.clone_suspected(cx, &passkey).await?;
+                return rejected;
+            }
+        };
+        let user = match users.get(tenant, passkey.user_id).await? {
+            Some(u) if u.status == UserStatus::Active => u,
+            _ => {
+                self.audit_login_failed(cx, Some(passkey.user_id), AuditDetails::login("passkey"))
+                    .await?;
+                return rejected;
+            }
+        };
+        let json = verified
+            .updated_passkey_json
+            .as_deref()
+            .unwrap_or(&passkey.passkey_json);
+        if users
+            .update_passkey(tenant, passkey.id, json, verified.counter, now)
+            .await?
+            == CounterOutcome::Stale
+        {
+            self.clone_suspected(cx, &passkey).await?;
+            return rejected;
+        }
+        if env.require_verified_email && !user.email_verified {
+            exec.attempt = None;
+            self.audit_login_failed(
+                cx,
+                Some(user.id),
+                AuditDetails::login("passkey").with(AuditDetails::reason("email_not_verified")),
+            )
+            .await?;
+            return Ok(Step::Fail(Failure::EmailNotVerified));
+        }
+        exec.attempt = Some(AuthAttempt::PasskeySucceeded { user: user.id });
+        exec.method = "passkey";
+        exec.passkey_backup_eligible = verified.backup_eligible;
+        exec.subject = Some(user);
+        Ok(Step::Continue)
+    }
+
+    /// `passkey_clone_suspected` for the passkey's user (the sign-in itself fails generically).
+    async fn clone_suspected(
+        &self,
+        cx: &FlowContext<'_>,
+        passkey: &PasskeyCredential,
+    ) -> Result<(), CoreError> {
+        self.audit()
+            .record(
+                cx.tenant.id,
+                AuditActor::anonymous(ActorKind::User),
+                AuditAction::PasskeyCloneSuspected,
+                Some(passkey.user_id.to_string()),
+                AuditOutcome::Failure,
+                cx.ctx,
+                AuditDetails::credential(CredentialKind::Webauthn),
+            )
+            .await
+    }
+
     /// Re-hashes a password with the current parameters after a successful login. Skipped
     /// (retried at the next login) when the hasher is overloaded.
     async fn rehash(
         &self,
-        tenant: crate::model::TenantId,
+        tenant: TenantId,
         user: UserId,
         password: &SecretString,
     ) -> Result<(), CoreError> {
@@ -659,6 +1219,39 @@ fn password_changed_email(
     })
 }
 
+/// The `recovery_code_used` notice (payload `tenant_name` and `remaining`, sealed).
+fn recovery_code_used_email(
+    kek: &Kek,
+    cx: &FlowContext<'_>,
+    to: &str,
+    remaining: u32,
+    now: OffsetDateTime,
+) -> Result<NewEmail, CoreError> {
+    let mut payload = BTreeMap::new();
+    payload.insert("tenant_name".to_owned(), cx.tenant.display_name.clone());
+    payload.insert("remaining".to_owned(), remaining.to_string());
+    Ok(NewEmail {
+        id: OutboxId::new_v7(),
+        to: to.to_owned(),
+        template: "recovery_code_used".to_owned(),
+        payload: seal_payload(kek, cx.tenant.id, &payload)?,
+        created_at: now,
+        expires_at: now + NOTICE_EMAIL_TTL,
+    })
+}
+
+/// Flow kinds whose state is a [`FlowState`] run by this service.
+fn engine_kind(kind: FlowKind) -> bool {
+    match kind {
+        FlowKind::Login
+        | FlowKind::Registration
+        | FlowKind::Verification
+        | FlowKind::Recovery
+        | FlowKind::Setup => true,
+        FlowKind::Settings | FlowKind::Consent => false,
+    }
+}
+
 fn encode_state(state: &FlowState) -> Result<String, CoreError> {
     serde_json::to_string(state)
         .map_err(|e| CoreError::Internal(format!("flow state serialisation: {e}")))
@@ -668,7 +1261,7 @@ fn encode_state(state: &FlowState) -> Result<String, CoreError> {
 mod tests {
     use super::*;
     use crate::flow::engine::LoginState;
-    use crate::model::{SEALED_PAYLOAD_KEY, TenantId, TenantSettings, open_payload};
+    use crate::model::{CredentialId, SEALED_PAYLOAD_KEY, TenantSettings, open_payload};
     use time::macros::datetime;
 
     const NOW: OffsetDateTime = datetime!(2026-11-25 12:00 UTC);
@@ -808,11 +1401,7 @@ mod tests {
             settings: TenantSettings::default(),
             created_at: NOW,
         };
-        let cx = FlowContext {
-            tenant: &tenant,
-            issuer: "https://id.example.test/t/acme",
-            ui_base: "https://id.example.test/t/acme/ui",
-        };
+        let cx = cx(&tenant);
         let (_, form) = FlowState::initial(FlowKind::Login, None, &FlowEnv::default()).unwrap();
         let id = FlowId::new_v7();
         let bound = bind_form(form, &cx, id, "csrf-tok");
@@ -839,7 +1428,17 @@ mod tests {
             tenant,
             issuer: "https://id.example.test/t/acme",
             ui_base: "https://id.example.test/t/acme/ui",
+            rp: rp(),
+            ctx: Box::leak(Box::new(RequestContext::default())),
         }
+    }
+
+    fn rp() -> &'static Result<RelyingParty, CoreError> {
+        Box::leak(Box::new(Ok(RelyingParty {
+            rp_id: "id.example.test".into(),
+            origin: "https://id.example.test".into(),
+            name: "Acme".into(),
+        })))
     }
 
     #[test]
@@ -887,5 +1486,159 @@ mod tests {
         let payload = open_payload(&kek, tenant.id, &mail.payload).unwrap();
         assert_eq!(payload["email"], "alice@example.com");
         assert_eq!(payload["tenant_name"], "Acme");
+    }
+
+    #[test]
+    fn identifier_hash_is_sha256_of_the_normalised_identifier() {
+        assert_eq!(
+            identifier_hash("alice@example.com"),
+            secret_hash("alice@example.com")
+        );
+        assert_ne!(
+            identifier_hash("alice@example.com"),
+            identifier_hash("bob@example.com")
+        );
+    }
+
+    fn passkey(user: UserId, credential_id: &[u8]) -> PasskeyCredential {
+        PasskeyCredential {
+            id: CredentialId::new_v7(),
+            user_id: user,
+            credential_id: credential_id.to_vec(),
+            passkey_json: "{}".into(),
+            counter: 0,
+            backup_eligible: false,
+            label: "Key".into(),
+            created_at: NOW,
+            last_used_at: None,
+        }
+    }
+
+    #[test]
+    fn passkey_must_belong_to_the_asserted_user_handle() {
+        let alice = UserId::new_v7();
+        let mallory = UserId::new_v7();
+        let identity = AssertionIdentity {
+            user_id: alice,
+            credential_id: vec![1, 2, 3],
+        };
+        // Unknown credential (also: another tenant's credential, the lookup is tenant-scoped).
+        assert_eq!(bound_passkey(&identity, None), None);
+        // A credential of another user presented with alice's user handle.
+        assert_eq!(
+            bound_passkey(&identity, Some(passkey(mallory, &[1, 2, 3]))),
+            None
+        );
+        // A row for another credential id.
+        assert_eq!(bound_passkey(&identity, Some(passkey(alice, &[9]))), None);
+        let ok = passkey(alice, &[1, 2, 3]);
+        assert_eq!(bound_passkey(&identity, Some(ok.clone())), Some(ok));
+    }
+
+    fn sealed_totp(kek: &Kek, secret: &TotpSecret) -> TotpCredential {
+        let id = CredentialId::new_v7();
+        TotpCredential {
+            id,
+            user_id: UserId::new_v7(),
+            secret_enc: kek
+                .seal(TOTP_SEED_PURPOSE, &credential_aad(id), secret.as_bytes())
+                .unwrap(),
+            last_step: None,
+            created_at: NOW,
+            last_used_at: None,
+        }
+    }
+
+    /// RFC 6238 Appendix B SHA-1 seed; at T=1111111109 the 6-digit code is 081804 (step
+    /// 37037036) and at T=59 it is 287082 (step 1).
+    fn rfc_secret() -> TotpSecret {
+        TotpSecret::from_bytes(b"12345678901234567890").unwrap()
+    }
+
+    fn at(unix: i64) -> OffsetDateTime {
+        OffsetDateTime::from_unix_timestamp(unix).unwrap()
+    }
+
+    #[test]
+    fn totp_step_opens_the_sealed_seed_and_matches_codes() {
+        let kek = Kek::generate();
+        let totp = sealed_totp(&kek, &rfc_secret());
+        let t = at(1_111_111_109);
+        assert_eq!(
+            totp_step(&kek, &totp, "081804", t).unwrap(),
+            Some(37_037_036)
+        );
+        assert_eq!(
+            totp_step(&kek, &totp, " 081 804 ", t).unwrap(),
+            Some(37_037_036)
+        );
+        assert_eq!(totp_step(&kek, &totp, "287082", at(59)).unwrap(), Some(1));
+        // The T=59 code is far outside the window at T=1111111109.
+        assert_eq!(totp_step(&kek, &totp, "287082", t).unwrap(), None);
+        for bad in ["", "08180", "0818045", "abcdef"] {
+            assert_eq!(totp_step(&kek, &totp, bad, t).unwrap(), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn totp_seed_is_bound_to_its_credential_id_and_kek() {
+        let kek = Kek::generate();
+        let mut totp = sealed_totp(&kek, &rfc_secret());
+        let t = at(1_111_111_109);
+        assert!(totp_step(&Kek::generate(), &totp, "081804", t).is_err());
+        totp.id = CredentialId::new_v7();
+        assert!(totp_step(&kek, &totp, "081804", t).is_err());
+    }
+
+    #[test]
+    fn recovery_code_lookup_normalises_and_rejects_garbage() {
+        let kek = Kek::generate();
+        let a = recovery_code_lookup(&kek, "ABCD-EFGH-IJKL-MNOP").unwrap();
+        let b = recovery_code_lookup(&kek, " abcd efgh ijkl mnop ").unwrap();
+        assert_eq!(a, b);
+        assert_ne!(
+            Some(a),
+            recovery_code_lookup(&Kek::generate(), "ABCD-EFGH-IJKL-MNOP")
+        );
+        for bad in ["", "ABCD", "ABCD-EFGH-IJKL-MNO1", &"A".repeat(100)] {
+            assert_eq!(recovery_code_lookup(&kek, bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn recovery_code_used_email_is_sealed_with_tenant_name_and_remaining_only() {
+        let kek = Kek::generate();
+        let tenant = acme();
+        let mail =
+            recovery_code_used_email(&kek, &cx(&tenant), "alice@example.com", 7, NOW).unwrap();
+        assert_eq!(mail.template, "recovery_code_used");
+        assert_eq!(mail.to, "alice@example.com");
+        assert_eq!(mail.expires_at, NOW + NOTICE_EMAIL_TTL);
+        assert_eq!(mail.payload.len(), 1);
+        assert!(mail.payload.contains_key(SEALED_PAYLOAD_KEY));
+        let payload = open_payload(&kek, tenant.id, &mail.payload).unwrap();
+        let keys: Vec<_> = payload.keys().map(String::as_str).collect();
+        assert_eq!(keys, vec!["remaining", "tenant_name"]);
+        assert_eq!(payload["remaining"], "7");
+        assert_eq!(payload["tenant_name"], "Acme");
+    }
+
+    #[test]
+    fn unavailable_relying_party_is_an_error_only_when_used() {
+        let tenant = acme();
+        let err: &'static Result<RelyingParty, CoreError> =
+            Box::leak(Box::new(Err(CoreError::Internal("ip literal".into()))));
+        let mut c = cx(&tenant);
+        c.rp = err;
+        assert!(matches!(c.relying_party(), Err(CoreError::Internal(_))));
+        assert!(cx(&tenant).relying_party().is_ok());
+    }
+
+    #[test]
+    fn only_engine_flow_kinds_are_decoded() {
+        for kind in FlowKind::ALL {
+            let decodable = FlowState::initial(*kind, None, &FlowEnv::default()).is_ok();
+            assert_eq!(engine_kind(*kind), decodable, "{kind:?}");
+        }
     }
 }

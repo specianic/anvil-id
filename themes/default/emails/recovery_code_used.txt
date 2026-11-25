@@ -1,0 +1,12 @@
+A recovery code was used to sign in to {{ tenant_name }}
+
+Hello,
+
+A recovery code was just used to sign in to your {{ tenant_name }} account. Each recovery code works only once; you have {{ remaining }} unused codes left.
+
+If this was you, consider generating a new set of recovery codes on your account's security page, especially if only a few are left.
+
+If you did not sign in, someone may know your password and one of your recovery codes. Reset your password immediately using the "Forgot your password?" option on the sign-in page, and contact your administrator.
+
+-- 
+{{ tenant_name }}

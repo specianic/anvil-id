@@ -13,7 +13,9 @@ use secrecy::SecretString;
 use time::{Duration, OffsetDateTime};
 
 use crate::error::CoreError;
-use crate::model::{BrowserSession, NewBrowserSession, SecretHash, SessionId, TenantId, UserId};
+use crate::model::{
+    BrowserSession, NewBrowserSession, RequestContext, SecretHash, SessionId, TenantId, UserId,
+};
 use crate::ports::{Clock, Storage};
 
 /// Absolute session lifetime from sign-in.
@@ -55,7 +57,9 @@ pub struct SessionService {
 }
 
 impl SessionService {
-    /// Creates a session for `user`. If `replaces` is given, that session is revoked first.
+    /// Creates a session for `user`. If `replaces` is given, that session is revoked first. The
+    /// client IP and user agent of `ctx` are stored with the session (shown on the sessions
+    /// page).
     pub async fn create(
         &self,
         tenant: TenantId,
@@ -63,8 +67,10 @@ impl SessionService {
         acr: &str,
         amr: &[String],
         replaces: Option<SessionId>,
+        ctx: &RequestContext,
     ) -> Result<NewSessionCookie, CoreError> {
         let now = self.clock.now();
+        let (ip, user_agent) = session_client(ctx);
         if let Some(old) = replaces {
             self.storage.sessions().revoke(tenant, old, now).await?;
         }
@@ -80,8 +86,8 @@ impl SessionService {
             created_at: now,
             expires_at,
             idle_expires_at,
-            ip: None,
-            user_agent: None,
+            ip,
+            user_agent,
         };
         self.storage.sessions().create(tenant, &new).await?;
         let session = BrowserSession {
@@ -97,8 +103,8 @@ impl SessionService {
             expires_at,
             idle_expires_at,
             revoked_at: None,
-            ip: None,
-            user_agent: None,
+            ip: new.ip,
+            user_agent: new.user_agent,
         };
         Ok(NewSessionCookie {
             token: SecretString::from(token),
@@ -150,10 +156,30 @@ impl SessionService {
     }
 }
 
+/// `(ip, user_agent)` stored on a session created in `ctx` (the user agent is already
+/// truncated by [`RequestContext::new`]).
+pub fn session_client(ctx: &RequestContext) -> (Option<String>, Option<String>) {
+    (ctx.ip.map(|ip| ip.to_string()), ctx.user_agent.clone())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use time::macros::datetime;
+
+    #[test]
+    fn session_client_takes_ip_and_user_agent_from_the_request() {
+        let ctx = RequestContext::new(
+            Some("2001:db8::7".parse().unwrap()),
+            Some("Mozilla/5.0"),
+            Some("req-1".into()),
+        );
+        assert_eq!(
+            session_client(&ctx),
+            (Some("2001:db8::7".into()), Some("Mozilla/5.0".into()))
+        );
+        assert_eq!(session_client(&RequestContext::default()), (None, None));
+    }
 
     #[test]
     fn expiry_is_14d_absolute_and_12h_idle() {
