@@ -5,18 +5,23 @@
 //! - [`transport`]: the [`transport::MailTransport`] port and its production implementation,
 //!   [`transport::SmtpTransport`] (lettre over rustls with aws-lc-rs).
 //! - [`worker`]: the [`worker::OutboxWorker`] that drains the storage outbox with retries and
-//!   exponential backoff.
+//!   exponential backoff, using tenant template overrides and tenant SMTP settings.
+//! - [`check`]: [`check::TemplateChecker`], the compile/sample-render check for tenant template
+//!   overrides, and the per-kind variable contract.
+//! - [`tester`]: [`tester::LettreSmtpTester`], the synchronous SMTP test send.
 //!
 //! Message bodies and links contain single-use tokens. Nothing in this crate logs them, and
 //! [`transport::OutgoingMail`]'s `Debug` output shows only the recipient and subject.
 
 pub mod check;
 pub mod render;
+pub mod tester;
 pub mod transport;
 pub mod worker;
 
 pub use check::TemplateChecker;
 pub use render::EmailRenderer;
+pub use tester::LettreSmtpTester;
 pub use transport::{MailTransport, OutgoingMail, SmtpTransport};
 pub use worker::{OutboxAccess, OutboxWorker, StorageOutbox};
 
