@@ -14,3 +14,13 @@ Out-of-scope discoveries logged by executors (not fixed by the plan that found t
   `AuditContext`, those tests get 500 unless that harness inserts a peer address too (as
   `support::TestApp::send` now does with `DEFAULT_PEER`). The plan that first adds `ClientIp` to a
   route exercised by ui_helpers should add it.
+
+## From 03-11 (form_post)
+
+- `themes/default/README.md` does not yet document the new `form_post.html` template contract
+  (context `page`, `action`, `fields`; ids `form-post`, `form-post-continue`; script `form_post.js`).
+  Not in 03-11's files_modified; pick up with the theme docs.
+- The form_post page's CSP `form-action` allows only the redirect URI's origin (as planned). Chromium
+  applies `form-action` to redirects that follow the POST, so an RP callback that immediately redirects
+  to a *different* origin would be blocked. Same-origin callback redirects are unaffected. Revisit if
+  the 03-28 Form Post conformance run or RP reports show problems.

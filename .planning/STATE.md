@@ -7,13 +7,13 @@ current_phase_name: release 0 2 secure by default
 current_plan: Not started
 status: planning
 stopped_at: Completed 03-08-PLAN.md
-last_updated: "2026-11-25T06:36:20.398Z"
+last_updated: "2026-11-25T06:50:02.756Z"
 last_activity: 2026-11-25
 progress:
   total_phases: 7
   completed_phases: 2
   total_plans: 60
-  completed_plans: 40
+  completed_plans: 41
   percent: 51
 ---
 
@@ -97,6 +97,7 @@ Phase 2 plans 02-01 through 02-22 are all complete (22/22 summaries). Next: Phas
 | Phase 03 P05 | 20min | 3 tasks | 18 files |
 | Phase 03 P06 | 45min | 3 tasks | 17 files |
 | Phase 03 P08 | 45min | 2 tasks | 20 files |
+| Phase 03 P11 | 25min | 2 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -198,6 +199,7 @@ Recent decisions affecting current work:
 - [Phase 03]: 03-06: Postgres 0003 additive (credential uuid PK swap, CHECK swaps via DROP/ADD CONSTRAINT); TOTP seed hex in credential.data; user-owned inserts check tenant via WHERE EXISTS since PG FKs reference user(id) only; consent scopes merged by one ON CONFLICT DO UPDATE in C order
 - [Phase 03]: 03-08: Client IP only via anvil_web::client_ip (ClientIp) and request_context::AuditContext(RequestContext); missing ConnectInfo is a generic 500; production trusts no proxies, dev mode trusts loopback
 - [Phase 03]: 03-08: anvilid builds AppConfig via AppConfig::new + field assignment; trusted-proxy operator config still to be mapped in 03-24
+- [Phase 03]: 03-11: single AuthorizationResponse builder; AuthorizeOutcome::Respond replaces Redirect; unsupported/repeated response_mode -> invalid_request via query
 
 ### Pending Todos
 

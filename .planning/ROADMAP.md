@@ -114,7 +114,7 @@ Plans:
 - [ ] 03-08-PLAN.md — Trusted-proxy client IP + RequestContext, ConnectInfo in the binary, skeleton route modules, TestApp::storage_arc (wave 2)
 - [ ] 03-09-PLAN.md — webauthn-rs adapter for PasskeyCeremonies, SVG QR renderer, webauthn.js (wave 2)
 - [ ] 03-10-PLAN.md — Rotation planner + KeyRotationService, per-client ID-token alg, JWKS cache headers (wave 3)
-- [ ] 03-11-PLAN.md — form_post response mode via one core response builder (wave 3)
+- [x] 03-11-PLAN.md — form_post response mode via one core response builder (wave 3)
 - [ ] 03-12-PLAN.md — Core login flow: usernameless passkey, TOTP/recovery second factor, attempts, audit, transactional recovery notice (wave 3)
 - [ ] 03-13-PLAN.md — Limiter wiring: route-class layer on by default, per-client token limit, brute-force helpers, CAPTCHA (wave 3)
 - [ ] 03-14-PLAN.md — Account security: passkey registration, TOTP enrolment + recovery codes, removal (wave 3)
