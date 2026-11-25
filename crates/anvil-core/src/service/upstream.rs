@@ -1097,6 +1097,8 @@ impl UpstreamService<'_> {
                         tenant,
                         &new_user,
                         &new_link(new_user.id, conn, &identity, now),
+                        None,
+                        None,
                     )
                     .await;
                 let u = match created {

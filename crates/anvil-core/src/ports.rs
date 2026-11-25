@@ -31,7 +31,8 @@
 //! [`UserRepo::complete_recovery`], [`UserRepo::delete`]) inserts, **in the same transaction**,
 //! one logout delivery per (session revoked by that call x `rp_session` row of that session whose
 //! client has a `backchannel_logout_uri`): `uri` copied from the client, `sub` = the user id,
-//! `sid` = the session id, `next_attempt_at = now`, `give_up_at = now + 24h`
+//! `sid` = the session id, `issuer` copied from the `rp_session` row (the issuer the RP got its ID
+//! tokens from), `next_attempt_at = now`, `give_up_at = now + 24h`
 //! ([`crate::model::LOGOUT_DELIVERY_TTL`]), `attempts = 0`. A call that revokes nothing enqueues
 //! nothing. `rp_session` rows are written by [`GrantRepo::create_code`]. Methods without a `now`
 //! parameter (`UserRepo::delete`) use the storage clock.
@@ -82,7 +83,9 @@ pub trait Storage: Send + Sync + 'static {
     /// Batch-deletes expired rows across all tenants: authorization codes, authorization
     /// requests, flows, browser sessions, refresh tokens, opaque access tokens, replay guards,
     /// self-service tokens and setup tokens with `expires_at <= now`, plus sent or expired outbox
-    /// emails. Never deletes a
+    /// emails. Also deletes token families past `absolute_expires_at` that have no unexpired
+    /// code (their refresh and access tokens go with them), and `branding_logo` rows that no
+    /// `branding` row of the same tenant references. Never deletes a
     /// row that is still usable at `now`. Consumed codes and refresh tokens are kept until they
     /// expire, so code and refresh-token reuse detection keeps working. Returns the number of
     /// rows deleted.
@@ -387,7 +390,9 @@ pub trait ClientRepo: Send + Sync {
     ) -> Result<bool, StorageError>;
 
     /// Deletes the client and revokes all its token families (reason `ClientDeleted`) in one
-    /// transaction. `false` if it did not exist.
+    /// transaction. The same transaction deletes the client's branding (scope
+    /// [`crate::model::BrandingScope::scope_key`] `client:{client_id}`) and its preview draft.
+    /// `false` if it did not exist.
     async fn delete(&self, tenant: TenantId, client_id: &str) -> Result<bool, StorageError>;
 }
 
@@ -601,8 +606,9 @@ pub trait GrantRepo: Send + Sync {
     /// moment the code does, so a code replay racing the exchange still revokes it. Callers set
     /// `code.token_family_id == family.id`; a mismatch is rejected with `Conflict` and nothing is
     /// stored. `Conflict` on a duplicate code hash or family id. In the same transaction it
-    /// records the RP session `(tenant, code.session_id, code.client_id)` (ignoring an existing
-    /// row), which back-channel logout uses ([`LogoutRepo`]).
+    /// records the RP session `(tenant, code.session_id, code.client_id)` with `code.issuer`; an
+    /// existing row for that session and client gets its issuer updated to the latest code's.
+    /// Back-channel logout uses it ([`LogoutRepo`]).
     async fn create_code(
         &self,
         tenant: TenantId,
@@ -979,23 +985,33 @@ pub trait ConnectionRepo: Send + Sync {
         now: OffsetDateTime,
     ) -> Result<bool, StorageError>;
 
-    /// Deletes one link of `user`. `false` if there is no such link of this user (another user's
-    /// link is never deleted).
+    /// Deletes one link of `user` unless it is the user's last sign-in method, in **one
+    /// transaction**. The link is deleted only if afterwards the user still has a password
+    /// credential, a passkey (webauthn credential), another identity link, or
+    /// `email_sign_in && user.email_verified` (TOTP is a second factor, never a sign-in method).
+    /// Calls for links of the same user are serialised (Postgres: the user row is locked
+    /// `FOR UPDATE` first; SQLite: the single writer), so concurrent unlinks can never remove
+    /// the last method. Another user's link or an unknown id is
+    /// [`DeleteLinkOutcome::NotFound`] and nothing is deleted.
     async fn delete_link(
         &self,
         tenant: TenantId,
         user: UserId,
         id: IdentityLinkId,
-    ) -> Result<bool, StorageError>;
+        email_sign_in: bool,
+    ) -> Result<DeleteLinkOutcome, StorageError>;
 
-    /// Creates the user (no password) and the link in **one transaction** (sign-up through an
-    /// upstream). `Conflict` on a duplicate email/username or link; on conflict nothing at all
-    /// is persisted.
+    /// Creates the user (no password), the link and optionally a self-service token (e.g.
+    /// verification) and an email, in **one transaction** (sign-up through an upstream).
+    /// `Conflict` on a duplicate email/username or link; on conflict nothing at all is
+    /// persisted (same semantics as [`UserRepo::create`]).
     async fn create_user_with_link(
         &self,
         tenant: TenantId,
         user: &NewUser,
         link: &NewIdentityLink,
+        token: Option<&NewSelfServiceToken>,
+        email: Option<&NewEmail>,
     ) -> Result<User, StorageError>;
 }
 
@@ -1100,6 +1116,17 @@ pub enum ConsumeOutcome {
     AlreadyConsumed { family_id: Option<TokenFamilyId> },
     /// Unknown, expired, or belongs to another tenant. Callers map all of these to `invalid_grant`.
     NotFound,
+}
+
+/// Result of [`ConnectionRepo::delete_link`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeleteLinkOutcome {
+    /// The link was deleted.
+    Deleted,
+    /// No such link of this user in this tenant.
+    NotFound,
+    /// The link exists but is the user's last sign-in method; it was kept.
+    LastSignInMethod,
 }
 
 /// Result of [`GrantRepo::rotate_refresh`].

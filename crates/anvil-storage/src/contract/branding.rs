@@ -257,3 +257,173 @@ pub async fn branding_isolated_by_tenant(s: &TestStorage) {
     assert!(!repo.delete(other, &key).await.expect("delete"));
     assert!(repo.get(tenant, &key).await.expect("get").is_some());
 }
+
+pub async fn purge_expired_removes_unreferenced_logos(s: &TestStorage) {
+    let tenant = seed_tenant(s).await;
+    let other = seed_tenant(s).await;
+    let repo = s.storage.branding();
+    let tenant_key = BrandingScope::Tenant.scope_key();
+    let app = BrandingScope::Client("app".into()).scope_key();
+    let app2 = BrandingScope::Client("app2".into()).scope_key();
+    let app3 = BrandingScope::Client("app3".into()).scope_key();
+    let put = |t, key: String, logo: LogoChange| async move {
+        s.storage
+            .branding()
+            .put(t, &key, &new_branding_update("#101010", logo), now_ms())
+            .await
+            .expect("put");
+    };
+    let (replaced, current, shared, cleared) = (new_logo(), new_logo(), new_logo(), new_logo());
+
+    // Replaced on the tenant scope: the old logo is unreferenced.
+    put(
+        tenant,
+        tenant_key.clone(),
+        LogoChange::Set(replaced.clone()),
+    )
+    .await;
+    put(tenant, tenant_key.clone(), LogoChange::Set(current.clone())).await;
+    // Referenced by one client scope, set then cleared on another: still referenced.
+    put(tenant, app.clone(), LogoChange::Set(shared.clone())).await;
+    put(tenant, app2.clone(), LogoChange::Set(shared.clone())).await;
+    put(tenant, app2.clone(), LogoChange::Clear).await;
+    // Set then cleared, referenced nowhere else.
+    put(tenant, app3.clone(), LogoChange::Set(cleared.clone())).await;
+    put(tenant, app3.clone(), LogoChange::Clear).await;
+    // The replaced logo's bytes are still in use in another tenant.
+    put(other, tenant_key.clone(), LogoChange::Set(replaced.clone())).await;
+
+    s.storage
+        .purge_expired(now_ms())
+        .await
+        .expect("purge_expired");
+
+    assert_eq!(
+        repo.logo(tenant, &replaced.sha256).await.expect("logo"),
+        None,
+        "a replaced logo is purged"
+    );
+    assert_eq!(
+        repo.logo(tenant, &current.sha256).await.expect("logo"),
+        Some(current.clone()),
+        "the current logo stays"
+    );
+    assert_eq!(
+        repo.logo(tenant, &shared.sha256).await.expect("logo"),
+        Some(shared.clone()),
+        "a logo another scope of the tenant references stays"
+    );
+    assert_eq!(
+        repo.logo(tenant, &cleared.sha256).await.expect("logo"),
+        None,
+        "a cleared logo is purged"
+    );
+    assert_eq!(
+        repo.logo(other, &replaced.sha256).await.expect("logo"),
+        Some(replaced.clone()),
+        "references are judged per tenant"
+    );
+    assert_eq!(
+        repo.get(tenant, &tenant_key)
+            .await
+            .expect("get")
+            .expect("branding")
+            .logo_sha256
+            .as_deref(),
+        Some(current.sha256.as_str())
+    );
+}
+
+pub async fn client_delete_removes_its_branding(s: &TestStorage) {
+    let tenant = seed_tenant(s).await;
+    let client = seed_client(s, tenant).await;
+    let survivor = seed_client(s, tenant).await;
+    let repo = s.storage.branding();
+    let tenant_key = BrandingScope::Tenant.scope_key();
+    let client_key = BrandingScope::Client(client.client_id.clone()).scope_key();
+    let survivor_key = BrandingScope::Client(survivor.client_id.clone()).scope_key();
+    let logo = new_logo();
+    let now = now_ms();
+
+    let tenant_branding = repo
+        .put(
+            tenant,
+            &tenant_key,
+            &new_branding_update("#202020", LogoChange::Keep),
+            now,
+        )
+        .await
+        .expect("put");
+    repo.put(
+        tenant,
+        &client_key,
+        &new_branding_update("#303030", LogoChange::Set(logo.clone())),
+        now,
+    )
+    .await
+    .expect("put");
+    let draft = new_branding_draft(Duration::minutes(10));
+    repo.put_draft(tenant, &client_key, &draft, now)
+        .await
+        .expect("put_draft");
+    let survivor_branding = repo
+        .put(
+            tenant,
+            &survivor_key,
+            &new_branding_update("#404040", LogoChange::Keep),
+            now,
+        )
+        .await
+        .expect("put");
+    let survivor_draft = new_branding_draft(Duration::minutes(10));
+    repo.put_draft(tenant, &survivor_key, &survivor_draft, now)
+        .await
+        .expect("put_draft");
+
+    assert!(
+        s.storage
+            .clients()
+            .delete(tenant, &client.client_id)
+            .await
+            .expect("delete")
+    );
+
+    assert_eq!(
+        repo.get(tenant, &client_key).await.expect("get"),
+        None,
+        "deleting a client deletes its branding"
+    );
+    assert_eq!(
+        repo.draft_by_preview(tenant, &draft.preview_token_hash, now_ms())
+            .await
+            .expect("draft_by_preview"),
+        None,
+        "and its preview draft"
+    );
+    assert_eq!(
+        repo.get(tenant, &tenant_key).await.expect("get"),
+        Some(tenant_branding),
+        "the tenant branding is untouched"
+    );
+    assert_eq!(
+        repo.get(tenant, &survivor_key).await.expect("get"),
+        Some(survivor_branding),
+        "another client's branding is untouched"
+    );
+    assert!(
+        repo.draft_by_preview(tenant, &survivor_draft.preview_token_hash, now_ms())
+            .await
+            .expect("draft_by_preview")
+            .is_some()
+    );
+
+    s.storage
+        .purge_expired(now_ms())
+        .await
+        .expect("purge_expired");
+    assert_eq!(
+        repo.logo(tenant, &logo.sha256).await.expect("logo"),
+        None,
+        "the deleted client's logo goes with the next purge"
+    );
+}

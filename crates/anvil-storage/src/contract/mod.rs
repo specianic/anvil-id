@@ -156,6 +156,7 @@ macro_rules! storage_contract_tests {
             outbox_expired_not_claimed,
             // purge
             purge_expired_removes_only_expired_rows,
+            purge_expired_removes_expired_token_families,
             // ---- Phase 3 (plan 03-02); backends implement them in 03-05 / 03-06 ----
             // clients and sessions: new columns
             client_phase3_fields_round_trip,
@@ -237,7 +238,10 @@ macro_rules! storage_contract_tests {
             connection_delete_cascades_links,
             identity_link_create_find_and_conflict,
             identity_link_delete_only_own,
+            delete_link_keeps_a_sign_in_method,
+            delete_link_concurrent_never_removes_the_last_method,
             create_user_with_link_is_atomic,
+            create_user_with_link_stores_verification_atomically,
             connections_isolated_by_tenant,
             // branding
             branding_put_get_scopes,
@@ -245,8 +249,11 @@ macro_rules! storage_contract_tests {
             branding_draft_replace_and_preview,
             branding_delete,
             branding_isolated_by_tenant,
+            purge_expired_removes_unreferenced_logos,
+            client_delete_removes_its_branding,
             // back-channel logout: RP sessions, enqueue on every revoking intent, delivery queue
             create_code_records_rp_session_once,
+            rp_session_records_issuer_and_deliveries_copy_it,
             revoke_enqueues_backchannel_delivery,
             revoke_with_families_enqueues_backchannel_delivery,
             revoke_all_for_user_enqueues_backchannel_delivery,

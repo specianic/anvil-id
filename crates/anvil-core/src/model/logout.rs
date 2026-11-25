@@ -18,6 +18,9 @@ pub struct RpSession {
     pub tenant_id: TenantId,
     pub session_id: SessionId,
     pub client_id: String,
+    /// The issuer of the ID tokens this RP got for the session (the latest authorization code's
+    /// issuer). `None` only for rows written before migration 0006 (SQLite) / 0005 (Postgres).
+    pub issuer: Option<String>,
     pub created_at: OffsetDateTime,
 }
 
@@ -34,6 +37,10 @@ pub struct LogoutDelivery {
     pub sub: String,
     /// The browser session id (logout token `sid`).
     pub sid: String,
+    /// The logout token `iss`, copied from the RP session when the delivery was enqueued (it
+    /// must equal the ID token's `iss`). `None` only for rows written before migration 0006
+    /// (SQLite) / 0005 (Postgres).
+    pub issuer: Option<String>,
     pub attempts: u32,
     pub next_attempt_at: OffsetDateTime,
     pub give_up_at: OffsetDateTime,

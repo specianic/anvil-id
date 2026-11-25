@@ -482,11 +482,15 @@ pub fn new_code(
         acr: ctx.session.acr.clone(),
         amr: ctx.session.amr.clone(),
         token_family_id: family.id,
+        issuer: TEST_ISSUER.to_owned(),
         expires_at: now + expires_in,
         created_at: now,
         resource: vec![],
     }
 }
+
+/// The issuer [`new_code`] records (and so the RP session and its deliveries carry).
+pub const TEST_ISSUER: &str = "https://op.test";
 
 /// The record `consume_code` must return for `code` stored under `tenant`.
 pub fn expected_code(tenant: TenantId, code: &NewAuthorizationCode) -> AuthorizationCode {

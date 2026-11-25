@@ -5,7 +5,7 @@ use std::collections::HashSet;
 
 use anvil_core::model::{
     Client, DeliveryResult, LOGOUT_DELIVERY_TTL, LogoutDelivery, LogoutDeliveryId,
-    NewBrowserSession, SelfServiceKind, TenantId, User,
+    NewAuthorizationCode, NewBrowserSession, SelfServiceKind, TenantId, User,
 };
 use time::{Duration, OffsetDateTime};
 
@@ -55,6 +55,11 @@ fn assert_fresh_delivery(
         d.sid,
         session.id.to_string(),
         "sid is the browser session id"
+    );
+    assert_eq!(
+        d.issuer.as_deref(),
+        Some(TEST_ISSUER),
+        "the issuer is copied from the RP session"
     );
     assert_eq!(d.attempts, 0);
     assert_eq!(d.delivered_at, None);
@@ -111,6 +116,104 @@ pub async fn create_code_records_rp_session_once(s: &TestStorage) {
             .await
             .is_empty(),
         "signing in enqueues nothing"
+    );
+}
+
+pub async fn rp_session_records_issuer_and_deliveries_copy_it(s: &TestStorage) {
+    let ctx = seed_logout_ctx(s).await;
+    let grants = s.storage.grants();
+    let gctx = GrantCtx {
+        tenant: ctx.tenant,
+        user: ctx.user.clone(),
+        client: ctx.bc.clone(),
+        session: ctx.session.clone(),
+    };
+    let issued_with = |issuer: &str| {
+        let family = new_family(&gctx, Duration::days(30));
+        let code = NewAuthorizationCode {
+            issuer: issuer.to_owned(),
+            ..new_code(&gctx, &family, Duration::minutes(5))
+        };
+        (code, family)
+    };
+    let bc_issuer = |rps: &[anvil_core::model::RpSession]| {
+        rps.iter()
+            .find(|r| r.client_id == ctx.bc.client_id)
+            .expect("bc rp session")
+            .issuer
+            .clone()
+    };
+
+    let (code, family) = issued_with("https://a.example.test/t/acme");
+    grants
+        .create_code(ctx.tenant, &code, &family)
+        .await
+        .expect("create_code");
+    let rps = s
+        .storage
+        .logout()
+        .rp_sessions(ctx.tenant, ctx.session.id)
+        .await
+        .expect("rp_sessions");
+    assert_eq!(
+        bc_issuer(&rps).as_deref(),
+        Some("https://a.example.test/t/acme"),
+        "create_code records the code's issuer"
+    );
+    let plain = rps
+        .iter()
+        .find(|r| r.client_id == ctx.plain.client_id)
+        .expect("plain rp session");
+    assert_eq!(
+        plain.issuer.as_deref(),
+        Some(TEST_ISSUER),
+        "another client's RP session keeps its own issuer"
+    );
+
+    // The latest code for the same session and client wins.
+    let (code, family) = issued_with("https://login.acme.test");
+    grants
+        .create_code(ctx.tenant, &code, &family)
+        .await
+        .expect("create_code");
+    let rps = s
+        .storage
+        .logout()
+        .rp_sessions(ctx.tenant, ctx.session.id)
+        .await
+        .expect("rp_sessions");
+    assert_eq!(rps.len(), 2, "still one row per (session, client)");
+    assert_eq!(bc_issuer(&rps).as_deref(), Some("https://login.acme.test"));
+
+    let now = now_ms();
+    assert!(
+        s.storage
+            .sessions()
+            .revoke_with_families(ctx.tenant, ctx.session.id, now)
+            .await
+            .expect("revoke_with_families")
+    );
+    let d = deliveries(s, ctx.tenant, &ctx.bc.client_id).await;
+    assert_eq!(d.len(), 1);
+    assert_eq!(
+        d[0].issuer.as_deref(),
+        Some("https://login.acme.test"),
+        "the delivery copies the RP session's issuer"
+    );
+    let claimed = s
+        .storage
+        .logout()
+        .claim_due_deliveries(now + Duration::minutes(1), now, 10)
+        .await
+        .expect("claim");
+    let mine = claimed
+        .iter()
+        .find(|c| c.id == d[0].id)
+        .expect("the delivery is due");
+    assert_eq!(
+        mine.issuer.as_deref(),
+        Some("https://login.acme.test"),
+        "claimed deliveries carry the issuer"
     );
 }
 

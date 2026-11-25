@@ -474,6 +474,21 @@ pub fn canonical_issuer(public_url: &PublicUrl, tenant: &Tenant) -> String {
     issuer(public_url, &base)
 }
 
+/// The `iss` of `delivery`'s logout token: the issuer the RP got its ID tokens from, recorded on
+/// the RP session and copied onto the delivery (Back-Channel Logout 1.0 §2.4: it must equal the
+/// ID token's `iss`). `None` exists only for rows written before the issuer column (SQLite
+/// migration 0006, Postgres 0005); those fall back to the tenant's canonical issuer.
+pub fn logout_token_issuer(
+    public_url: &PublicUrl,
+    tenant: &Tenant,
+    delivery: &LogoutDelivery,
+) -> String {
+    delivery
+        .issuer
+        .clone()
+        .unwrap_or_else(|| canonical_issuer(public_url, tenant))
+}
+
 /// Signs the logout token of `delivery` with `signer` (header `typ: logout+jwt`): claims
 /// exactly `iss`, `aud` (the client), `iat`, `exp` (2 minutes), `jti`, `sub`, `sid`, `events`;
 /// never a `nonce` (Back-Channel Logout 1.0 §2.4).
@@ -530,7 +545,7 @@ impl LogoutService {
             .ok_or(CoreError::NotFound)?;
         let alg = id_token_alg(&tenant, &client)?;
         let signer = keys.signer_for(tenant.id, alg).await?;
-        let issuer = canonical_issuer(public_url, &tenant);
+        let issuer = logout_token_issuer(public_url, &tenant, delivery);
         let token = sign_logout_token(&signer, &issuer, delivery, &random_token(), now)?;
         Ok(PreparedDelivery {
             uri,
@@ -603,6 +618,7 @@ mod tests {
             uri: "https://rp.example.test/bc?x=1".into(),
             sub: "user-1".into(),
             sid: "session-1".into(),
+            issuer: None,
             attempts: 0,
             next_attempt_at: t,
             give_up_at: t + crate::model::LOGOUT_DELIVERY_TTL,
@@ -667,6 +683,44 @@ mod tests {
         assert_eq!(canonical_issuer(&url, &t), "https://id.example/t/acme");
         t.host = Some("login.acme.test".into());
         assert_eq!(canonical_issuer(&url, &t), "https://login.acme.test");
+    }
+
+    #[test]
+    fn logout_token_uses_the_delivery_issuer_before_the_canonical_one() {
+        use crate::model::KeyState;
+        use crate::service::key::{jwks_from_rows, open_key, tests::sealed_row};
+        use anvil_jose::jws::verify_jwt;
+        use anvil_jose::keys::Alg;
+
+        let url = PublicUrl::parse("https://id.example").unwrap();
+        // A custom-host tenant whose user signed in through /t/{slug}.
+        let tenant = Tenant {
+            id: crate::model::TenantId::new_v7(),
+            slug: "acme".into(),
+            display_name: "a".into(),
+            host: Some("login.acme.test".into()),
+            settings: crate::model::TenantSettings::default(),
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+        };
+        let mut d = delivery();
+        d.issuer = Some("https://id.example/t/acme".into());
+        let iss = logout_token_issuer(&url, &tenant, &d);
+        assert_eq!(iss, "https://id.example/t/acme");
+
+        let kek = anvil_jose::Kek::generate();
+        let row = sealed_row(&kek, KeyState::Active);
+        let signer = open_key(&kek, &row).unwrap();
+        let now = time::macros::datetime!(2026-11-25 12:05 UTC);
+        let token = sign_logout_token(&signer, &iss, &d, "jti-1", now).unwrap();
+        let jwt = verify_jwt(&token, &jwks_from_rows(&[row]).unwrap(), &[Alg::RS256]).unwrap();
+        assert_eq!(jwt.claims["iss"], "https://id.example/t/acme");
+
+        // Rows from before the issuer column fall back to the canonical (host) issuer.
+        d.issuer = None;
+        assert_eq!(
+            logout_token_issuer(&url, &tenant, &d),
+            "https://login.acme.test"
+        );
     }
 
     #[test]

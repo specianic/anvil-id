@@ -1,7 +1,12 @@
 //! ConnectionRepo contract: upstream connections and identity links.
 
-use anvil_core::model::{ConnectionId, ConnectionUpdate, IdentityLinkId, NewConnection};
-use anvil_core::ports::StorageError;
+use std::sync::Arc;
+
+use anvil_core::model::{
+    ConnectionId, ConnectionUpdate, IdentityLinkId, NewConnection, NewIdentityLink, NewUser,
+    SelfServiceKind, TenantId, User, UserId,
+};
+use anvil_core::ports::{DeleteLinkOutcome, StorageError};
 use time::Duration;
 
 use super::TestStorage;
@@ -281,6 +286,7 @@ pub async fn identity_link_create_find_and_conflict(s: &TestStorage) {
 
 pub async fn identity_link_delete_only_own(s: &TestStorage) {
     let tenant = seed_tenant(s).await;
+    // seed_user has a password, so the link is not the last sign-in method.
     let user = seed_user(s, tenant).await;
     let attacker = seed_user(s, tenant).await;
     let repo = s.storage.connections();
@@ -288,11 +294,11 @@ pub async fn identity_link_delete_only_own(s: &TestStorage) {
     let link = new_identity_link(user.id, c.id, "victim");
     repo.create_link(tenant, &link).await.expect("create_link");
 
-    assert!(
-        !repo
-            .delete_link(tenant, attacker.id, link.id)
+    assert_eq!(
+        repo.delete_link(tenant, attacker.id, link.id, false)
             .await
             .expect("delete_link"),
+        DeleteLinkOutcome::NotFound,
         "another user's link is never deleted"
     );
     assert!(
@@ -301,21 +307,218 @@ pub async fn identity_link_delete_only_own(s: &TestStorage) {
             .expect("find")
             .is_some()
     );
-    assert!(
-        repo.delete_link(tenant, user.id, link.id)
+    assert_eq!(
+        repo.delete_link(tenant, user.id, link.id, false)
             .await
-            .expect("delete_link")
+            .expect("delete_link"),
+        DeleteLinkOutcome::Deleted
     );
     assert_eq!(
         repo.find_link(tenant, c.id, "victim").await.expect("find"),
         None
     );
-    assert!(
-        !repo
-            .delete_link(tenant, user.id, link.id)
+    assert_eq!(
+        repo.delete_link(tenant, user.id, link.id, false)
             .await
-            .expect("delete_link")
+            .expect("delete_link"),
+        DeleteLinkOutcome::NotFound
     );
+}
+
+/// Creates a user without any credential (`verified` sets `email_verified`).
+async fn seed_bare_user(s: &TestStorage, tenant: TenantId, verified: bool) -> User {
+    let user = NewUser {
+        email_verified: verified,
+        ..new_user()
+    };
+    s.storage
+        .users()
+        .create(tenant, &user, None, None, None)
+        .await
+        .expect("create user")
+}
+
+/// Links `user` to a fresh connection and returns the link.
+async fn seed_link(s: &TestStorage, tenant: TenantId, user: UserId) -> NewIdentityLink {
+    let c = seed_connection(s, tenant).await;
+    let link = new_identity_link(user, c.id, "subject");
+    s.storage
+        .connections()
+        .create_link(tenant, &link)
+        .await
+        .expect("create_link");
+    link
+}
+
+async fn link_exists(s: &TestStorage, tenant: TenantId, user: UserId, id: IdentityLinkId) -> bool {
+    s.storage
+        .connections()
+        .links_for_user(tenant, user)
+        .await
+        .expect("links")
+        .iter()
+        .any(|l| l.id == id)
+}
+
+pub async fn delete_link_keeps_a_sign_in_method(s: &TestStorage) {
+    let tenant = seed_tenant(s).await;
+    let other_tenant = seed_tenant(s).await;
+    let repo = s.storage.connections();
+    let users = s.storage.users();
+
+    // The only method is one link: refused with or without email sign-in while unverified.
+    let only = seed_bare_user(s, tenant, false).await;
+    let link = seed_link(s, tenant, only.id).await;
+    for email_sign_in in [false, true] {
+        assert_eq!(
+            repo.delete_link(tenant, only.id, link.id, email_sign_in)
+                .await
+                .expect("delete_link"),
+            DeleteLinkOutcome::LastSignInMethod,
+            "an unverified email never counts (email_sign_in = {email_sign_in})"
+        );
+        assert!(link_exists(s, tenant, only.id, link.id).await);
+    }
+    // TOTP is a second factor, not a sign-in method.
+    users
+        .create_totp(tenant, only.id, &new_totp(), &recovery_codes(2), now_ms())
+        .await
+        .expect("create_totp");
+    assert_eq!(
+        repo.delete_link(tenant, only.id, link.id, true)
+            .await
+            .expect("delete_link"),
+        DeleteLinkOutcome::LastSignInMethod,
+        "TOTP is not a sign-in method"
+    );
+
+    // Verified email: allowed only when the tenant offers email sign-in.
+    let verified = seed_bare_user(s, tenant, true).await;
+    let link = seed_link(s, tenant, verified.id).await;
+    assert_eq!(
+        repo.delete_link(tenant, verified.id, link.id, false)
+            .await
+            .expect("delete_link"),
+        DeleteLinkOutcome::LastSignInMethod
+    );
+    assert_eq!(
+        repo.delete_link(tenant, verified.id, link.id, true)
+            .await
+            .expect("delete_link"),
+        DeleteLinkOutcome::Deleted,
+        "a verified email with tenant email sign-in is a remaining method"
+    );
+    assert!(!link_exists(s, tenant, verified.id, link.id).await);
+
+    // A password.
+    let with_password = seed_user(s, tenant).await;
+    let link = seed_link(s, tenant, with_password.id).await;
+    assert_eq!(
+        repo.delete_link(tenant, with_password.id, link.id, false)
+            .await
+            .expect("delete_link"),
+        DeleteLinkOutcome::Deleted
+    );
+
+    // A passkey.
+    let with_passkey = seed_bare_user(s, tenant, false).await;
+    users
+        .create_passkey(tenant, with_passkey.id, &new_passkey())
+        .await
+        .expect("create_passkey");
+    let link = seed_link(s, tenant, with_passkey.id).await;
+    assert_eq!(
+        repo.delete_link(tenant, with_passkey.id, link.id, false)
+            .await
+            .expect("delete_link"),
+        DeleteLinkOutcome::Deleted
+    );
+
+    // A second link: the first goes, then the second is the last method.
+    let two = seed_bare_user(s, tenant, false).await;
+    let first = seed_link(s, tenant, two.id).await;
+    let second = seed_link(s, tenant, two.id).await;
+    assert_eq!(
+        repo.delete_link(tenant, two.id, first.id, false)
+            .await
+            .expect("delete_link"),
+        DeleteLinkOutcome::Deleted
+    );
+    assert_eq!(
+        repo.delete_link(tenant, two.id, second.id, false)
+            .await
+            .expect("delete_link"),
+        DeleteLinkOutcome::LastSignInMethod
+    );
+    assert!(link_exists(s, tenant, two.id, second.id).await);
+
+    // Another user's link, an unknown id, another tenant: NotFound, nothing deleted.
+    let victim = seed_user(s, tenant).await;
+    let victim_link = seed_link(s, tenant, victim.id).await;
+    for (t, u, id) in [
+        (tenant, with_password.id, victim_link.id),
+        (tenant, victim.id, IdentityLinkId::new_v7()),
+        (other_tenant, victim.id, victim_link.id),
+        (tenant, UserId::new_v7(), victim_link.id),
+    ] {
+        assert_eq!(
+            repo.delete_link(t, u, id, true).await.expect("delete_link"),
+            DeleteLinkOutcome::NotFound
+        );
+    }
+    assert!(link_exists(s, tenant, victim.id, victim_link.id).await);
+}
+
+pub async fn delete_link_concurrent_never_removes_the_last_method(s: &TestStorage) {
+    let tenant = seed_tenant(s).await;
+    for round in 0..10 {
+        let user = seed_bare_user(s, tenant, false).await;
+        let a = seed_link(s, tenant, user.id).await;
+        let b = seed_link(s, tenant, user.id).await;
+        let ids = [a.id, b.id];
+        let storage = Arc::clone(&s.storage);
+        let outcomes = race(2, move |i| {
+            let storage = Arc::clone(&storage);
+            let id = ids[i];
+            async move {
+                storage
+                    .connections()
+                    .delete_link(tenant, user.id, id, true)
+                    .await
+            }
+        })
+        .await;
+        let outcomes: Vec<DeleteLinkOutcome> = outcomes
+            .into_iter()
+            .map(|r| r.expect("no storage error under contention"))
+            .collect();
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|o| **o == DeleteLinkOutcome::Deleted)
+                .count(),
+            1,
+            "round {round}: exactly one unlink wins ({outcomes:?})"
+        );
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|o| **o == DeleteLinkOutcome::LastSignInMethod)
+                .count(),
+            1,
+            "round {round}: the other is refused ({outcomes:?})"
+        );
+        assert_eq!(
+            s.storage
+                .connections()
+                .links_for_user(tenant, user.id)
+                .await
+                .expect("links")
+                .len(),
+            1,
+            "round {round}: exactly one link is left"
+        );
+    }
 }
 
 pub async fn create_user_with_link_is_atomic(s: &TestStorage) {
@@ -327,7 +530,7 @@ pub async fn create_user_with_link_is_atomic(s: &TestStorage) {
     let new = new_user();
     let link = new_identity_link(new.id, c.id, "fresh");
     let user = repo
-        .create_user_with_link(tenant, &new, &link)
+        .create_user_with_link(tenant, &new, &link, None, None)
         .await
         .expect("create_user_with_link");
     assert_eq!(user, expected_user(tenant, &new));
@@ -353,7 +556,7 @@ pub async fn create_user_with_link_is_atomic(s: &TestStorage) {
     };
     let orphan = new_identity_link(dup_email.id, c.id, "orphan");
     assert!(matches!(
-        repo.create_user_with_link(tenant, &dup_email, &orphan)
+        repo.create_user_with_link(tenant, &dup_email, &orphan, None, None)
             .await,
         Err(StorageError::Conflict(_))
     ));
@@ -375,7 +578,8 @@ pub async fn create_user_with_link_is_atomic(s: &TestStorage) {
     let taken = new_user();
     let dup_link = new_identity_link(taken.id, c.id, "fresh");
     assert!(matches!(
-        repo.create_user_with_link(tenant, &taken, &dup_link).await,
+        repo.create_user_with_link(tenant, &taken, &dup_link, None, None)
+            .await,
         Err(StorageError::Conflict(_))
     ));
     assert_eq!(
@@ -390,6 +594,95 @@ pub async fn create_user_with_link_is_atomic(s: &TestStorage) {
             .await
             .expect("get_by_email"),
         None
+    );
+}
+
+pub async fn create_user_with_link_stores_verification_atomically(s: &TestStorage) {
+    let tenant = seed_tenant(s).await;
+    let existing = seed_user(s, tenant).await;
+    let repo = s.storage.connections();
+    let users = s.storage.users();
+    let c = seed_connection(s, tenant).await;
+
+    let new = new_user();
+    let link = new_identity_link(new.id, c.id, "unverified");
+    let token = new_self_service_token(
+        SelfServiceKind::Verification,
+        new.id,
+        &new.email,
+        Duration::hours(1),
+    );
+    let email = new_email(&new.email);
+    repo.create_user_with_link(tenant, &new, &link, Some(&token), Some(&email))
+        .await
+        .expect("create_user_with_link");
+    let now = now_ms();
+    let verified = users
+        .complete_verification(tenant, &token.token_hash, now)
+        .await
+        .expect("complete_verification")
+        .expect("the token was stored with the user");
+    assert!(verified.email_verified);
+    let claimed = s
+        .storage
+        .outbox()
+        .claim_due(now, 100, LEASE)
+        .await
+        .expect("claim_due");
+    assert_eq!(
+        claimed.iter().map(|e| e.id).collect::<Vec<_>>(),
+        vec![email.id],
+        "the email is in the outbox"
+    );
+
+    // Email conflict: no user, link, token or email.
+    let dup = NewUser {
+        email: existing.email.clone(),
+        username: None,
+        ..new_user()
+    };
+    let orphan = new_identity_link(dup.id, c.id, "orphan");
+    let orphan_token = new_self_service_token(
+        SelfServiceKind::Verification,
+        dup.id,
+        &dup.email,
+        Duration::hours(1),
+    );
+    let orphan_email = new_email(&dup.email);
+    assert!(matches!(
+        repo.create_user_with_link(
+            tenant,
+            &dup,
+            &orphan,
+            Some(&orphan_token),
+            Some(&orphan_email)
+        )
+        .await,
+        Err(StorageError::Conflict(_))
+    ));
+    assert_eq!(users.get(tenant, dup.id).await.expect("get"), None);
+    assert_eq!(
+        repo.find_link(tenant, c.id, "orphan").await.expect("find"),
+        None
+    );
+    assert_eq!(
+        users
+            .complete_verification(tenant, &orphan_token.token_hash, now_ms())
+            .await
+            .expect("complete_verification"),
+        None,
+        "a conflict stores no token"
+    );
+    let later = now_ms() + LEASE + Duration::seconds(1);
+    assert!(
+        s.storage
+            .outbox()
+            .claim_due(later, 100, LEASE)
+            .await
+            .expect("claim_due")
+            .iter()
+            .all(|e| e.id != orphan_email.id),
+        "a conflict stores no email"
     );
 }
 
@@ -431,11 +724,11 @@ pub async fn connections_isolated_by_tenant(s: &TestStorage) {
             .await
             .expect("touch")
     );
-    assert!(
-        !repo
-            .delete_link(other, user.id, link.id)
+    assert_eq!(
+        repo.delete_link(other, user.id, link.id, true)
             .await
-            .expect("delete_link")
+            .expect("delete_link"),
+        DeleteLinkOutcome::NotFound
     );
     // A link in another tenant cannot point at this tenant's connection or user.
     let foreign = new_identity_link(user.id, c.id, "foreign");

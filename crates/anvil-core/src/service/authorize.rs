@@ -176,11 +176,14 @@ pub enum SelectAccountStart {
 }
 
 /// Builds a code and its pre-created token family. Returns the plaintext code (sent to the
-/// client only) and the records to store; only the code's hash is stored.
+/// client only) and the records to store; only the code's hash is stored. `issuer` is the
+/// issuer of this authorization response (and of the ID tokens issued from the code); storage
+/// records it on the RP session for back-channel logout.
 pub fn build_code(
     client: &Client,
     params: &AuthorizationParams,
     session: &BrowserSession,
+    issuer: &str,
     now: OffsetDateTime,
 ) -> (SecretString, NewAuthorizationCode, NewTokenFamily) {
     let plaintext = anvil_jose::encoding::random_token();
@@ -213,6 +216,7 @@ pub fn build_code(
         acr: session.acr.clone(),
         amr: session.amr.clone(),
         token_family_id: family_id,
+        issuer: issuer.to_owned(),
         expires_at: now + CODE_TTL,
         created_at: now,
         resource: params.resource.clone(),
@@ -739,7 +743,7 @@ impl AuthorizeService {
         session: &BrowserSession,
         now: OffsetDateTime,
     ) -> Result<AuthorizeOutcome, CoreError> {
-        let (plaintext, code, family) = build_code(client, params, session, now);
+        let (plaintext, code, family) = build_code(client, params, session, issuer, now);
         self.storage
             .grants()
             .create_code(tenant.id, &code, &family)
@@ -864,7 +868,7 @@ mod tests {
         let c = client();
         let p = params();
         let s = session();
-        let (plain, code, family) = build_code(&c, &p, &s, NOW);
+        let (plain, code, family) = build_code(&c, &p, &s, ISSUER, NOW);
         let plain = plain.expose_secret();
         assert_eq!(plain.len(), 43);
         assert_eq!(
@@ -880,6 +884,7 @@ mod tests {
         assert_eq!(code.nonce.as_deref(), Some("n-1"));
         assert_eq!(code.redirect_uri, RP);
         assert_eq!(code.client_id, "rp");
+        assert_eq!(code.issuer, ISSUER);
         assert_eq!(code.user_id, s.user_id);
         assert_eq!(code.session_id, s.id);
         assert_eq!(code.auth_time, s.auth_time);
@@ -894,11 +899,11 @@ mod tests {
         // The granted resources go onto the code and the family (RFC 8707 §2.1).
         let mut with_resource = p.clone();
         with_resource.resource = vec!["https://api.example.test".to_owned()];
-        let (_, rcode, rfamily) = build_code(&c, &with_resource, &s, NOW);
+        let (_, rcode, rfamily) = build_code(&c, &with_resource, &s, ISSUER, NOW);
         assert_eq!(rcode.resource, with_resource.resource);
         assert_eq!(rfamily.resource, with_resource.resource);
         // Two codes never collide.
-        let (other, _, other_family) = build_code(&c, &p, &s, NOW);
+        let (other, _, other_family) = build_code(&c, &p, &s, ISSUER, NOW);
         assert_ne!(other.expose_secret(), plain);
         assert_ne!(other_family.id, family.id);
     }

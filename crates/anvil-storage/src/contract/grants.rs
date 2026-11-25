@@ -994,6 +994,87 @@ pub async fn purge_expired_removes_only_expired_rows(s: &TestStorage) {
     );
 }
 
+pub async fn purge_expired_removes_expired_token_families(s: &TestStorage) {
+    let ctx = seed_grant_ctx(s).await;
+    let grants = s.storage.grants();
+    let create = |absolute_in: Duration, code_in: Duration| {
+        let family = new_family(&ctx, absolute_in);
+        let code = new_code(&ctx, &family, code_in);
+        (code, family)
+    };
+
+    // Past its absolute expiry, its only code expired: purged with its refresh tokens.
+    let (code, dead) = create(Duration::seconds(-1), Duration::seconds(-1));
+    grants
+        .create_code(ctx.tenant, &code, &dead)
+        .await
+        .expect("create_code");
+    let dead_rt = new_refresh(dead.id, None, Duration::days(1));
+    grants
+        .create_refresh_token(ctx.tenant, &dead_rt)
+        .await
+        .expect("create_refresh_token");
+    // Past its absolute expiry but with a still-valid code: kept (the code still points at it).
+    let (live_code, with_code) = create(Duration::seconds(-1), Duration::minutes(5));
+    grants
+        .create_code(ctx.tenant, &live_code, &with_code)
+        .await
+        .expect("create_code");
+    // Not yet at its absolute expiry: kept even though its code expired.
+    let (old_code, unexpired) = create(Duration::days(30), Duration::seconds(-1));
+    grants
+        .create_code(ctx.tenant, &old_code, &unexpired)
+        .await
+        .expect("create_code");
+    let live_rt = new_refresh(unexpired.id, None, Duration::days(1));
+    grants
+        .create_refresh_token(ctx.tenant, &live_rt)
+        .await
+        .expect("create_refresh_token");
+
+    s.storage
+        .purge_expired(now_ms())
+        .await
+        .expect("purge_expired");
+
+    assert_eq!(
+        grants.get_family(ctx.tenant, dead.id).await.expect("get"),
+        None,
+        "a family past its absolute expiry with no live code is purged"
+    );
+    assert_eq!(
+        grants
+            .find_refresh_token(ctx.tenant, &dead_rt.token_hash)
+            .await
+            .expect("find"),
+        None,
+        "its refresh tokens go with it"
+    );
+    assert!(
+        grants
+            .get_family(ctx.tenant, with_code.id)
+            .await
+            .expect("get")
+            .is_some(),
+        "a family with an unexpired code is kept"
+    );
+    assert!(
+        grants
+            .get_family(ctx.tenant, unexpired.id)
+            .await
+            .expect("get")
+            .is_some(),
+        "an unexpired family is kept"
+    );
+    assert!(
+        grants
+            .find_refresh_token(ctx.tenant, &live_rt.token_hash)
+            .await
+            .expect("find")
+            .is_some()
+    );
+}
+
 // ---- Phase 4 (plan 04-01); backends implement it in 04-04 / 04-05 ----
 
 pub async fn code_and_family_resource_round_trip(s: &TestStorage) {

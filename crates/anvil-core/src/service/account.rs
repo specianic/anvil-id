@@ -51,8 +51,8 @@ use crate::model::{
 };
 use crate::policy::{PasswordPolicy, check_password};
 use crate::ports::{
-    BreachChecker, Clock, PasskeyCeremonies, PasskeyUser, PasswordHasher, RelyingParty, Storage,
-    StorageError,
+    BreachChecker, Clock, DeleteLinkOutcome, PasskeyCeremonies, PasskeyUser, PasswordHasher,
+    RelyingParty, Storage, StorageError,
 };
 
 /// Number of recovery codes in a set.
@@ -1178,9 +1178,11 @@ impl AccountService {
     /// audited `identity_unlinked` (mode `account`).
     ///
     /// Refused with [`AccountFailure::LastSignInMethod`] when the account would be left without
-    /// a way to sign in: no password, no passkey, no other link, and the tenant offers neither
-    /// email codes nor magic links. Another user's link (or an unknown id) is
-    /// [`AccountFailure::LinkNotFound`]; it is never deleted.
+    /// a way to sign in: no password, no passkey, no other link, and no email sign-in (the tenant
+    /// offers email codes or magic links *and* the user's email is verified). The check and the
+    /// delete are one storage intent ([`crate::ports::ConnectionRepo::delete_link`]), so
+    /// concurrent unlinks cannot remove the last method. Another user's link (or an unknown id)
+    /// is [`AccountFailure::LinkNotFound`]; it is never deleted.
     pub async fn unlink(
         &self,
         tenant: &Tenant,
@@ -1196,32 +1198,21 @@ impl AccountService {
         let Some(target) = links.iter().find(|l| l.id == link) else {
             return Err(AccountFailure::LinkNotFound.into());
         };
-        let credentials = self
-            .storage
-            .users()
-            .list_credentials(tenant.id, user)
-            .await?;
-        let methods = SignInMethods {
-            password: credentials
-                .iter()
-                .any(|c| c.kind == CredentialKind::Password),
-            passkeys: credentials
-                .iter()
-                .filter(|c| c.kind == CredentialKind::Webauthn)
-                .count(),
-            other_links: links.len() - 1,
-            email_sign_in: tenant.settings.email_otp || tenant.settings.magic_link,
-        };
-        if !methods.any() {
-            return Err(AccountFailure::LastSignInMethod.into());
-        }
         let slug = connections
             .get(tenant.id, target.connection_id)
             .await?
             .map(|c| c.slug)
             .unwrap_or_default();
-        if !connections.delete_link(tenant.id, user, link).await? {
-            return Err(AccountFailure::LinkNotFound.into());
+        let email_sign_in = tenant.settings.email_otp || tenant.settings.magic_link;
+        match connections
+            .delete_link(tenant.id, user, link, email_sign_in)
+            .await?
+        {
+            DeleteLinkOutcome::Deleted => {}
+            DeleteLinkOutcome::NotFound => return Err(AccountFailure::LinkNotFound.into()),
+            DeleteLinkOutcome::LastSignInMethod => {
+                return Err(AccountFailure::LastSignInMethod.into());
+            }
         }
         self.audit()
             .record(
@@ -1235,22 +1226,6 @@ impl AccountService {
             )
             .await?;
         Ok(())
-    }
-}
-
-/// The ways a user can still sign in once one linked identity is gone.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct SignInMethods {
-    password: bool,
-    passkeys: usize,
-    other_links: usize,
-    /// The tenant offers sign-in with an email code or a magic link.
-    email_sign_in: bool,
-}
-
-impl SignInMethods {
-    fn any(self) -> bool {
-        self.password || self.passkeys > 0 || self.other_links > 0 || self.email_sign_in
     }
 }
 
@@ -1452,45 +1427,6 @@ mod tests {
         assert_eq!(
             AccountFailure::ReauthRequired.key(),
             "account.reauth_required"
-        );
-    }
-
-    #[test]
-    fn any_remaining_method_allows_unlinking() {
-        let none = SignInMethods {
-            password: false,
-            passkeys: 0,
-            other_links: 0,
-            email_sign_in: false,
-        };
-        assert!(!none.any());
-        assert!(
-            SignInMethods {
-                password: true,
-                ..none
-            }
-            .any()
-        );
-        assert!(
-            SignInMethods {
-                passkeys: 1,
-                ..none
-            }
-            .any()
-        );
-        assert!(
-            SignInMethods {
-                other_links: 1,
-                ..none
-            }
-            .any()
-        );
-        assert!(
-            SignInMethods {
-                email_sign_in: true,
-                ..none
-            }
-            .any()
         );
     }
 

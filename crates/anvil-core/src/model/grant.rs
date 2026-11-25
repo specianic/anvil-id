@@ -168,6 +168,9 @@ pub struct NewAuthorizationCode {
     pub acr: String,
     pub amr: Vec<String>,
     pub token_family_id: TokenFamilyId,
+    /// The issuer of the authorization response and of the ID tokens issued from this code.
+    /// Recorded on the RP session for back-channel logout.
+    pub issuer: String,
     pub expires_at: OffsetDateTime,
     pub created_at: OffsetDateTime,
 }
