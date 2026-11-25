@@ -8,6 +8,7 @@ import { createServer } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { expect, type Locator, type Page } from '@playwright/test';
 import { anvilUrl, createClient, login, type AdminAccount } from './anvil';
+import { tenantIssuer } from './upstream';
 
 /** The console URL for a path inside it (`users`, `audit?action=x`, ...). */
 export function consoleUrl(path = ''): string {
@@ -71,10 +72,10 @@ function freePort(): Promise<number> {
 }
 
 /**
- * Starts examples/node-rp on a free loopback port with a new confidential client of the default
- * tenant (authorization code + refresh token).
+ * Starts examples/node-rp on a free loopback port with a new confidential client of `tenant`
+ * (default `default`; authorization code + refresh token).
  */
-export async function startSampleRp(token: string, name: string): Promise<SampleRp> {
+export async function startSampleRp(token: string, name: string, tenant = 'default'): Promise<SampleRp> {
   const port = await freePort();
   const base = `http://localhost:${port}`;
   const client = await createClient(token, {
@@ -85,12 +86,12 @@ export async function startSampleRp(token: string, name: string): Promise<Sample
     redirect_uris: [`${base}/callback`],
     grant_types: ['authorization_code', 'refresh_token'],
     scopes: ['openid', 'profile', 'email'],
-  });
+  }, tenant);
   let log = '';
   const rp: ChildProcess = spawn(process.execPath, [RP_SERVER], {
     env: {
       ...process.env,
-      ISSUER: anvilUrl(),
+      ISSUER: tenantIssuer(tenant),
       CLIENT_ID: client.client_id,
       CLIENT_SECRET: client.client_secret ?? '',
       PORT: String(port),

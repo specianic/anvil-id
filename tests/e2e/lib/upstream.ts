@@ -7,12 +7,13 @@
 // at runtime.
 
 import { generateKeyPairSync, randomBytes } from 'node:crypto';
-import { anvilUrl, createClient, createUser, randomEmail, randomPassword } from './anvil';
-import { signEs256Jwt, type Jwk } from './mock-idp';
+import { expect, type Page } from '@playwright/test';
+import { anvilUrl, createClient, createUser, login, randomEmail, randomPassword } from './anvil';
+import { mockIdpRedirectUri, signEs256Jwt, startMockIdp, type Jwk, type MockIdp, type MockUser } from './mock-idp';
 
 async function adminRequest<T>(
   token: string,
-  method: 'POST' | 'PATCH',
+  method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
   path: string,
   body: unknown,
   expected: number,
@@ -21,14 +22,15 @@ async function adminRequest<T>(
     method,
     headers: {
       authorization: `Bearer ${token}`,
-      'content-type': 'application/json',
       accept: 'application/json',
+      ...(body === undefined ? {} : { 'content-type': 'application/json' }),
     },
-    body: JSON.stringify(body),
+    body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (res.status !== expected) {
     throw new Error(`${method} ${path} failed: HTTP ${res.status} ${await res.text()}`);
   }
+  if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }
 
@@ -40,6 +42,40 @@ export function tenantIssuer(tenant: string): string {
 /** A unique tenant slug (2-63 chars of a-z, 0-9, '-'). */
 export function randomSlug(prefix = 'up'): string {
   return `${prefix}-${randomBytes(4).toString('hex')}`;
+}
+
+/**
+ * Creates tenant `slug` (POST /tenants) with `settings` (NewTenantSettings fields such as
+ * `auto_link` or `upstream_registration`; absent fields take the server defaults). A fresh tenant
+ * per test keeps connections and login settings away from the shared default tenant.
+ */
+export async function createTenant(
+  token: string,
+  slug: string,
+  settings: Record<string, unknown> = {},
+): Promise<void> {
+  await adminRequest(token, 'POST', '/tenants', { slug, display_name: `E2E ${slug}`, settings }, 201);
+}
+
+/** A user as listed by the admin API (the fields the upstream specs read). */
+export interface TenantUser {
+  id: string;
+  email: string;
+  email_verified: boolean;
+  claims: { name?: string | null; given_name?: string | null; family_name?: string | null; [k: string]: unknown };
+  [extra: string]: unknown;
+}
+
+/** The first 200 users of `tenant` (enough for the small per-test tenants). */
+export async function tenantUsers(token: string, tenant: string): Promise<TenantUser[]> {
+  const page = await adminRequest<{ items: TenantUser[] }>(
+    token,
+    'GET',
+    `/tenants/${encodeURIComponent(tenant)}/users?limit=200`,
+    undefined,
+    200,
+  );
+  return page.items;
 }
 
 export interface UpstreamTenant {
@@ -93,6 +129,29 @@ export interface CreatedConnection {
   [extra: string]: unknown;
 }
 
+/** Deletes connection `id` of `tenant` (DELETE /tenants/{t}/connections/{id}). */
+export async function deleteConnection(token: string, tenant: string, id: string): Promise<void> {
+  await adminRequest(
+    token,
+    'DELETE',
+    `/tenants/${encodeURIComponent(tenant)}/connections/${encodeURIComponent(id)}`,
+    undefined,
+    204,
+  );
+}
+
+/** The connections of `tenant` (GET /tenants/{t}/connections). */
+export async function listConnections(token: string, tenant: string): Promise<CreatedConnection[]> {
+  const list = await adminRequest<{ items: CreatedConnection[] }>(
+    token,
+    'GET',
+    `/tenants/${encodeURIComponent(tenant)}/connections`,
+    undefined,
+    200,
+  );
+  return list.items;
+}
+
 /** Creates an upstream connection in `tenant` (POST /tenants/{t}/connections). */
 export function createConnection(
   token: string,
@@ -143,4 +202,118 @@ export function appleClientSecret(
     iat: now,
     exp: now + (claims.lifetimeSeconds ?? 300),
   });
+}
+
+export interface MockConnection {
+  mock: MockIdp;
+  connection: CreatedConnection;
+  slug: string;
+}
+
+/**
+ * Starts a GitHub-like mock on 127.0.0.1 and creates a GitHub connection `slug` in `tenant` whose
+ * authorization and token endpoints and API base point at it. `connection` holds extra
+ * CreateConnection fields (`trust_email_verified`, `display_name`, ...). Stop the mock when done.
+ */
+export async function githubMockConnection(
+  token: string,
+  tenant: string,
+  slug: string,
+  users?: MockUser[],
+  connection: Record<string, unknown> = {},
+): Promise<MockConnection> {
+  const clientId = `Iv1.${randomBytes(6).toString('hex')}`;
+  const mock = await startMockIdp({
+    kind: 'github',
+    clientId,
+    redirectUri: mockIdpRedirectUri(anvilUrl(), tenant, slug),
+    users,
+  });
+  try {
+    const created = await createConnection(token, tenant, {
+      slug,
+      display_name: 'GitHub',
+      config: {
+        type: 'social',
+        provider: 'github',
+        client_id: clientId,
+        endpoints: {
+          authorization_endpoint: `${mock.url}/login/oauth/authorize`,
+          token_endpoint: `${mock.url}/login/oauth/access_token`,
+          api_base_url: mock.url,
+        },
+      },
+      secret: mock.clientSecret,
+      ...connection,
+    });
+    return { mock, connection: created, slug };
+  } catch (e) {
+    await mock.stop();
+    throw e;
+  }
+}
+
+/**
+ * Starts an Apple-like mock on 127.0.0.1 and creates an Apple connection `slug` in `tenant`: the
+ * issuer, endpoints and JWKS point at the mock, the secret is a fresh .p8 key (appleKeyPair) whose
+ * public half the mock checks AnvilID's ES256 client secret against. Stop the mock when done.
+ */
+export async function appleMockConnection(
+  token: string,
+  tenant: string,
+  slug: string,
+  users?: MockUser[],
+  connection: Record<string, unknown> = {},
+): Promise<MockConnection & { teamId: string; clientId: string; key: AppleKeyPair }> {
+  const key = appleKeyPair();
+  const teamId = `T${randomBytes(5).toString('hex').toUpperCase()}`;
+  const clientId = `test.e2e.${randomBytes(4).toString('hex')}.services`;
+  const mock = await startMockIdp({
+    kind: 'apple',
+    clientId,
+    redirectUri: mockIdpRedirectUri(anvilUrl(), tenant, slug),
+    appleClientKeyJwk: key.publicJwk,
+    appleKeyId: key.keyId,
+    appleTeamId: teamId,
+    users,
+  });
+  try {
+    const created = await createConnection(token, tenant, {
+      slug,
+      display_name: 'Apple',
+      config: {
+        type: 'social',
+        provider: 'apple',
+        client_id: clientId,
+        endpoints: {
+          issuer: mock.url,
+          authorization_endpoint: `${mock.url}/auth/authorize`,
+          token_endpoint: `${mock.url}/auth/token`,
+          jwks_uri: `${mock.url}/auth/keys`,
+        },
+        apple: { team_id: teamId, key_id: key.keyId },
+      },
+      secret: key.privateKeyPem,
+      ...connection,
+    });
+    return { mock, connection: created, slug, teamId, clientId, key };
+  } catch (e) {
+    await mock.stop();
+    throw e;
+  }
+}
+
+/**
+ * Signs in on `tenant`'s hosted login page without an authorization request and waits for the
+ * "Signed in" message page (a fresh session: account changes need a sign-in in the last 15 min).
+ */
+export async function signInAtTenant(
+  page: Page,
+  tenant: string,
+  email: string,
+  password: string,
+): Promise<void> {
+  await page.goto(`${tenantIssuer(tenant)}/ui/login`);
+  await login(page, email, password);
+  await expect(page.locator('#message-body')).toHaveAttribute('data-message-key', 'login.signed_in');
 }
