@@ -123,6 +123,17 @@ mod tests {
             b64url_decode("YWJ").is_err(),
             "non-canonical trailing bits rejected"
         );
+        assert!(
+            b64url_decode("Zh").is_err(),
+            "non-canonical trailing bits rejected"
+        );
+        assert!(
+            b64url_decode("Zm9vY").is_err(),
+            "impossible length rejected"
+        );
+        assert_eq!(b64url_decode("").unwrap(), b"");
+        assert_eq!(b64url(b"\xfb\xff"), "-_8");
+        assert_eq!(b64url(b"foobar"), "Zm9vYmFy");
     }
 
     #[test]

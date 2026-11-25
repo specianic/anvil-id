@@ -16,8 +16,7 @@ use sqlx::{SqliteConnection, SqlitePool};
 use time::OffsetDateTime;
 
 use crate::convert::{
-    b64url_decode, b64url_encode, i64_to_u32, map_err, ms_to_odt, odt_to_ms, opt_ms_to_odt,
-    parse_enum,
+    i64_to_u32, map_err, ms_to_odt, odt_to_ms, opt_ms_to_odt, parse_enum, sealed_from_text,
 };
 use crate::outbox::insert_email;
 
@@ -222,7 +221,7 @@ pub(crate) async fn totp(
         Ok(TotpCredential {
             id: CredentialId(r.id),
             user_id: UserId(r.user_id),
-            secret_enc: b64url_decode(&r.secret, "credential.secret (totp)")?,
+            secret_enc: sealed_from_text(&r.secret, "credential.secret (totp)")?,
             last_step: r
                 .counter
                 .map(|c| {
@@ -279,7 +278,7 @@ pub(crate) async fn create_totp(
     codes: &[RecoveryCodeHash],
     now: OffsetDateTime,
 ) -> Result<(), StorageError> {
-    let secret = b64url_encode(&totp.secret_enc);
+    let secret = anvil_jose::encoding::b64url(&totp.secret_enc);
     let created_at = odt_to_ms(totp.created_at);
     let now_ms = odt_to_ms(now);
     let mut tx = writer.begin().await.map_err(map_err)?;
