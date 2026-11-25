@@ -1139,6 +1139,63 @@ async fn email_templates_default_override_validation_and_reset() {
         200,
     );
 
+    // login_code: `code` and `link` are optional (email_otp / magic_link), so an override that
+    // prints either unguarded is refused; the shipped default (guarded) saves as is.
+    let resp = put(
+        &app,
+        &t,
+        "/tenants/default/email-templates/login_code",
+        json!({
+            "subject": "Sign in to {{ tenant_name }}",
+            "body_html": "<p>{% if link is defined %}{{ link }}{% endif %}</p>",
+            "body_text": "Your code:\n{{ code }}\n",
+        }),
+    )
+    .await;
+    let problem = assert_problem(&resp, 422);
+    assert_eq!(problem["errors"][0]["field"], "body_text", "{problem}");
+    assert_eq!(problem["errors"][0]["line"], 2, "{problem}");
+    let resp = put(
+        &app,
+        &t,
+        "/tenants/default/email-templates/login_code",
+        json!({
+            "subject": "Sign in to {{ tenant_name }}",
+            "body_html": "<a href=\"{{ link }}\">Sign in</a>",
+            "body_text": "{% if code is defined %}{{ code }}{% endif %}",
+        }),
+    )
+    .await;
+    let problem = assert_problem(&resp, 422);
+    assert_eq!(problem["errors"][0]["field"], "body_html", "{problem}");
+    let login_default = ok(
+        &get(&app, &t, "/tenants/default/email-templates/login_code").await,
+        200,
+    );
+    assert_eq!(
+        login_default["variables"],
+        json!(["tenant_name", "code", "link", "expires_minutes"])
+    );
+    let echo = json!({
+        "subject": login_default["subject"],
+        "body_html": login_default["body_html"],
+        "body_text": login_default["body_text"],
+    });
+    ok(
+        &put(
+            &app,
+            &t,
+            "/tenants/default/email-templates/login_code",
+            echo,
+        )
+        .await,
+        200,
+    );
+    ok(
+        &delete(&app, &t, "/tenants/default/email-templates/login_code").await,
+        204,
+    );
+
     // Invalid: unknown variable on line 3 of the text body.
     let resp = put(
         &app,
@@ -1234,17 +1291,23 @@ async fn email_templates_default_override_validation_and_reset() {
         "body",
     );
 
-    // Audit: two updates, one reset (the second DELETE had nothing to reset).
+    // Audit: three updates, two resets (the second recovery DELETE had nothing to reset).
     let events = audit(&app, &default_tenant(&app)).await;
     let count = |a: AuditAction| events.iter().filter(|e| e.action == a).count();
-    assert_eq!(count(AuditAction::EmailTemplateUpdated), 2);
-    assert_eq!(count(AuditAction::EmailTemplateReset), 1);
-    let reset = events
+    assert_eq!(count(AuditAction::EmailTemplateUpdated), 3);
+    assert_eq!(count(AuditAction::EmailTemplateReset), 2);
+    let mut resets: Vec<_> = events
         .iter()
-        .find(|e| e.action == AuditAction::EmailTemplateReset)
-        .unwrap();
-    assert_eq!(reset.target.as_deref(), Some("recovery"));
-    assert_eq!(reset.actor.id.as_deref(), Some(admin.as_str()));
+        .filter(|e| e.action == AuditAction::EmailTemplateReset)
+        .collect();
+    resets.sort_by_key(|e| e.target.clone());
+    let targets: Vec<_> = resets.iter().map(|e| e.target.as_deref()).collect();
+    assert_eq!(targets, [Some("login_code"), Some("recovery")]);
+    assert!(
+        resets
+            .iter()
+            .all(|e| e.actor.id.as_deref() == Some(admin.as_str()))
+    );
 }
 
 /// A local TCP port with nothing listening.

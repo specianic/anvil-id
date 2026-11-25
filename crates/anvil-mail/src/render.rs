@@ -91,12 +91,25 @@ impl EmailRenderer {
     ///
     /// An override's subject is its own (single-line) template; its text body is rendered as
     /// is (no subject line is stripped).
+    ///
+    /// A payload of a kind with optional variables (`crate::check::optional_variables`) must hold
+    /// at least one of them.
     pub fn render_with(
         &self,
         override_: Option<&EmailTemplate>,
         kind: EmailKind,
         payload: &BTreeMap<String, String>,
     ) -> Result<(String, String, String), MailError> {
+        // A kind with optional variables needs at least one of them (`login_code`: the code or
+        // the link); an email with neither would sign nobody in.
+        let optional = crate::check::optional_variables(kind);
+        if !optional.is_empty() && !optional.iter().any(|v| payload.contains_key(*v)) {
+            return Err(MailError::Template(format!(
+                "{}: the payload has none of {}",
+                kind.as_str(),
+                optional.join(", ")
+            )));
+        }
         let Some(t) = override_ else {
             return self.render(kind.as_str(), payload);
         };

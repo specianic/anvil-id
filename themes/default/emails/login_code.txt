@@ -1,18 +1,18 @@
-Your {{ tenant_name }} sign-in code
+{% if code is defined %}Your {{ tenant_name }} sign-in code{% else %}Your {{ tenant_name }} sign-in link{% endif %}
 
 Hello,
-
+{% if code is defined %}
 Use this code to finish signing in to {{ tenant_name }}:
 
     {{ code }}
-
-Or open this link to sign in directly:
+{% endif %}{% if link is defined %}
+{% if code is defined %}Or open this link to sign in directly:{% else %}Open this link to finish signing in to {{ tenant_name }}:{% endif %}
 
 {{ link }}
+{% endif %}
+{% if code is defined and link is defined %}The code and the link expire{% elif code is defined %}The code expires{% else %}The link expires{% endif %} in {{ expires_minutes }} minutes and can be used only once. {% if code is defined %}Never share this code with anyone.{% else %}Never forward this email to anyone.{% endif %}
 
-The code and the link expire in {{ expires_minutes }} minutes and can be used only once. Never share this code with anyone.
-
-If you did not try to sign in, ignore this email. Nobody can sign in without the code.
+If you did not try to sign in, ignore this email. Nobody can sign in without {% if code is defined and link is defined %}the code or the link{% elif code is defined %}the code{% else %}the link{% endif %}.
 
 -- 
 {{ tenant_name }}
