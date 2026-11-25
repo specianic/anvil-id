@@ -4,13 +4,13 @@ milestone: v1.0
 milestone_name: milestone
 status: verifying
 stopped_at: Completed 02-10-PLAN.md
-last_updated: "2026-11-25T02:09:06.992Z"
+last_updated: "2026-11-25T02:12:52.947Z"
 last_activity: "2026-11-25 — Completed 01-08 (phase gate: CI green on GitHub, spike verdicts, stack confirmed)"
 progress:
   total_phases: 7
   completed_phases: 1
   total_plans: 29
-  completed_plans: 17
+  completed_plans: 18
   percent: 53
 ---
 
@@ -67,6 +67,7 @@ Progress: [█████░░░░░] 53%
 | Phase 02 P10 | 20min | 2 tasks | 5 files |
 | Phase 02 P08 | 30min | 2 tasks | 5 files |
 | Phase 02 P09 | 25min | 2 tasks | 8 files |
+| Phase 02 P05 | 30min | 3 tasks | 16 files |
 
 ## Accumulated Context
 
@@ -121,6 +122,10 @@ Recent decisions affecting current work:
 - [Phase 02]: FlowOutcome::Restarted(StartedFlow) for expired/unknown flows (new flow cookie + flow.expired)
 - [Phase 02]: password_changed notice enqueued via OutboxRepo::enqueue after complete_recovery (recipient unknown until token consumed); port refinement raised
 - [Phase 02]: require_verified_email honoured: unverified login -> login.email_not_verified after correct password; registration -> registration.check_email
+- [Phase 02]: SQLite 0002 replaces Phase 1 authorization codes (not carried over; lack NOT NULL auth context); unit test proves 0002 applies on a populated Phase 1 DB
+- [Phase 02]: SQLite: token families have no FK to user/session/client; codes, credentials, sessions, self-service tokens cascade from user via composite (tenant_id,user_id) FKs
+- [Phase 02]: UserRepo::delete/ClientRepo::delete stamp family revocation with storage clock (ports take no now)
+- [Phase 02]: Outbox payloads may hold plaintext token links (02-08 to decide: build link at send time or document)
 
 ### Pending Todos
 

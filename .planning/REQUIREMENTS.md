@@ -95,7 +95,7 @@ Source of truth for wording and detail: [docs/PRD.md](../docs/PRD.md) §8–9. I
 ### Operations (PRD §9.1)
 
 - [ ] **OPS-01**: Operator can download one static binary (linux amd64/arm64, macOS) or a container image under 50 MB
-- [ ] **OPS-02**: AnvilID runs on embedded SQLite by default and on PostgreSQL for production, with no other required dependency
+- [x] **OPS-02**: AnvilID runs on embedded SQLite by default and on PostgreSQL for production, with no other required dependency
 - [ ] **OPS-03**: Operator can run multiple stateless instances on one Postgres without extra coordination services
 - [ ] **OPS-04**: Migrations run automatically, are tested between consecutive minor versions, and are never destructive without an explicit flag
 - [ ] **OPS-05**: Operator can start with zero configuration; in production only the public URL is expected
@@ -118,7 +118,7 @@ Source of truth for wording and detail: [docs/PRD.md](../docs/PRD.md) §8–9. I
 ### Quality (PRD §9.3, §6.3)
 
 - [ ] **QUAL-01**: Each security requirement has an automated negative test proving bad input is rejected
-- [ ] **QUAL-02**: The same test suite runs against SQLite and Postgres
+- [x] **QUAL-02**: The same test suite runs against SQLite and Postgres
 - [ ] **QUAL-03**: Public APIs are versioned; breaking changes only in major versions
 - [ ] **QUAL-04**: Zero-config `docker run` → OIDC login in a sample app takes ≤ 2 minutes (scripted check)
 - [ ] **QUAL-05**: Idle memory < 100 MB; token endpoint ≥ 1,000 req/s at p99 < 50 ms on 4 vCPU with Postgres
@@ -232,7 +232,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | AGT-02 | Phase 5 | Pending |
 | AGT-03 | Phase 7 | Pending |
 | OPS-01 | Phase 2 | Pending |
-| OPS-02 | Phase 2 | Pending |
+| OPS-02 | Phase 2 | Complete |
 | OPS-03 | Phase 5 | Pending |
 | OPS-04 | Phase 3 | Pending |
 | OPS-05 | Phase 2 | Pending |
@@ -249,7 +249,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SEC-07 | Phase 2 | Pending |
 | SEC-08 | Phase 7 | Pending |
 | QUAL-01 | Phase 2 | Pending |
-| QUAL-02 | Phase 2 | Pending |
+| QUAL-02 | Phase 2 | Complete |
 | QUAL-03 | Phase 7 | Pending |
 | QUAL-04 | Phase 2 | Pending |
 | QUAL-05 | Phase 5 | Pending |
