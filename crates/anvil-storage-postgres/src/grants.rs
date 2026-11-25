@@ -16,9 +16,7 @@ use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::convert::{
-    enum_from, from_json, hash, map_err, opt_from_json, opt_hash, to_json,
-};
+use crate::convert::{enum_from, from_json, hash, map_err, opt_from_json, opt_hash, to_json};
 
 #[derive(Debug, Clone)]
 pub(crate) struct PgGrants {

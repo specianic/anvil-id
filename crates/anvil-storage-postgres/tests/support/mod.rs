@@ -47,7 +47,8 @@ async fn server_url() -> &'static str {
     url
 }
 
-/// A fresh, migrated database on the shared container.
+/// A fresh, migrated database on the shared container. The guard holds the database URL
+/// (`String`) so row-inspection tests can open their own connection.
 pub async fn postgres() -> TestStorage {
     let server = server_url().await;
     let db = format!("test_{}", Uuid::now_v7().simple());
@@ -66,13 +67,14 @@ pub async fn postgres() -> TestStorage {
         .await
         .expect("closing the admin connection must succeed");
 
-    let storage = PostgresStorage::connect(&format!("{server}/{db}"), MAX_CONNECTIONS)
+    let url = format!("{server}/{db}");
+    let storage = PostgresStorage::connect(&url, MAX_CONNECTIONS)
         .await
         .expect("connecting to the per-test database must succeed");
     storage.migrate().await.expect("migrations must apply");
 
     TestStorage {
         storage: Arc::new(storage),
-        _guard: Box::new(()),
+        _guard: Box::new(url),
     }
 }

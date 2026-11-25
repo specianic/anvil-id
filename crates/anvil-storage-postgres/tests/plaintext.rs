@@ -1,0 +1,309 @@
+//! Secrets at rest (ARCHITECTURE §6.2): `secrets_never_stored_plaintext` row inspection.
+//!
+//! Seeds an authorization code, a refresh token, a browser session, a flow, a client secret, a
+//! setup token, a self-service token and a replay guard through the ports, each derived from a
+//! known plaintext marker hashed with `anvil_jose::encoding::secret_hash`. Then it scans every
+//! text, text[], jsonb and bytea column of every table with a plain sqlx connection and asserts
+//! that no marker appears anywhere, and that every hash column holds exactly the 32-byte hash.
+//!
+//! Run with `cargo test`, not nextest: the container is shared per test binary.
+
+mod support;
+
+use anvil_core::model::{
+    FlowKind, NewBrowserSession, NewFlow, NewRefreshToken, NewSelfServiceToken, NewSetupToken,
+    ReplayKind, SecretHash, SelfServiceKind,
+};
+use anvil_jose::encoding::secret_hash;
+use anvil_storage::contract::*;
+use sqlx::{Connection, PgConnection, Row};
+use time::Duration;
+use uuid::Uuid;
+
+/// A plaintext secret marker and its stored hash.
+struct Marker {
+    plain: String,
+    hash: SecretHash,
+}
+
+fn marker(kind: &str) -> Marker {
+    let plain = format!("plaintext-marker-{kind}-{}", Uuid::now_v7().simple());
+    let hash = SecretHash(secret_hash(&plain));
+    Marker { plain, hash }
+}
+
+/// Identifiers read from information_schema are only interpolated if they are plain names.
+fn ident(name: &str) -> String {
+    assert!(
+        !name.is_empty()
+            && name
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+        "unexpected identifier {name:?}"
+    );
+    format!("\"{name}\"")
+}
+
+async fn count(conn: &mut PgConnection, sql: String, bind_text: &str, bind_bytes: &[u8]) -> i64 {
+    sqlx::query(sqlx::AssertSqlSafe(sql.clone()))
+        .bind(bind_text)
+        .bind(bind_bytes)
+        .fetch_one(&mut *conn)
+        .await
+        .unwrap_or_else(|e| panic!("{sql}: {e}"))
+        .get::<i64, _>(0)
+}
+
+/// Every `table.column` (text, text[], jsonb or bytea) that contains `plain`.
+async fn locations(
+    conn: &mut PgConnection,
+    columns: &[(String, String, String, String)],
+    plain: &str,
+) -> Vec<String> {
+    let mut found = Vec::new();
+    for (table, column, data_type, udt) in columns {
+        let (t, c) = (ident(table), ident(column));
+        // $1 = the value as text, $2 = the value as bytes.
+        let predicate = match data_type.as_str() {
+            "text" => format!("strpos({c}, $1) > 0 AND $2 IS NOT NULL"),
+            "jsonb" => format!("strpos({c}::text, $1) > 0 AND $2 IS NOT NULL"),
+            "bytea" => format!("position($2 in {c}) > 0 AND $1 IS NOT NULL"),
+            "ARRAY" if udt == "_text" => {
+                format!("strpos(array_to_string({c}, ' '), $1) > 0 AND $2 IS NOT NULL")
+            }
+            other => panic!("unexpected column type {other} ({udt}) for {table}.{column}"),
+        };
+        let hits = count(
+            conn,
+            format!("SELECT count(*) FROM {t} WHERE {predicate}"),
+            plain,
+            plain.as_bytes(),
+        )
+        .await;
+        if hits > 0 {
+            found.push(format!("{table}.{column}"));
+        }
+    }
+    found
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn secrets_never_stored_plaintext() {
+    let s = support::postgres().await;
+    let url = s
+        ._guard
+        .downcast_ref::<String>()
+        .expect("the Postgres test guard holds the database URL")
+        .clone();
+
+    // --- seed through the ports ----------------------------------------------------------
+    let ctx = seed_grant_ctx(&s).await;
+    let now = now_ms();
+
+    let code = marker("code");
+    let family = new_family(&ctx, Duration::days(30));
+    let mut new_code_row = new_code(&ctx, &family, Duration::minutes(5));
+    new_code_row.code_hash = code.hash;
+    s.storage
+        .grants()
+        .create_code(ctx.tenant, &new_code_row, &family)
+        .await
+        .expect("create_code");
+
+    let refresh = marker("refresh");
+    s.storage
+        .grants()
+        .create_refresh_token(
+            ctx.tenant,
+            &NewRefreshToken {
+                token_hash: refresh.hash,
+                ..new_refresh(family.id, None, Duration::days(1))
+            },
+        )
+        .await
+        .expect("create_refresh_token");
+
+    let session = marker("session");
+    s.storage
+        .sessions()
+        .create(
+            ctx.tenant,
+            &NewBrowserSession {
+                token_hash: session.hash,
+                ..new_session(ctx.user.id, Duration::hours(8), Duration::minutes(30))
+            },
+        )
+        .await
+        .expect("create session");
+
+    let csrf = marker("csrf");
+    let cookie = marker("flowcookie");
+    s.storage
+        .flows()
+        .create(
+            ctx.tenant,
+            &NewFlow {
+                kind: FlowKind::Login,
+                csrf_hash: csrf.hash,
+                cookie_hash: cookie.hash,
+                ..new_flow(None, Duration::minutes(15))
+            },
+        )
+        .await
+        .expect("create flow");
+
+    let client_secret = marker("clientsecret");
+    assert!(
+        s.storage
+            .clients()
+            .set_secret_hash(
+                ctx.tenant,
+                &ctx.client.client_id,
+                Some(client_secret.hash),
+                now
+            )
+            .await
+            .expect("set_secret_hash")
+    );
+
+    let setup = marker("setup");
+    s.storage
+        .setup()
+        .create_setup_token(&NewSetupToken {
+            token_hash: setup.hash,
+            created_at: now,
+            expires_at: now + Duration::hours(1),
+        })
+        .await
+        .expect("create_setup_token");
+
+    let self_service = marker("selfservice");
+    s.storage
+        .users()
+        .issue_self_service_token(
+            ctx.tenant,
+            &NewSelfServiceToken {
+                token_hash: self_service.hash,
+                ..new_self_service_token(
+                    SelfServiceKind::Recovery,
+                    ctx.user.id,
+                    &ctx.user.email,
+                    Duration::hours(1),
+                )
+            },
+            None,
+        )
+        .await
+        .expect("issue_self_service_token");
+
+    let jti = marker("jti");
+    s.storage
+        .grants()
+        .record_jti(
+            ctx.tenant,
+            ReplayKind::ClientAssertionJti,
+            &jti.hash,
+            now + Duration::minutes(5),
+            now,
+        )
+        .await
+        .expect("record_jti");
+
+    let markers = [
+        &code,
+        &refresh,
+        &session,
+        &csrf,
+        &cookie,
+        &client_secret,
+        &setup,
+        &self_service,
+        &jti,
+    ];
+
+    // --- inspect the raw rows -------------------------------------------------------------
+    let mut conn = PgConnection::connect(&url)
+        .await
+        .expect("plain connection to the test database");
+
+    let columns = sqlx::query(
+        "SELECT table_name::text, column_name::text, data_type::text, udt_name::text
+           FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND data_type IN ('text', 'bytea', 'jsonb', 'ARRAY')
+          ORDER BY table_name, ordinal_position",
+    )
+    .fetch_all(&mut conn)
+    .await
+    .expect("listing columns");
+    let columns: Vec<(String, String, String, String)> = columns
+        .iter()
+        .map(|r| (r.get(0), r.get(1), r.get(2), r.get(3)))
+        .collect();
+    assert!(
+        columns.len() > 20,
+        "the scan must cover the 0.1 schema, found {} columns",
+        columns.len()
+    );
+
+    for m in markers {
+        let found = locations(&mut conn, &columns, &m.plain).await;
+        assert!(
+            found.is_empty(),
+            "plaintext secret {:?} found in {found:?}",
+            m.plain
+        );
+    }
+    // Positive control: the same scan finds a value that is stored in clear (the email).
+    let email_found = locations(&mut conn, &columns, &ctx.user.email).await;
+    assert!(
+        email_found.contains(&"user.email".to_owned()),
+        "the scan must find the user's email, found {email_found:?}"
+    );
+
+    // Every hash column holds exactly the 32-byte hash that was passed in.
+    let hash_columns = [
+        ("authorization_code", "code_hash", &code),
+        ("refresh_token", "token_hash", &refresh),
+        ("browser_session", "token_hash", &session),
+        ("flow", "csrf_hash", &csrf),
+        ("flow", "cookie_hash", &cookie),
+        ("client", "secret_hash", &client_secret),
+        ("admin_setup_token", "token_hash", &setup),
+        ("self_service_token", "token_hash", &self_service),
+        ("replay_guard", "value_hash", &jti),
+    ];
+    for (table, column, m) in hash_columns {
+        let (t, c) = (ident(table), ident(column));
+        let wrong_length = count(
+            &mut conn,
+            format!(
+                "SELECT count(*) FROM {t}
+                  WHERE {c} IS NOT NULL AND octet_length({c}) <> 32
+                    AND $1 IS NOT NULL AND $2 IS NOT NULL"
+            ),
+            "",
+            &[],
+        )
+        .await;
+        assert_eq!(
+            wrong_length, 0,
+            "{table}.{column} must only hold 32-byte hashes"
+        );
+        let stored = count(
+            &mut conn,
+            format!("SELECT count(*) FROM {t} WHERE {c} = $2 AND $1 IS NOT NULL"),
+            "",
+            m.hash.as_bytes(),
+        )
+        .await;
+        assert_eq!(
+            stored, 1,
+            "{table}.{column} must hold the SHA-256 of the marker (positive control for the scan)"
+        );
+    }
+
+    conn.close()
+        .await
+        .expect("closing the inspection connection");
+}

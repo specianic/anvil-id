@@ -48,7 +48,6 @@ impl UserRow {
     }
 }
 
-
 /// The record a successful insert of `u` under `tenant` stores.
 pub(crate) fn user_from_new(tenant: TenantId, u: &NewUser) -> User {
     User {
