@@ -163,7 +163,7 @@ Plans:
 - [x] 04-09-PLAN.md — Pure theming rules: token/contrast validation, CSS validator, merge, stylesheet, logo sniffing (TDD) (wave 2)
 - [x] 04-10-PLAN.md — Conformance harness: logout/backchannel selections, callback CA + leaf, outbound settings, browser tasks (wave 2)
 - [ ] 04-11-PLAN.md — Admin API 0.3: connections CRUD with sealed write-only secrets, client logout/resource/MFA fields, tenant settings, OpenAPI regen (wave 3)
-- [ ] 04-12-PLAN.md — Resource indicators end to end: multi-valued resource, invalid_target, downscoping, aud, introspection, UserInfo audience rule (wave 3)
+- [x] 04-12-PLAN.md — Resource indicators end to end: multi-valued resource, invalid_target, downscoping, aud, introspection, UserInfo audience rule (wave 3)
 - [ ] 04-13-PLAN.md — RP-initiated logout: /logout GET+POST, hint validation, confirmation flow, signed-out/error pages, discovery fields (wave 3)
 - [ ] 04-14-PLAN.md — Upstream transport adapter on the guarded client: discovery, JWKS cache, token exchange, API calls, MockProvider (wave 3)
 - [ ] 04-15-PLAN.md — Account page: profile, email change with re-verification, password change, nav; login_code/email_change/email_changed emails (wave 3)
