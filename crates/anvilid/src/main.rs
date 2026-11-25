@@ -14,14 +14,17 @@ use anvil_core::clock::SystemClock;
 use anvil_core::policy::PasswordPolicy;
 use anvil_core::service::bootstrap::BootstrapService;
 use anvil_web::adapters::Argon2Pool;
-use anyhow::{Context, bail};
+use anyhow::Context;
 use clap::{Parser, Subcommand};
 use secrecy::ExposeSecret;
 use tokio::sync::watch;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::Layer as _;
+use tracing_subscriber::filter::{FilterExt as _, LevelFilter, Targets, filter_fn};
+use tracing_subscriber::layer::{Context as LayerContext, SubscriberExt as _};
+use tracing_subscriber::util::SubscriberInitExt as _;
 
 use crate::config::{CliOverrides, Config, Layers, LogFormat};
-use crate::datadir::OnMissing;
 use crate::storage::Backend;
 
 /// Time background jobs get to finish their current batch after the server stopped.
@@ -102,16 +105,72 @@ fn load(args: &CliOverrides) -> anyhow::Result<Config> {
     Config::resolve(Layers::from_process(args)?.raw()?)
 }
 
-/// Logs go to stderr, so stdout carries only command output (`config show`, `admin setup-url`).
+/// Tracing target of the audit stream (ADM-04).
+const AUDIT_TARGET: &str = "audit";
+
+/// The audit mirror of this binary: every recorded audit event becomes an `info` event on the
+/// `audit` target, which [`AuditStdout`] prints.
+struct TracingMirror;
+
+impl anvil_core::ports::AuditMirror for TracingMirror {
+    fn emit(&self, event_json: &str) {
+        tracing::info!(target: AUDIT_TARGET, event = %event_json);
+    }
+}
+
+/// Prints the `event` field of every `audit`-target event as one raw JSON line on stdout. The
+/// JSON comes from `anvil_core::service::audit::event_json`, which holds only typed, secret-free
+/// fields.
+struct AuditStdout;
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for AuditStdout {
+    fn on_event(&self, event: &tracing::Event<'_>, _ctx: LayerContext<'_, S>) {
+        struct EventField(Option<String>);
+        impl tracing::field::Visit for EventField {
+            fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                if field.name() == "event" {
+                    self.0 = Some(value.to_owned());
+                }
+            }
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "event" {
+                    self.0 = Some(format!("{value:?}"));
+                }
+            }
+        }
+        if event.metadata().target() != AUDIT_TARGET {
+            return;
+        }
+        let mut field = EventField(None);
+        event.record(&mut field);
+        if let Some(json) = field.0 {
+            use std::io::Write as _;
+            let mut out = std::io::stdout().lock();
+            let _ = writeln!(out, "{json}");
+            let _ = out.flush();
+        }
+    }
+}
+
+/// Logs go to stderr, filtered by `RUST_LOG` (default `info`). Audit events go to stdout as JSON
+/// lines through a separate layer that is always enabled at `info` for the `audit` target,
+/// independent of `RUST_LOG`, and are excluded from the stderr log. Stdout otherwise carries only
+/// command output (`config show`, `admin setup-url`, `keys rotate`).
 fn init_tracing(format: LogFormat) {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    let builder = tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_writer(std::io::stderr);
-    match format {
-        LogFormat::Json => builder.json().init(),
-        LogFormat::Pretty => builder.with_ansi(std::io::stderr().is_terminal()).init(),
-    }
+    let general = tracing_subscriber::fmt::layer().with_writer(std::io::stderr);
+    let general = match format {
+        LogFormat::Json => general.json().boxed(),
+        LogFormat::Pretty => general.with_ansi(std::io::stderr().is_terminal()).boxed(),
+    };
+    let general = general.with_filter(filter.and(filter_fn(|meta| meta.target() != AUDIT_TARGET)));
+    let audit =
+        AuditStdout.with_filter(Targets::new().with_target(AUDIT_TARGET, LevelFilter::INFO));
+    tracing_subscriber::registry()
+        .with(general)
+        .with(audit)
+        .init();
+    anvil_core::service::audit::install_mirror(Box::new(TracingMirror));
 }
 
 fn log_warnings(cfg: &Config) {
@@ -146,24 +205,7 @@ async fn migrate(cfg: &Config) -> anyhow::Result<()> {
 #[tokio::main(flavor = "multi_thread")]
 async fn setup_url(cfg: &Config) -> anyhow::Result<()> {
     init_tracing(cfg.log_format);
-    let url = cfg.database_url.expose_secret();
-    if Backend::from_url(url)? == Backend::Sqlite {
-        match storage::sqlite_file(url) {
-            Some(file) if !file.exists() => bail!(
-                "database {} does not exist; start `anvilid serve` once to install",
-                file.display()
-            ),
-            Some(_) => {}
-            None => bail!("an in-memory database cannot be reached from another process"),
-        }
-    }
-    let (kek, _) = datadir::load_kek(
-        cfg.kek.as_ref(),
-        &cfg.kek_file,
-        OnMissing::RefuseNotInstalled,
-    )?;
-    // No migrations and no serve.lock: this runs next to a running server (Pitfall P10).
-    let storage = storage::open_storage(url, storage::Migrations::Skip).await?;
+    let (storage, kek) = startup::open_for_cli(cfg).await?;
     let bootstrap = BootstrapService {
         storage,
         clock: Arc::new(SystemClock),

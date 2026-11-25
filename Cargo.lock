@@ -298,6 +298,7 @@ dependencies = [
  "figment",
  "hyper",
  "hyper-util",
+ "ipnet",
  "mimalloc",
  "reqwest",
  "rustls",

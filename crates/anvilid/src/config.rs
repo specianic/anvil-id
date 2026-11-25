@@ -6,18 +6,26 @@
 //! Secrets (`kek`, `smtp_url`, credentials inside `database_url`) are accepted from the environment
 //! and the config file only (never as CLI flags, which other users can read from the process
 //! list), are held as [`SecretString`] once resolved, and are redacted by [`show`].
+//!
+//! Phase 3 keys (0.2): `trusted_proxies` / `trusted_proxy_header` (client IP behind reverse
+//! proxies, OPS-06), `rate_limit_*` (SEC-05), `key_rotation_days` (SEC-02) and
+//! `audit_retention_days` (ADM-04).
 
 use std::fmt;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 
+use anvil_cache::limiter::{LimiterConfig, RateQuota};
 use anvil_core::model::PublicUrl;
+use anvil_core::service::key_rotation::{DEFAULT_PREPUBLISH, JWKS_MAX_AGE, RotationPolicy};
 use anvil_web::adapters::BreachCheckMode;
 use anvil_web::adapters::hibp::HIBP_BASE_URL;
+use anvil_web::client_ip::{ForwardedHeader, TrustedProxies};
 use anyhow::{Context, bail};
 use figment::providers::{Env, Format, Serialized, Toml};
 use figment::value::{Dict, Value};
 use figment::{Figment, Profile, Provider};
+use ipnet::IpNet;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
@@ -31,6 +39,15 @@ pub const DEFAULT_CONFIG_FILE: &str = "anvilid.toml";
 pub const DEFAULT_PUBLIC_URL: &str = "http://localhost:8080";
 pub const DEFAULT_LISTEN: &str = "127.0.0.1:8080";
 pub const DEFAULT_DATA_DIR: &str = "./anvilid-data";
+
+/// Signing-key rotation period in days (SEC-02).
+pub const DEFAULT_KEY_ROTATION_DAYS: u32 = 90;
+/// Longest accepted rotation period (10 years).
+pub const MAX_KEY_ROTATION_DAYS: u32 = 3650;
+/// Audit events older than this are purged daily; `0` keeps them forever.
+pub const DEFAULT_AUDIT_RETENTION_DAYS: u32 = 365;
+/// Longest accepted audit retention (100 years).
+pub const MAX_AUDIT_RETENTION_DAYS: u32 = 36_500;
 
 /// Every configuration key, in `config show` order.
 pub const KEYS: &[&str] = &[
@@ -51,6 +68,16 @@ pub const KEYS: &[&str] = &[
     "allow_destructive_migrations",
     "insecure_http",
     "log_format",
+    "trusted_proxies",
+    "trusted_proxy_header",
+    "rate_limit_enabled",
+    "rate_limit_auth_per_minute",
+    "rate_limit_token_per_second",
+    "rate_limit_token_client_per_second",
+    "rate_limit_admin_per_second",
+    "rate_limit_default_per_second",
+    "key_rotation_days",
+    "audit_retention_days",
 ];
 
 /// Keys whose value is a secret as a whole.
@@ -141,6 +168,82 @@ pub struct CliOverrides {
     #[arg(long, value_name = "FORMAT")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub log_format: Option<String>,
+
+    /// Comma-separated CIDRs (or single IPs) of reverse proxies whose forwarding header is
+    /// trusted for the client IP; empty trusts none [default: loopback in dev mode, none otherwise].
+    #[arg(long, value_name = "CIDRS")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trusted_proxies: Option<String>,
+
+    /// Forwarding header set by the trusted proxies: `x-forwarded-for` or `forwarded`
+    /// [default: x-forwarded-for].
+    #[arg(long, value_name = "HEADER")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trusted_proxy_header: Option<String>,
+
+    /// Rate limiting on or off [default: true].
+    #[arg(long, value_name = "BOOL")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rate_limit_enabled: Option<bool>,
+
+    /// Requests per minute and client IP on interactive login endpoints [default: 10].
+    #[arg(long, value_name = "N")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rate_limit_auth_per_minute: Option<u32>,
+
+    /// Requests per second and client IP on the token endpoint [default: 50].
+    #[arg(long, value_name = "N")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rate_limit_token_per_second: Option<u32>,
+
+    /// Requests per second and client on the token endpoint [default: 100].
+    #[arg(long, value_name = "N")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rate_limit_token_client_per_second: Option<u32>,
+
+    /// Requests per second and client IP on the admin API [default: 20].
+    #[arg(long, value_name = "N")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rate_limit_admin_per_second: Option<u32>,
+
+    /// Requests per second and client IP on every other endpoint [default: 50].
+    #[arg(long, value_name = "N")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rate_limit_default_per_second: Option<u32>,
+
+    /// Signing-key rotation period in days, at least 1 [default: 90].
+    #[arg(long, value_name = "DAYS")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_rotation_days: Option<u32>,
+
+    /// Days audit events are kept; 0 keeps them forever [default: 365].
+    #[arg(long, value_name = "DAYS")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audit_retention_days: Option<u32>,
+}
+
+/// A list given either as one comma-separated string (environment, CLI) or as a TOML array.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(untagged)]
+pub enum ListValue {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl ListValue {
+    /// The non-empty, trimmed entries.
+    pub fn entries(&self) -> Vec<String> {
+        let parts: Vec<&str> = match self {
+            Self::One(s) => s.split(',').collect(),
+            Self::Many(v) => v.iter().flat_map(|s| s.split(',')).collect(),
+        };
+        parts
+            .into_iter()
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(str::to_owned)
+            .collect()
+    }
 }
 
 /// The merged, not yet validated configuration. Missing keys take the defaults below; derived
@@ -165,6 +268,17 @@ pub struct RawConfig {
     pub allow_destructive_migrations: bool,
     pub insecure_http: bool,
     pub log_format: Option<String>,
+    /// `None` = mode default (loopback in dev mode, none otherwise).
+    pub trusted_proxies: Option<ListValue>,
+    pub trusted_proxy_header: String,
+    pub rate_limit_enabled: bool,
+    pub rate_limit_auth_per_minute: u32,
+    pub rate_limit_token_per_second: u32,
+    pub rate_limit_token_client_per_second: u32,
+    pub rate_limit_admin_per_second: u32,
+    pub rate_limit_default_per_second: u32,
+    pub key_rotation_days: u32,
+    pub audit_retention_days: u32,
 }
 
 impl fmt::Debug for RawConfig {
@@ -195,8 +309,103 @@ impl Default for RawConfig {
             allow_destructive_migrations: false,
             insecure_http: false,
             log_format: None,
+            trusted_proxies: None,
+            trusted_proxy_header: "x-forwarded-for".to_owned(),
+            rate_limit_enabled: true,
+            rate_limit_auth_per_minute: DEFAULT_RATE_LIMIT_AUTH_PER_MINUTE,
+            rate_limit_token_per_second: DEFAULT_RATE_LIMIT_TOKEN_PER_SECOND,
+            rate_limit_token_client_per_second: DEFAULT_RATE_LIMIT_TOKEN_CLIENT_PER_SECOND,
+            rate_limit_admin_per_second: DEFAULT_RATE_LIMIT_ADMIN_PER_SECOND,
+            rate_limit_default_per_second: DEFAULT_RATE_LIMIT_DEFAULT_PER_SECOND,
+            key_rotation_days: DEFAULT_KEY_ROTATION_DAYS,
+            audit_retention_days: DEFAULT_AUDIT_RETENTION_DAYS,
         }
     }
+}
+
+/// Default quotas, equal to [`LimiterConfig::default`] (a unit test keeps them in sync).
+pub const DEFAULT_RATE_LIMIT_AUTH_PER_MINUTE: u32 = 10;
+pub const DEFAULT_RATE_LIMIT_TOKEN_PER_SECOND: u32 = 50;
+pub const DEFAULT_RATE_LIMIT_TOKEN_CLIENT_PER_SECOND: u32 = 100;
+pub const DEFAULT_RATE_LIMIT_ADMIN_PER_SECOND: u32 = 20;
+pub const DEFAULT_RATE_LIMIT_DEFAULT_PER_SECOND: u32 = 50;
+
+/// Parses the trusted-proxy list. An entry is a CIDR (`10.0.0.0/8`) or a single address (a host
+/// route). Errors name the key and the entry position, never the value.
+pub fn parse_trusted_proxies(list: &ListValue) -> anyhow::Result<Vec<IpNet>> {
+    list.entries()
+        .iter()
+        .enumerate()
+        .map(|(i, entry)| {
+            entry
+                .parse::<IpNet>()
+                .map(|net| net.trunc())
+                .or_else(|_| entry.parse::<IpAddr>().map(IpNet::from))
+                .map_err(|_| {
+                    field_error(
+                        "trusted_proxies",
+                        format!("entry {} is not an IP address or CIDR", i + 1),
+                    )
+                })
+        })
+        .collect()
+}
+
+/// The rotation policy for a period of `days`: prepublish is 7 days, or half the period when the
+/// period is shorter than 14 days (never below the JWKS cache lifetime); retire grace is the
+/// default.
+pub fn rotation_policy(days: u32) -> anyhow::Result<RotationPolicy> {
+    if days == 0 || days > MAX_KEY_ROTATION_DAYS {
+        return Err(field_error(
+            "key_rotation_days",
+            format!("must be between 1 and {MAX_KEY_ROTATION_DAYS}"),
+        ));
+    }
+    let period = time::Duration::days(i64::from(days));
+    let prepublish = DEFAULT_PREPUBLISH.min(period / 2).max(JWKS_MAX_AGE);
+    RotationPolicy::new(period, prepublish, RotationPolicy::default().retire_grace())
+        .map_err(|e| field_error("key_rotation_days", e))
+}
+
+fn quota(key: &str, n: u32) -> anyhow::Result<u32> {
+    if n == 0 {
+        return Err(field_error(
+            key,
+            "must be at least 1 (set rate_limit_enabled = false to turn limiting off)",
+        ));
+    }
+    Ok(n)
+}
+
+/// Maps the `rate_limit_*` keys onto the limiter configuration. The login quota allows a burst
+/// of half its per-minute count; the per-second quotas allow a burst of one second's worth.
+pub fn rate_limits(raw: &RawConfig) -> anyhow::Result<LimiterConfig> {
+    let auth = quota("rate_limit_auth_per_minute", raw.rate_limit_auth_per_minute)?;
+    let token = quota(
+        "rate_limit_token_per_second",
+        raw.rate_limit_token_per_second,
+    )?;
+    let token_client = quota(
+        "rate_limit_token_client_per_second",
+        raw.rate_limit_token_client_per_second,
+    )?;
+    let admin = quota(
+        "rate_limit_admin_per_second",
+        raw.rate_limit_admin_per_second,
+    )?;
+    let default = quota(
+        "rate_limit_default_per_second",
+        raw.rate_limit_default_per_second,
+    )?;
+    Ok(LimiterConfig {
+        enabled: raw.rate_limit_enabled,
+        auth: RateQuota::per_minute(auth, (auth / 2).max(1)),
+        token: RateQuota::per_second(token, token),
+        token_client: RateQuota::per_second(token_client, token_client),
+        admin: RateQuota::per_second(admin, admin),
+        default: RateQuota::per_second(default, default),
+        ..LimiterConfig::default()
+    })
 }
 
 /// `sqlite://{data_dir}/anvilid.db` (the SQLite backend creates the file if missing).
@@ -382,6 +591,14 @@ pub struct Config {
     pub allow_destructive_migrations: bool,
     pub insecure_http: bool,
     pub log_format: LogFormat,
+    /// Reverse proxies trusted for the client IP.
+    pub trusted_proxies: TrustedProxies,
+    /// Rate limits (`enabled = false` turns limiting off).
+    pub rate_limits: LimiterConfig,
+    /// Signing-key rotation timings.
+    pub rotation: RotationPolicy,
+    /// Audit retention; `None` keeps events forever.
+    pub audit_retention: Option<time::Duration>,
     /// Non-fatal findings, logged as warnings on start.
     pub warnings: Vec<String>,
 }
@@ -412,6 +629,7 @@ impl Config {
             other => field_error("public_url", other),
         })?;
         let mut warnings = Vec::new();
+        let rate_limits = rate_limits(&raw)?;
         if public_url.scheme() == "http" && !public_url.is_dev_mode() {
             if !raw.insecure_http {
                 return Err(field_error(
@@ -502,6 +720,54 @@ impl Config {
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| default_smtp_from(&public_url));
 
+        let header = match raw
+            .trusted_proxy_header
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "x-forwarded-for" => ForwardedHeader::XForwardedFor,
+            "forwarded" => ForwardedHeader::Forwarded,
+            _ => {
+                return Err(field_error(
+                    "trusted_proxy_header",
+                    "must be `x-forwarded-for` or `forwarded`",
+                ));
+            }
+        };
+        let trusted_proxies = match &raw.trusted_proxies {
+            Some(list) => TrustedProxies {
+                cidrs: parse_trusted_proxies(list)?,
+                header,
+            },
+            None if public_url.is_dev_mode() => TrustedProxies {
+                header,
+                ..TrustedProxies::loopback()
+            },
+            None => TrustedProxies {
+                cidrs: Vec::new(),
+                header,
+            },
+        };
+        if !rate_limits.enabled {
+            warnings.push(
+                "rate_limit_enabled is false: login, token and admin endpoints are not rate \
+                 limited"
+                    .to_owned(),
+            );
+        }
+        let rotation = rotation_policy(raw.key_rotation_days)?;
+        let audit_retention = match raw.audit_retention_days {
+            0 => None,
+            d if d > MAX_AUDIT_RETENTION_DAYS => {
+                return Err(field_error(
+                    "audit_retention_days",
+                    format!("must be between 0 and {MAX_AUDIT_RETENTION_DAYS}"),
+                ));
+            }
+            d => Some(time::Duration::days(i64::from(d))),
+        };
+
         Ok(Self {
             kek_file: raw
                 .kek_file
@@ -520,6 +786,10 @@ impl Config {
             allow_destructive_migrations: raw.allow_destructive_migrations,
             insecure_http: raw.insecure_http,
             log_format,
+            trusted_proxies,
+            rate_limits,
+            rotation,
+            audit_retention,
             warnings,
         })
     }
@@ -615,6 +885,33 @@ pub fn show(layers: &Layers, raw: &RawConfig) -> String {
                     "json".to_owned()
                 }
             }),
+            "trusted_proxies" => match &raw.trusted_proxies {
+                Some(list) => {
+                    let entries = list.entries();
+                    if entries.is_empty() {
+                        "<none>".to_owned()
+                    } else {
+                        entries.join(", ")
+                    }
+                }
+                None => if public_url.as_ref().is_some_and(PublicUrl::is_dev_mode) {
+                    "127.0.0.0/8, ::1/128"
+                } else {
+                    "<none>"
+                }
+                .to_owned(),
+            },
+            "trusted_proxy_header" => raw.trusted_proxy_header.clone(),
+            "rate_limit_enabled" => raw.rate_limit_enabled.to_string(),
+            "rate_limit_auth_per_minute" => raw.rate_limit_auth_per_minute.to_string(),
+            "rate_limit_token_per_second" => raw.rate_limit_token_per_second.to_string(),
+            "rate_limit_token_client_per_second" => {
+                raw.rate_limit_token_client_per_second.to_string()
+            }
+            "rate_limit_admin_per_second" => raw.rate_limit_admin_per_second.to_string(),
+            "rate_limit_default_per_second" => raw.rate_limit_default_per_second.to_string(),
+            "key_rotation_days" => raw.key_rotation_days.to_string(),
+            "audit_retention_days" => raw.audit_retention_days.to_string(),
             _ => continue,
         };
         out.push_str(&format!("{key} = {value} ({})\n", layers.source(key)));
@@ -904,6 +1201,179 @@ mod tests {
         let env = [("breach_check", s("off"))];
         let cfg = resolve(&layers(&CliOverrides::default(), &env, None)).expect("cfg");
         assert_eq!(cfg.breach_check, BreachCheckMode::Off);
+    }
+
+    #[test]
+    fn trusted_proxies_from_env_list_and_defaults_by_mode() {
+        let env = [
+            ("public_url", s("https://id.example.test")),
+            (
+                "trusted_proxies",
+                s("10.0.0.0/8, 192.168.0.0/16,203.0.113.7"),
+            ),
+            ("trusted_proxy_header", s("Forwarded")),
+        ];
+        let cfg = resolve(&layers(&CliOverrides::default(), &env, None)).expect("cfg");
+        let cidrs: Vec<String> = cfg
+            .trusted_proxies
+            .cidrs
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(cidrs, ["10.0.0.0/8", "192.168.0.0/16", "203.0.113.7/32"]);
+        assert_eq!(cfg.trusted_proxies.header, ForwardedHeader::Forwarded);
+
+        // TOML array form.
+        let file = [(
+            "trusted_proxies",
+            Value::from(vec!["172.16.0.0/12".to_owned(), "::1".to_owned()]),
+        )];
+        let cfg = resolve(&layers(&CliOverrides::default(), &[], Some(&file))).expect("cfg");
+        assert_eq!(cfg.trusted_proxies.cidrs.len(), 2);
+
+        let dev = resolve(&layers(&CliOverrides::default(), &[], None)).expect("dev");
+        assert_eq!(dev.trusted_proxies, TrustedProxies::loopback());
+        let prod = resolve(&layers(
+            &CliOverrides::default(),
+            &[("public_url", s("https://id.example.test"))],
+            None,
+        ))
+        .expect("prod");
+        assert!(prod.trusted_proxies.cidrs.is_empty());
+        // An explicit empty list overrides the dev-mode default.
+        let none = resolve(&layers(
+            &CliOverrides::default(),
+            &[("trusted_proxies", s(""))],
+            None,
+        ))
+        .expect("empty");
+        assert!(none.trusted_proxies.cidrs.is_empty());
+    }
+
+    #[test]
+    fn invalid_trusted_proxy_is_rejected_without_echo() {
+        for (key, value) in [
+            ("trusted_proxies", "10.0.0.0/8, not-a-cidr-secretish"),
+            ("trusted_proxies", "10.0.0.0/33"),
+            ("trusted_proxy_header", "x-real-ip"),
+        ] {
+            let err = resolve(&layers(&CliOverrides::default(), &[(key, s(value))], None))
+                .expect_err(value)
+                .to_string();
+            assert!(err.contains(key), "{err}");
+            assert!(!err.contains("secretish"), "{err}");
+        }
+    }
+
+    #[test]
+    fn rate_limits_switch_and_quota_overrides() {
+        let cfg = resolve(&layers(&CliOverrides::default(), &[], None)).expect("cfg");
+        assert_eq!(cfg.rate_limits, LimiterConfig::default());
+
+        let env = [
+            ("rate_limit_enabled", s("false")),
+            ("rate_limit_auth_per_minute", s("30")),
+            ("rate_limit_admin_per_second", s("5")),
+        ];
+        let cfg = resolve(&layers(&CliOverrides::default(), &env, None)).expect("cfg");
+        assert!(!cfg.rate_limits.enabled);
+        assert_eq!(cfg.rate_limits.auth, RateQuota::per_minute(30, 15));
+        assert_eq!(cfg.rate_limits.admin, RateQuota::per_second(5, 5));
+        assert_eq!(cfg.rate_limits.token, LimiterConfig::default().token);
+        assert!(
+            cfg.warnings
+                .iter()
+                .any(|w| w.contains("rate_limit_enabled")),
+            "{:?}",
+            cfg.warnings
+        );
+
+        for key in ["rate_limit_auth_per_minute", "rate_limit_token_per_second"] {
+            let err = resolve(&layers(&CliOverrides::default(), &[(key, s("0"))], None))
+                .expect_err(key)
+                .to_string();
+            assert!(err.contains(key), "{err}");
+        }
+        let err = resolve(&layers(
+            &CliOverrides::default(),
+            &[("rate_limit_enabled", s("maybe"))],
+            None,
+        ))
+        .expect_err("bool")
+        .to_string();
+        assert!(err.contains("rate_limit_enabled"), "{err}");
+    }
+
+    #[test]
+    fn rotation_and_retention_days() {
+        let cfg = resolve(&layers(&CliOverrides::default(), &[], None)).expect("cfg");
+        assert_eq!(cfg.rotation, RotationPolicy::default());
+        assert_eq!(cfg.audit_retention, Some(time::Duration::days(365)));
+
+        let env = [
+            ("key_rotation_days", s("1")),
+            ("audit_retention_days", s("0")),
+        ];
+        let cfg = resolve(&layers(&CliOverrides::default(), &env, None)).expect("cfg");
+        assert_eq!(cfg.rotation.period(), time::Duration::days(1));
+        assert_eq!(cfg.rotation.prepublish(), time::Duration::hours(12));
+        assert_eq!(cfg.audit_retention, None);
+
+        let cli = CliOverrides {
+            key_rotation_days: Some(30),
+            ..Default::default()
+        };
+        let l = layers(&cli, &[], None);
+        let cfg = resolve(&l).expect("cfg");
+        assert_eq!(cfg.rotation.period(), time::Duration::days(30));
+        assert_eq!(cfg.rotation.prepublish(), time::Duration::days(7));
+        assert_eq!(
+            l.source("key_rotation_days"),
+            Source::Cli("--key-rotation-days".to_owned())
+        );
+
+        for (key, value) in [
+            ("key_rotation_days", "0"),
+            ("key_rotation_days", "99999"),
+            ("audit_retention_days", "99999"),
+            ("audit_retention_days", "-1"),
+        ] {
+            let err = resolve(&layers(&CliOverrides::default(), &[(key, s(value))], None))
+                .expect_err(value)
+                .to_string();
+            assert!(err.contains(key), "{key}={value}: {err}");
+        }
+    }
+
+    #[test]
+    fn show_lists_phase3_keys() {
+        let env = [
+            ("trusted_proxies", s("10.0.0.0/8")),
+            ("rate_limit_enabled", s("false")),
+        ];
+        let l = layers(&CliOverrides::default(), &env, None);
+        let out = show(&l, &l.raw().expect("raw"));
+        assert!(
+            out.contains("trusted_proxies = 10.0.0.0/8 (env ANVILID_TRUSTED_PROXIES)"),
+            "{out}"
+        );
+        assert!(
+            out.contains("rate_limit_enabled = false (env ANVILID_RATE_LIMIT_ENABLED)"),
+            "{out}"
+        );
+        assert!(
+            out.contains("trusted_proxy_header = x-forwarded-for (default)"),
+            "{out}"
+        );
+        assert!(out.contains("key_rotation_days = 90 (default)"), "{out}");
+        assert!(
+            out.contains("audit_retention_days = 365 (default)"),
+            "{out}"
+        );
+        assert!(
+            out.contains("rate_limit_auth_per_minute = 10 (default)"),
+            "{out}"
+        );
     }
 
     #[test]

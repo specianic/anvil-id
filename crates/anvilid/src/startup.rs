@@ -1,16 +1,19 @@
 //! Server startup: data directory, serve lock and KEK → storage → production adapters →
-//! bootstrap (first start prints the one-time setup URL) → the full router.
+//! bootstrap (first start prints the one-time setup URL) → reconciliation (console client,
+//! signing keys for every tenant's enabled algorithms) → the full router.
 
 use std::sync::Arc;
 
 use anvil_core::clock::SystemClock;
+use anvil_core::model::PageRequest;
 use anvil_core::policy::PasswordPolicy;
 use anvil_core::ports::{Clock, PasswordHasher, Storage};
 use anvil_core::service::bootstrap::{BootstrapService, InstallResult};
+use anvil_core::service::key_rotation::KeyRotationService;
 use anvil_jose::Kek;
 use anvil_web::adapters::{Argon2Pool, breach_checker};
 use anvil_web::{AppConfig, AppDeps};
-use anyhow::Context;
+use anyhow::{Context, bail};
 use axum::Router;
 use secrecy::{ExposeSecret, SecretString};
 
@@ -58,6 +61,67 @@ pub fn prepare_data_dir(
     Ok((lock, kek))
 }
 
+/// Opens storage (no migrations) and the KEK for a CLI command that runs next to a running
+/// server (`admin setup-url`, `keys rotate`): no serve lock is taken, nothing is installed, and
+/// a missing database or KEK is an error.
+pub async fn open_for_cli(cfg: &Config) -> anyhow::Result<(Arc<dyn Storage>, Kek)> {
+    let url = cfg.database_url.expose_secret();
+    if Backend::from_url(url)? == Backend::Sqlite {
+        match storage::sqlite_file(url) {
+            Some(file) if !file.exists() => bail!(
+                "database {} does not exist; start `anvilid serve` once to install",
+                file.display()
+            ),
+            Some(_) => {}
+            None => bail!("an in-memory database cannot be reached from another process"),
+        }
+    }
+    let (kek, _) = datadir::load_kek(
+        cfg.kek.as_ref(),
+        &cfg.kek_file,
+        OnMissing::RefuseNotInstalled,
+    )?;
+    // No migrations and no serve.lock: this runs next to a running server (Pitfall P10).
+    let storage = storage::open_storage(url, storage::Migrations::Skip).await?;
+    Ok((storage, kek))
+}
+
+/// Tenants are reconciled in pages of this size.
+const TENANT_PAGE: u32 = 100;
+
+/// Generates an active signing key for every enabled algorithm of every tenant that has none.
+/// A tenant that fails is logged and does not stop the others or the start.
+pub async fn ensure_signing_keys(rotation: &KeyRotationService) -> anyhow::Result<u32> {
+    let mut generated = 0;
+    let mut after = None;
+    loop {
+        let page = rotation
+            .storage
+            .tenants()
+            .list(PageRequest {
+                after,
+                limit: TENANT_PAGE,
+            })
+            .await
+            .context("failed to list tenants")?;
+        for tenant in &page.items {
+            match rotation.ensure_tenant(tenant).await {
+                Ok(n) => generated += n,
+                Err(e) => tracing::error!(
+                    tenant = %tenant.slug,
+                    error = %e,
+                    "failed to ensure signing keys"
+                ),
+            }
+        }
+        match page.next_cursor {
+            Some(c) => after = Some(c),
+            None => break,
+        }
+    }
+    Ok(generated)
+}
+
 /// Argon2 concurrency: one hashing slot per available CPU.
 fn argon2_permits() -> usize {
     std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
@@ -93,13 +157,29 @@ pub async fn start(cfg: &Config) -> anyhow::Result<Started> {
         InstallResult::Installed { setup_url } => announce_setup_url(&setup_url, cfg.log_format),
         InstallResult::AlreadyInstalled => tracing::info!("installation found"),
     }
+    // The console client follows the public URL (created or updated, audited).
+    bootstrap
+        .ensure_console_client(&cfg.public_url)
+        .await
+        .context("failed to reconcile the console client")?;
+    let rotation = KeyRotationService {
+        storage: Arc::clone(&storage),
+        kek: Arc::clone(&kek),
+        clock: Arc::clone(&clock),
+        policy: cfg.rotation,
+    };
+    let generated = ensure_signing_keys(&rotation).await?;
+    if generated > 0 {
+        tracing::info!(keys = generated, "generated missing signing keys");
+    }
 
-    // `AppConfig::new` supplies defaults for the fields not set here (trusted proxies: loopback
-    // in development mode, none otherwise; mapped from operator config in 03-24).
+    // `AppConfig::new` supplies defaults for the fields not set here.
     let mut app_config = AppConfig::new(cfg.public_url.clone());
     app_config.theme_dir = cfg.theme_dir.clone();
     app_config.password_policy = policy;
     app_config.insecure_http = cfg.insecure_http;
+    app_config.trusted_proxies = cfg.trusted_proxies.clone();
+    app_config.rate_limits = cfg.rate_limits.clone();
     let deps = AppDeps {
         storage: Arc::clone(&storage),
         clock: Arc::clone(&clock),

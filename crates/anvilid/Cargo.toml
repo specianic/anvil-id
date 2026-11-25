@@ -27,6 +27,7 @@ clap.workspace = true
 figment.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
+ipnet.workspace = true
 mimalloc.workspace = true
 rustls.workspace = true
 secrecy.workspace = true
