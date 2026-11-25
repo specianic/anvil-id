@@ -6,14 +6,14 @@ current_phase: 03
 current_phase_name: release 0 2 secure by default
 current_plan: Not started
 status: planning
-stopped_at: Completed 03-27-PLAN.md
-last_updated: "2026-11-25T08:32:22.766Z"
+stopped_at: Completed 03-28-PLAN.md
+last_updated: "2026-11-25T08:32:43.790Z"
 last_activity: 2026-11-25
 progress:
   total_phases: 7
   completed_phases: 2
   total_plans: 61
-  completed_plans: 58
+  completed_plans: 59
   percent: 92
 ---
 
@@ -115,6 +115,7 @@ Phase 2 plans 02-01 through 02-22 are all complete (22/22 summaries). Next: Phas
 | Phase 03 P23 | 75min | 3 tasks | 16 files |
 | Phase 03 P26 | 20min | 2 tasks | 3 files |
 | Phase 03 P27 | 35min | 2 tasks | 11 files |
+| Phase 03 P28 | 50min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -251,6 +252,7 @@ Recent decisions affecting current work:
 - [Phase 03]: 03-23: e2e createClient and conformance static clients default to consent_mode=skip_first_party; API default stays required
 - [Phase 03]: 03-26: TOTP e2e replay is deterministic: enrol with step S, sign in with step S+1 (+-1 window), replay that code; amr asserted via a dedicated code client since the sample RP hides the ID token
 - [Phase 03]: 03-27: Account pages use a wider card and stack tables below 30rem with data-label cells; TOTP QR capped at 13rem, black on white in all schemes, forced-color-adjust none
+- [Phase 03]: 03-28: conformance instance raises only the Auth login quota (ANVILID_RATE_LIMIT_AUTH_PER_MINUTE=600); the default 10/min caused the 429s in CI run 45574616586; expected-failures stays []
 
 ### Pending Todos
 
@@ -260,9 +262,10 @@ None yet.
 
 - [Phase 6]: Decision D4 (pure-Rust SAML XML-DSig vs alternatives) must be resolved before M5; SAML stays experimental until it passes a signature-wrapping attack corpus
 - [Phase 4]: Social login exit criterion requires testing against real providers in a staging environment (provider app registrations needed)
+- [Phase 3]: 03-28 Form Post OP oidcc-unsigned-request-object fails (request_not_supported delivered via query; response_mode only inside the unsupported request object); needs a product decision (discovery request_object_signing_alg_values_supported or error delivery mode)
 
 ## Session Continuity
 
-Last session: 2026-11-25T08:32:22.763Z
-Stopped at: Completed 03-27-PLAN.md
+Last session: 2026-11-25T08:32:37.256Z
+Stopped at: Completed 03-28-PLAN.md
 Resume file: None
