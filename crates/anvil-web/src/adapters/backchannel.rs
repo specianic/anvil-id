@@ -14,7 +14,9 @@
 //!   body. The response body is read (capped at 64 KiB) and discarded.
 //! - [`classify_delivery`] decides: 200/204 delivered; other statuses and blocked destinations
 //!   give up; 5xx, network errors and timeouts retry with `10 s * 2^n` backoff (cap 1 h) until
-//!   24 h after enqueue. A client that was deleted or lost its URI gives up.
+//!   24 h after enqueue. A retry that would fall at or after that deadline is a give-up now
+//!   (reason `expired`), because such a row is never claimed again and would otherwise vanish
+//!   unaudited. A client that was deleted or lost its URI gives up.
 //! - Give-ups are audited as `backchannel_logout_failed` in the row's tenant (system actor, the
 //!   delivery id as target, details client id, attempts and a fixed reason). Logs and audit
 //!   never contain the token or the URI.
@@ -220,8 +222,22 @@ impl Inner {
                 let sent = self.post(&prepared.uri, body).await;
                 let now = self.clock.now();
                 let outcome = outcome_of(&sent);
-                let result = classify_delivery(outcome, row.attempts, row.created_at, now);
-                let expired = now >= row.created_at + LOGOUT_DELIVERY_TTL;
+                let deadline = row.created_at + LOGOUT_DELIVERY_TTL;
+                let mut expired = now >= deadline;
+                let mut result = classify_delivery(outcome, row.attempts, row.created_at, now);
+                // A retry at or after the deadline would never be claimed (claims require
+                // `give_up_at > now`): give up now, so the failure is recorded and audited.
+                if let DeliveryResult::Retry {
+                    next_attempt_at,
+                    error,
+                } = &result
+                    && *next_attempt_at >= deadline
+                {
+                    result = DeliveryResult::GiveUp {
+                        error: error.clone(),
+                    };
+                    expired = true;
+                }
                 (result, reason_of(outcome, expired))
             }
             Err(CoreError::NotFound) => (
@@ -237,13 +253,14 @@ impl Inner {
                     "back-channel logout token could not be prepared"
                 );
                 let now = self.clock.now();
-                let result = if now >= row.created_at + LOGOUT_DELIVERY_TTL {
+                let next = next_attempt(row.attempts, now);
+                let result = if next >= row.created_at + LOGOUT_DELIVERY_TTL {
                     DeliveryResult::GiveUp {
                         error: INTERNAL_ERROR.to_owned(),
                     }
                 } else {
                     DeliveryResult::Retry {
-                        next_attempt_at: next_attempt(row.attempts, now),
+                        next_attempt_at: next,
                         error: INTERNAL_ERROR.to_owned(),
                     }
                 };
