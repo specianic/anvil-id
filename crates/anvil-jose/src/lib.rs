@@ -7,6 +7,8 @@
 //! - [`jwk`]: public JWKs, JWK Sets, RFC 7638 thumbprints.
 //! - [`keys`]: RS256/ES256/Ed25519 key generation and JWT signing.
 //! - [`hash`]: per-algorithm `at_hash`/`c_hash`.
+//! - [`otp`]: TOTP secrets, `otpauth://` URIs and code checks (totp-rs).
+//! - [`recovery_code`]: MFA recovery-code generation, normalisation and peppered hashing.
 //! - [`jws`]: strict compact-JWS parsing and signature verification against a JWK Set.
 //! - [`client_assertion`]: `private_key_jwt` client assertion rules.
 //! - [`op_token`]: verification of tokens this OP issued (access tokens, `id_token_hint`).
@@ -23,7 +25,9 @@ pub mod jws;
 pub mod kek;
 pub mod keys;
 pub mod op_token;
+pub mod otp;
 pub mod pkce;
+pub mod recovery_code;
 
 pub use client_assertion::{AssertionRules, VerifiedAssertion, verify_client_assertion};
 pub use error::JoseError;
@@ -35,3 +39,5 @@ pub use keys::{
     Alg, GeneratedKey, SigningKey, generate, generate_ed25519, generate_es256, generate_rs256,
 };
 pub use op_token::{ExpiryCheck, verify_op_token, verify_op_token_algs};
+pub use otp::{TotpSecret, check_code, otpauth_uri};
+pub use recovery_code::{generate_recovery_codes, normalize_recovery_code, recovery_code_hash};

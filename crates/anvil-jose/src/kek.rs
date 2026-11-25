@@ -17,6 +17,9 @@ use crate::encoding::random_bytes;
 
 const KEK_LEN: usize = 32;
 const HKDF_SALT: &[u8] = b"anvilid/v1";
+/// Salt for [`Kek::derive_key`]: a different salt keeps derived keys (HMAC peppers, ...) disjoint
+/// from the AEAD data keys even if an info string were ever reused as a seal purpose.
+const HKDF_DERIVE_SALT: &[u8] = b"anvilid/derive/v1";
 const TAG_LEN: usize = 16;
 
 /// A 32-byte key-encryption key. Zeroized on drop; `Debug` never prints the material.
@@ -75,18 +78,38 @@ impl Kek {
         SecretString::from(STANDARD.encode(self.key.as_ref()))
     }
 
-    fn data_key(&self, purpose: &str) -> Result<RandomizedNonceKey, JoseError> {
-        if purpose.is_empty() {
-            return Err(JoseError::Crypto("empty KEK purpose"));
-        }
-        let prk = hkdf::Salt::new(hkdf::HKDF_SHA256, HKDF_SALT).extract(self.key.as_ref());
-        let info = [purpose.as_bytes()];
+    fn hkdf32(&self, salt: &[u8], info: &str) -> Result<Zeroizing<[u8; KEK_LEN]>, JoseError> {
+        let prk = hkdf::Salt::new(hkdf::HKDF_SHA256, salt).extract(self.key.as_ref());
+        let info = [info.as_bytes()];
         let okm = prk
             .expand(&info, Len32)
             .map_err(|_| JoseError::Crypto("HKDF expand failed"))?;
         let mut dk = Zeroizing::new([0u8; KEK_LEN]);
         okm.fill(dk.as_mut())
             .map_err(|_| JoseError::Crypto("HKDF fill failed"))?;
+        Ok(dk)
+    }
+
+    /// A 32-byte subkey for `info` (HKDF-SHA256, salt `anvilid/derive/v1`), e.g. the recovery-code
+    /// pepper (`anvilid/recovery-code/v1`). Use a distinct, versioned info string per purpose.
+    /// The raw KEK is never exposed.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice: HKDF-SHA256 can always expand to 32 bytes, so the error path is
+    /// unreachable.
+    #[must_use]
+    pub fn derive_key(&self, info: &str) -> Zeroizing<[u8; KEK_LEN]> {
+        assert!(!info.is_empty(), "derive_key needs a non-empty info string");
+        self.hkdf32(HKDF_DERIVE_SALT, info)
+            .expect("HKDF-SHA256 expand to 32 bytes cannot fail")
+    }
+
+    fn data_key(&self, purpose: &str) -> Result<RandomizedNonceKey, JoseError> {
+        if purpose.is_empty() {
+            return Err(JoseError::Crypto("empty KEK purpose"));
+        }
+        let dk = self.hkdf32(HKDF_SALT, purpose)?;
         RandomizedNonceKey::new(&AES_256_GCM, dk.as_ref())
             .map_err(|_| JoseError::Crypto("AEAD key setup failed"))
     }
@@ -192,6 +215,24 @@ mod tests {
         assert!(Kek::from_base64(&url).is_ok());
         assert!(Kek::from_base64("not base64!").is_err());
         assert!(Kek::from_base64(&STANDARD.encode([1u8; 16])).is_err());
+    }
+
+    #[test]
+    fn derive_key_is_deterministic_and_separated() {
+        let kek = Kek::from_bytes(&[3u8; 32]).unwrap();
+        let a = kek.derive_key("anvilid/recovery-code/v1");
+        assert_eq!(*a, *kek.derive_key("anvilid/recovery-code/v1"));
+        assert_ne!(*a, *kek.derive_key("anvilid/other/v1"));
+        assert_ne!(
+            *a,
+            *Kek::from_bytes(&[4u8; 32])
+                .unwrap()
+                .derive_key("anvilid/recovery-code/v1")
+        );
+        // Never the raw KEK, and disjoint from the AEAD data key for the same string.
+        assert_ne!(*a, [3u8; 32]);
+        let data = kek.hkdf32(HKDF_SALT, "anvilid/recovery-code/v1").unwrap();
+        assert_ne!(*a, *data);
     }
 
     #[test]
