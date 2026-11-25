@@ -1,0 +1,10 @@
+{
+  "description": "anvilid M0 pipeline proof (Config OP plan)",
+  "server": {
+    "discoveryUrl": "http://host.docker.internal:9090/.well-known/openid-configuration"
+  },
+  "client": {
+    "client_id": "m0-placeholder",
+    "client_secret": "m0-placeholder"
+  }
+}
