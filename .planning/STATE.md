@@ -6,15 +6,15 @@ current_phase: 03
 current_phase_name: release 0 2 secure by default
 current_plan: Not started
 status: planning
-stopped_at: Completed 03-14-PLAN.md
-last_updated: "2026-11-25T07:02:43.463Z"
+stopped_at: Completed 03-12-PLAN.md
+last_updated: "2026-11-25T07:05:43.985Z"
 last_activity: 2026-11-25
 progress:
   total_phases: 7
   completed_phases: 2
   total_plans: 60
-  completed_plans: 46
-  percent: 51
+  completed_plans: 47
+  percent: 78
 ---
 
 # Project State
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 **Status:** Ready to plan
 **Last Activity:** 2026-11-25
 **Last Activity Description:** Phase 2 complete, transitioned to Phase 03
-**Progress:** [█████░░░░░] 51%
+**Progress:** [████████░░] 78%
 
 Phase 2 plans 02-01 through 02-22 are all complete (22/22 summaries). Next: Phase 2 verification, then Phase 3.
 
@@ -103,6 +103,7 @@ Phase 2 plans 02-01 through 02-22 are all complete (22/22 summaries). Next: Phas
 | Phase 03 P13 | 50min | 2 tasks | 11 files |
 | Phase 03 P16 | 60min | 3 tasks | 24 files |
 | Phase 03 P14 | 55min | 2 tasks | 7 files |
+| Phase 03 P12 | 150min | 3 tasks | 16 files |
 
 ## Accumulated Context
 
@@ -215,6 +216,9 @@ Recent decisions affecting current work:
 - [Phase 03]: 03-16: released migrations pinned in scripts/released-migrations.sha256 (0.1 = 0001/0002 both backends); 03-29 appends 0.2 files at release; -- anvil:non-destructive-rebuild is file-level
 - [Phase 03]: 03-14: settings flows are created/advanced by AccountService (FlowKind::Settings, tagged SettingsState with owner user id); checks: flow unexpired -> kind -> cookie+CSRF (Forbidden) -> owner -> auth_time within 15 min (account.reauth_required); pending passkey challenge / sealed TOTP secret consumed via swap_state before use
 - [Phase 03]: 03-14: account pages set ACCOUNT_CSP (default + script-src/connect-src 'self') for webauthn.js; AccountService::admin_list/admin_remove(tenant, user, id, admin_id, ctx) for 03-23 (NotFound for password/other user's credential, audited with Admin actor)
+- [Phase 03]: 03-12: password_changed notice stays post-transaction until the email-variable contract is resolved (worker injects recipient or contract drops email)
+- [Phase 03]: 03-12: FlowContext.rp is &Result<RelyingParty, CoreError>; only passkey effects propagate the error
+- [Phase 03]: 03-12: submit returns SubmitResult { outcome, attempt: Option<AuthAttempt> } for the 03-20 limiter
 
 ### Pending Todos
 
@@ -227,6 +231,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-25T07:02:37.083Z
-Stopped at: Completed 03-14-PLAN.md
+Last session: 2026-11-25T07:05:43.983Z
+Stopped at: Completed 03-12-PLAN.md
 Resume file: None

@@ -44,3 +44,14 @@ fail 9 anvil-web tests. Both fixes are in files outside 03-13's files_modified:
   the new one) from one peer with no clock movement. The 6th exceeds the default auth burst of 5 and
   gets 429 (as SEC-05 requires). Fix: `app.clock().advance(Duration::from_secs(60))` before the
   final logins, or send them with `send_from` from another peer.
+
+## From 03-12
+
+- `password_changed` notice cannot move into the recovery transaction (`RecoveryNotice`) while
+  its template contract requires `email` (03-15 `check::variables`, default templates, render
+  test): the address is only known after the token is consumed. Decide: mail worker supplies
+  `email` from the recipient, or drop `email` from the password_changed contract; then switch
+  FlowService `CompleteRecovery` to `complete_recovery(.., Some(&notice))`.
+- 03-14's `tests/account_security.rs` asserts an empty audit log after signing in; sign-in now
+  records `user_registered`/`login_succeeded` (03-12), so those assertions must filter to the
+  account actions.
