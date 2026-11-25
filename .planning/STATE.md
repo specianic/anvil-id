@@ -7,13 +7,13 @@ current_phase_name: release 0 2 secure by default
 current_plan: Not started
 status: planning
 stopped_at: Completed 03-08-PLAN.md
-last_updated: "2026-11-25T06:50:02.756Z"
+last_updated: "2026-11-25T06:54:21.327Z"
 last_activity: 2026-11-25
 progress:
   total_phases: 7
   completed_phases: 2
   total_plans: 60
-  completed_plans: 41
+  completed_plans: 42
   percent: 51
 ---
 
@@ -98,6 +98,7 @@ Phase 2 plans 02-01 through 02-22 are all complete (22/22 summaries). Next: Phas
 | Phase 03 P06 | 45min | 3 tasks | 17 files |
 | Phase 03 P08 | 45min | 2 tasks | 20 files |
 | Phase 03 P11 | 25min | 2 tasks | 10 files |
+| Phase 03 P10 | 40min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -200,6 +201,7 @@ Recent decisions affecting current work:
 - [Phase 03]: 03-08: Client IP only via anvil_web::client_ip (ClientIp) and request_context::AuditContext(RequestContext); missing ConnectInfo is a generic 500; production trusts no proxies, dev mode trusts loopback
 - [Phase 03]: 03-08: anvilid builds AppConfig via AppConfig::new + field assignment; trusted-proxy operator config still to be mapped in 03-24
 - [Phase 03]: 03-11: single AuthorizationResponse builder; AuthorizeOutcome::Respond replaces Redirect; unsupported/repeated response_mode -> invalid_request via query
+- [Phase 03]: 03-10: RotationPolicy 90 d / 7 d prepublish (>= JWKS max-age 1 h) / retire 1 h 5 min; ID-token alg per client with no fallback (server_error); /jwks max-age=3600 + strong ETag; rotate_now takes an AuditActor
 
 ### Pending Todos
 
