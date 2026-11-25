@@ -5,7 +5,8 @@
 // credential. Credentials are created at runtime by completeSetup().
 
 import { randomBytes } from 'node:crypto';
-import { expect, type Page } from '@playwright/test';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { expect, type Browser, type Page } from '@playwright/test';
 
 export function requireEnv(name: string): string {
   const value = process.env[name];
@@ -135,6 +136,79 @@ async function adminPost<T>(token: string, path: string, body: unknown): Promise
     throw new Error(`POST ${path} failed: HTTP ${res.status} ${await res.text()}`);
   }
   return (await res.json()) as T;
+}
+
+async function adminGet<T>(token: string, path: string): Promise<T> {
+  const res = await fetch(`${anvilUrl()}/api/admin/v1${path}`, {
+    headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
+  });
+  if (res.status !== 200) {
+    throw new Error(`GET ${path} failed: HTTP ${res.status} ${await res.text()}`);
+  }
+  return (await res.json()) as T;
+}
+
+export interface UserView {
+  id: string;
+  email: string;
+  email_verified: boolean;
+  status: string;
+  [extra: string]: unknown;
+}
+
+/** Reads one user by id through the admin API. */
+export function getUser(token: string, id: string, tenant = 'default'): Promise<UserView> {
+  return adminGet<UserView>(
+    token,
+    `/tenants/${encodeURIComponent(tenant)}/users/${encodeURIComponent(id)}`,
+  );
+}
+
+/** Finds a user by email by paging through the admin API user list. */
+export async function findUserByEmail(
+  token: string,
+  email: string,
+  tenant = 'default',
+): Promise<UserView | undefined> {
+  let after: string | undefined;
+  for (;;) {
+    const query = new URLSearchParams({ limit: '200' });
+    if (after) query.set('after', after);
+    const page = await adminGet<{ items: UserView[]; next_cursor?: string | null }>(
+      token,
+      `/tenants/${encodeURIComponent(tenant)}/users?${query}`,
+    );
+    const found = page.items.find((u) => u.email === email.toLowerCase());
+    if (found) return found;
+    if (!page.next_cursor) return undefined;
+    after = page.next_cursor;
+  }
+}
+
+/**
+ * The management credential of the AnvilID under test, shared by every spec of one run.
+ *
+ * The first caller completes /setup at SETUP_URL and stores the credential in the file named by
+ * E2E_STATE_FILE (a private temp file created by tests/e2e/run.sh); later callers read it. The
+ * setup token is single-use, so run the suite with one worker (run.sh passes --workers=1).
+ */
+export async function sharedManagementCredential(browser: Browser): Promise<ManagementCredential> {
+  const stateFile = requireEnv('E2E_STATE_FILE');
+  if (existsSync(stateFile) && readFileSync(stateFile, 'utf8').trim() !== '') {
+    return JSON.parse(readFileSync(stateFile, 'utf8')) as ManagementCredential;
+  }
+  const context = await browser.newContext();
+  try {
+    const page = await context.newPage();
+    const creds = await completeSetup(page, requireEnv('SETUP_URL'), {
+      email: randomEmail('admin'),
+      password: randomPassword(),
+    });
+    writeFileSync(stateFile, JSON.stringify(creds), { mode: 0o600 });
+    return creds;
+  } finally {
+    await context.close();
+  }
 }
 
 /** Creates an OAuth client in the given tenant (default `default`). */

@@ -64,6 +64,8 @@ jobs:
       - run: npm ci --prefix tests/e2e
       - run: npm ci --prefix examples/node-rp
       - run: npx --prefix tests/e2e playwright install --with-deps chromium
+      # QUAL-04 runs the container image, so build it first (also enforces the size gate).
+      - run: just docker-image
       - run: just qual04 ${{ matrix.backend }}
       - name: Upload results
         if: failure()
@@ -74,9 +76,13 @@ jobs:
           if-no-files-found: warn
 
   e2e:
-    name: Playwright e2e
+    name: Playwright e2e (${{ matrix.backend }})
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [sqlite, postgres]
     steps:
       - uses: actions/checkout@v7
       - name: Install toolchain (rust-toolchain.toml)
@@ -89,13 +95,12 @@ jobs:
         with:
           node-version: 22
       - run: npm ci --prefix tests/e2e
-      - run: npm ci --prefix examples/node-rp
       - run: npx --prefix tests/e2e playwright install --with-deps chromium
-      - run: just e2e
+      - run: just e2e ${{ matrix.backend }}
       - name: Upload results
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: e2e-results
+          name: e2e-${{ matrix.backend }}-results
           path: e2e-results/
           if-no-files-found: warn
