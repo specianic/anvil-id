@@ -7,6 +7,7 @@ pub mod admin;
 mod assets;
 pub mod client_ip;
 pub mod config;
+pub mod console;
 pub mod cookies;
 pub mod errors;
 mod health;
