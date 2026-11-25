@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Runs the OpenID conformance suite (Basic OP, Config OP and Form Post OP; RP-Initiated and Back-Channel
-# Logout on request) against a freshly started anvilid over TLS.
+# Runs the OpenID conformance suite (Basic OP, Config OP, Form Post OP, RP-Initiated Logout OP and
+# Back-Channel Logout OP) against a freshly started anvilid over TLS.
 #
 # Usage: tests/conformance/run.sh [basic|config|formpost|logout|backchannel|all]   (default: all)
-#        `all` = basic + config + formpost; the logout plans join it once they pass (04-23).
+#        `all` = basic + config + formpost + logout + backchannel, in that order.
 #
 # Local runs and CI run this same script (`just conformance`). It:
 #   1. fetches the suite's scripts + prebuilt compose file at the pinned tag into ./suite,
@@ -13,7 +13,7 @@
 #      anvilid (new temporary data dir) on the built-in TLS listener at 0.0.0.0:$ANVILID_PORT with
 #      public URL https://host.docker.internal:$ANVILID_PORT; anvilid trusts the callback CA and may
 #      reach 127.0.0.1 through its outbound (SSRF) guard, for back-channel logout delivery,
-#   4. provisions it through /setup and the admin API (setup.sh), which writes the suite config,
+#   4. provisions it through /setup and the admin API (setup.sh), which writes the suite configs,
 #   5. runs the selected plans through the suite's own run-test-plan.py with the expected-skips and
 #      expected-failures files, exporting results to $RESULTS_DIR,
 #   6. tears everything down (logs saved to $RESULTS_DIR, generated secrets deleted) and exits with
@@ -40,8 +40,10 @@ BASIC_PLAN="oidcc-basic-certification-test-plan[server_metadata=discovery][clien
 CONFIG_PLAN="oidcc-config-certification-test-plan"
 # The Basic plan's module list with response_mode=form_post (suite: OIDCCFormPostBasicTestPlan).
 FORMPOST_PLAN="oidcc-formpost-basic-certification-test-plan[server_metadata=discovery][client_registration=static_client]"
-# Logout plans (suite: OIDCCRpInitiatedLogoutTestPlan, OIDCCBackchannelRpInitiatedLogoutTestPlan). The
-# variant string is not confirmed against a passing run yet, so both are overridable.
+# Logout plans (suite: OIDCCRpInitiatedLogoutTestPlan, OIDCCBackchannelRpInitiatedLogoutTestPlan). Both
+# plans fix server_metadata=discovery, client_auth_type=client_secret_basic and response_mode=default per
+# module; the remaining variant parameters of AbstractOIDCCServerTest are response_type and
+# client_registration (checked in the suite source at release-v5.3.5). Overridable for other suite tags.
 LOGOUT_PLAN="${LOGOUT_PLAN:-oidcc-rp-initiated-logout-certification-test-plan[response_type=code][client_registration=static_client]}"
 BACKCHANNEL_PLAN="${BACKCHANNEL_PLAN:-oidcc-backchannel-rp-initiated-logout-certification-test-plan[response_type=code][client_registration=static_client]}"
 # Host name of the suite's nginx as seen from the host. It resolves to 127.0.0.1, which is why anvilid
@@ -65,7 +67,7 @@ case "$SELECTION" in
   formpost) PLAN_NAMES=("$FORMPOST_PLAN") ;;
   logout) PLAN_NAMES=("$LOGOUT_PLAN") ;;
   backchannel) PLAN_NAMES=("$BACKCHANNEL_PLAN") ;;
-  all) PLAN_NAMES=("$BASIC_PLAN" "$CONFIG_PLAN" "$FORMPOST_PLAN") ;;
+  all) PLAN_NAMES=("$BASIC_PLAN" "$CONFIG_PLAN" "$FORMPOST_PLAN" "$LOGOUT_PLAN" "$BACKCHANNEL_PLAN") ;;
   *) die "unknown plan selection '$SELECTION' (expected basic, config, formpost, logout, backchannel or all)" ;;
 esac
 
@@ -80,6 +82,10 @@ mkdir -p "$RESULTS_DIR"
 # The path is stable on purpose: the expected-failures/skips files key on configuration-filename.
 TMP_DIR="$RESULTS_DIR/tmp"
 CFG="$TMP_DIR/anvilid-oidcc.json"
+# Back-Channel Logout plan only: same template, but `client` is the client with a backchannel_logout_uri
+# (setup.sh explains why no other plan may use that client). The name does not match the
+# `*anvilid-oidcc.json` pattern of the reviewed skip, which belongs to the Basic/Form Post plans.
+CFG_BACKCHANNEL="$TMP_DIR/anvilid-oidcc-backchannel.json"
 rm -rf "$TMP_DIR"
 mkdir -m 700 "$TMP_DIR"
 
@@ -235,7 +241,7 @@ done
 [[ -n "$setup_url" ]] || die "no 'Setup URL:' line in $RESULTS_DIR/anvilid.log"
 
 # --- 4b. Provision clients and the test user, write the suite config -----------------------------------
-tests/conformance/setup.sh "$setup_url" "$CFG"
+tests/conformance/setup.sh "$setup_url" "$CFG" "$CFG_BACKCHANNEL"
 
 # --- 5. Runner (suite's own driver, in a venv) ------------------------------------------------------------
 if [[ ! -x "$SUITE_DIR/.venv/bin/python3" ]]; then
@@ -252,9 +258,14 @@ if [[ "$SELECTION" == "config" || "$SELECTION" == "logout" || "$SELECTION" == "b
   printf '[]\n' > "$SKIPS_FILE"
 fi
 
-# All selected plans share one config file (same clients, user and browser automation).
+# All plans share one config file (same clients, user and browser automation) except the Back-Channel
+# Logout plan, whose config points `client` at the back-channel client.
 for plan in "${PLAN_NAMES[@]}"; do
-  PLAN_ARGS+=("$plan" "$CFG")
+  if [[ "$plan" == "$BACKCHANNEL_PLAN" ]]; then
+    PLAN_ARGS+=("$plan" "$CFG_BACKCHANNEL")
+  else
+    PLAN_ARGS+=("$plan" "$CFG")
+  fi
 done
 log "running ${PLAN_NAMES[*]}"
 set +e

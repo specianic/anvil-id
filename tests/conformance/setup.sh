@@ -5,31 +5,40 @@
 #      POST an admin email and a random password) and reads the management client credentials from
 #      the result page (#mgmt-client-id, #mgmt-client-secret),
 #   2. gets an admin access token from the system tenant's token endpoint (client_credentials),
-#   3. creates the three static clients the suite expects in the default tenant through the admin API,
+#   3. creates the static clients the suite expects in the default tenant through the admin API: the
+#      three Basic/Config/Form Post/RP-Initiated Logout clients plus a separate back-channel logout client,
 #   4. creates a user with every standard claim,
-#   5. renders tests/conformance/config.template.json into <out-config>.
+#   5. renders tests/conformance/config.template.json into <out-config> (all plans except Back-Channel
+#      Logout) and into <out-backchannel-config> (Back-Channel Logout plan; `client` is the back-channel
+#      client there).
 #
-# Usage: setup.sh <setup-url> <out-config>
+# Usage: setup.sh <setup-url> <out-config> <out-backchannel-config>
 #
 # The setup URL's host is resolved to 127.0.0.1 (the suite reaches the same listener as
 # host.docker.internal from inside Docker). The certificate is self-signed, so curl runs with -k.
 # Secrets (admin password, management secret, client secrets, user password) are never printed; they
-# only end up in <out-config>, which the caller keeps in a temporary directory and deletes on exit.
+# only end up in the two config files, which the caller keeps in a temporary directory and deletes on exit.
 set -euo pipefail
 
 log() { printf '[conformance-setup] %s\n' "$*" >&2; }
 die() { log "ERROR: $*"; exit 2; }
 
-[[ $# -eq 2 ]] || die "usage: setup.sh <setup-url> <out-config>"
+[[ $# -eq 3 ]] || die "usage: setup.sh <setup-url> <out-config> <out-backchannel-config>"
 SETUP_URL="$1"
 OUT_CONFIG="$2"
+OUT_BACKCHANNEL_CONFIG="$3"
 TEMPLATE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/config.template.json"
 [[ -f "$TEMPLATE" ]] || die "missing $TEMPLATE"
 
 # Suite callback base. The suite's public name is localhost.emobix.co.uk:8443; each client alias
 # gets /test/a/{alias}/callback.
 SUITE_ALIAS="anvilid"
-SUITE_CALLBACK="https://localhost.emobix.co.uk:8443/test/a/${SUITE_ALIAS}/callback"
+SUITE_BASE="https://localhost.emobix.co.uk:8443/test/a/${SUITE_ALIAS}"
+SUITE_CALLBACK="${SUITE_BASE}/callback"
+# Logout endpoints of the suite for the same alias (suite: CreatePostLogoutRedirectUri,
+# CreateBackchannelLogoutUri, both `base_url` + fixed suffix).
+SUITE_POST_LOGOUT="${SUITE_BASE}/post_logout_redirect"
+SUITE_BACKCHANNEL="${SUITE_BASE}/backchannel_logout"
 
 # Base URL (scheme://host:port) and the host:port pair to pin to loopback.
 BASE_URL=$(python3 -c 'import sys,urllib.parse as u;p=u.urlsplit(sys.argv[1]);print(f"{p.scheme}://{p.netloc}")' "$SETUP_URL")
@@ -121,13 +130,21 @@ admin_post() {
 # consent_mode=skip_first_party: the suite's browser automation signs in but does not answer a
 # consent screen (new clients default to consent_mode=required).
 # token_format=jwt: the default, stated explicitly so the suite always sees JWT access tokens.
+# Logout metadata ($3, $4):
+#   - post_logout_redirect_uris: the RP-Initiated Logout modules (static client) send the suite's
+#     /post_logout_redirect and expect the OP to return there.
+#   - backchannel_logout_uri (+ backchannel_logout_session_required): only on the dedicated back-channel
+#     client. A suite module answers any request it does not expect with a FAILURE, so a back-channel
+#     logout token POSTed while an RP-Initiated Logout (or Basic) module is running would fail it. The
+#     Back-Channel plan therefore runs with its own config whose `client` is this client.
 create_client() {
-  # $1 = client name, $2 = auth method; prints "client_id client_secret"
+  # $1 = client name, $2 = auth method, $3 = post-logout redirect URI or "", $4 = back-channel
+  # logout URI or ""; prints "client_id client_secret"
   local body
-  body=$(python3 - "$1" "$2" "$SUITE_CALLBACK" <<'PY'
+  body=$(python3 - "$1" "$2" "$SUITE_CALLBACK" "${3:-}" "${4:-}" <<'PY'
 import json, sys
-name, method, cb = sys.argv[1:4]
-print(json.dumps({
+name, method, cb, post_logout, backchannel = sys.argv[1:6]
+client = {
     "name": name,
     "client_type": "confidential",
     "auth_method": method,
@@ -137,7 +154,13 @@ print(json.dumps({
     "scopes": ["openid", "profile", "email", "address", "phone"],
     "consent_mode": "skip_first_party",
     "token_format": "jwt",
-}))
+}
+if post_logout:
+    client["post_logout_redirect_uris"] = [post_logout]
+if backchannel:
+    client["backchannel_logout_uri"] = backchannel
+    client["backchannel_logout_session_required"] = True
+print(json.dumps(client))
 PY
 )
   admin_post "/tenants/default/clients" "$body" \
@@ -145,9 +168,13 @@ PY
 }
 
 log "creating static clients"
-read -r client1_id client1_secret < <(create_client "conformance client" client_secret_basic)
+read -r client1_id client1_secret < <(create_client "conformance client" client_secret_basic "$SUITE_POST_LOGOUT")
 read -r client2_id client2_secret < <(create_client "conformance client2" client_secret_basic)
 read -r post_id post_secret < <(create_client "conformance client_secret_post" client_secret_post)
+read -r bcl_id bcl_secret < <(create_client "conformance back-channel logout client" client_secret_basic \
+  "$SUITE_POST_LOGOUT" "$SUITE_BACKCHANNEL")
+[[ -n "${client1_id:-}" && -n "${client2_id:-}" && -n "${post_id:-}" && -n "${bcl_id:-}" ]] \
+  || die "client creation failed"
 
 # --- 4. User with every standard claim -----------------------------------------------------------------
 log "creating the test user"
@@ -192,14 +219,16 @@ PY
 admin_post "/tenants/default/users" "$user_body" > /dev/null
 
 # --- 5. Suite configuration ---------------------------------------------------------------------------------
-log "writing the suite configuration"
-mkdir -p "$(dirname "$OUT_CONFIG")"
+log "writing the suite configurations"
+mkdir -p "$(dirname "$OUT_CONFIG")" "$(dirname "$OUT_BACKCHANNEL_CONFIG")"
 umask 077
-BASE_URL="$BASE_URL" CLIENT_ID="$client1_id" CLIENT_SECRET="$client1_secret" \
-CLIENT2_ID="$client2_id" CLIENT2_SECRET="$client2_secret" \
-POST_CLIENT_ID="$post_id" POST_CLIENT_SECRET="$post_secret" \
-USER_EMAIL="$user_email" USER_PASSWORD="$user_password" \
-python3 - "$TEMPLATE" "$OUT_CONFIG" <<'PY'
+render_config() {
+  # $1 = output file, $2 = client_id, $3 = client_secret for the suite's `client` section
+  BASE_URL="$BASE_URL" CLIENT_ID="$2" CLIENT_SECRET="$3" \
+  CLIENT2_ID="$client2_id" CLIENT2_SECRET="$client2_secret" \
+  POST_CLIENT_ID="$post_id" POST_CLIENT_SECRET="$post_secret" \
+  USER_EMAIL="$user_email" USER_PASSWORD="$user_password" \
+  python3 - "$TEMPLATE" "$1" <<'PY'
 import json, os, sys
 template, out = sys.argv[1:3]
 text = open(template, encoding="utf-8").read()
@@ -220,4 +249,7 @@ for placeholder, env in values.items():
 json.loads(text)  # must still be valid JSON
 open(out, "w", encoding="utf-8").write(text)
 PY
-log "configuration written to $OUT_CONFIG"
+}
+render_config "$OUT_CONFIG" "$client1_id" "$client1_secret"
+render_config "$OUT_BACKCHANNEL_CONFIG" "$bcl_id" "$bcl_secret"
+log "configurations written to $OUT_CONFIG and $OUT_BACKCHANNEL_CONFIG"

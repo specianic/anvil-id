@@ -59,6 +59,7 @@
       ]
     },
     {
+      "comment": "sign-out with a registered post_logout_redirect_uri: confirm if asked, then check that the browser landed on the suite's post_logout_redirect page. That page (suite template resultCaptured.html) has no submission_complete element, so the task only checks the URL, as the suite's own logout config does.",
       "match": "@BASE_URL@/logout*",
       "tasks": [
         {
@@ -75,15 +76,7 @@
         },
         {
           "task": "Verify Complete",
-          "match": "*/test/*/post_logout_redirect*",
-          "commands": [
-            [
-              "wait",
-              "id",
-              "submission_complete",
-              10
-            ]
-          ]
+          "match": "*/test/*/post_logout_redirect*"
         }
       ]
     }
