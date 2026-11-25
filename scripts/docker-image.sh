@@ -121,8 +121,20 @@ if ((ok == 0)); then
     docker logs "$cid" >&2 || true
     exit 1
 fi
-if ! docker logs "$cid" 2>&1 | grep -q 'Setup URL: http://localhost:8080/setup?token='; then
+# The setup URL can be logged shortly after the listener is up (noticeably later under QEMU).
+logged=0
+for _ in $(seq 1 60); do
+    # Capture first: with pipefail, `docker logs | grep -q` can fail on a match (SIGPIPE).
+    logs=$(docker logs "$cid" 2>&1 || true)
+    if grep -q 'Setup URL: http://localhost:8080/setup?token=' <<<"$logs"; then
+        logged=1
+        break
+    fi
+    sleep 0.5
+done
+if ((logged == 0)); then
     echo "error: container logs do not contain the setup URL" >&2
+    docker logs "$cid" >&2 || true
     exit 1
 fi
 echo "smoke test passed: live on :$SMOKE_PORT, setup URL logged, user nonroot"
