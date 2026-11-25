@@ -13,5 +13,5 @@
     "resolveJsonModule": true,
     "isolatedModules": true
   },
-  "include": ["playwright.config.ts", "lib/**/*.ts", "specs/**/*.ts"]
+  "include": ["playwright.config.ts", "fixtures/**/*.ts", "lib/**/*.ts", "specs/**/*.ts"]
 }

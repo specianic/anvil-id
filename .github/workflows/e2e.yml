@@ -95,7 +95,10 @@ jobs:
         with:
           node-version: 22
       - run: npm ci --prefix tests/e2e
+      # The no-JavaScript project (nojs.spec.ts) drives the sample relying party.
+      - run: npm ci --prefix examples/node-rp
       - run: npx --prefix tests/e2e playwright install --with-deps chromium
+      # Runs both Playwright projects: chromium and nojs (JavaScript disabled).
       - run: just e2e ${{ matrix.backend }}
       - name: Upload results
         if: failure()
