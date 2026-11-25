@@ -14,3 +14,4 @@
 - Postgres `purge_expired` never deletes expired token families (SQLite does); pre-dates Phase 4 (04-05).
 - `state advance-plan` cannot parse STATE.md during parallel waves; fix STATE.md Current Position at the phase gate.
 - In-flow passkey registration as an MFA enrolment choice under `required` is not built; only TOTP enrolment is offered (04-16). Check against AUTH-08 wording at verification.
+- Logout-token `iss` for custom-host tenants (04-17): tokens use the tenant's canonical issuer, but a user who signed in via `/t/{slug}` on a custom-host tenant got ID tokens with the path issuer. OIDC Back-Channel Logout requires the logout token's iss to match the ID token's; decide (e.g. record the issuer per RP session) before 0.3. Also: `canonical_issuer` (core) duplicates anvil-web's private `admin_issuer_of`; make the latter delegate.
