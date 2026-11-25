@@ -86,7 +86,10 @@ wait_for http://127.0.0.1:8025/api/v1/info
 cargo build -p anvilid --locked
 BIN="$ROOT/target/debug/anvilid"
 
-env_args=(ANVILID_SMTP_URL=smtp://127.0.0.1:1025)
+# Every spec posts from 127.0.0.1, so the default login budget (10/min, burst 5) would throttle the
+# suite. Rate limiting stays ON (its behaviour is covered by the Rust security_ratelimit /
+# security_bruteforce suites); only the per-IP auth budget is raised for this run.
+env_args=(ANVILID_SMTP_URL=smtp://127.0.0.1:1025 ANVILID_RATE_LIMIT_AUTH_PER_MINUTE=1200)
 if [[ "$BACKEND" == postgres ]]; then
     # Throwaway local-only credentials; the container is removed on exit.
     PG_CID=$(docker run -d -p 127.0.0.1::5432 \

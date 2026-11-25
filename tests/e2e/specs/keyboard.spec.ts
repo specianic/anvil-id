@@ -103,8 +103,13 @@ for (const vp of [
       await expect(page.locator('form#login')).toBeVisible();
 
       const links = await page.locator('main nav a').evaluateAll((els) => els.map((e) => e.id));
-      const order = await tabSequence(page, 3 + links.length);
-      expect(order).toEqual(['identifier', 'password', 'login-submit', ...links]);
+      // The passkey button (03-20) is revealed only when webauthn.js finds WebAuthn support, so it
+      // is in the tab order in the JS project and absent in the no-JS one.
+      const passkey = (await page.locator('#login-passkey-submit').isVisible())
+        ? ['login-passkey-submit']
+        : [];
+      const order = await tabSequence(page, 3 + passkey.length + links.length);
+      expect(order).toEqual(['identifier', 'password', 'login-submit', ...passkey, ...links]);
 
       await expect(page.locator('#identifier')).toHaveAttribute('autocomplete', 'username');
       await expect(page.locator('#password')).toHaveAttribute('autocomplete', 'current-password');
