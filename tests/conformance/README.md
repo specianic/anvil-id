@@ -78,7 +78,9 @@ minutes (one Basic OP module waits 30 seconds on purpose).
 ### TLS and certificates
 
 The suite trusts any certificate (its HTTP client and scripted browser use a trust-all trust manager),
-so a self-signed certificate is enough and no CA is installed anywhere. The Config OP plan fails if any
+so a self-signed certificate is enough for anvilid's listener and no CA is installed in the suite.
+The only CA in the run is the throwaway callback CA that anvilid trusts for its own outbound requests
+(next section). The Config OP plan fails if any
 advertised endpoint is not https, which is why the harness uses the TLS listener rather than
 `--insecure-http`. The key is generated per run in a gitignored temporary directory and is never
 committed.
