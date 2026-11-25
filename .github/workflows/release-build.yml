@@ -1,0 +1,70 @@
+# Static musl release builds (FND-04, ARCHITECTURE.md §2.1 condition 2). Each architecture builds
+# natively on its own runner inside the official Rust alpine image (scripts/build-musl.sh), then
+# scripts/measure-idle.sh verifies the embedded asset and reports binary size and idle memory to
+# the step summary and a JSON artifact. No signing or publishing here: releases use cargo-dist later.
+name: release-build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "crates/**"
+      - "themes/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "scripts/build-musl.sh"
+      - "scripts/measure-idle.sh"
+      - ".github/workflows/release-build.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  musl:
+    name: musl ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@v7
+      - name: Cache cargo registry and target
+        uses: actions/cache@v5
+        with:
+          path: |
+            .cargo-home/registry
+            target/
+          key: musl-${{ matrix.target }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: |
+            musl-${{ matrix.target }}-
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - name: Build static binary
+        run: just musl ${{ matrix.target }}
+      - name: Measure size and idle memory
+        run: MEASURE_OUT=measure just measure target/${{ matrix.target }}/release/anvilid ${{ matrix.target }}
+      - name: Upload binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: anvilid-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/anvilid
+          if-no-files-found: error
+      - name: Upload measurement
+        uses: actions/upload-artifact@v7
+        with:
+          name: measure-${{ matrix.target }}
+          path: measure/
+          if-no-files-found: error
