@@ -93,7 +93,8 @@ pub(crate) async fn upsert_consent(
     scopes.dedup();
     let scopes = to_json("consent_grant.scopes", &scopes)?;
     // Active grant: union of stored and new scopes. Revoked grant: re-activated with exactly the
-    // new scopes. The user must belong to the tenant (the FK alone only checks the user id).
+    // new scopes. The user must belong to the tenant: the composite (tenant_id, user_id) FK
+    // enforces it in the schema; the EXISTS pre-check is defense in depth with a clearer error.
     sqlx::query_as!(
         ConsentRow,
         "INSERT INTO consent_grant

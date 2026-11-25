@@ -22,6 +22,10 @@ use crate::outbox::enqueue_email;
 
 /// The insert matched no user of the tenant (the user id is unknown or belongs to another
 /// tenant). Reported like the SQLite backend's composite foreign-key violation.
+///
+/// The schema enforces this too (migration 0003: composite `(tenant_id, user_id)` foreign keys,
+/// a violation of which surfaces as `Backend`); the `WHERE EXISTS` pre-checks in the inserts
+/// below are kept as defense in depth and for this clearer error.
 fn unknown_user() -> StorageError {
     StorageError::Backend("credential owner is not a user of this tenant".into())
 }

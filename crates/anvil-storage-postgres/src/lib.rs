@@ -293,9 +293,17 @@ mod tests {
              INSERT INTO refresh_token (token_hash, tenant_id, family_id, scope, created_at,
                                         expires_at)
                   VALUES (decode(repeat('cd', 32), 'hex'), '{tenant}', '{family}', 'openid',
-                          now(), now() + interval '30 days');",
+                          now(), now() + interval '30 days');
+             -- 0.1 had no user FK on codes: an expired code of a since-deleted user may exist.
+             INSERT INTO authorization_code (code_hash, tenant_id, client_id, redirect_uri, scope,
+                                             code_challenge, token_family_id, user_id, session_id,
+                                             auth_time, acr, amr, expires_at, created_at)
+                  VALUES (decode(repeat('ef', 32), 'hex'), '{tenant}', 'web',
+                          'https://rp.example.test/cb', 'openid', NULL, '{family}', '{gone}',
+                          '{s}', now(), 'urn:anvilid:acr:pwd', ARRAY['pwd'], now(), now());",
             c = Uuid::now_v7(),
             s = Uuid::now_v7(),
+            gone = Uuid::now_v7(),
         );
         exec(&mut conn, &seed).await.expect("seeding 0.1 rows");
 
@@ -446,6 +454,7 @@ mod tests {
             .expect("all migrations must apply");
 
         let (a, b, user_b) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+        let family = Uuid::now_v7();
         exec(
             &mut conn,
             &format!(
@@ -453,14 +462,19 @@ mod tests {
                       VALUES ('{a}', 'a', 'A', now()), ('{b}', 'b', 'B', now());
                  INSERT INTO \"user\" (id, tenant_id, email, email_verified, status, created_at,
                                        updated_at)
-                      VALUES ('{user_b}', '{b}', 'b@example.test', true, 'active', now(), now());"
+                      VALUES ('{user_b}', '{b}', 'b@example.test', true, 'active', now(), now());
+                 INSERT INTO token_family (id, tenant_id, client_id, user_id, scope, amr,
+                                           created_at, absolute_expires_at)
+                      VALUES ('{family}', '{b}', 'web', '{user_b}', 'openid', ARRAY['pwd'], now(),
+                              now() + interval '30 days');"
             ),
         )
         .await
         .expect("seeding two tenants");
 
         // One insert per user-owned table; `{t}` is the tenant written on the row.
-        let rows: [(&str, Box<dyn Fn(Uuid) -> String>); 5] = [
+        type InsertFor = Box<dyn Fn(Uuid) -> String>;
+        let rows: [(&str, InsertFor); 6] = [
             (
                 "credential",
                 Box::new(move |t| {
@@ -515,6 +529,22 @@ mod tests {
                                       decode(md5(random()::text) || md5(random()::text), 'hex'),
                                       now(), 'urn:anvilid:acr:pwd', ARRAY['pwd'], now(), now(),
                                       now() + interval '1 day', now() + interval '1 hour')",
+                        Uuid::now_v7()
+                    )
+                }),
+            ),
+            (
+                "authorization_code",
+                Box::new(move |t| {
+                    format!(
+                        "INSERT INTO authorization_code (code_hash, tenant_id, client_id,
+                                                         redirect_uri, scope, token_family_id,
+                                                         user_id, session_id, auth_time, acr, amr,
+                                                         expires_at, created_at)
+                              VALUES (decode(md5(random()::text) || md5(random()::text), 'hex'),
+                                      '{t}', 'web', 'https://rp.example.test/cb', 'openid',
+                                      '{family}', '{user_b}', '{}', now(), 'urn:anvilid:acr:pwd',
+                                      ARRAY['pwd'], now() + interval '1 minute', now())",
                         Uuid::now_v7()
                     )
                 }),
