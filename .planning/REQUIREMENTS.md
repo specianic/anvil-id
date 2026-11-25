@@ -94,7 +94,7 @@ Source of truth for wording and detail: [docs/PRD.md](../docs/PRD.md) §8–9. I
 
 ### Operations (PRD §9.1)
 
-- [ ] **OPS-01**: Operator can download one static binary (linux amd64/arm64, macOS) or a container image under 50 MB
+- [x] **OPS-01**: Operator can download one static binary (linux amd64/arm64, macOS) or a container image under 50 MB
 - [x] **OPS-02**: AnvilID runs on embedded SQLite by default and on PostgreSQL for production, with no other required dependency
 - [ ] **OPS-03**: Operator can run multiple stateless instances on one Postgres without extra coordination services
 - [ ] **OPS-04**: Migrations run automatically, are tested between consecutive minor versions, and are never destructive without an explicit flag
@@ -231,7 +231,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | AGT-01 | Phase 5 | Pending |
 | AGT-02 | Phase 5 | Pending |
 | AGT-03 | Phase 7 | Pending |
-| OPS-01 | Phase 2 | Pending |
+| OPS-01 | Phase 2 | Complete |
 | OPS-02 | Phase 2 | Complete |
 | OPS-03 | Phase 5 | Pending |
 | OPS-04 | Phase 3 | Pending |

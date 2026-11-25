@@ -1,19 +1,19 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
+milestone: v0.1
 milestone_name: milestone
-current_phase: 2
-current_phase_name: Release 0.1 "First login" (M1)
-current_plan: 22
-status: verifying
+current_phase: 03
+current_phase_name: release 0 2 secure by default
+current_plan: Not started
+status: planning
 stopped_at: Completed 03-08-PLAN.md
-last_updated: "2026-11-25T06:26:51.278Z"
+last_updated: "2026-11-25T06:36:20.398Z"
 last_activity: 2026-11-25
 progress:
   total_phases: 7
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 60
-  completed_plans: 39
+  completed_plans: 40
   percent: 51
 ---
 
@@ -28,14 +28,14 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 
 ## Current Position
 
-**Current Phase:** 2
-**Current Phase Name:** Release 0.1 "First login" (M1)
+**Current Phase:** 03
+**Current Phase Name:** release 0 2 secure by default
 **Total Phases:** 7
-**Current Plan:** 22
+**Current Plan:** Not started
 **Total Plans in Phase:** 22
-**Status:** Phase complete — ready for verification
+**Status:** Ready to plan
 **Last Activity:** 2026-11-25
-**Last Activity Description:** Completed 02-21 (phase gate: security-test map, `just ci` gates, docs sync, CI green on GitHub)
+**Last Activity Description:** Phase 2 complete, transitioned to Phase 03
 **Progress:** [█████░░░░░] 51%
 
 Phase 2 plans 02-01 through 02-22 are all complete (22/22 summaries). Next: Phase 2 verification, then Phase 3.
