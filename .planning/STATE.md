@@ -6,8 +6,8 @@ current_phase: 04
 current_phase_name: release 0 3 real world logins
 current_plan: Not started
 status: planning
-stopped_at: Completed 04-16-PLAN.md
-last_updated: "2026-11-25T21:59:50.885Z"
+stopped_at: Completed 04-17-PLAN.md
+last_updated: "2026-11-25T22:01:18.520Z"
 last_activity: 2026-11-25
 progress:
   total_phases: 7
@@ -138,6 +138,7 @@ Phase 3 plans 03-01 through 03-34 are all complete (34/34 summaries); v0.2.0 is 
 | Phase 04 P19 | 35min | 2 tasks | 10 files |
 | Phase 04 P18 | 90min | 2 tasks | 17 files |
 | Phase 04 P16 | 150min | 2 tasks | 15 files |
+| Phase 04 P17 | 2h | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -311,6 +312,8 @@ Recent decisions affecting current work:
 - [Phase 04]: 04-19: console secrets reach requests through a ref, never mutation variables (kept out of the query cache)
 - [Phase 04]: 04-18: branding publish identifies the draft by preview token; logo upload is JSON base64; 400 KiB body limit only on the logo route
 - [Phase 04]: 04-16: MFA step-up only checked on existing sessions when acr requested or policy Required; unmet essential acr signs in single-factor and resume answers unmet_authentication_requirements; session switch revokes the other user's session with families
+- [Phase 04]: 04-17: a back-channel retry that would land at/after the 24 h deadline is given up (and audited) immediately
+- [Phase 04]: 04-17: logout tokens use the tenant's canonical issuer and the client's current backchannel_logout_uri
 
 ### Pending Todos
 
@@ -323,6 +326,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-25T21:59:50.882Z
-Stopped at: Completed 04-16-PLAN.md
+Last session: 2026-11-25T22:01:18.517Z
+Stopped at: Completed 04-17-PLAN.md
 Resume file: None
