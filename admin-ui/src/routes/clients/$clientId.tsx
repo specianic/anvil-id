@@ -216,9 +216,19 @@ function ClientPage() {
       <Link to="/clients" className="text-muted-foreground text-sm underline-offset-4 hover:underline">
         ← Clients
       </Link>
-      <h1 id="client-heading" className="text-xl font-semibold break-all">
-        {query.data?.name ?? "Client"}
-      </h1>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h1 id="client-heading" className="text-xl font-semibold break-all">
+          {query.data?.name ?? "Client"}
+        </h1>
+        <Link
+          to="/branding/$clientId"
+          params={{ clientId }}
+          className="text-sm underline underline-offset-4"
+          data-testid="client-branding-link"
+        >
+          Branding
+        </Link>
+      </div>
       {query.isPending ? (
         <div role="status" aria-label="Loading client" className="space-y-2">
           <Skeleton className="h-6 w-1/2" />

@@ -12,6 +12,8 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as CallbackRouteImport } from './routes/callback'
 import { Route as AuditIndexRouteImport } from './routes/audit/index'
+import { Route as BrandingIndexRouteImport } from './routes/branding/index'
+import { Route as BrandingClientIdRouteImport } from './routes/branding/$clientId'
 import { Route as ClientsIndexRouteImport } from './routes/clients/index'
 import { Route as ClientsClientIdRouteImport } from './routes/clients/$clientId'
 import { Route as ClientsNewRouteImport } from './routes/clients/new'
@@ -39,6 +41,16 @@ const CallbackRoute = CallbackRouteImport.update({
 const AuditIndexRoute = AuditIndexRouteImport.update({
   id: '/audit/',
   path: '/audit/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BrandingIndexRoute = BrandingIndexRouteImport.update({
+  id: '/branding/',
+  path: '/branding/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BrandingClientIdRoute = BrandingClientIdRouteImport.update({
+  id: '/branding/$clientId',
+  path: '/branding/$clientId',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ClientsIndexRoute = ClientsIndexRouteImport.update({
@@ -110,6 +122,7 @@ const UsersUserIdRoute = UsersUserIdRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/callback': typeof CallbackRoute
+  '/branding/$clientId': typeof BrandingClientIdRoute
   '/clients/$clientId': typeof ClientsClientIdRoute
   '/clients/new': typeof ClientsNewRoute
   '/connections/$connectionId': typeof ConnectionsConnectionIdRoute
@@ -118,6 +131,7 @@ export interface FileRoutesByFullPath {
   '/email/smtp': typeof EmailSmtpRoute
   '/users/$userId': typeof UsersUserIdRoute
   '/audit/': typeof AuditIndexRoute
+  '/branding/': typeof BrandingIndexRoute
   '/clients/': typeof ClientsIndexRoute
   '/connections/': typeof ConnectionsIndexRoute
   '/email/': typeof EmailIndexRoute
@@ -128,6 +142,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/callback': typeof CallbackRoute
+  '/branding/$clientId': typeof BrandingClientIdRoute
   '/clients/$clientId': typeof ClientsClientIdRoute
   '/clients/new': typeof ClientsNewRoute
   '/connections/$connectionId': typeof ConnectionsConnectionIdRoute
@@ -136,6 +151,7 @@ export interface FileRoutesByTo {
   '/email/smtp': typeof EmailSmtpRoute
   '/users/$userId': typeof UsersUserIdRoute
   '/audit': typeof AuditIndexRoute
+  '/branding': typeof BrandingIndexRoute
   '/clients': typeof ClientsIndexRoute
   '/connections': typeof ConnectionsIndexRoute
   '/email': typeof EmailIndexRoute
@@ -147,6 +163,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/callback': typeof CallbackRoute
+  '/branding/$clientId': typeof BrandingClientIdRoute
   '/clients/$clientId': typeof ClientsClientIdRoute
   '/clients/new': typeof ClientsNewRoute
   '/connections/$connectionId': typeof ConnectionsConnectionIdRoute
@@ -155,6 +172,7 @@ export interface FileRoutesById {
   '/email/smtp': typeof EmailSmtpRoute
   '/users/$userId': typeof UsersUserIdRoute
   '/audit/': typeof AuditIndexRoute
+  '/branding/': typeof BrandingIndexRoute
   '/clients/': typeof ClientsIndexRoute
   '/connections/': typeof ConnectionsIndexRoute
   '/email/': typeof EmailIndexRoute
@@ -167,6 +185,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/callback'
+    | '/branding/$clientId'
     | '/clients/$clientId'
     | '/clients/new'
     | '/connections/$connectionId'
@@ -175,6 +194,7 @@ export interface FileRouteTypes {
     | '/email/smtp'
     | '/users/$userId'
     | '/audit/'
+    | '/branding/'
     | '/clients/'
     | '/connections/'
     | '/email/'
@@ -185,6 +205,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/callback'
+    | '/branding/$clientId'
     | '/clients/$clientId'
     | '/clients/new'
     | '/connections/$connectionId'
@@ -193,6 +214,7 @@ export interface FileRouteTypes {
     | '/email/smtp'
     | '/users/$userId'
     | '/audit'
+    | '/branding'
     | '/clients'
     | '/connections'
     | '/email'
@@ -203,6 +225,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/callback'
+    | '/branding/$clientId'
     | '/clients/$clientId'
     | '/clients/new'
     | '/connections/$connectionId'
@@ -211,6 +234,7 @@ export interface FileRouteTypes {
     | '/email/smtp'
     | '/users/$userId'
     | '/audit/'
+    | '/branding/'
     | '/clients/'
     | '/connections/'
     | '/email/'
@@ -222,6 +246,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   CallbackRoute: typeof CallbackRoute
+  BrandingClientIdRoute: typeof BrandingClientIdRoute
   ClientsClientIdRoute: typeof ClientsClientIdRoute
   ClientsNewRoute: typeof ClientsNewRoute
   ConnectionsConnectionIdRoute: typeof ConnectionsConnectionIdRoute
@@ -230,6 +255,7 @@ export interface RootRouteChildren {
   EmailSmtpRoute: typeof EmailSmtpRoute
   UsersUserIdRoute: typeof UsersUserIdRoute
   AuditIndexRoute: typeof AuditIndexRoute
+  BrandingIndexRoute: typeof BrandingIndexRoute
   ClientsIndexRoute: typeof ClientsIndexRoute
   ConnectionsIndexRoute: typeof ConnectionsIndexRoute
   EmailIndexRoute: typeof EmailIndexRoute
@@ -259,6 +285,20 @@ declare module '@tanstack/react-router' {
       path: '/audit'
       fullPath: '/audit/'
       preLoaderRoute: typeof AuditIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/branding/': {
+      id: '/branding/'
+      path: '/branding'
+      fullPath: '/branding/'
+      preLoaderRoute: typeof BrandingIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/branding/$clientId': {
+      id: '/branding/$clientId'
+      path: '/branding/$clientId'
+      fullPath: '/branding/$clientId'
+      preLoaderRoute: typeof BrandingClientIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/clients/': {
@@ -358,6 +398,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   CallbackRoute: CallbackRoute,
+  BrandingClientIdRoute: BrandingClientIdRoute,
   ClientsClientIdRoute: ClientsClientIdRoute,
   ClientsNewRoute: ClientsNewRoute,
   ConnectionsConnectionIdRoute: ConnectionsConnectionIdRoute,
@@ -366,6 +407,7 @@ const rootRouteChildren: RootRouteChildren = {
   EmailSmtpRoute: EmailSmtpRoute,
   UsersUserIdRoute: UsersUserIdRoute,
   AuditIndexRoute: AuditIndexRoute,
+  BrandingIndexRoute: BrandingIndexRoute,
   ClientsIndexRoute: ClientsIndexRoute,
   ConnectionsIndexRoute: ConnectionsIndexRoute,
   EmailIndexRoute: EmailIndexRoute,

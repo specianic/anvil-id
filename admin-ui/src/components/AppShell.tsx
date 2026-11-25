@@ -10,6 +10,7 @@ const NAV = [
   { to: "/sessions", label: "Sessions" },
   { to: "/audit", label: "Audit log" },
   { to: "/email", label: "Email" },
+  { to: "/branding", label: "Branding" },
   { to: "/settings", label: "Login settings" },
 ] as const;
 
