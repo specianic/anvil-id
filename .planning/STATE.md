@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: verifying
-stopped_at: Completed 01-08-PLAN.md
-last_updated: "2026-11-25T01:28:11.113Z"
+stopped_at: Completed 02-03-PLAN.md
+last_updated: "2026-11-25T01:42:39.000Z"
 last_activity: "2026-11-25 — Completed 01-08 (phase gate: CI green on GitHub, spike verdicts, stack confirmed)"
 progress:
   total_phases: 7
@@ -58,6 +58,7 @@ Progress: [█████░░░░░] 53%
 | Phase 01 P05 | 4min | 2 tasks | 10 files |
 | Phase 01 P07 | 10min | 3 tasks | 9 files |
 | Phase 01 P08 | 20min | 2 tasks | 4 files |
+| Phase 02 P03 | 10min | 2 tasks | 21 files |
 
 ## Accumulated Context
 
@@ -84,6 +85,7 @@ Recent decisions affecting current work:
 - [Phase 01]: Spike B local x86_64 static-pie musl: 9.44 MiB, 18.3 MB idle RSS (vs probe 3.5 MB/9.1 MB, now with sqlx SQLite+Postgres + aws-lc-rs linked); arm64 proven in CI (plan 08)
 - [Phase 01]: Phase 1 gate: §2.1 conditions 1-3 met (conformance green in CI, static musl amd64+arm64, two sqlx backends manageable); Rust stack confirmed
 - [Phase 01]: Conformance suite fetched via blobless --no-checkout clone (sparse-checkout not portable across git versions); mongo on a named volume removed by down -v
+- [Phase 02]: Theme selector/text contract (input id=name, {form.id}-submit, mgmt-client-*, error_key sentences) documented in themes/default/README.md; forms use novalidate so errors come from FormDescription
 
 ### Pending Todos
 
@@ -97,5 +99,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-11-25T01:24:20.336Z
-Stopped at: Completed 01-08-PLAN.md
+Stopped at: Completed 02-03-PLAN.md
 Resume file: None
