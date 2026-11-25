@@ -32,23 +32,27 @@
 use std::sync::Arc;
 
 use anvil_jose::encoding::{random_token, secret_hash};
+use anvil_jose::keys::SigningKey;
 use anvil_jose::{ExpiryCheck, verify_op_token_algs};
 use secrecy::SecretString;
+use time::OffsetDateTime;
 
 use super::audit::AuditService;
 use super::flow::{BindingError, FLOW_LIFETIME, check_binding};
+use super::key::KeyService;
 use super::key::published_jwks;
 use super::key_rotation::enabled_algs;
-use super::token::ID_TOKEN_TYP;
+use super::token::{ID_TOKEN_TYP, id_token_alg};
 use crate::error::CoreError;
 use crate::flow::logout::LogoutState;
 use crate::model::{
-    AuditAction, AuditActor, AuditDetails, AuditOutcome, BrowserSession, Client, FlowId, FlowKind,
-    NewFlow, RequestContext, SecretHash, Tenant,
+    AuditAction, AuditActor, AuditDetails, AuditOutcome, BrowserSession, Client,
+    DEFAULT_TENANT_SLUG, FlowId, FlowKind, LogoutDelivery, NewFlow, PublicUrl, RequestContext,
+    SecretHash, Tenant, TenantBase, issuer,
 };
 use crate::oauth::logout::{
     CurrentSession, EndSessionDecision, EndSessionRequest, HintCheck, LogoutError,
-    PostLogoutRedirect, validate_end_session,
+    PostLogoutRedirect, logout_token_claims, validate_end_session,
 };
 use crate::ports::{Clock, Storage};
 
@@ -447,6 +451,94 @@ impl LogoutService {
     }
 }
 
+/// `typ` header of logout tokens (Back-Channel Logout 1.0 §2.4).
+pub const LOGOUT_TOKEN_TYP: &str = "logout+jwt";
+
+/// A back-channel logout delivery ready to send: the destination and the freshly signed logout
+/// token. The token is never logged or stored.
+#[derive(Debug)]
+pub struct PreparedDelivery {
+    /// The client's current `backchannel_logout_uri` (query string preserved).
+    pub uri: String,
+    pub logout_token: SecretString,
+}
+
+/// The canonical issuer of `tenant`: its custom host, the public URL for the default tenant,
+/// else `/t/{slug}`. Background work (no request, so no request host) uses this issuer.
+pub fn canonical_issuer(public_url: &PublicUrl, tenant: &Tenant) -> String {
+    let base = match &tenant.host {
+        Some(h) => TenantBase::Host(h.clone()),
+        None if tenant.slug == DEFAULT_TENANT_SLUG => TenantBase::Root,
+        None => TenantBase::Path(tenant.slug.clone()),
+    };
+    issuer(public_url, &base)
+}
+
+/// Signs the logout token of `delivery` with `signer` (header `typ: logout+jwt`): claims
+/// exactly `iss`, `aud` (the client), `iat`, `exp` (2 minutes), `jti`, `sub`, `sid`, `events`;
+/// never a `nonce` (Back-Channel Logout 1.0 §2.4).
+pub fn sign_logout_token(
+    signer: &SigningKey,
+    issuer: &str,
+    delivery: &LogoutDelivery,
+    jti: &str,
+    now: OffsetDateTime,
+) -> Result<String, CoreError> {
+    let claims = logout_token_claims(
+        issuer,
+        &delivery.client_id,
+        &delivery.sub,
+        &delivery.sid,
+        jti,
+        now,
+    );
+    signer
+        .sign_jwt(Some(LOGOUT_TOKEN_TYP), &claims)
+        .map_err(|_| CoreError::Internal("logout token signing failed".to_owned()))
+}
+
+impl LogoutService {
+    /// Prepares one back-channel logout delivery at send time (OIDC Back-Channel Logout 1.0):
+    /// loads the tenant and the client, and signs a fresh logout token (new random `jti`) with
+    /// the key of the client's ID-token algorithm (no fallback to another algorithm: an alg the
+    /// tenant cannot serve is `Internal`). The destination is the client's *current*
+    /// `backchannel_logout_uri`.
+    ///
+    /// A deleted tenant or client, or a client that no longer has a back-channel logout URI, is
+    /// [`CoreError::NotFound`]: the delivery can never succeed and is given up.
+    pub async fn prepare_delivery(
+        &self,
+        keys: &KeyService,
+        public_url: &PublicUrl,
+        delivery: &LogoutDelivery,
+        now: OffsetDateTime,
+    ) -> Result<PreparedDelivery, CoreError> {
+        let tenant = self
+            .storage
+            .tenants()
+            .get(delivery.tenant_id)
+            .await?
+            .ok_or(CoreError::NotFound)?;
+        let client = self
+            .client(&tenant, &delivery.client_id)
+            .await?
+            .ok_or(CoreError::NotFound)?;
+        let uri = client
+            .backchannel_logout_uri
+            .clone()
+            .filter(|u| !u.is_empty())
+            .ok_or(CoreError::NotFound)?;
+        let alg = id_token_alg(&tenant, &client)?;
+        let signer = keys.signer_for(tenant.id, alg).await?;
+        let issuer = canonical_issuer(public_url, &tenant);
+        let token = sign_logout_token(&signer, &issuer, delivery, &random_token(), now)?;
+        Ok(PreparedDelivery {
+            uri,
+            logout_token: SecretString::from(token),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -500,6 +592,81 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    fn delivery() -> LogoutDelivery {
+        let t = time::macros::datetime!(2026-11-25 12:00 UTC);
+        LogoutDelivery {
+            id: crate::model::LogoutDeliveryId::new_v7(),
+            tenant_id: crate::model::TenantId::new_v7(),
+            client_id: "rp".into(),
+            uri: "https://rp.example.test/bc?x=1".into(),
+            sub: "user-1".into(),
+            sid: "session-1".into(),
+            attempts: 0,
+            next_attempt_at: t,
+            give_up_at: t + crate::model::LOGOUT_DELIVERY_TTL,
+            created_at: t,
+            delivered_at: None,
+            last_error: None,
+        }
+    }
+
+    #[test]
+    fn logout_token_has_typ_and_exactly_the_spec_claims() {
+        use crate::model::KeyState;
+        use crate::service::key::{jwks_from_rows, open_key, tests::sealed_row};
+        use anvil_jose::jws::{decode_header, verify_jwt};
+        use anvil_jose::keys::Alg;
+
+        let kek = anvil_jose::Kek::generate();
+        let row = sealed_row(&kek, KeyState::Active);
+        let signer = open_key(&kek, &row).unwrap();
+        let d = delivery();
+        let now = time::macros::datetime!(2026-11-25 12:05 UTC);
+        let token = sign_logout_token(&signer, "https://op.example", &d, "jti-1", now).unwrap();
+
+        let header = decode_header(&token).unwrap();
+        assert_eq!(header.typ.as_deref(), Some(LOGOUT_TOKEN_TYP));
+        assert_eq!(header.kid.as_deref(), Some(row.kid.as_str()));
+        let jwt = verify_jwt(&token, &jwks_from_rows(&[row]).unwrap(), &[Alg::RS256]).unwrap();
+        let claims = &jwt.claims;
+        let mut names: Vec<&str> = claims.keys().map(String::as_str).collect();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            ["aud", "events", "exp", "iat", "iss", "jti", "sid", "sub"]
+        );
+        assert_eq!(claims["iss"], "https://op.example");
+        assert_eq!(claims["aud"], "rp");
+        assert_eq!(claims["sub"], "user-1");
+        assert_eq!(claims["sid"], "session-1");
+        assert_eq!(claims["jti"], "jti-1");
+        assert_eq!(claims["iat"], now.unix_timestamp());
+        assert_eq!(claims["exp"], now.unix_timestamp() + 120);
+        assert_eq!(
+            claims["events"],
+            serde_json::json!({ "http://schemas.openid.net/event/backchannel-logout": {} })
+        );
+        assert!(claims.get("nonce").is_none());
+    }
+
+    #[test]
+    fn canonical_issuer_follows_host_default_and_slug() {
+        let url = PublicUrl::parse("https://id.example").unwrap();
+        let mut t = Tenant {
+            id: crate::model::TenantId::new_v7(),
+            slug: DEFAULT_TENANT_SLUG.into(),
+            display_name: "d".into(),
+            host: None,
+            settings: crate::model::TenantSettings::default(),
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+        };
+        assert_eq!(canonical_issuer(&url, &t), "https://id.example");
+        t.slug = "acme".into();
+        assert_eq!(canonical_issuer(&url, &t), "https://id.example/t/acme");
+        t.host = Some("login.acme.test".into());
+        assert_eq!(canonical_issuer(&url, &t), "https://login.acme.test");
     }
 
     #[test]
