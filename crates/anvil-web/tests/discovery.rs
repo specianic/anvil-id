@@ -251,7 +251,7 @@ async fn jwks_lists_published_public_keys() {
 
     let resp = app.get("/jwks").await;
     assert_eq!(resp.status, 200);
-    assert_eq!(resp.header("cache-control"), Some("public, max-age=300"));
+    assert_eq!(resp.header("cache-control"), Some("public, max-age=3600"));
     let set = json(&resp);
     let keys = set["keys"].as_array().expect("keys array");
     let mut kids = Vec::new();

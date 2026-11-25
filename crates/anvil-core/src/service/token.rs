@@ -8,8 +8,9 @@
 use std::sync::Arc;
 
 use anvil_jose::Kek;
-use anvil_jose::encoding::{at_hash, random_token, secret_hash};
-use anvil_jose::keys::SigningKey;
+use anvil_jose::encoding::{random_token, secret_hash};
+use anvil_jose::keys::{Alg, SigningKey};
+use anvil_jose::token_hash;
 use serde::Serialize;
 use time::{Duration, OffsetDateTime};
 
@@ -24,7 +25,8 @@ use crate::service::claims::{
     requested_claims,
 };
 use crate::service::client_auth::{ClientAuthInput, ClientAuthenticator};
-use crate::service::key::KeyService;
+use crate::service::key::{KeyService, TOKEN_ALG};
+use crate::service::key_rotation::enabled_algs;
 
 /// Refresh token idle lifetime; a child never outlives its family's absolute expiry.
 pub const REFRESH_TOKEN_IDLE_TTL: Duration = Duration::days(14);
@@ -245,7 +247,12 @@ pub fn check_user(user: Option<User>) -> Result<User, CoreError> {
 
 /// ID token input for a token family: the authentication context comes from the family, so a
 /// refreshed ID token repeats `auth_time`, `acr`, `amr` and `sid`. `nonce` is only passed for the
-/// first ID token of an authorization (`None` on refresh, OIDC Core §12.2).
+/// first ID token of an authorization (`None` on refresh, OIDC Core §12.2). `at_hash` uses the
+/// hash of the ID token's algorithm (`id_token_alg`).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "every argument is a distinct input of the ID token"
+)]
 pub fn family_id_token_input<'a>(
     issuer: &'a str,
     sub: &'a str,
@@ -254,6 +261,7 @@ pub fn family_id_token_input<'a>(
     now: OffsetDateTime,
     nonce: Option<&'a str>,
     access_token: &str,
+    id_token_alg: Alg,
 ) -> IdTokenInput<'a> {
     let extra = family
         .claims
@@ -270,9 +278,31 @@ pub fn family_id_token_input<'a>(
         acr: family.acr.as_deref(),
         amr: &family.amr,
         sid: family.session_id.map(|s| s.to_string()),
-        at_hash: Some(at_hash(access_token)),
+        at_hash: Some(token_hash(id_token_alg, access_token)),
         extra,
     }
+}
+
+/// The algorithm the client's ID tokens are signed with: its `id_token_signed_response_alg`, or
+/// RS256. An algorithm that is unknown or not enabled for the tenant is a server error; there is
+/// never a fallback to another algorithm.
+pub fn id_token_alg(tenant: &Tenant, client: &Client) -> Result<Alg, CoreError> {
+    let Some(raw) = client.id_token_signed_response_alg.as_deref() else {
+        return Ok(TOKEN_ALG);
+    };
+    let alg: Alg = raw.parse().map_err(|_| {
+        CoreError::Internal(format!(
+            "client {} requests unknown ID token alg {raw}",
+            client.client_id
+        ))
+    })?;
+    if !enabled_algs(tenant)?.contains(&alg) {
+        return Err(CoreError::Internal(format!(
+            "client {} requests ID token alg {raw}, which the tenant has not enabled",
+            client.client_id
+        )));
+    }
+    Ok(alg)
 }
 
 fn signing_error(_: anvil_jose::JoseError) -> CoreError {
@@ -408,6 +438,7 @@ impl TokenService {
             .mint_user_tokens(
                 tenant,
                 issuer,
+                client,
                 &family,
                 &user,
                 &scope,
@@ -479,7 +510,7 @@ impl TokenService {
             }
         };
         let minted = self
-            .mint_user_tokens(tenant, issuer, &family, &user, &scope, now, None)
+            .mint_user_tokens(tenant, issuer, client, &family, &user, &scope, now, None)
             .await?;
         Ok(response(minted, scope, Some(rt)))
     }
@@ -525,6 +556,7 @@ impl TokenService {
         &self,
         tenant: &Tenant,
         issuer: &str,
+        client: &Client,
         family: &TokenFamily,
         user: &User,
         scope: &Scope,
@@ -548,9 +580,23 @@ impl TokenService {
             },
         )?;
         let id_token = if scope.contains("openid") {
-            let input =
-                family_id_token_input(issuer, &sub, family, user, now, nonce, &access_token);
-            Some(sign_id_token(&signer, &input)?)
+            let alg = id_token_alg(tenant, client)?;
+            let id_signer = if alg == signer.alg() {
+                signer
+            } else {
+                self.keys().signer_for(tenant.id, alg).await?
+            };
+            let input = family_id_token_input(
+                issuer,
+                &sub,
+                family,
+                user,
+                now,
+                nonce,
+                &access_token,
+                id_signer.alg(),
+            );
+            Some(sign_id_token(&id_signer, &input)?)
         } else {
             None
         };
@@ -903,14 +949,26 @@ mod tests {
         });
         let u = user(StandardClaims::default());
         let sub = u.id.to_string();
-        let input = family_id_token_input("https://op.test", &sub, &f, &u, now(), None, "at");
+        let input = family_id_token_input(
+            "https://op.test",
+            &sub,
+            &f,
+            &u,
+            now(),
+            None,
+            "at",
+            Alg::RS256,
+        );
         assert_eq!(input.auth_time, f.auth_time);
         assert_eq!(input.acr, Some(ACR_PWD));
         assert_eq!(input.amr, f.amr.as_slice());
         assert_eq!(input.client_id, "rp");
         assert!(input.nonce.is_none());
         assert_eq!(input.sid, f.session_id.map(|s| s.to_string()));
-        assert_eq!(input.at_hash.as_deref(), Some(at_hash("at").as_str()));
+        assert_eq!(
+            input.at_hash.as_deref(),
+            Some(anvil_jose::encoding::at_hash("at").as_str())
+        );
 
         let s = signer();
         let id = sign_id_token(&s, &input).unwrap();
@@ -924,6 +982,65 @@ mod tests {
         assert_eq!(c["azp"], "rp");
         assert_eq!(c["auth_time"], f.auth_time.unwrap().unix_timestamp());
         assert_eq!(c["email"], "alice@example.test", "claims.id_token honoured");
+    }
+
+    #[test]
+    fn at_hash_follows_the_id_token_alg() {
+        let f = family("rp", "openid");
+        let u = user(StandardClaims::default());
+        let sub = u.id.to_string();
+        for alg in [Alg::RS256, Alg::ES256, Alg::Ed25519] {
+            let input =
+                family_id_token_input("https://op.test", &sub, &f, &u, now(), None, "at", alg);
+            assert_eq!(input.at_hash, Some(token_hash(alg, "at")));
+        }
+        let sha256 = family_id_token_input("i", &sub, &f, &u, now(), None, "at", Alg::ES256);
+        let sha512 = family_id_token_input("i", &sub, &f, &u, now(), None, "at", Alg::Ed25519);
+        assert_ne!(sha256.at_hash, sha512.at_hash);
+    }
+
+    fn tenant(algs: &[&str]) -> Tenant {
+        Tenant {
+            id: crate::model::TenantId::new_v7(),
+            slug: "acme".into(),
+            display_name: "Acme".into(),
+            host: None,
+            settings: crate::model::TenantSettings {
+                signing_algs: algs.iter().map(|a| (*a).to_owned()).collect(),
+                ..crate::model::TenantSettings::default()
+            },
+            created_at: now(),
+        }
+    }
+
+    #[test]
+    fn id_token_alg_defaults_to_rs256_and_never_falls_back() {
+        let mut c = client(ClientAuthMethod::None);
+        assert_eq!(id_token_alg(&tenant(&[]), &c).unwrap(), Alg::RS256);
+
+        c.id_token_signed_response_alg = Some("ES256".into());
+        assert_eq!(
+            id_token_alg(&tenant(&["RS256", "ES256"]), &c).unwrap(),
+            Alg::ES256
+        );
+        // Not enabled for the tenant: server error, not RS256.
+        assert!(matches!(
+            id_token_alg(&tenant(&["RS256"]), &c),
+            Err(CoreError::Internal(_))
+        ));
+
+        c.id_token_signed_response_alg = Some("Ed25519".into());
+        assert_eq!(
+            id_token_alg(&tenant(&["Ed25519"]), &c).unwrap(),
+            Alg::Ed25519
+        );
+        for bad in ["EdDSA", "HS256", "none", ""] {
+            c.id_token_signed_response_alg = Some(bad.into());
+            assert!(matches!(
+                id_token_alg(&tenant(&["RS256", "ES256", "Ed25519"]), &c),
+                Err(CoreError::Internal(_))
+            ));
+        }
     }
 
     #[test]
