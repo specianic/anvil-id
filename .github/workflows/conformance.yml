@@ -1,5 +1,5 @@
 # OpenID conformance pipeline (FND-05, Spike C). Starts the pinned conformance suite and a fresh anvilid,
-# runs the Config OP plan and enforces tests/conformance/expected-failures-m0.json exactly.
+# runs the Basic OP and Config OP plans and enforces the committed expected-failures file exactly.
 # Same entry point as local runs: `just conformance` (tests/conformance/run.sh). Dev mode, no secrets.
 name: conformance
 
@@ -29,9 +29,9 @@ env:
 
 jobs:
   conformance:
-    name: OpenID conformance (Config OP)
+    name: OpenID conformance (Basic + Config OP)
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
       - name: Install toolchain (rust-toolchain.toml)

@@ -12,12 +12,15 @@ workspace = true
 [dependencies]
 anvil-core.workspace = true
 async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 sqlx = { workspace = true, features = ["postgres"] }
 thiserror.workspace = true
 time.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+anvil-jose.workspace = true
 anvil-storage = { workspace = true, features = ["contract"] }
 testcontainers-modules.workspace = true
 tokio.workspace = true

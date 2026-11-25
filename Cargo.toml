@@ -30,7 +30,7 @@ anvil-mail = { path = "crates/anvil-mail" }
 anvilid = { path = "crates/anvilid" }
 
 # Third-party crates
-tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
+tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time", "fs", "process", "io-util"] }
 axum = "0.8.9"
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
@@ -63,6 +63,46 @@ anyhow = "1"
 # Use the re-export `testcontainers_modules::testcontainers`; do not add `testcontainers` directly.
 testcontainers-modules = { version = "0.15", default-features = false, features = ["postgres"] }
 tempfile = "3.27"
+
+# Phase 2 (release 0.1). Every crate Phase 2 needs is declared here once.
+# JOSE: jsonwebtoken is used for signature operations only (ARCHITECTURE.md §8.1).
+# `use_pem` is required for the PKCS#8 (PRIVATE KEY PEM) signing path.
+jsonwebtoken = { version = "12.0.0", default-features = false, features = ["aws_lc_rs", "use_pem"] }
+base64 = "0.23.1"
+subtle = "2.6.1"
+secrecy = "0.10.3"
+zeroize = { version = "1.9.2", features = ["derive"] }
+argon2 = { version = "0.6.0", default-features = false, features = ["alloc", "password-hash"] }
+# serde is off by default in minijinja 3.x; there is no `loader` feature.
+minijinja = { version = "3.1.0", features = ["serde"] }
+# Never `rustls-tls` (enables ring).
+lettre = { version = "0.11.24", default-features = false, features = [
+  "tokio1-rustls",
+  "aws-lc-rs",
+  "webpki-roots",
+  "smtp-transport",
+  "builder",
+  "hostname",
+  "pool",
+] }
+utoipa = { version = "6.0.0", features = ["axum_extras", "uuid", "time"] }
+utoipa-axum = "0.3.0"
+axum-extra = { version = "0.12.6", features = ["cookie", "typed-header"] }
+# 0.6.x: the line reqwest 0.13 already resolves, so cargo-deny reports no duplicate.
+tower-http = { version = "0.6.11", features = ["cors", "set-header", "limit", "trace", "request-id", "util"] }
+figment = { version = "0.10.19", features = ["toml", "env"] }
+# reqwest 0.13 `rustls` uses the aws-lc-rs provider (no ring).
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json"] }
+# Built-in TLS listener: aws-lc-rs provider only.
+rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs", "std", "tls12", "logging"] }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["aws_lc_rs", "tls12", "logging"] }
+hyper = { version = "1.13", features = ["http1", "http2", "server"] }
+hyper-util = { version = "0.1.21", features = ["server-auto", "tokio", "service"] }
+
+# Dev-only (tests).
+proptest = "1.12.0"
+insta = { version = "1.49.0", features = ["json"] }
+wiremock = "0.6.5"
 
 [profile.release]
 lto = "fat"

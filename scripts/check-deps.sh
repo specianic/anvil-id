@@ -60,7 +60,7 @@ check() {
   local store_impls=(anvil-storage-sqlite anvil-storage-postgres)
 
   # anvil-core: pure domain + ports, no I/O.
-  allow_direct anvil-core anvil-jose serde serde_json time uuid url thiserror async-trait
+  allow_direct anvil-core anvil-jose secrecy serde serde_json time uuid url thiserror async-trait
   forbid anvil-core "${io[@]}" anvil-storage "${store_impls[@]}" anvil-web anvil-cache anvil-mail
 
   # anvil-storage (contract suite) stays driver-free.

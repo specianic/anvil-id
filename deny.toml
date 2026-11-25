@@ -31,6 +31,8 @@ allow = [
   "MIT-0",
   "CC0-1.0",
   "Unlicense",
+  # quoted_printable (via lettre, SMTP mail). Public-domain equivalent, OSI approved.
+  "0BSD",
 ]
 confidence-threshold = 0.9
 

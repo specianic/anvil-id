@@ -15,17 +15,31 @@ path = "src/main.rs"
 
 [dependencies]
 anvil-core.workspace = true
+anvil-jose.workspace = true
+anvil-mail.workspace = true
 anvil-storage-postgres.workspace = true
 anvil-storage-sqlite.workspace = true
 anvil-web.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 clap.workspace = true
+figment.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
 mimalloc.workspace = true
+rustls.workspace = true
+secrecy.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+time.workspace = true
 tokio.workspace = true
+tokio-rustls.workspace = true
+tower.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 url.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
+reqwest.workspace = true
 tempfile.workspace = true

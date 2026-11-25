@@ -1,0 +1,101 @@
+# End-to-end gates for release 0.1: container image size, QUAL-04 zero-config first login on both
+# storage backends, and the Playwright e2e suite. Every job delegates to the justfile, so local runs
+# and CI use the same entry points (scripts owned by plan 02-20).
+name: e2e
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "crates/**"
+      - "themes/**"
+      - "examples/**"
+      - "tests/e2e/**"
+      - "scripts/**"
+      - "Dockerfile"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/e2e.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  image:
+    name: container image (size gate)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      # Builds the image and fails if it is 50 MB or larger.
+      - run: just docker-image
+
+  qual04:
+    name: QUAL-04 zero-config first login (${{ matrix.backend }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [sqlite, postgres]
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - run: npm ci --prefix tests/e2e
+      - run: npm ci --prefix examples/node-rp
+      - run: npx --prefix tests/e2e playwright install --with-deps chromium
+      - run: just qual04 ${{ matrix.backend }}
+      - name: Upload results
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: qual04-${{ matrix.backend }}-results
+          path: e2e-results/
+          if-no-files-found: warn
+
+  e2e:
+    name: Playwright e2e
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - run: npm ci --prefix tests/e2e
+      - run: npm ci --prefix examples/node-rp
+      - run: npx --prefix tests/e2e playwright install --with-deps chromium
+      - run: just e2e
+      - name: Upload results
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-results
+          path: e2e-results/
+          if-no-files-found: warn

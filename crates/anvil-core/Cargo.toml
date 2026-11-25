@@ -12,10 +12,14 @@ workspace = true
 # Pure domain crate: no I/O dependencies (allowlist enforced by scripts/check-deps.sh).
 [dependencies]
 async-trait.workspace = true
+secrecy.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 time.workspace = true
+url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+proptest.workspace = true
 time = { workspace = true, features = ["macros"] }

@@ -57,19 +57,41 @@ jobs:
       - run: just deps deps-selftest
 
   test:
-    name: tests (SQLite + Postgres)
+    name: tests (${{ matrix.db }})
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        db: [sqlite, postgres]
     steps:
       - uses: actions/checkout@v7
       - name: Install toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.db }}
       - uses: taiki-e/install-action@v2
         with:
           tool: just
       # Plain cargo test (not nextest): one Postgres container per test binary.
-      # The runner's Docker serves testcontainers.
-      - run: just test
+      # The runner's Docker serves testcontainers. `just test` covers the whole workspace (including
+      # the storage contract on both backends); `just test-pg` reruns web + binary tests on Postgres.
+      - if: matrix.db == 'sqlite'
+        run: just test
+      - if: matrix.db == 'postgres'
+        run: just test-pg
+
+  release-graph:
+    name: release dependency graph
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - run: just release-graph
 
   sqlx-check:
     name: sqlx offline metadata

@@ -2,8 +2,11 @@
 # sqlx tooling for the storage backends.
 #
 #   scripts/sqlx.sh db-up     start the local throwaway Postgres used for query checking
-#   scripts/sqlx.sh prepare   regenerate each storage crate's .sqlx/ offline metadata
-#   scripts/sqlx.sh check     fail if any storage crate's .sqlx/ metadata is stale
+#   scripts/sqlx.sh prepare [crates/<storage-crate>]   regenerate .sqlx/ offline metadata
+#   scripts/sqlx.sh check   [crates/<storage-crate>]   fail if .sqlx/ metadata is stale
+#
+# Without a crate argument every storage crate is processed. With one, only that crate is, so two
+# plans can prepare different backends in parallel without touching each other's .sqlx/.
 #
 # Metadata is prepared per crate (never `--workspace`): each backend has its own sqlx.toml with
 # its own DATABASE_URL variable and its own .sqlx/ directory, so identical SQL in two backends
@@ -21,7 +24,7 @@ PG_PASSWORD=postgres
 PG_DB=anvil_dev
 
 usage() {
-    echo "usage: $0 {db-up|prepare|check}" >&2
+    echo "usage: $0 db-up | $0 {prepare|check} [crates/<storage-crate>]" >&2
 }
 
 require_sqlx_cli() {
@@ -68,18 +71,39 @@ db_up() {
     exit 1
 }
 
-# prepare_crates <extra cargo sqlx prepare args...>
+# select_crates [crate-filter]: print the storage crates to process, one per line.
+select_crates() {
+    local filter="${1:-}" crate
+    if [[ -z "$filter" ]]; then
+        printf '%s\n' "${STORAGE_CRATES[@]}"
+        return 0
+    fi
+    filter="${filter%/}"
+    for crate in "${STORAGE_CRATES[@]}"; do
+        if [[ "$filter" == "$crate" || "$filter" == "${crate#crates/}" ]]; then
+            echo "$crate"
+            return 0
+        fi
+    done
+    echo "error: unknown storage crate: $filter (expected one of: ${STORAGE_CRATES[*]})" >&2
+    exit 2
+}
+
+# prepare_crates <crate-filter or ""> <extra cargo sqlx prepare args...>
 prepare_crates() {
+    local filter="$1"
+    shift
+    local selected
+    selected="$(select_crates "$filter")"
     require_sqlx_cli
     mkdir -p "$ROOT/target/sqlx"
-    export ANVIL_SQLITE_DATABASE_URL="sqlite://$ROOT/target/sqlx/sqlite-dev.db?mode=rwc"
     export ANVIL_PG_DATABASE_URL="postgres://postgres:${PG_PASSWORD}@localhost:${PG_PORT}/${PG_DB}"
     export SQLX_OFFLINE=false
     # A global offline dir would override the per-crate .sqlx/ directories.
     unset SQLX_OFFLINE_DIR
 
     local processed=() crate
-    for crate in "${STORAGE_CRATES[@]}"; do
+    for crate in $selected; do
         if [[ ! -f "$ROOT/$crate/sqlx.toml" ]]; then
             echo "skip: $crate (no sqlx.toml)"
             continue
@@ -90,6 +114,8 @@ prepare_crates() {
         echo "==> $crate"
         (
             cd "$ROOT/$crate"
+            # One SQLite dev database per crate, so parallel runs never share a file.
+            export ANVIL_SQLITE_DATABASE_URL="sqlite://$ROOT/target/sqlx/${crate#crates/}-dev.db?mode=rwc"
             sqlx migrate run
             cargo sqlx prepare "$@"
         )
@@ -103,14 +129,20 @@ prepare_crates() {
 }
 
 main() {
-    if [[ $# -ne 1 ]]; then
+    if [[ $# -lt 1 || $# -gt 2 ]]; then
         usage
         exit 2
     fi
     case "$1" in
-        db-up) db_up ;;
-        prepare) prepare_crates ;;
-        check) prepare_crates --check ;;
+        db-up)
+            if [[ $# -ne 1 ]]; then
+                usage
+                exit 2
+            fi
+            db_up
+            ;;
+        prepare) prepare_crates "${2:-}" ;;
+        check) prepare_crates "${2:-}" --check ;;
         *)
             usage
             exit 2
