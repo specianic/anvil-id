@@ -6,14 +6,14 @@ current_phase: 03
 current_phase_name: release 0 2 secure by default
 current_plan: Not started
 status: planning
-stopped_at: Completed 03-20-PLAN.md
-last_updated: "2026-11-25T07:41:27.497Z"
+stopped_at: Completed 03-24-PLAN.md
+last_updated: "2026-11-25T08:03:09.020Z"
 last_activity: 2026-11-25
 progress:
   total_phases: 7
   completed_phases: 2
   total_plans: 61
-  completed_plans: 54
+  completed_plans: 55
   percent: 80
 ---
 
@@ -111,6 +111,7 @@ Phase 2 plans 02-01 through 02-22 are all complete (22/22 summaries). Next: Phas
 | Phase 03 P21 | 50min | 2 tasks | 13 files |
 | Phase 03 P17 | 75min | 2 tasks | 11 files |
 | Phase 03 P20 | 95min | 2 tasks | 11 files |
+| Phase 03 P24 | 25min | 2 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -239,6 +240,9 @@ Recent decisions affecting current work:
 - [Phase 03]: 03-17: id_token_hint verified with verify_op_token_algs over enabled_algs(tenant); authz test fixture clients are skip_first_party; API-created clients default to required consent (e2e/conformance clients must opt into skip_first_party)
 - [Phase 03]: 03-20: second-factor page is the direct answer to the password POST (flow stores only the CSRF hash, so no PRG GET); per-user second-factor limiter key comes from a KEK-sealed factor_token (AAD tenant||flow)
 - [Phase 03]: 03-20: locks answer 429 + Retry-After with the form and 'Try again in N seconds' (login.too_many_attempts); CAPTCHA verified before the password via AppConfig.captcha_endpoints
+- [Phase 03]: 03-24: Audit stdout lines are raw event_json (one object per line) on a dedicated tracing layer for target audit, independent of RUST_LOG; never on stderr
+- [Phase 03]: 03-24: key_rotation_days 1..3650 (prepublish = min(7 d, period/2) >= 1 h); audit_retention_days 0..36500 (0 = forever); rate-limit quota 0 rejected
+- [Phase 03]: 03-24: Periodic jobs run under 15 min job leases released after each run; jobs.rs has no crate:: imports so tests include it via #[path]
 
 ### Pending Todos
 
@@ -251,6 +255,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-25T07:41:27.495Z
-Stopped at: Completed 03-20-PLAN.md
+Last session: 2026-11-25T08:03:09.017Z
+Stopped at: Completed 03-24-PLAN.md
 Resume file: None
