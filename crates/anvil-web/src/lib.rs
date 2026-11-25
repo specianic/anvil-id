@@ -67,6 +67,8 @@ pub fn app(config: AppConfig, deps: AppDeps) -> Result<Router, WebError> {
         hsts: state.config().is_https(),
     };
     Ok(Router::new()
+        // Installation-wide, outside tenant resolution: `/t/{slug}/console/` is not the console.
+        .merge(console::routes())
         .fallback_service(tenant_routed)
         .layer(axum::middleware::map_response_with_state(
             headers,
