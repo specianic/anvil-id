@@ -4,6 +4,7 @@ import { createColumnHelper } from "@tanstack/react-table";
 import { CONSOLE_TENANT, type ClientView, api, unwrap } from "@/api/client";
 import { DataTable, type DataTableFeatures, useCursorPager } from "@/components/DataTable";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 
 const PAGE_SIZE = 50;
 const col = createColumnHelper<DataTableFeatures, ClientView>();
@@ -48,9 +49,14 @@ function ClientsPage() {
 
   return (
     <section aria-labelledby="clients-heading" className="space-y-4">
-      <h1 id="clients-heading" className="text-xl font-semibold">
-        Clients
-      </h1>
+      <div className="flex items-center justify-between">
+        <h1 id="clients-heading" className="text-xl font-semibold">
+          Clients
+        </h1>
+        <Button asChild size="sm">
+          <Link to="/clients/new">New client</Link>
+        </Button>
+      </div>
       <DataTable
         caption="Clients"
         columns={columns}

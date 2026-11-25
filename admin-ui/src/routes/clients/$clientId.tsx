@@ -1,8 +1,12 @@
-import { useQuery } from "@tanstack/react-query";
-import { Link, createFileRoute } from "@tanstack/react-router";
-import type { ReactNode } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
+import { type ReactNode, useState } from "react";
 import { CONSOLE_TENANT, type ClientView, api, unwrap } from "@/api/client";
+import { ClientForm, type ClientFormValues, SecretOnce, updateBody, valuesFromClient } from "@/components/ClientForm";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ProblemAlert } from "@/components/ProblemAlert";
+import { StatusMessage } from "@/components/form";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatDateTime } from "@/lib/format";
@@ -48,6 +52,10 @@ function ClientDetails({ client }: { client: ClientView }) {
               <code className="text-xs">{client.auth_method}</code>
             </Field>
             <Field label="PKCE required">{client.require_pkce ? "Yes" : "No"}</Field>
+            <Field label="Access token format">{client.token_format}</Field>
+            <Field label="Consent">{client.consent_mode === "required" ? "Required" : "Skipped (first party)"}</Field>
+            <Field label="ID token signing">{client.id_token_signed_response_alg}</Field>
+            <Field label="Tenant-wide introspection">{client.can_introspect ? "Yes" : "No"}</Field>
             <Field label="Created">{formatDateTime(client.created_at)}</Field>
             <Field label="Updated">{formatDateTime(client.updated_at)}</Field>
           </dl>
@@ -72,6 +80,121 @@ function ClientDetails({ client }: { client: ClientView }) {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+function EditClient({ client }: { client: ClientView }) {
+  const queryClient = useQueryClient();
+  const [status, setStatus] = useState<string | null>(null);
+  const update = useMutation({
+    mutationFn: async (values: ClientFormValues) =>
+      unwrap(
+        await api.PATCH("/api/admin/v1/tenants/{slug}/clients/{client_id}", {
+          params: { path: { slug: CONSOLE_TENANT, client_id: client.client_id } },
+          body: updateBody(values),
+        }),
+      ),
+    onMutate: () => setStatus(null),
+    onSuccess: async (saved) => {
+      queryClient.setQueryData(["client", CONSOLE_TENANT, client.client_id], saved);
+      setStatus("Client saved.");
+      await queryClient.invalidateQueries({ queryKey: ["clients"] });
+    },
+  });
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>
+          <h2>Edit client</h2>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <ClientForm
+          mode="edit"
+          initial={valuesFromClient(client)}
+          submitLabel="Save changes"
+          pending={update.isPending}
+          error={update.error}
+          onSubmit={(values) => update.mutate(values)}
+        />
+        <StatusMessage message={status} />
+      </CardContent>
+    </Card>
+  );
+}
+
+function DangerZone({ client }: { client: ClientView }) {
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const [confirm, setConfirm] = useState<"rotate" | "delete" | null>(null);
+  const hasSecret = client.auth_method === "client_secret_basic" || client.auth_method === "client_secret_post";
+
+  const rotate = useMutation({
+    mutationFn: async () =>
+      unwrap(
+        await api.POST("/api/admin/v1/tenants/{slug}/clients/{client_id}/secret", {
+          params: { path: { slug: CONSOLE_TENANT, client_id: client.client_id } },
+        }),
+      ),
+    onSuccess: () => setConfirm(null),
+  });
+
+  const remove = useMutation({
+    mutationFn: async () => {
+      await api.DELETE("/api/admin/v1/tenants/{slug}/clients/{client_id}", {
+        params: { path: { slug: CONSOLE_TENANT, client_id: client.client_id } },
+      });
+    },
+    onSuccess: async () => {
+      setConfirm(null);
+      queryClient.removeQueries({ queryKey: ["client", CONSOLE_TENANT, client.client_id] });
+      await queryClient.invalidateQueries({ queryKey: ["clients"] });
+      await navigate({ to: "/clients" });
+    },
+  });
+
+  const active = confirm === "rotate" ? rotate : remove;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>
+          <h2>Credentials and removal</h2>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {rotate.data && <SecretOnce clientId={rotate.data.client_id} secret={rotate.data.client_secret} />}
+        <div className="flex flex-wrap gap-2">
+          {hasSecret && (
+            <Button variant="outline" onClick={() => setConfirm("rotate")}>
+              Rotate secret
+            </Button>
+          )}
+          <Button variant="destructive" onClick={() => setConfirm("delete")}>
+            Delete client
+          </Button>
+        </div>
+      </CardContent>
+      <ConfirmDialog
+        open={confirm !== null}
+        title={confirm === "rotate" ? "Rotate the client secret?" : "Delete this client?"}
+        description={
+          <p>
+            {confirm === "rotate"
+              ? "A new secret is generated and the current one stops working immediately."
+              : "The client is removed and every token issued to it is revoked. This cannot be undone."}
+          </p>
+        }
+        confirmLabel={confirm === "rotate" ? "Rotate secret" : "Delete client"}
+        onConfirm={() => active.mutate()}
+        onCancel={() => {
+          rotate.reset();
+          remove.reset();
+          setConfirm(null);
+        }}
+        pending={active.isPending}
+        error={active.error}
+      />
+    </Card>
   );
 }
 
@@ -105,7 +228,11 @@ function ClientPage() {
       ) : query.isError ? (
         <ProblemAlert error={query.error} />
       ) : (
-        <ClientDetails client={query.data} />
+        <>
+          <ClientDetails client={query.data} />
+          <EditClient client={query.data} />
+          <DangerZone client={query.data} />
+        </>
       )}
     </section>
   );

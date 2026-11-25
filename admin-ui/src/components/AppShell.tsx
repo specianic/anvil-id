@@ -3,10 +3,12 @@ import type { ReactNode } from "react";
 import { useAuth } from "@/auth/AuthProvider";
 import { Button } from "@/components/ui/button";
 
-// Only built pages are linked. Sessions, Audit and Email settings join this list in plan 03-25.
 const NAV = [
   { to: "/users", label: "Users" },
   { to: "/clients", label: "Clients" },
+  { to: "/sessions", label: "Sessions" },
+  { to: "/audit", label: "Audit log" },
+  { to: "/email", label: "Email" },
 ] as const;
 
 const focusRing = "focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none";

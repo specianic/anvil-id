@@ -1,0 +1,399 @@
+// Create/edit form for OAuth clients, shared by /clients/new and /clients/$clientId.
+import { useQuery } from "@tanstack/react-query";
+import { type FormEvent, useState } from "react";
+import { ApiError, CONSOLE_TENANT, api, unwrap } from "@/api/client";
+import type { components } from "@/api/schema";
+import { ProblemAlert } from "@/components/ProblemAlert";
+import {
+  CheckboxField,
+  CheckboxGroup,
+  type FieldErrors,
+  SelectField,
+  TextField,
+  TextareaField,
+  fieldErrors,
+  lines,
+  tokens,
+} from "@/components/form";
+import { Button } from "@/components/ui/button";
+
+type ClientView = components["schemas"]["ClientView"];
+type ClientType = components["schemas"]["ClientType"];
+type ApplicationType = components["schemas"]["ApplicationType"];
+type ClientAuthMethod = components["schemas"]["ClientAuthMethod"];
+type GrantType = components["schemas"]["GrantType"];
+type TokenFormat = components["schemas"]["TokenFormat"];
+type ConsentMode = components["schemas"]["ConsentMode"];
+export type CreateClient = components["schemas"]["CreateClient"];
+export type UpdateClient = components["schemas"]["UpdateClient"];
+
+export interface ClientFormValues {
+  name: string;
+  client_type: ClientType;
+  application_type: ApplicationType;
+  auth_method: ClientAuthMethod;
+  jwks: string;
+  redirect_uris: string;
+  grant_types: GrantType[];
+  scopes: string;
+  require_pkce: boolean;
+  token_format: TokenFormat;
+  consent_mode: ConsentMode;
+  id_token_signed_response_alg: string;
+  can_introspect: boolean;
+}
+
+export const NEW_CLIENT: ClientFormValues = {
+  name: "",
+  client_type: "confidential",
+  application_type: "web",
+  auth_method: "client_secret_basic",
+  jwks: "",
+  redirect_uris: "",
+  grant_types: ["authorization_code", "refresh_token"],
+  scopes: "openid profile email",
+  require_pkce: true,
+  token_format: "jwt",
+  consent_mode: "required",
+  id_token_signed_response_alg: "RS256",
+  can_introspect: false,
+};
+
+export function valuesFromClient(client: ClientView): ClientFormValues {
+  return {
+    name: client.name,
+    client_type: client.client_type,
+    application_type: client.application_type,
+    auth_method: client.auth_method,
+    jwks: client.jwks ? JSON.stringify(client.jwks, null, 2) : "",
+    redirect_uris: client.redirect_uris.join("\n"),
+    grant_types: [...client.grant_types],
+    scopes: client.scopes.join(" "),
+    require_pkce: client.require_pkce,
+    token_format: client.token_format,
+    consent_mode: client.consent_mode,
+    id_token_signed_response_alg: client.id_token_signed_response_alg,
+    can_introspect: client.can_introspect,
+  };
+}
+
+/** Thrown by the body builders for input that never reaches the server (e.g. malformed JSON). */
+export class LocalFieldError extends Error {
+  constructor(
+    readonly field: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+function parseJwks(values: ClientFormValues): Record<string, never> | null {
+  if (values.auth_method !== "private_key_jwt") return null;
+  if (values.jwks.trim() === "") return null;
+  try {
+    const parsed: unknown = JSON.parse(values.jwks);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error();
+    return parsed as Record<string, never>;
+  } catch {
+    throw new LocalFieldError("jwks", "The JWK Set must be a JSON object.");
+  }
+}
+
+export function createBody(values: ClientFormValues): CreateClient {
+  const confidential = values.client_type === "confidential";
+  return {
+    name: values.name.trim(),
+    client_type: values.client_type,
+    application_type: values.application_type,
+    auth_method: confidential ? values.auth_method : "none",
+    jwks: parseJwks(values),
+    redirect_uris: lines(values.redirect_uris),
+    grant_types: values.grant_types,
+    scopes: tokens(values.scopes),
+    require_pkce: confidential ? values.require_pkce : true,
+    token_format: values.token_format,
+    consent_mode: values.consent_mode,
+    id_token_signed_response_alg: values.id_token_signed_response_alg,
+    can_introspect: confidential ? values.can_introspect : false,
+  };
+}
+
+export function updateBody(values: ClientFormValues): UpdateClient {
+  const confidential = values.client_type === "confidential";
+  const body: UpdateClient = {
+    name: values.name.trim(),
+    redirect_uris: lines(values.redirect_uris),
+    grant_types: values.grant_types,
+    scopes: tokens(values.scopes),
+    require_pkce: confidential ? values.require_pkce : true,
+    token_format: values.token_format,
+    consent_mode: values.consent_mode,
+    id_token_signed_response_alg: values.id_token_signed_response_alg,
+    can_introspect: confidential ? values.can_introspect : false,
+  };
+  if (values.auth_method === "private_key_jwt") body.jwks = parseJwks(values);
+  return body;
+}
+
+const GRANT_OPTIONS: readonly { value: GrantType; label: string }[] = [
+  { value: "authorization_code", label: "Authorization code" },
+  { value: "refresh_token", label: "Refresh token" },
+  { value: "client_credentials", label: "Client credentials" },
+];
+
+const FORM_FIELDS = new Set([
+  "name",
+  "client_type",
+  "application_type",
+  "auth_method",
+  "jwks",
+  "redirect_uris",
+  "grant_types",
+  "scopes",
+  "require_pkce",
+  "token_format",
+  "consent_mode",
+  "id_token_signed_response_alg",
+  "can_introspect",
+]);
+
+/** The tenant's enabled ID-token signing algorithms (RS256 first). */
+function useSigningAlgs(): string[] {
+  const query = useQuery({
+    queryKey: ["tenant", CONSOLE_TENANT],
+    queryFn: async ({ signal }) =>
+      unwrap(await api.GET("/api/admin/v1/tenants/{slug}", { params: { path: { slug: CONSOLE_TENANT } }, signal })),
+  });
+  return query.data?.settings.signing_algs ?? ["RS256"];
+}
+
+interface ClientFormProps {
+  mode: "create" | "edit";
+  initial: ClientFormValues;
+  submitLabel: string;
+  pending: boolean;
+  error: unknown;
+  onSubmit: (values: ClientFormValues) => void;
+}
+
+export function ClientForm({ mode, initial, submitLabel, pending, error, onSubmit }: ClientFormProps) {
+  const [values, setValues] = useState<ClientFormValues>(initial);
+  const algs = useSigningAlgs();
+  const set = <K extends keyof ClientFormValues>(key: K, value: ClientFormValues[K]) =>
+    setValues((v) => ({ ...v, [key]: value }));
+
+  const confidential = values.client_type === "confidential";
+  const errors: FieldErrors = fieldErrors(error);
+  if (error instanceof LocalFieldError) errors[error.field] = [{ message: error.message }];
+  const otherError =
+    error && !(error instanceof LocalFieldError) && !(error instanceof ApiError && error.problem.errors.length > 0 && error.problem.errors.every((e) => FORM_FIELDS.has(e.field)))
+      ? error
+      : null;
+  // An algorithm the tenant disabled since the client was saved stays selectable so the form shows it.
+  const algOptions = (algs.includes(values.id_token_signed_response_alg) ? algs : [...algs, values.id_token_signed_response_alg]).map(
+    (a) => ({ value: a, label: a }),
+  );
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    onSubmit(values);
+  };
+
+  return (
+    <form onSubmit={submit} aria-label={mode === "create" ? "New client" : "Edit client"} className="space-y-6" noValidate>
+      {error instanceof ApiError && error.status === 422 && (
+        <p role="alert" className="text-destructive text-sm">
+          The client was not saved. Fix the errors below.
+        </p>
+      )}
+      {otherError ? <ProblemAlert error={otherError} /> : null}
+
+      <fieldset className="grid gap-4 sm:grid-cols-2">
+        <legend className="mb-2 text-base font-semibold">Application</legend>
+        <TextField
+          label="Name"
+          name="name"
+          required
+          value={values.name}
+          onChange={(e) => set("name", e.target.value)}
+          errors={errors.name}
+        />
+        {mode === "create" ? (
+          <>
+            <SelectField
+              label="Client type"
+              name="client_type"
+              value={values.client_type}
+              onChange={(e) => {
+                const type = e.target.value as ClientType;
+                setValues((v) => ({
+                  ...v,
+                  client_type: type,
+                  auth_method: type === "public" ? "none" : v.auth_method === "none" ? "client_secret_basic" : v.auth_method,
+                  require_pkce: type === "public" ? true : v.require_pkce,
+                  can_introspect: type === "public" ? false : v.can_introspect,
+                }));
+              }}
+              options={[
+                { value: "confidential", label: "Confidential (server-side, has a secret)" },
+                { value: "public", label: "Public (browser or native app, no secret)" },
+              ]}
+              errors={errors.client_type}
+            />
+            <SelectField
+              label="Application type"
+              name="application_type"
+              value={values.application_type}
+              onChange={(e) => set("application_type", e.target.value as ApplicationType)}
+              options={[
+                { value: "web", label: "Web" },
+                { value: "native", label: "Native" },
+              ]}
+              errors={errors.application_type}
+            />
+            <SelectField
+              label="Token endpoint authentication"
+              name="auth_method"
+              value={values.auth_method}
+              disabled={!confidential}
+              onChange={(e) => set("auth_method", e.target.value as ClientAuthMethod)}
+              options={
+                confidential
+                  ? [
+                      { value: "client_secret_basic", label: "client_secret_basic" },
+                      { value: "client_secret_post", label: "client_secret_post" },
+                      { value: "private_key_jwt", label: "private_key_jwt" },
+                    ]
+                  : [{ value: "none", label: "none (public client)" }]
+              }
+              errors={errors.auth_method}
+            />
+          </>
+        ) : null}
+        {values.auth_method === "private_key_jwt" && (
+          <div className="sm:col-span-2">
+            <TextareaField
+              label="JWK Set"
+              name="jwks"
+              rows={6}
+              hint="The client's public keys as a JSON Web Key Set."
+              value={values.jwks}
+              onChange={(e) => set("jwks", e.target.value)}
+              errors={errors.jwks}
+            />
+          </div>
+        )}
+      </fieldset>
+
+      <fieldset className="grid gap-4 sm:grid-cols-2">
+        <legend className="mb-2 text-base font-semibold">Authorization</legend>
+        <div className="sm:col-span-2">
+          <TextareaField
+            label="Redirect URIs"
+            name="redirect_uris"
+            rows={3}
+            hint="One per line; matched exactly."
+            value={values.redirect_uris}
+            onChange={(e) => set("redirect_uris", e.target.value)}
+            errors={errors.redirect_uris}
+          />
+        </div>
+        <div className="sm:col-span-2">
+          <CheckboxGroup
+            legend="Grant types"
+            options={GRANT_OPTIONS}
+            value={values.grant_types}
+            onChange={(next) => set("grant_types", next)}
+            errors={errors.grant_types}
+          />
+        </div>
+        <TextField
+          label="Scopes"
+          name="scopes"
+          hint="Separated by spaces."
+          value={values.scopes}
+          onChange={(e) => set("scopes", e.target.value)}
+          errors={errors.scopes}
+        />
+        <SelectField
+          label="Consent"
+          name="consent_mode"
+          value={values.consent_mode}
+          onChange={(e) => set("consent_mode", e.target.value as ConsentMode)}
+          options={[
+            { value: "required", label: "Ask the user for new scopes" },
+            { value: "skip_first_party", label: "Skip (first-party application)" },
+          ]}
+          errors={errors.consent_mode}
+        />
+        <CheckboxField
+          label="Require PKCE"
+          name="require_pkce"
+          checked={values.require_pkce}
+          disabled={!confidential}
+          hint={confidential ? undefined : "Always required for public clients."}
+          onChange={(e) => set("require_pkce", e.target.checked)}
+          errors={errors.require_pkce}
+        />
+      </fieldset>
+
+      <fieldset className="grid gap-4 sm:grid-cols-2">
+        <legend className="mb-2 text-base font-semibold">Tokens</legend>
+        <SelectField
+          label="Access token format"
+          name="token_format"
+          value={values.token_format}
+          onChange={(e) => set("token_format", e.target.value as TokenFormat)}
+          options={[
+            { value: "jwt", label: "JWT (self-contained)" },
+            { value: "opaque", label: "Opaque (introspection only)" },
+          ]}
+          errors={errors.token_format}
+        />
+        <SelectField
+          label="ID token signing algorithm"
+          name="id_token_signed_response_alg"
+          value={values.id_token_signed_response_alg}
+          onChange={(e) => set("id_token_signed_response_alg", e.target.value)}
+          options={algOptions}
+          hint="The algorithms enabled for this tenant."
+          errors={errors.id_token_signed_response_alg}
+        />
+        <div className="sm:col-span-2">
+          <CheckboxField
+            label="May introspect any token of the tenant"
+            name="can_introspect"
+            checked={values.can_introspect}
+            disabled={!confidential}
+            hint={confidential ? undefined : "Only confidential clients can introspect."}
+            onChange={(e) => set("can_introspect", e.target.checked)}
+            errors={errors.can_introspect}
+          />
+        </div>
+      </fieldset>
+
+      <Button type="submit" disabled={pending}>
+        {pending ? "Saving…" : submitLabel}
+      </Button>
+    </form>
+  );
+}
+
+/** A secret shown exactly once (after creation or rotation). */
+export function SecretOnce({ clientId, secret }: { clientId: string; secret: string }) {
+  return (
+    <div role="status" className="space-y-2 rounded-md border p-4 text-sm">
+      <p className="font-medium">Copy the client secret now. It is not shown again.</p>
+      <dl className="grid grid-cols-3 gap-2">
+        <dt className="text-muted-foreground">Client ID</dt>
+        <dd className="col-span-2 break-all">
+          <code data-testid="created-client-id">{clientId}</code>
+        </dd>
+        <dt className="text-muted-foreground">Client secret</dt>
+        <dd className="col-span-2 break-all">
+          <code data-testid="created-client-secret">{secret}</code>
+        </dd>
+      </dl>
+    </div>
+  );
+}

@@ -11,8 +11,14 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as CallbackRouteImport } from './routes/callback'
+import { Route as AuditIndexRouteImport } from './routes/audit/index'
 import { Route as ClientsIndexRouteImport } from './routes/clients/index'
 import { Route as ClientsClientIdRouteImport } from './routes/clients/$clientId'
+import { Route as ClientsNewRouteImport } from './routes/clients/new'
+import { Route as EmailIndexRouteImport } from './routes/email/index'
+import { Route as EmailKindRouteImport } from './routes/email/$kind'
+import { Route as EmailSmtpRouteImport } from './routes/email/smtp'
+import { Route as SessionsIndexRouteImport } from './routes/sessions/index'
 import { Route as UsersIndexRouteImport } from './routes/users/index'
 import { Route as UsersUserIdRouteImport } from './routes/users/$userId'
 
@@ -26,6 +32,11 @@ const CallbackRoute = CallbackRouteImport.update({
   path: '/callback',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AuditIndexRoute = AuditIndexRouteImport.update({
+  id: '/audit/',
+  path: '/audit/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ClientsIndexRoute = ClientsIndexRouteImport.update({
   id: '/clients/',
   path: '/clients/',
@@ -34,6 +45,31 @@ const ClientsIndexRoute = ClientsIndexRouteImport.update({
 const ClientsClientIdRoute = ClientsClientIdRouteImport.update({
   id: '/clients/$clientId',
   path: '/clients/$clientId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ClientsNewRoute = ClientsNewRouteImport.update({
+  id: '/clients/new',
+  path: '/clients/new',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const EmailIndexRoute = EmailIndexRouteImport.update({
+  id: '/email/',
+  path: '/email/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const EmailKindRoute = EmailKindRouteImport.update({
+  id: '/email/$kind',
+  path: '/email/$kind',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const EmailSmtpRoute = EmailSmtpRouteImport.update({
+  id: '/email/smtp',
+  path: '/email/smtp',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SessionsIndexRoute = SessionsIndexRouteImport.update({
+  id: '/sessions/',
+  path: '/sessions/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const UsersIndexRoute = UsersIndexRouteImport.update({
@@ -51,16 +87,28 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/callback': typeof CallbackRoute
   '/clients/$clientId': typeof ClientsClientIdRoute
+  '/clients/new': typeof ClientsNewRoute
+  '/email/$kind': typeof EmailKindRoute
+  '/email/smtp': typeof EmailSmtpRoute
   '/users/$userId': typeof UsersUserIdRoute
+  '/audit/': typeof AuditIndexRoute
   '/clients/': typeof ClientsIndexRoute
+  '/email/': typeof EmailIndexRoute
+  '/sessions/': typeof SessionsIndexRoute
   '/users/': typeof UsersIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/callback': typeof CallbackRoute
   '/clients/$clientId': typeof ClientsClientIdRoute
+  '/clients/new': typeof ClientsNewRoute
+  '/email/$kind': typeof EmailKindRoute
+  '/email/smtp': typeof EmailSmtpRoute
   '/users/$userId': typeof UsersUserIdRoute
+  '/audit': typeof AuditIndexRoute
   '/clients': typeof ClientsIndexRoute
+  '/email': typeof EmailIndexRoute
+  '/sessions': typeof SessionsIndexRoute
   '/users': typeof UsersIndexRoute
 }
 export interface FileRoutesById {
@@ -68,8 +116,14 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/callback': typeof CallbackRoute
   '/clients/$clientId': typeof ClientsClientIdRoute
+  '/clients/new': typeof ClientsNewRoute
+  '/email/$kind': typeof EmailKindRoute
+  '/email/smtp': typeof EmailSmtpRoute
   '/users/$userId': typeof UsersUserIdRoute
+  '/audit/': typeof AuditIndexRoute
   '/clients/': typeof ClientsIndexRoute
+  '/email/': typeof EmailIndexRoute
+  '/sessions/': typeof SessionsIndexRoute
   '/users/': typeof UsersIndexRoute
 }
 export interface FileRouteTypes {
@@ -78,24 +132,42 @@ export interface FileRouteTypes {
     | '/'
     | '/callback'
     | '/clients/$clientId'
+    | '/clients/new'
+    | '/email/$kind'
+    | '/email/smtp'
     | '/users/$userId'
+    | '/audit/'
     | '/clients/'
+    | '/email/'
+    | '/sessions/'
     | '/users/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/callback'
     | '/clients/$clientId'
+    | '/clients/new'
+    | '/email/$kind'
+    | '/email/smtp'
     | '/users/$userId'
+    | '/audit'
     | '/clients'
+    | '/email'
+    | '/sessions'
     | '/users'
   id:
     | '__root__'
     | '/'
     | '/callback'
     | '/clients/$clientId'
+    | '/clients/new'
+    | '/email/$kind'
+    | '/email/smtp'
     | '/users/$userId'
+    | '/audit/'
     | '/clients/'
+    | '/email/'
+    | '/sessions/'
     | '/users/'
   fileRoutesById: FileRoutesById
 }
@@ -103,8 +175,14 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   CallbackRoute: typeof CallbackRoute
   ClientsClientIdRoute: typeof ClientsClientIdRoute
+  ClientsNewRoute: typeof ClientsNewRoute
+  EmailKindRoute: typeof EmailKindRoute
+  EmailSmtpRoute: typeof EmailSmtpRoute
   UsersUserIdRoute: typeof UsersUserIdRoute
+  AuditIndexRoute: typeof AuditIndexRoute
   ClientsIndexRoute: typeof ClientsIndexRoute
+  EmailIndexRoute: typeof EmailIndexRoute
+  SessionsIndexRoute: typeof SessionsIndexRoute
   UsersIndexRoute: typeof UsersIndexRoute
 }
 
@@ -124,6 +202,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof CallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/audit/': {
+      id: '/audit/'
+      path: '/audit'
+      fullPath: '/audit/'
+      preLoaderRoute: typeof AuditIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/clients/': {
       id: '/clients/'
       path: '/clients'
@@ -136,6 +221,41 @@ declare module '@tanstack/react-router' {
       path: '/clients/$clientId'
       fullPath: '/clients/$clientId'
       preLoaderRoute: typeof ClientsClientIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/clients/new': {
+      id: '/clients/new'
+      path: '/clients/new'
+      fullPath: '/clients/new'
+      preLoaderRoute: typeof ClientsNewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/email/': {
+      id: '/email/'
+      path: '/email'
+      fullPath: '/email/'
+      preLoaderRoute: typeof EmailIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/email/$kind': {
+      id: '/email/$kind'
+      path: '/email/$kind'
+      fullPath: '/email/$kind'
+      preLoaderRoute: typeof EmailKindRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/email/smtp': {
+      id: '/email/smtp'
+      path: '/email/smtp'
+      fullPath: '/email/smtp'
+      preLoaderRoute: typeof EmailSmtpRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/sessions/': {
+      id: '/sessions/'
+      path: '/sessions'
+      fullPath: '/sessions/'
+      preLoaderRoute: typeof SessionsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/users/': {
@@ -159,8 +279,14 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   CallbackRoute: CallbackRoute,
   ClientsClientIdRoute: ClientsClientIdRoute,
+  ClientsNewRoute: ClientsNewRoute,
+  EmailKindRoute: EmailKindRoute,
+  EmailSmtpRoute: EmailSmtpRoute,
   UsersUserIdRoute: UsersUserIdRoute,
+  AuditIndexRoute: AuditIndexRoute,
   ClientsIndexRoute: ClientsIndexRoute,
+  EmailIndexRoute: EmailIndexRoute,
+  SessionsIndexRoute: SessionsIndexRoute,
   UsersIndexRoute: UsersIndexRoute,
 }
 export const routeTree = rootRouteImport
