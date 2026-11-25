@@ -69,7 +69,9 @@ pub async fn client(app: &TestApp, tenant: &Tenant, input: ClientInput) -> Clien
         require_pkce: input.require_pkce.unwrap_or(true),
         created_at: app.clock().now(),
         token_format: anvil_core::model::TokenFormat::Jwt,
-        consent_mode: anvil_core::model::ConsentMode::Required,
+        // The authorization-endpoint tests are about the protocol, not the consent screen
+        // (tests/consent.rs switches clients to `required`).
+        consent_mode: anvil_core::model::ConsentMode::SkipFirstParty,
         id_token_signed_response_alg: None,
         can_introspect: false,
     };

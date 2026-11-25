@@ -1,0 +1,31 @@
+{#- Consent screen (plan 03-17). Variables (besides page):
+      client_name, client_id, scopes [{name, description}], messages [{level, key, text}],
+      csrf_token, action
+    Selectors: form consent-form, client name consent-client, scope list consent-scopes with
+    items consent-scope-{n} (data-scope = scope name), buttons consent-allow and consent-deny
+    (both name="decision", values allow / deny). No JavaScript. -#}
+{% extends "base.html" %}
+{% block heading %}Allow access to your account?{% endblock %}
+{% block content %}
+<div class="anvil-form-messages" id="consent-messages" aria-live="polite">
+{% for m in messages %}
+<p class="anvil-message anvil-message-{{ m.level }}" id="consent-msg-{{ loop.index }}" data-message-key="{{ m.key }}"{% if m.level == "error" %} role="alert"{% endif %}>{{ m.text }}</p>
+{% endfor %}
+</div>
+<form id="consent-form" method="post" action="{{ action }}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+<fieldset class="anvil-consent-scopes" id="consent-scopes">
+<legend><strong id="consent-client">{{ client_name }}</strong> would like to:</legend>
+<ul class="anvil-scope-list">
+{% for s in scopes %}
+<li id="consent-scope-{{ loop.index }}" data-scope="{{ s.name }}">{% if s.description %}{{ s.description }}{% else %}Use <code>{{ s.name }}</code>{% endif %}</li>
+{% endfor %}
+</ul>
+</fieldset>
+<p class="anvil-muted" id="consent-note">You can remove this access at any time under Connected apps in your account.</p>
+<div class="anvil-actions">
+<button type="submit" id="consent-allow" name="decision" value="allow">Allow</button>
+<button type="submit" id="consent-deny" name="decision" value="deny">Deny</button>
+</div>
+</form>
+{% endblock %}

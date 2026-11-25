@@ -226,7 +226,12 @@ mod tests {
             Ok(ConsentDecision::Skip)
         );
         assert_eq!(
-            decision(ConsentMode::Required, Some(&granted), &requested, &s(&["none"])),
+            decision(
+                ConsentMode::Required,
+                Some(&granted),
+                &requested,
+                &s(&["none"])
+            ),
             Ok(ConsentDecision::Skip)
         );
         assert_eq!(
@@ -272,7 +277,12 @@ mod tests {
             Err("consent_required")
         );
         assert_eq!(
-            decision(ConsentMode::Required, Some(&s(&[])), &requested, &s(&["none"])),
+            decision(
+                ConsentMode::Required,
+                Some(&s(&[])),
+                &requested,
+                &s(&["none"])
+            ),
             Err("consent_required")
         );
     }
@@ -316,13 +326,19 @@ mod tests {
         assert!(json.contains("\"kind\":\"consent\""), "{json}");
         assert_eq!(ConsentState::from_json(&json), Ok(state.clone()));
         let decided = state.decide().expect("decide").0;
-        assert_ne!(decided.to_json(), json, "a decision changes the stored state");
+        assert_ne!(
+            decided.to_json(),
+            json,
+            "a decision changes the stored state"
+        );
         let apps = ConsentState::for_apps(state.user);
         assert!(!apps.to_json().contains("request"));
         assert_eq!(ConsentState::from_json(&apps.to_json()), Ok(apps));
         // Other flow states are not consent states.
         assert_eq!(
-            ConsentState::from_json(r#"{"kind":"settings","user":"0192d0b4-0000-7000-8000-000000000000"}"#),
+            ConsentState::from_json(
+                r#"{"kind":"settings","user":"0192d0b4-0000-7000-8000-000000000000"}"#
+            ),
             Err(CorruptConsentState)
         );
         assert_eq!(
