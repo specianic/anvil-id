@@ -6,7 +6,7 @@ current_phase: 03
 current_phase_name: release 0 2 secure by default
 current_plan: Not started
 status: planning
-stopped_at: Completed 03-08-PLAN.md
+stopped_at: Completed 03-15-PLAN.md
 last_updated: "2026-11-25T06:54:21.327Z"
 last_activity: 2026-11-25
 progress:
@@ -99,6 +99,7 @@ Phase 2 plans 02-01 through 02-22 are all complete (22/22 summaries). Next: Phas
 | Phase 03 P08 | 45min | 2 tasks | 20 files |
 | Phase 03 P11 | 25min | 2 tasks | 10 files |
 | Phase 03 P10 | 40min | 2 tasks | 8 files |
+| Phase 03 P15 | 55min | 2 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -202,6 +203,9 @@ Recent decisions affecting current work:
 - [Phase 03]: 03-08: anvilid builds AppConfig via AppConfig::new + field assignment; trusted-proxy operator config still to be mapped in 03-24
 - [Phase 03]: 03-11: single AuthorizationResponse builder; AuthorizeOutcome::Respond replaces Redirect; unsupported/repeated response_mode -> invalid_request via query
 - [Phase 03]: 03-10: RotationPolicy 90 d / 7 d prepublish (>= JWKS max-age 1 h) / retire 1 h 5 min; ID-token alg per client with no fallback (server_error); /jwks max-age=3600 + strong ETag; rotate_now takes an AuditActor
+- [Phase 03]: 03-15: one minijinja environment factory (strict undefined, .html autoescape, fuel 50k; defaults use <10%); tenant overrides render loader-less; unknown variables rejected statically against the per-kind contract (recovery_code_used = tenant_name, remaining)
+- [Phase 03]: 03-15: outbox worker always runs; transport = tenant SMTP (SmtpTransportFactory, KEK-opened password, cached by updated_at), else installation smtp_url, else 'no SMTP configured' with backoff; SMTP password sealed/opened only via service::mail_settings::{seal_smtp_password, smtp_connection}
+- [Phase 03]: 03-15: TemplateIssue messages prefixed with subject|body_html|body_text; MailSettingsService.put_template returns TemplateError::Invalid{field,line,message}; test sends audited with outcome only (no SMTP text/recipient)
 
 ### Pending Todos
 
@@ -214,6 +218,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-25T06:26:51.276Z
-Stopped at: Completed 03-08-PLAN.md
+Last session: 2026-11-25T06:56:00.000Z
+Stopped at: Completed 03-15-PLAN.md
 Resume file: None

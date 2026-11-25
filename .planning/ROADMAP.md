@@ -118,7 +118,7 @@ Plans:
 - [ ] 03-12-PLAN.md — Core login flow: usernameless passkey, TOTP/recovery second factor, attempts, audit, transactional recovery notice (wave 3)
 - [ ] 03-13-PLAN.md — Limiter wiring: route-class layer on by default, per-client token limit, brute-force helpers, CAPTCHA (wave 3)
 - [ ] 03-14-PLAN.md — Account security: passkey registration, TOTP enrolment + recovery codes, removal (wave 3)
-- [ ] 03-15-PLAN.md — Tenant email templates (fuel, compile check) + per-tenant SMTP + synchronous test send (wave 3)
+- [x] 03-15-PLAN.md — Tenant email templates (fuel, compile check) + per-tenant SMTP + synchronous test send (wave 3)
 - [ ] 03-16-PLAN.md — Destructive-migration guard + flag, 0.1→0.2 upgrade tests on both backends, migration lint/immutability (wave 3)
 - [ ] 03-17-PLAN.md — Consent (decide/remember/deny/revoke) + connected apps page (wave 4)
 - [ ] 03-18-PLAN.md — Opaque vs JWT access tokens, /introspect, /revoke, Phase 3 discovery metadata (wave 4)
