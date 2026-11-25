@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: verifying
-stopped_at: Completed 02-03-PLAN.md
+stopped_at: Completed 02-04-PLAN.md
 last_updated: "2026-11-25T01:42:39.000Z"
 last_activity: "2026-11-25 — Completed 01-08 (phase gate: CI green on GitHub, spike verdicts, stack confirmed)"
 progress:
@@ -59,6 +59,7 @@ Progress: [█████░░░░░] 53%
 | Phase 01 P07 | 10min | 3 tasks | 9 files |
 | Phase 01 P08 | 20min | 2 tasks | 4 files |
 | Phase 02 P03 | 10min | 2 tasks | 21 files |
+| Phase 02 P04 | 8min | 2 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -86,6 +87,9 @@ Recent decisions affecting current work:
 - [Phase 01]: Phase 1 gate: §2.1 conditions 1-3 met (conformance green in CI, static musl amd64+arm64, two sqlx backends manageable); Rust stack confirmed
 - [Phase 01]: Conformance suite fetched via blobless --no-checkout clone (sparse-checkout not portable across git versions); mongo on a named volume removed by down -v
 - [Phase 02]: Theme selector/text contract (input id=name, {form.id}-submit, mgmt-client-*, error_key sentences) documented in themes/default/README.md; forms use novalidate so errors come from FormDescription
+- [Phase 02]: Sample RP (examples/node-rp) uses client.ClientSecretBasic explicitly; openid-client 6 defaults to client_secret_post for a bare secret
+- [Phase 02]: Sample RP allows insecure http only for localhost/127.0.0.1 issuers and fails on a refresh response without a rotated refresh token
+- [Phase 02]: e2e helpers take all endpoints from ANVIL_URL/MAILPIT_URL/RP_URL; credentials are created at runtime via /setup
 
 ### Pending Todos
 
