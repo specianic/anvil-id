@@ -6,13 +6,15 @@
 <meta name="referrer" content="no-referrer">
 <title>{% block title %}{{ page.title }}{% endblock %}{% if page.tenant_name %} · {{ page.tenant_name }}{% endif %}</title>
 <link rel="stylesheet" href="{{ page.asset_base }}/anvil.css">
-</head>
+{% if page.theme_css %}<link rel="stylesheet" href="{{ page.theme_css }}">
+{% endif %}</head>
 <body>
 {% if page.dev_mode %}
 <div class="anvil-dev-banner" role="status" id="dev-mode-banner">{{ t("dev.banner") }}</div>
 {% endif %}
 <main id="main" aria-labelledby="page-heading">
-{% if page.tenant_name %}<p class="anvil-tenant">{{ page.tenant_name }}</p>{% endif %}
+{% if page.theme_css %}<span class="anvil-logo" role="img" aria-label="{{ page.tenant_name | default(page.title) }}"></span>
+{% endif %}{% if page.tenant_name %}<p class="anvil-tenant">{{ page.tenant_name }}</p>{% endif %}
 <h1 id="page-heading">{% block heading %}{{ page.title }}{% endblock %}</h1>
 {% block content %}{% endblock %}
 </main>
