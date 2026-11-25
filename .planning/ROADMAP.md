@@ -145,7 +145,7 @@ Plans:
 **Requirements**: OIDC-12, OIDC-14, OIDC-16, AUTH-06, AUTH-07, AUTH-08, AUTH-11, AUTH-13, UI-03, UI-04, SEC-03
 **Success Criteria** (what must be TRUE):
   1. OpenID conformance **RP-Initiated Logout** and **Back-Channel Logout** plans pass in CI
-  2. Social login with Google, Apple, Microsoft, GitHub and a generic OIDC provider is tested against real providers in a staging environment; upstream identities link only on verified email or explicit confirmation, and upstream secrets are stored encrypted
+  2. Social login with Google, Apple, Microsoft, GitHub and a generic OIDC provider is tested against mock IdPs in CI (plus a documented manual real-provider checklist run before release); upstream identities link only on verified email or explicit confirmation, and upstream secrets are stored encrypted
   3. An admin edits theme settings in the console and sees the login pages change live; pages render in the language chosen from `ui_locales` or the browser
   4. A user can log in with email OTP or magic link, and manage profile, email, password, passkeys, MFA, sessions and connected apps from the account page
   5. Admin MFA policy (off/optional/required) is enforced per tenant and client, and clients can request step-up via `acr_values`, `prompt` and `max_age`, and audience-bound tokens via resource indicators

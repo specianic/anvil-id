@@ -49,3 +49,17 @@ The login journeys real products need, on top of 0.2:
 
 ---
 *Phase: 04-release-0-3-real-world-logins*
+
+## Decisions after research (orchestrator, 2026-11-25)
+
+- **Back-channel logout timing:** the post-logout redirect does not wait for back-channel delivery; delivery is asynchronous via the leased job with retries.
+- **UserInfo audience:** accept only access tokens whose `aud` includes the requesting client's `client_id` or `{issuer}/userinfo`; tokens audience-bound solely to another resource are rejected at UserInfo (`invalid_token`). (Only affects clients that request resources — a 0.3 feature.)
+- **Unmet essential `acr`:** return `unmet_authentication_requirements` (OpenID Connect Unmet Authentication Requirements 1.0).
+- **MFA policy precedence:** strictest wins across tenant / client (and org in Phase 6): `required` > `optional` > `off`.
+- **`amr` values:** email OTP and magic link → `otp` (RFC 8176); social / upstream OIDC sign-in → `fed` (documented, not RFC 8176-registered); combined with a second factor → add `mfa` as today.
+- **Apple PKCE:** treat as unsupported (don't send); verify in the manual real-provider checklist.
+- **Theme preview for host-based tenants:** preview goes through the `/t/{slug}` path form (tenant resolution already supports it); the console preview uses it for every tenant.
+- **UI-04 scope:** pages only; localized email templates are deferred (record in PRD/REQUIREMENTS notes as a later item).
+- **`sid`:** equals the browser session id (already in 0.2 ID tokens); the separate `rp_session.sid` column from ARCHITECTURE §6.1 is dropped — sync the doc.
+- **Docs:** ROADMAP Phase 4 success criterion 2 and ARCHITECTURE M3 exit criterion are reworded from "staging environment" to "mock IdPs in CI + manual real-provider checklist" (user decision).
+- **Logout plan variant string:** confirm on the first harness run.

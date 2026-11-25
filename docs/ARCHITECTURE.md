@@ -766,7 +766,7 @@ plan passes; brute-force and rate-limit tests pass; accessibility audit (axe) of
 Scope: OIDC-12, 14, 16; AUTH-6, 7, 8, 11, 13; UI-3, UI-4; back-channel logout delivery.
 
 Exit criteria: **RP-Initiated Logout** and **Back-Channel Logout** conformance plans pass; social
-login tested against real providers in a staging environment; theming editable live from the console.
+login tested against mock IdPs in CI plus a manual real-provider checklist before release; theming editable live from the console.
 
 ### M4 — Release 0.4 "Operate it"
 
