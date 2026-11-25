@@ -7,6 +7,7 @@ use anvil_core::model::PublicUrl;
 use anvil_core::policy::PasswordPolicy;
 
 use crate::adapters::captcha::CaptchaEndpoints;
+use crate::adapters::outbound::OutboundPolicy;
 use crate::client_ip::TrustedProxies;
 
 /// Settings the web layer needs. The binary builds it from its own configuration (02-18).
@@ -30,15 +31,21 @@ pub struct AppConfig {
     /// CAPTCHA siteverify endpoints (AUTH-09). Default: the providers' public endpoints. Only
     /// used for tenants that configure a CAPTCHA; tests point them at a local mock.
     pub captcha_endpoints: CaptchaEndpoints,
+    /// Destination policy of the single outbound HTTP client (SSRF guard). Default, following
+    /// the trusted-proxies precedent: loopback (`127.0.0.0/8`, `::1/128`) allowed, plain http to
+    /// it allowed, in development mode (public URL on a loopback host); nothing beyond public
+    /// https destinations otherwise. The binary replaces `allow_cidrs` with an explicit
+    /// `outbound_allow_cidrs`.
+    pub outbound: OutboundPolicy,
 }
 
 impl AppConfig {
     /// A configuration with the default password policy and no theme override.
     pub fn new(public_url: PublicUrl) -> Self {
-        let trusted_proxies = if public_url.is_dev_mode() {
-            TrustedProxies::loopback()
+        let (trusted_proxies, outbound) = if public_url.is_dev_mode() {
+            (TrustedProxies::loopback(), OutboundPolicy::loopback_dev())
         } else {
-            TrustedProxies::default()
+            (TrustedProxies::default(), OutboundPolicy::default())
         };
         Self {
             trusted_proxies,
@@ -48,6 +55,7 @@ impl AppConfig {
             insecure_http: false,
             rate_limits: LimiterConfig::default(),
             captcha_endpoints: CaptchaEndpoints::default(),
+            outbound,
         }
     }
 
@@ -99,6 +107,15 @@ mod tests {
         assert!(prod.trusted_proxies.cidrs.is_empty());
         let dev = AppConfig::new(PublicUrl::parse("http://localhost:8080").expect("url"));
         assert_eq!(dev.trusted_proxies, TrustedProxies::loopback());
+    }
+
+    #[test]
+    fn outbound_policy_default_by_mode() {
+        let prod = AppConfig::new(PublicUrl::parse("https://op.test").expect("url"));
+        assert_eq!(prod.outbound, OutboundPolicy::default());
+        assert!(prod.outbound.allow_cidrs.is_empty() && !prod.outbound.allow_http);
+        let dev = AppConfig::new(PublicUrl::parse("http://localhost:8080").expect("url"));
+        assert_eq!(dev.outbound, OutboundPolicy::loopback_dev());
     }
 
     #[test]
