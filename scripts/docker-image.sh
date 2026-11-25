@@ -3,9 +3,17 @@
 #
 #   scripts/docker-image.sh            # tag anvilid:ci
 #   scripts/docker-image.sh anvilid:dev
+#   TARGET=aarch64-unknown-linux-musl PREBUILT=1 scripts/docker-image.sh anvilid:arm64
+#
+# Environment:
+#   TARGET    musl target whose binary goes into the image (default x86_64-unknown-linux-musl);
+#             the image platform follows from it (linux/amd64 or linux/arm64). A non-native
+#             platform needs QEMU binfmt (docker/setup-qemu-action) for the smoke test.
+#   PREBUILT  1 = use target/$TARGET/release/anvilid as is (release workflow: the binary was built
+#             by an earlier job); fail if it is missing instead of building it.
 #
 # 1. Builds the static musl binary (scripts/build-musl.sh) unless it exists and is newer than
-#    every source file.
+#    every source file (or PREBUILT=1).
 # 2. `docker build` from the prebuilt binary (Dockerfile, distroless static nonroot).
 # 3. Fails if the image is 50 MB (52428800 bytes) or larger. Prints the size and appends it to
 #    $GITHUB_STEP_SUMMARY when set.
@@ -16,7 +24,15 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 TAG=${1:-anvilid:ci}
-TARGET=x86_64-unknown-linux-musl
+TARGET=${TARGET:-x86_64-unknown-linux-musl}
+case "$TARGET" in
+    x86_64-unknown-linux-musl) PLATFORM=linux/amd64 ;;
+    aarch64-unknown-linux-musl) PLATFORM=linux/arm64 ;;
+    *)
+        echo "error: unsupported TARGET $TARGET" >&2
+        exit 2
+        ;;
+esac
 BIN="target/$TARGET/release/anvilid"
 LIMIT=52428800
 SMOKE_PORT=${SMOKE_PORT:-18080}
@@ -30,7 +46,13 @@ needs_build() {
     [[ -n "$newer" ]]
 }
 
-if needs_build; then
+if [[ "${PREBUILT:-0}" == "1" ]]; then
+    if [[ ! -x "$BIN" ]]; then
+        echo "error: PREBUILT=1 but $BIN is missing or not executable" >&2
+        exit 1
+    fi
+    echo "using prebuilt $BIN"
+elif needs_build; then
     scripts/build-musl.sh "$TARGET"
 else
     echo "using existing $BIN (newer than the sources)"
@@ -40,13 +62,13 @@ fi
 mkdir -p target/docker/data
 find target/docker/data -mindepth 1 -delete
 
-docker build -t "$TAG" .
+docker build --platform "$PLATFORM" -t "$TAG" .
 
 size=$(docker image inspect -f '{{.Size}}' "$TAG")
 size_mb=$(awk -v s="$size" 'BEGIN { printf "%.1f", s / 1048576 }')
-echo "image $TAG size: $size bytes ($size_mb MiB), limit $LIMIT bytes"
+echo "image $TAG ($PLATFORM) size: $size bytes ($size_mb MiB), limit $LIMIT bytes"
 if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
-    echo "Container image \`$TAG\`: $size bytes ($size_mb MiB), limit $LIMIT bytes" >>"$GITHUB_STEP_SUMMARY"
+    echo "Container image \`$TAG\` ($PLATFORM): $size bytes ($size_mb MiB), limit $LIMIT bytes" >>"$GITHUB_STEP_SUMMARY"
 fi
 if ((size >= LIMIT)); then
     echo "error: image $TAG is $size bytes, which is not under the $LIMIT byte limit" >&2
@@ -60,7 +82,7 @@ if [[ "$user" != "nonroot" ]]; then
 fi
 
 # --- Smoke test: zero configuration, setup URL in the logs. ---
-cid=$(docker run -d -p "127.0.0.1:$SMOKE_PORT:8080" "$TAG")
+cid=$(docker run -d --platform "$PLATFORM" -p "127.0.0.1:$SMOKE_PORT:8080" "$TAG")
 cleanup() { docker rm -f "$cid" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
