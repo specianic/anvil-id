@@ -1,7 +1,7 @@
 # Static musl release builds (FND-04, ARCHITECTURE.md §2.1 condition 2). Each architecture builds
 # natively on its own runner inside the official Rust alpine image (scripts/build-musl.sh), then
 # scripts/measure-idle.sh verifies the embedded asset and reports binary size and idle memory to
-# the step summary and a JSON artifact. No signing or publishing here: releases use cargo-dist later.
+# the step summary and a JSON artifact. No publishing here: tagged releases are built by release.yml.
 name: release-build
 
 on:
