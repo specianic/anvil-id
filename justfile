@@ -7,8 +7,9 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 # Run the full local CI gate.
 default: ci
 
-# The single command contributors run (needs Docker for the Postgres tests).
-ci: fmt-check lint deny deps test test-pg release-graph security-tests
+# The single command contributors run (needs Docker for the Postgres tests and Node >= 22.12 for
+# the console check).
+ci: fmt-check lint deny deps migrations-check test test-pg release-graph security-tests console-check
 
 # Check formatting.
 fmt-check:
@@ -115,7 +116,9 @@ migrations-check:
 openapi-update:
     UPDATE_OPENAPI=1 cargo test -p anvil-web --test openapi_drift
 
-# --- Admin console (admin-ui/, Node >= 22.12). Not part of `ci` yet; CI runs it in the `console` job. ---
+# --- Admin console (admin-ui/, Node >= 22.12). console-check runs in `ci`; CI runs the same steps
+# plus the build in the `console` job. Release builds embed the console and fail without it
+# (scripts/check-console-embedded.sh). ---
 
 # Install locked dependencies and build the console into admin-ui/dist (with .br/.gz sidecars).
 console-build:

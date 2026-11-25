@@ -2,6 +2,8 @@
 # natively on its own runner inside the official Rust alpine image (scripts/build-musl.sh), then
 # scripts/measure-idle.sh verifies the embedded asset and reports binary size and idle memory to
 # the step summary and a JSON artifact. No publishing here: tagged releases are built by release.yml.
+# The admin console is built once (Node 22) and embedded in every binary; a build without it fails
+# (scripts/check-console-embedded.sh), so release artifacts always serve the real console.
 name: release-build
 
 on:
@@ -12,11 +14,13 @@ on:
     paths:
       - "crates/**"
       - "themes/**"
+      - "admin-ui/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "rust-toolchain.toml"
       - "scripts/build-musl.sh"
       - "scripts/measure-idle.sh"
+      - "scripts/check-console-embedded.sh"
       - ".github/workflows/release-build.yml"
 
 permissions:
@@ -27,8 +31,31 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  console:
+    name: admin console build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: admin-ui/package-lock.json
+      - name: Build the console
+        working-directory: admin-ui
+        run: npm ci && npm run build
+      - name: Check the build output
+        run: scripts/check-console-embedded.sh
+      - name: Upload console
+        uses: actions/upload-artifact@v7
+        with:
+          name: admin-ui-dist
+          path: admin-ui/dist/
+          if-no-files-found: error
+
   musl:
     name: musl ${{ matrix.target }}
+    needs: console
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -52,8 +79,17 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: just
+      - name: Download console
+        uses: actions/download-artifact@v8
+        with:
+          name: admin-ui-dist
+          path: admin-ui/dist
+      - name: Require the console
+        run: scripts/check-console-embedded.sh
       - name: Build static binary
         run: just musl ${{ matrix.target }}
+      - name: Check the console is embedded
+        run: scripts/check-console-embedded.sh target/${{ matrix.target }}/release/anvilid
       - name: Measure size and idle memory
         run: MEASURE_OUT=measure just measure target/${{ matrix.target }}/release/anvilid ${{ matrix.target }}
       - name: Upload binary

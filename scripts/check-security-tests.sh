@@ -20,10 +20,19 @@
 #                                           is instantiated there by storage_contract_tests!)
 #   crates/<c>/src/**                    -> unit tests of crate <c>
 #
-# Controls deliberately not mapped in 0.1 (nothing to test yet; revisit when they are built):
-#   - Rate limiting / progressive lockout (ARCHITECTURE §11): not built in 0.1.
-#   - SSRF guard: 0.1 performs no server-side fetch of a client-supplied URL (jwks_uri is deferred).
+# Release 0.2 adds the Phase 3 controls: passkeys, TOTP and recovery codes, introspection and
+# revocation, consent, session revocation, rate limiting and brute-force protection, CAPTCHA,
+# trusted proxies, form_post, the destructive-migration guard, Postgres composite tenant keys and
+# the new admin routes.
+#
+# Controls deliberately not mapped here:
+#   - SSRF guard: the server fetches no client-supplied URL (jwks_uri and request_uri are not
+#     fetched). The CAPTCHA verifier only calls operator-configured https endpoints (mapped above).
 #   - "Test code" (SEC-06): enforced by scripts/check-release-graph.sh, not by a unit test.
+#   - Released-migration immutability: enforced by scripts/check-migrations.sh (and its
+#     --self-test), which `just ci` runs as migrations-check.
+#   - Browser-level behaviour (passkey ceremony, consent, sessions, a11y): Playwright specs under
+#     tests/e2e/specs, run by the e2e workflow.
 #
 # Every finding prints one `SECURITY TEST MISSING:` line.
 set -euo pipefail
@@ -142,6 +151,129 @@ admin: scopes|$W/security_admin.rs|read_scope_cannot_write
 admin: scopes|$W/security_admin.rs|resource_scopes_are_confined_to_their_resource
 admin: scopes|$W/security_admin.rs|system_clients_need_full_admin
 cache: OAuth responses are no-store|crates/anvil-web/src/errors.rs|every_oauth_response_is_no_store
+passkey: challenge single use|$W/flow_login_factors.rs|passkey_challenge_is_single_use
+passkey: challenge single use|$W/flow_passkey.rs|passkey_signs_in_and_a_consumed_challenge_cannot_be_replayed
+passkey: enrolment challenge single use, duplicates conflict|$W/account_security.rs|passkey_challenge_is_single_use_even_concurrently_and_duplicates_conflict
+passkey: garbage or unrequested responses store nothing|$W/account_security.rs|garbage_or_unrequested_passkey_responses_store_nothing
+passkey: garbage assertion refused|$W/flow_passkey.rs|a_garbage_assertion_is_the_login_form_with_passkey_failed
+passkey: another user's or tenant's credential refused|$W/flow_login_factors.rs|passkey_of_another_user_or_tenant_is_rejected
+passkey: clone detection / stale counter|$W/flow_login_factors.rs|possible_clone_or_stale_counter_fails_and_is_audited
+passkey: counter never moves backwards|crates/anvil-storage/src/contract/credentials.rs|passkey_concurrent_updates_never_move_counter_backwards
+passkey: credential id unique|crates/anvil-storage/src/contract/credentials.rs|passkey_duplicate_credential_id_conflicts
+passkey: invalid relying-party issuers refused|$W/passkey_adapter.rs|relying_party_rejects_ip_and_garbage_issuers
+totp: replay rejected|$W/flow_login_factors.rs|totp_code_signs_in_once_and_a_replay_is_rejected
+totp: replay rejected|$W/flow_mfa.rs|totp_signs_in_with_mfa_amr_and_the_same_code_is_rejected_later
+totp: step one winner under concurrency|crates/anvil-storage/src/contract/credentials.rs|totp_step_concurrent_single_winner
+second factor: no factor without a verified password|$W/flow_login_factors.rs|second_factor_inputs_without_a_verified_password_are_refused
+second factor: binding token required|$W/flow_mfa.rs|a_second_factor_post_without_a_valid_binding_token_restarts_the_sign_in
+second factor: code on the password route is not a factor|$W/flow_mfa.rs|a_code_posted_to_the_password_route_is_not_a_second_factor
+second factor: csrf|$W/flow_mfa.rs|second_factor_form_without_csrf_or_flow_is_rejected
+recovery code: single use|$W/flow_login_factors.rs|recovery_code_is_single_use_and_enqueues_a_sealed_notice
+recovery code: one winner under concurrency|crates/anvil-storage/src/contract/credentials.rs|recovery_code_concurrent_single_winner
+credentials: tenant isolation|crates/anvil-storage/src/contract/credentials.rs|credentials_isolated_by_tenant
+credentials: removal only by the owner|$W/account_security.rs|removing_a_passkey_works_without_javascript_and_only_for_its_owner
+account: csrf, binding and cross-site posts|$W/account_security.rs|posts_without_csrf_with_a_wrong_token_or_cross_site_are_rejected
+account: settings flow owner and kind|$W/account_security.rs|binding_owner_and_kind_are_enforced
+account: re-authentication for changes|$W/account_security.rs|a_stale_session_must_sign_in_again_and_changes_nothing
+account: session required|$W/account_security.rs|without_a_session_every_route_sends_the_user_to_sign_in
+introspection: confidential client authentication only|$W/security_introspect_revoke.rs|introspect_requires_confidential_client_authentication
+introspection: request shape|$W/security_introspect_revoke.rs|introspect_request_shape_is_enforced
+introspection: other clients' tokens need can_introspect|$W/security_introspect_revoke.rs|other_clients_token_needs_can_introspect
+introspection: garbage, expired, other tenant inactive|$W/security_introspect_revoke.rs|garbage_expired_and_other_tenant_tokens_are_inactive
+introspection: consumed refresh token inactive|$W/security_introspect_revoke.rs|consumed_refresh_token_is_inactive
+introspection: opaque tokens tenant-bound|$W/access_token_format.rs|opaque_token_of_one_tenant_is_unknown_in_another
+revocation: client authentication and POST|$W/security_introspect_revoke.rs|revoke_requires_client_authentication_and_post
+revocation: unknown token no oracle|$W/security_introspect_revoke.rs|unknown_token_is_200_without_effect
+revocation: unsupported hint|$W/security_introspect_revoke.rs|unsupported_hint_is_rejected
+revocation: refresh token revokes the family|$W/security_introspect_revoke.rs|revoking_a_refresh_token_revokes_the_family
+revocation: access token revokes the family|$W/security_introspect_revoke.rs|revoking_a_jwt_access_token_revokes_its_family
+revocation: access token revokes the family|$W/security_introspect_revoke.rs|revoking_an_opaque_access_token_revokes_it_and_its_family
+revocation: another client's token unchanged|$W/security_introspect_revoke.rs|another_clients_token_is_not_revoked
+revocation: JWT client-credentials token unsupported|$W/security_introspect_revoke.rs|jwt_client_credentials_token_cannot_be_revoked
+revocation: reuse is audited|$W/security_introspect_revoke.rs|refresh_and_code_reuse_are_audited
+consent: csrf and binding|$W/consent.rs|submissions_without_a_valid_binding_are_rejected
+consent: deny is access_denied with state and iss|$W/consent.rs|deny_returns_access_denied_with_state_and_iss
+consent: prompt=none needs a grant|$W/consent.rs|prompt_none_when_consent_is_needed_is_consent_required
+consent: double submission issues one code|$W/consent.rs|a_double_submission_issues_one_code
+consent: session required|$W/consent.rs|the_consent_page_needs_a_session
+consent: id_token_hint algorithm gated by the tenant|$W/consent.rs|an_es256_hint_is_rejected_when_the_tenant_does_not_enable_es256
+consent: revocation changes nothing without a binding|$W/account_apps.rs|revocations_without_a_valid_binding_change_nothing
+consent: revocation only that client's tokens|crates/anvil-storage/src/contract/consent.rs|consent_revoke_revokes_only_that_clients_families
+consent: tenant isolation|crates/anvil-storage/src/contract/consent.rs|consent_isolated_by_tenant
+sessions: another user's or unknown session cannot be revoked|$W/sessions.rs|another_users_or_unknown_session_cannot_be_revoked
+sessions: csrf, binding and cross-site posts|$W/sessions.rs|posts_without_csrf_with_a_wrong_binding_or_cross_site_are_rejected
+sessions: revocation revokes the session's tokens|$W/sessions.rs|revoking_another_session_signs_it_out_and_revokes_its_tokens
+sessions: idle timeout|$W/sessions.rs|idle_timeout_signs_out
+sessions: absolute limit|$W/sessions.rs|hourly_activity_keeps_the_session_until_the_absolute_limit
+sessions: revocation only its own families|crates/anvil-storage/src/contract/sessions.rs|session_revoke_with_families_only_its_own
+rate limit: auth class per IP, themed 429|$W/security_ratelimit.rs|auth_class_is_limited_per_ip_with_a_themed_429
+rate limit: token endpoint per IP|$W/security_ratelimit.rs|token_flood_from_one_ip_gets_oauth_json_429
+rate limit: token endpoint per client|$W/security_ratelimit.rs|token_endpoint_limits_per_claimed_client_id
+rate limit: admin API|$W/security_ratelimit.rs|admin_api_flood_gets_problem_json_429
+rate limit: path tenants classified|$W/security_ratelimit.rs|path_tenant_auth_routes_are_classified_tenant_relative
+rate limit: spoofed X-Forwarded-For does not bypass|$W/security_ratelimit.rs|varying_x_forwarded_for_from_an_untrusted_peer_does_not_bypass
+rate limit: no peer address is not waved through|$W/security_ratelimit.rs|request_without_peer_address_is_not_waved_through
+rate limit: route classes independent|crates/anvil-cache/tests/limiter.rs|gcra_route_classes_are_independent
+brute force: progressive lock, success resets|$W/security_bruteforce.rs|failed_passwords_lock_progressively_and_success_resets
+brute force: lock per identifier and IP|$W/security_bruteforce.rs|the_lock_is_per_identifier_and_ip
+brute force: enumeration-safe answers|$W/security_bruteforce.rs|unknown_identifiers_get_byte_identical_answers
+brute force: identifier tier across many IPs|$W/security_bruteforce.rs|the_identifier_tier_delays_attempts_from_many_ips_without_captcha
+brute force: CAPTCHA before the password|$W/security_bruteforce.rs|with_captcha_the_identifier_tier_requires_a_verified_captcha_before_the_password
+brute force: second factor throttled per user|$W/security_bruteforce.rs|second_factor_attempts_are_throttled_per_user_and_reset_on_success
+brute force: passkey failures throttled per IP|$W/security_bruteforce.rs|passkey_failures_are_throttled_per_ip
+brute force: known and unknown identifiers identical|crates/anvil-cache/tests/limiter.rs|gate_known_and_unknown_identifiers_behave_identically
+brute force: lock capped, doubling|crates/anvil-cache/tests/limiter.rs|backoff_free_attempts_then_doubling_lock_capped_at_fifteen_minutes
+captcha: unreachable provider fails closed|$W/security_bruteforce.rs|an_unreachable_captcha_provider_fails_closed
+captcha: success false rejected|$W/captcha.rs|success_false_is_rejected
+captcha: http error fails closed|$W/captcha.rs|http_error_fails_closed
+captcha: timeout fails closed|$W/captcha.rs|timeout_fails_closed
+captcha: malformed json fails closed|$W/captcha.rs|malformed_json_fails_closed
+captcha: oversized body fails closed|$W/captcha.rs|oversized_body_fails_closed
+captcha: redirects not followed|$W/captcha.rs|redirects_are_not_followed
+captcha: non-https endpoints refused|$W/captcha.rs|non_https_endpoints_are_refused
+trusted proxies: untrusted peer ignores X-Forwarded-For|$W/client_ip.rs|client_ip_untrusted_peer_ignores_spoofed_xff
+trusted proxies: no trusted proxies ignores headers|$W/client_ip.rs|client_ip_no_trusted_proxies_ignores_headers
+trusted proxies: right-to-left walk, never leftmost|$W/client_ip.rs|client_ip_walks_right_to_left_never_leftmost
+trusted proxies: unparsable entry stops the walk|$W/client_ip.rs|client_ip_unparsable_entry_stops_the_walk
+trusted proxies: header modes do not mix|$W/client_ip.rs|client_ip_header_modes_do_not_mix
+trusted proxies: spoofed prefix never chosen (property)|$W/client_ip.rs|client_ip_never_comes_from_spoofed_prefix
+trusted proxies: spoofed prefix never chosen (property)|$W/client_ip.rs|client_ip_never_comes_from_spoofed_forwarded_prefix
+trusted proxies: forwarded proto/host do not change issuer or cookies|$W/client_ip.rs|client_ip_forwarded_proto_and_host_do_not_change_issuer_or_cookies
+form_post: escaping of reflected values|$W/response_mode.rs|form_post_escapes_reflected_state
+form_post: CSP form-action only the redirect origin|$W/response_mode.rs|form_post_success_posts_code_state_and_iss
+form_post: invalid redirect is an error page without a form|$W/response_mode.rs|invalid_redirect_with_form_post_is_an_error_page_without_a_form
+form_post: unsupported response_mode via query|$W/response_mode.rs|unsupported_response_mode_is_invalid_request_via_query
+request objects: rejected, delivered with their mode|$W/response_mode.rs|rejected_request_object_is_delivered_with_its_form_post_mode
+request objects: unusable mode falls back to query|$W/response_mode.rs|rejected_request_object_with_unusable_mode_falls_back_to_query
+request objects: invalid redirect is an error page|$W/response_mode.rs|request_object_with_invalid_redirect_is_an_error_page
+id token alg: not enabled for the tenant refused|$W/id_token_alg.rs|alg_not_enabled_for_the_tenant_is_a_server_error
+key rotation: algorithm must be enabled|$W/jwks_rotation.rs|rotate_now_rejects_an_alg_the_tenant_has_not_enabled
+key rotation: one promotion under concurrency|$W/jwks_rotation.rs|concurrent_runs_promote_exactly_once
+key rotation: immediate rotation drops the old key|$W/jwks_rotation.rs|immediate_rotation_drops_the_old_key_from_jwks_at_once
+jobs: lease single holder|crates/anvilid/tests/jobs.rs|two_runners_never_run_the_same_job_concurrently
+jobs: lease single holder under concurrency|crates/anvil-storage/src/contract/jobs.rs|job_lease_concurrent_single_holder
+migrations: destructive guard refuses and changes nothing (SQLite)|crates/anvil-storage-sqlite/src/migrate.rs|migrate_refuses_pending_destructive_migration_and_changes_nothing
+migrations: destructive guard refuses and changes nothing (Postgres)|crates/anvil-storage-postgres/src/migrate.rs|migrate_refuses_pending_destructive_migration_and_changes_nothing
+migrations: embedded migrations are not destructive (SQLite)|crates/anvil-storage-sqlite/src/migrate.rs|migrate_embedded_migrations_are_not_destructive
+migrations: embedded migrations are not destructive (Postgres)|crates/anvil-storage-postgres/src/migrate.rs|migrate_embedded_migrations_are_not_destructive
+migrations: destructive refusal names the flag|crates/anvilid/src/storage.rs|destructive_refusal_names_the_migrations_and_the_flag
+tenant isolation: Postgres composite tenant foreign keys|crates/anvil-storage-postgres/src/lib.rs|composite_tenant_foreign_keys_reject_cross_tenant_rows
+admin v0.2: new routes need a token|$W/security_admin_v02.rs|every_new_route_rejects_a_missing_token
+admin v0.2: new routes reject other tenants' tokens|$W/security_admin_v02.rs|every_new_route_rejects_tokens_of_another_tenant
+admin v0.2: new routes require their scope|$W/security_admin_v02.rs|every_new_route_requires_its_scope
+admin v0.2: tenant signing/captcha need tenants write|$W/security_admin_v02.rs|tenant_signing_and_captcha_settings_need_the_tenants_write_scope
+admin v0.2: write-only secrets never disclosed|$W/security_admin_v02.rs|captcha_secret_and_smtp_password_are_never_disclosed
+admin v0.2: write-only secrets never disclosed|$W/admin_api_v02.rs|captcha_secret_is_write_only
+admin v0.2: disabling an algorithm in use refused|$W/admin_api_v02.rs|disabling_a_signing_algorithm_in_use_is_refused_with_the_client_ids
+admin audit: failed actions record nothing|$W/admin_audit.rs|failed_admin_actions_record_nothing
+admin audit: signing algs gate client id token alg|$W/admin_audit.rs|signing_algs_enable_keys_and_gate_client_id_token_alg
+console: default tenant clients cannot get admin scopes|$W/console_client.rs|default_tenant_clients_cannot_obtain_admin_scopes
+console: system tenant registration disabled|$W/console_client.rs|system_tenant_registration_is_disabled_on_install_and_enforced_later
+console: traversal and missing files are 404|$W/console.rs|missing_files_and_traversal_are_404
+mail templates: no includes, runaway loops bounded|crates/anvil-mail/tests/templates.rs|includes_are_not_possible
+mail templates: no includes, runaway loops bounded|crates/anvil-mail/tests/templates.rs|runaway_loops_fail_quickly
+mail templates: render errors do not leak payload|crates/anvil-mail/tests/templates.rs|override_render_errors_do_not_leak_payload_values
+smtp test: errors never include credentials|crates/anvil-mail/tests/smtp_test.rs|auth_rejection_reports_535_without_credentials
 EOF
 )
 
