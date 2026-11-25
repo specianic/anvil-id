@@ -16,6 +16,8 @@ This sign-in attempt expired. Please start again.
 This form submission could not be verified. Please try again.
 {%- elif error_key == "not_found" -%}
 Page not found.
+{%- elif error_key == "too_many_requests" -%}
+Too many attempts. Please wait a moment and try again.
 {%- else -%}
 Something went wrong.
 {%- endif -%}
