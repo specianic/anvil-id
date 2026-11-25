@@ -22,10 +22,10 @@
 <tbody>
 {% for s in sessions %}
 <tr id="session-{{ s.id }}"{% if s.current %} data-current{% endif %}>
-<td class="anvil-session-device">{{ s.device }}{% if s.current %} <strong id="session-current-marker">(this device)</strong>{% endif %}</td>
-<td class="anvil-session-ip">{% if s.ip %}{{ s.ip }}{% else %}Unknown{% endif %}</td>
-<td><time datetime="{{ s.created_iso }}">{{ s.created }}</time></td>
-<td><time datetime="{{ s.last_seen_iso }}">{{ s.last_seen }}</time></td>
+<td class="anvil-session-device" data-label="Device">{{ s.device }}{% if s.current %} <strong id="session-current-marker">(this device)</strong>{% endif %}</td>
+<td class="anvil-session-ip" data-label="IP address">{% if s.ip %}{{ s.ip }}{% else %}Unknown{% endif %}</td>
+<td data-label="Signed in"><time datetime="{{ s.created_iso }}">{{ s.created }}</time></td>
+<td data-label="Last active"><time datetime="{{ s.last_seen_iso }}">{{ s.last_seen }}</time></td>
 <td>
 <form id="session-revoke-{{ s.id }}" method="post" action="{{ s.revoke_url }}">
 {{ csrf() }}

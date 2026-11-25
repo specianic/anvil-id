@@ -3,10 +3,26 @@
 // (3.3.8 accessible authentication), target size (2.5.8) and errors that are programmatically
 // linked and announced (3.3.1, 4.1.3).
 //
+// 0.2 pages (plan 03-27): second factor (one-time-code autocomplete, paste, recovery-code disclosure
+// by keyboard), consent buttons, account security / TOTP enrolment / recovery codes, sessions and
+// connected apps (tab order follows the DOM, visible unobscured focus, 24 px targets).
+//
 // Env: ANVIL_URL, SETUP_URL, E2E_STATE_FILE (see tests/e2e/run.sh).
 
-import { expect, test, type Page } from '@playwright/test';
-import { anvilUrl, randomEmail, randomPassword, sharedManagementCredential } from '../lib/anvil';
+import { createHash, randomBytes } from 'node:crypto';
+import { createServer } from 'node:net';
+import { expect, test, type Browser, type Page } from '@playwright/test';
+import {
+  adminToken,
+  anvilUrl,
+  createClient,
+  createUser,
+  login,
+  randomEmail,
+  randomPassword,
+  sharedManagementCredential,
+} from '../lib/anvil';
+import { totp } from '../lib/totp';
 
 test.beforeAll(async ({ browser }) => {
   // Make sure the instance is installed (setup completed once for the whole run).
@@ -182,6 +198,279 @@ for (const vp of [
       await page.keyboard.type(randomEmail('kbd-rec'));
       await page.keyboard.press('Enter');
       await expect(page.locator('#message-body')).toHaveAttribute('data-message-key', 'recovery.sent');
+      await expectTargetSizes(page);
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------------------------
+// Helpers for the 0.2 pages.
+
+/** The ids (or tag names) of the visible focusable controls inside <main>, in DOM order. */
+function domFocusOrder(page: Page): Promise<string[]> {
+  return page.evaluate(() =>
+    Array.from(
+      document.querySelectorAll<HTMLElement>(
+        'main a[href], main button, main input:not([type=hidden]), main textarea, main select, main summary',
+      ),
+    )
+      .filter((el) => el.checkVisibility() && el.tabIndex >= 0)
+      .map((el) => el.id || el.tagName.toLowerCase()),
+  );
+}
+
+/** Tabbing from the top of the page visits exactly the visible controls, in DOM order. */
+async function expectDomTabOrder(page: Page): Promise<string[]> {
+  const expected = await domFocusOrder(page);
+  expect(expected.length, 'page has focusable controls').toBeGreaterThan(0);
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  const order = await tabSequence(page, expected.length);
+  expect(order).toEqual(expected);
+  return order;
+}
+
+/** <summary> disclosures are also targets of at least 24x24 CSS px. */
+async function expectSummaryTargetSizes(page: Page): Promise<void> {
+  const small = await page.evaluate(() =>
+    Array.from(document.querySelectorAll<HTMLElement>('main summary'))
+      .map((el) => el.getBoundingClientRect())
+      .filter((r) => r.width < 24 || r.height < 24)
+      .map((r) => `${r.width}x${r.height}`),
+  );
+  expect(small, 'summaries smaller than 24x24 CSS px').toEqual([]);
+}
+
+async function newUser(browser: Browser, prefix: string): Promise<{ email: string; password: string }> {
+  const creds = await sharedManagementCredential(browser);
+  const email = randomEmail(prefix);
+  const password = randomPassword();
+  await createUser(await adminToken(creds), { email, password, email_verified: true });
+  return { email, password };
+}
+
+async function signIn(page: Page, email: string, password: string): Promise<void> {
+  await page.goto(`${anvilUrl()}/ui/login`);
+  await login(page, email, password);
+  await expect(page.locator('form#login')).toHaveCount(0);
+}
+
+/** Enrols an authenticator app for the signed-in user of `page`; returns its base32 secret. */
+async function enrolTotp(page: Page): Promise<string> {
+  await page.goto(`${anvilUrl()}/ui/account/security`);
+  await page.locator('#totp-begin-submit').click();
+  const secret = ((await page.locator('#totp-secret').textContent()) ?? '').replace(/\s+/g, '');
+  await page.locator('#code').fill(totp(secret));
+  await page.locator('#totp-confirm-submit').click();
+  await expect(page.locator('#recovery-codes li')).toHaveCount(10);
+  return secret;
+}
+
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const srv = createServer();
+    srv.once('error', reject);
+    srv.listen(0, '127.0.0.1', () => {
+      const addr = srv.address();
+      srv.close(() => {
+        if (addr && typeof addr === 'object') resolve(addr.port);
+        else reject(new Error('no port'));
+      });
+    });
+  });
+}
+
+const PHASE3_VIEWPORTS = [
+  { name: 'desktop', width: 1280, height: 800 },
+  { name: 'mobile', width: 375, height: 812 },
+] as const;
+
+for (const vp of PHASE3_VIEWPORTS) {
+  test.describe(`${vp.name} viewport, 0.2 pages`, () => {
+    test.use({ viewport: { width: vp.width, height: vp.height } });
+
+    test('second factor: tab order, one-time-code, paste, disclosure by keyboard, announced error', async ({
+      page,
+      browser,
+    }) => {
+      const user = await newUser(browser, 'kbd-2fa');
+      const setup = await browser.newContext();
+      let secret = '';
+      try {
+        const p = await setup.newPage();
+        await signIn(p, user.email, user.password);
+        secret = await enrolTotp(p);
+      } finally {
+        await setup.close();
+      }
+
+      await page.goto(`${anvilUrl()}/ui/login`);
+      await login(page, user.email, user.password);
+      await expect(page.locator('form#second-factor')).toBeVisible();
+
+      const order = await expectDomTabOrder(page);
+      expect(order).toEqual(['code', 'summary', 'second-factor-submit', 'link-login']);
+      // WCAG 3.3.8: the code field supports autofill of one-time codes and allows paste.
+      await expect(page.locator('#code')).toHaveAttribute('autocomplete', 'one-time-code');
+      await expect(page.locator('#code')).toHaveAttribute('inputmode', 'numeric');
+      await expectPasteAllowed(page, '#code');
+      await expectTargetSizes(page);
+      await expectSummaryTargetSizes(page);
+
+      // The recovery-code disclosure opens with the keyboard and its field joins the tab order.
+      await page.locator('#recovery-code-toggle > summary').focus();
+      await page.keyboard.press('Enter');
+      await expect(page.locator('#recovery-code-toggle')).toHaveAttribute('open', '');
+      await page.keyboard.press('Tab');
+      expect(await focusedId(page)).toBe('recovery_code');
+      await expectVisibleFocus(page);
+      await expectPasteAllowed(page, '#recovery_code');
+      await page.keyboard.press('Shift+Tab');
+      await page.keyboard.press('Space');
+      await expect(page.locator('#recovery-code-toggle')).not.toHaveAttribute('open', '');
+
+      // A wrong code typed and submitted with Enter: the error is linked and announced.
+      const now = Date.now() / 1000;
+      const valid = new Set([totp(secret, now - 30), totp(secret, now), totp(secret, now + 30)]);
+      let wrong = '000000';
+      for (let n = 1; valid.has(wrong); n += 1) wrong = String(n).padStart(6, '0');
+      await page.locator('#code').focus();
+      await page.keyboard.type(wrong);
+      await page.keyboard.press('Enter');
+      const error = page.locator('[data-message-key="login.second_factor_invalid"]');
+      await expect(error).toBeVisible();
+      await expect(error).toHaveAttribute('role', 'alert');
+      const describedBy = (await page.locator('#code').getAttribute('aria-describedby')) ?? '';
+      expect(describedBy.split(/\s+/)).toContain((await error.getAttribute('id')) ?? '?');
+
+      // The right code by keyboard signs in.
+      await page.locator('#code').focus();
+      await page.keyboard.type(totp(secret, Date.now() / 1000 + 30));
+      await page.keyboard.press('Enter');
+      await expect(page.locator('form#second-factor')).toHaveCount(0);
+    });
+
+    test('consent: Allow and Deny reachable in order, Enter submits', async ({ page, browser }) => {
+      const user = await newUser(browser, 'kbd-consent');
+      const creds = await sharedManagementCredential(browser);
+      const redirectUri = `http://localhost:${await freePort()}/cb`;
+      const client = await createClient(
+        await adminToken(creds),
+        {
+          name: 'keyboard consent client',
+          client_type: 'confidential',
+          application_type: 'web',
+          auth_method: 'client_secret_basic',
+          redirect_uris: [redirectUri],
+          grant_types: ['authorization_code'],
+          scopes: ['openid', 'email'],
+        },
+        'default',
+        'required',
+      );
+      await signIn(page, user.email, user.password);
+      const authorize = new URL(`${anvilUrl()}/authorize`);
+      authorize.search = new URLSearchParams({
+        client_id: client.client_id,
+        response_type: 'code',
+        scope: 'openid email',
+        redirect_uri: redirectUri,
+        state: randomBytes(12).toString('base64url'),
+        code_challenge: createHash('sha256').update(randomBytes(32)).digest('base64url'),
+        code_challenge_method: 'S256',
+      }).toString();
+      await page.goto(authorize.href);
+      await expect(page.locator('form#consent-form')).toBeVisible();
+
+      const order = await expectDomTabOrder(page);
+      expect(order).toEqual(['consent-allow', 'consent-deny']);
+      await expectTargetSizes(page);
+
+      // Deny with the keyboard: the browser is sent to the redirect URI with access_denied.
+      const redirected = page.waitForRequest((req) => req.url().startsWith(redirectUri));
+      await page.locator('#consent-deny').focus();
+      await page.keyboard.press('Enter');
+      expect(new URL((await redirected).url()).searchParams.get('error')).toBe('access_denied');
+    });
+
+    test('account security, TOTP enrolment and recovery codes: tab order, focus, targets', async ({
+      page,
+      browser,
+    }) => {
+      const user = await newUser(browser, 'kbd-sec');
+      await signIn(page, user.email, user.password);
+
+      await page.goto(`${anvilUrl()}/ui/account/security`);
+      const overview = await expectDomTabOrder(page);
+      expect(overview.slice(0, 3)).toEqual([
+        'account-nav-security',
+        'account-nav-sessions',
+        'account-nav-apps',
+      ]);
+      expect(overview).toContain('totp-begin-submit');
+      await expectTargetSizes(page);
+
+      // Start enrolment by keyboard.
+      await page.locator('#totp-begin-submit').focus();
+      await page.keyboard.press('Enter');
+      await expect(page.locator('#totp-qr')).toBeVisible();
+      const enrol = await expectDomTabOrder(page);
+      expect(enrol.slice(3)).toEqual(['code', 'totp-confirm-submit', 'link-account-security']);
+      await expect(page.locator('#code')).toHaveAttribute('autocomplete', 'one-time-code');
+      await expectPasteAllowed(page, '#code');
+      await expectTargetSizes(page);
+
+      const secret = ((await page.locator('#totp-secret').textContent()) ?? '').replace(/\s+/g, '');
+      await page.locator('#code').focus();
+      await page.keyboard.type(totp(secret));
+      await page.keyboard.press('Enter');
+      await expect(page.locator('#recovery-codes li')).toHaveCount(10);
+      const codes = await expectDomTabOrder(page);
+      expect(codes.slice(3)).toEqual(['recovery-codes-text', 'link-account-security']);
+      await expectTargetSizes(page);
+
+      await page.locator('#link-account-security').focus();
+      await page.keyboard.press('Enter');
+      await expect(page.locator('#recovery-codes-count')).toHaveText('10');
+      const enrolled = await expectDomTabOrder(page);
+      expect(enrolled).toContain('recovery-codes-regenerate-submit');
+      await expectTargetSizes(page);
+    });
+
+    test('sessions and connected apps: table actions in order, visible focus, targets', async ({
+      page,
+      browser,
+    }) => {
+      const user = await newUser(browser, 'kbd-sess');
+      const other = await browser.newContext();
+      try {
+        await signIn(await other.newPage(), user.email, user.password);
+        await signIn(page, user.email, user.password);
+        await page.goto(`${anvilUrl()}/ui/account/sessions`);
+        await expect(page.locator('#session-list tbody tr')).toHaveCount(2);
+        const order = await expectDomTabOrder(page);
+        expect(order.slice(0, 3)).toEqual([
+          'account-nav-security',
+          'account-nav-sessions',
+          'account-nav-apps',
+        ]);
+        expect(order.at(-1)).toBe('sessions-revoke-others-submit');
+        expect(order.filter((id) => /^session-revoke-.+-submit$/.test(id))).toHaveLength(2);
+        await expectTargetSizes(page);
+
+        // Sign out the other session with the keyboard.
+        const otherButton = page.locator('#session-list tbody tr:not([data-current]) button');
+        await otherButton.focus();
+        await expectVisibleFocus(page);
+        await page.keyboard.press('Enter');
+        await expect(page.locator('[data-message-key="sessions.revoked"]')).toBeVisible();
+        await expect(page.locator('#session-list tbody tr')).toHaveCount(1);
+      } finally {
+        await other.close();
+      }
+
+      await page.goto(`${anvilUrl()}/ui/account/apps`);
+      await expect(page.locator('#apps-empty')).toBeVisible();
+      await expectDomTabOrder(page);
       await expectTargetSizes(page);
     });
   });

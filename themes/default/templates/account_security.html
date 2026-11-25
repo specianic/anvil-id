@@ -25,9 +25,9 @@
 <tbody>
 {% for p in passkeys %}
 <tr id="passkey-{{ p.id }}">
-<td class="anvil-credential-label">{{ p.label }}</td>
-<td><time datetime="{{ p.created_iso }}">{{ p.created }}</time></td>
-<td>{% if p.last_used %}<time datetime="{{ p.last_used_iso }}">{{ p.last_used }}</time>{% else %}Never{% endif %}</td>
+<td class="anvil-credential-label" data-label="Name">{{ p.label }}</td>
+<td data-label="Added"><time datetime="{{ p.created_iso }}">{{ p.created }}</time></td>
+<td data-label="Last used">{% if p.last_used %}<time datetime="{{ p.last_used_iso }}">{{ p.last_used }}</time>{% else %}Never{% endif %}</td>
 <td>
 <form id="credential-delete-{{ p.id }}" method="post" action="{{ p.delete_url }}">
 {{ csrf() }}

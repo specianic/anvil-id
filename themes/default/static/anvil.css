@@ -94,7 +94,8 @@ label {
   font-size: 0.875rem;
 }
 
-input {
+input,
+textarea {
   width: 100%;
   min-width: 0;
   min-height: 2.75rem;
@@ -108,7 +109,9 @@ input {
 
 /* Visible focus for every control (WCAG 2.4.7); never removed, never covered by fixed content. */
 input:focus-visible,
-button:focus-visible {
+textarea:focus-visible,
+button:focus-visible,
+summary:focus-visible {
   outline: 3px solid var(--anvil-focus);
   outline-offset: 2px;
 }
@@ -171,7 +174,8 @@ input[aria-invalid="true"] {
   border-color: var(--anvil-danger);
 }
 
-input:focus-visible {
+input:focus-visible,
+textarea:focus-visible {
   border-color: var(--anvil-primary);
 }
 
@@ -274,6 +278,300 @@ code {
   border-radius: 4px;
 }
 
+/* The `hidden` attribute always wins over the display rules below (e.g. the passkey button stays
+   hidden until webauthn.js reveals it). */
+[hidden] {
+  display: none !important;
+}
+
+textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.875rem;
+  resize: vertical;
+}
+
+h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+/* Secondary actions (passkey sign-in, Deny, per-row actions): outlined, same 44 px height. */
+button.anvil-secondary,
+.anvil-table button {
+  color: var(--anvil-primary);
+  background: transparent;
+  border: 1px solid var(--anvil-primary);
+}
+
+.anvil-table button {
+  min-height: 2.25rem;
+  padding: 0.375rem 0.75rem;
+  font-size: 0.875rem;
+  white-space: nowrap;
+}
+
+button.anvil-secondary:hover,
+.anvil-table button:hover {
+  filter: none;
+  background: var(--anvil-code-bg);
+}
+
+/* Sign-in page: the passkey form sits below the password form. */
+.anvil-passkey {
+  gap: 0.5rem;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--anvil-border);
+}
+
+.anvil-passkey p:empty {
+  display: none;
+}
+
+/* Paragraphs inside forms are spaced by the form's gap, not by their own margins. */
+form > p {
+  margin: 0;
+}
+
+/* Third-party CAPTCHA widget: centred, never wider than the card (1.4.10). */
+.anvil-captcha {
+  display: flex;
+  justify-content: center;
+  max-width: 100%;
+  min-height: 4.0625rem;
+  overflow-x: auto;
+}
+
+/* <details> disclosure (second factor: "Use a recovery code instead"). */
+.anvil-disclosure {
+  border: 1px solid var(--anvil-border);
+  border-radius: var(--anvil-radius);
+}
+
+.anvil-disclosure > summary {
+  display: flex;
+  align-items: center;
+  min-height: 2.75rem;
+  padding: 0.5rem 0.75rem;
+  color: var(--anvil-primary);
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+
+.anvil-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+/* Open/closed state shown by a triangle (decorative; the summary exposes the state itself). */
+.anvil-disclosure > summary::before {
+  content: "\25B8" / "";
+  margin-right: 0.5rem;
+}
+
+.anvil-disclosure[open] > summary::before {
+  content: "\25BE" / "";
+}
+
+.anvil-disclosure > .anvil-field {
+  padding: 0 0.75rem 0.75rem;
+}
+
+.anvil-disclosure p {
+  margin: 0;
+}
+
+/* Consent screen. */
+.anvil-consent-scopes {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.anvil-consent-scopes legend {
+  margin-bottom: 0.5rem;
+  padding: 0;
+}
+
+.anvil-scope-list {
+  margin: 0 0 1rem;
+  padding-left: 1.25rem;
+}
+
+.anvil-scope-list li + li {
+  margin-top: 0.25rem;
+}
+
+.anvil-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.anvil-actions button {
+  flex: 1 1 8rem;
+}
+
+/* Account pages: a wider card for the tables, section navigation, sections. */
+main:has(> .anvil-account-nav) {
+  max-width: 50rem;
+}
+
+.anvil-account-nav {
+  margin: 0 0 1.5rem;
+  border-bottom: 1px solid var(--anvil-border);
+}
+
+.anvil-account-nav ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 1.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.anvil-account-nav a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  border-bottom: 3px solid transparent;
+  text-decoration: none;
+}
+
+.anvil-account-nav a:hover {
+  text-decoration: underline;
+}
+
+/* The current section is not marked by colour alone (1.4.1): bold text and a bar. */
+.anvil-account-nav a[aria-current="page"] {
+  color: var(--anvil-text);
+  font-weight: 600;
+  border-bottom-color: var(--anvil-primary);
+}
+
+.anvil-account .anvil-message {
+  margin-bottom: 1rem;
+}
+
+.anvil-account-section + .anvil-account-section {
+  margin-top: 2rem;
+}
+
+.anvil-account-section p {
+  margin: 0 0 1rem;
+}
+
+.anvil-account-section form + form {
+  margin-top: 0.75rem;
+}
+
+.anvil-app-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.anvil-app-list > li {
+  padding: 1rem 0;
+  border-top: 1px solid var(--anvil-border);
+}
+
+.anvil-app-list > li:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.anvil-app-list form {
+  align-items: flex-start;
+}
+
+/* Data tables (sessions, passkeys). */
+.anvil-table {
+  width: 100%;
+  margin: 0 0 1rem;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.anvil-table caption {
+  margin-bottom: 0.5rem;
+  color: var(--anvil-muted);
+  text-align: left;
+}
+
+.anvil-table th,
+.anvil-table td {
+  padding: 0.5rem 0.75rem 0.5rem 0;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--anvil-border);
+  overflow-wrap: anywhere;
+}
+
+.anvil-table th {
+  color: var(--anvil-muted);
+  font-weight: 600;
+  overflow-wrap: normal;
+}
+
+.anvil-table td:last-child,
+.anvil-table th:last-child {
+  padding-right: 0;
+  text-align: right;
+}
+
+.anvil-table form {
+  display: inline-flex;
+}
+
+/* TOTP enrolment: QR code at a fixed, scannable size, dark modules on white in every colour
+   scheme (scanners expect it); the SVG carries its own 4-module quiet zone. */
+.anvil-qr {
+  width: min(13rem, 100%);
+  margin: 0 auto 1rem;
+  padding: 0.5rem;
+  color: #000000;
+  background: #ffffff;
+  border: 1px solid var(--anvil-border);
+  border-radius: var(--anvil-radius);
+  forced-color-adjust: none;
+}
+
+.anvil-qr svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.anvil-secret {
+  padding: 0.25rem 0.5rem;
+  font-size: 1rem;
+  letter-spacing: 0.05em;
+  word-spacing: 0.25em;
+  user-select: all;
+}
+
+/* Recovery codes: two columns of monospace codes, one column on narrow screens. */
+.anvil-recovery-codes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem 1.5rem;
+  margin: 0 0 1rem;
+  padding-left: 1.75rem;
+}
+
+.anvil-recovery-codes code {
+  font-size: 1rem;
+  letter-spacing: 0.05em;
+}
+
+.anvil-field textarea {
+  min-height: 6rem;
+}
+
 /* Narrow screens: one column, no horizontal scrolling down to 320 CSS px (WCAG 1.4.10). */
 @media (max-width: 30rem) {
   body {
@@ -289,14 +587,65 @@ code {
     flex-direction: column;
     align-items: flex-start;
   }
+
+  .anvil-recovery-codes {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* Tables become one block per row; each cell is labelled by its column header. */
+  .anvil-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .anvil-table tr {
+    display: block;
+    padding: 0.5rem 0;
+    border-bottom: 1px solid var(--anvil-border);
+  }
+
+  .anvil-table td {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 0.5rem;
+    padding: 0.125rem 0;
+    border-bottom: 0;
+  }
+
+  .anvil-table td[data-label]::before {
+    content: attr(data-label) / "";
+    min-width: 6.5rem;
+    color: var(--anvil-muted);
+    font-weight: 600;
+  }
+
+  .anvil-table td:last-child {
+    padding-top: 0.5rem;
+    text-align: left;
+  }
 }
 
 /* High-contrast / forced-colours modes keep a visible boundary on the card and the controls. */
 @media (forced-colors: active) {
   main,
   input,
-  button {
+  textarea,
+  button,
+  .anvil-disclosure {
     border: 1px solid CanvasText;
+  }
+
+  .anvil-account-nav a[aria-current="page"] {
+    border-bottom-color: Highlight;
+  }
+
+  .anvil-table th,
+  .anvil-table td {
+    border-color: CanvasText;
   }
 }
 
