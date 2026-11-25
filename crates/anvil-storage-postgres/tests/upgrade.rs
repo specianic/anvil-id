@@ -391,6 +391,303 @@ async fn upgrade_from_0_1_is_idempotent_on_restart() {
         .expect("a second start finds nothing pending");
 }
 
+// ---------------------------------------------------------------------------------------------
+// 0.2 → 0.3
+
+/// Last schema version shipped in 0.2.
+const LAST_V0_2_VERSION: i64 = 3;
+
+const V2_TENANT: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0002_0001);
+const V2_USER: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0002_0010);
+const V2_SESSION: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0002_0030);
+const V2_FAMILY: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0002_0040);
+const V2_FLOW: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0002_0070);
+const V2_CODE_HASH: [u8; 32] = [0x21; 32];
+const V2_AT_HASH: [u8; 32] = [0x22; 32];
+const V2_SESSION_HASH: [u8; 32] = [0x23; 32];
+const V2_TOKEN_HASH: [u8; 32] = [0x24; 32];
+
+/// 0.2 rows in every table migration 0004 touches (flow, self_service_token, email_template,
+/// client, authorization_code, token_family, access_token, browser_session).
+const V0_2_FIXTURE: &str = "
+INSERT INTO tenant (id, slug, display_name, created_at, settings)
+     VALUES ('00000000-0000-7000-8000-000000020001', 'acme', 'Acme', '2026-01-01T00:00:00Z',
+             '{\"registration\":\"open\",\"require_verified_email\":false}');
+INSERT INTO \"user\" (id, tenant_id, email, email_verified, username, status, created_at,
+                      updated_at)
+     VALUES ('00000000-0000-7000-8000-000000020010', '00000000-0000-7000-8000-000000020001',
+             'grace@example.test', true, 'grace', 'active', '2026-01-01T00:00:00Z',
+             '2026-01-01T00:00:00Z');
+INSERT INTO client (id, tenant_id, client_id, name, client_type, application_type, auth_method,
+                    redirect_uris, grant_types, scopes, require_pkce, created_at, updated_at,
+                    token_format, consent_mode, id_token_signed_response_alg, can_introspect)
+     VALUES ('00000000-0000-7000-8000-000000020020', '00000000-0000-7000-8000-000000020001',
+             'rp', 'RP', 'public', 'web', 'none', ARRAY['https://rp.example.test/cb'],
+             ARRAY['authorization_code', 'refresh_token'], ARRAY['openid'], true,
+             '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'opaque', 'skip_first_party',
+             'ES256', true);
+INSERT INTO browser_session (id, tenant_id, user_id, token_hash, auth_time, acr, amr, created_at,
+                             last_seen_at, expires_at, idle_expires_at, ip, user_agent)
+     VALUES ('00000000-0000-7000-8000-000000020030', '00000000-0000-7000-8000-000000020001',
+             '00000000-0000-7000-8000-000000020010', decode(repeat('23', 32), 'hex'),
+             '2026-01-01T00:00:00Z', 'urn:anvilid:acr:pwd', ARRAY['pwd'], '2026-01-01T00:00:00Z',
+             '2026-01-01T00:00:00Z', '2100-01-01T00:00:00Z', '2100-01-01T00:00:00Z',
+             '192.0.2.7', 'fixture-agent');
+INSERT INTO token_family (id, tenant_id, client_id, user_id, scope, auth_time, acr, amr,
+                          session_id, created_at, absolute_expires_at)
+     VALUES ('00000000-0000-7000-8000-000000020040', '00000000-0000-7000-8000-000000020001',
+             'rp', '00000000-0000-7000-8000-000000020010', 'openid', '2026-01-01T00:00:00Z',
+             'urn:anvilid:acr:pwd', ARRAY['pwd'], '00000000-0000-7000-8000-000000020030',
+             '2026-01-01T00:00:00Z', '2100-01-01T00:00:00Z');
+INSERT INTO authorization_code (code_hash, tenant_id, client_id, redirect_uri, scope, nonce,
+                                code_challenge, token_family_id, user_id, session_id, auth_time,
+                                acr, amr, expires_at, created_at)
+     VALUES (decode(repeat('21', 32), 'hex'), '00000000-0000-7000-8000-000000020001', 'rp',
+             'https://rp.example.test/cb', 'openid', 'n-0.2', 'challenge-0.2',
+             '00000000-0000-7000-8000-000000020040', '00000000-0000-7000-8000-000000020010',
+             '00000000-0000-7000-8000-000000020030', '2026-01-01T00:00:00Z',
+             'urn:anvilid:acr:pwd', ARRAY['pwd'], '2100-01-01T00:00:00Z',
+             '2026-01-01T00:00:00Z');
+INSERT INTO access_token (token_hash, tenant_id, family_id, client_id, user_id, scope,
+                          created_at, expires_at)
+     VALUES (decode(repeat('22', 32), 'hex'), '00000000-0000-7000-8000-000000020001',
+             '00000000-0000-7000-8000-000000020040', 'rp', '00000000-0000-7000-8000-000000020010',
+             'openid', '2026-01-01T00:00:00Z', '2100-01-01T00:00:00Z');
+INSERT INTO flow (id, tenant_id, kind, state, csrf_hash, cookie_hash, created_at, expires_at)
+     VALUES ('00000000-0000-7000-8000-000000020070', '00000000-0000-7000-8000-000000020001',
+             'consent', '{\"step\":\"0.2\"}', decode(repeat('25', 32), 'hex'),
+             decode(repeat('26', 32), 'hex'), '2026-01-01T00:00:00Z', '2100-01-01T00:00:00Z');
+INSERT INTO self_service_token (token_hash, tenant_id, kind, user_id, email, created_at,
+                                expires_at)
+     VALUES (decode(repeat('24', 32), 'hex'), '00000000-0000-7000-8000-000000020001', 'recovery',
+             '00000000-0000-7000-8000-000000020010', 'grace@example.test',
+             '2026-01-01T00:00:00Z', '2100-01-01T00:00:00Z');
+INSERT INTO email_template (tenant_id, kind, subject, body_html, body_text, updated_at)
+     VALUES ('00000000-0000-7000-8000-000000020001', 'password_changed', 'Changed',
+             '<p>changed</p>', 'changed', '2026-01-01T00:00:00Z');
+";
+
+/// Runs one statement on a raw connection.
+async fn exec(conn: &mut PgConnection, sql: &str) -> Result<u64, sqlx::Error> {
+    sqlx::raw_sql(sqlx::AssertSqlSafe(sql.to_owned()))
+        .execute(&mut *conn)
+        .await
+        .map(|r| r.rows_affected())
+}
+
+#[tokio::test]
+async fn upgrade_from_0_2_keeps_every_row_and_widens_kinds() {
+    use anvil_core::model::{FlowId, FlowKind, NewFlow, NewSelfServiceToken, SelfServiceKind};
+
+    let url = fresh_database().await;
+    let mut conn = connect(&url).await;
+    sqlx::migrate!()
+        .run_to(LAST_V0_2_VERSION, &mut conn)
+        .await
+        .expect("0.2 migrations apply");
+    sqlx::raw_sql(V0_2_FIXTURE)
+        .execute(&mut conn)
+        .await
+        .expect("0.2 fixtures load");
+
+    // The 0.3 binary starts: migrate with the defaults (destructive refused).
+    let s = PostgresStorage::connect(&url, MAX_CONNECTIONS)
+        .await
+        .expect("connect");
+    s.migrate_with(MigrateOptions::default())
+        .await
+        .expect("0.2 → 0.3 upgrade applies without the destructive flag");
+    let tenant = TenantId(V2_TENANT);
+
+    // Client: 0.2 values kept, 0.3 columns default to "nothing configured".
+    let rp = s
+        .clients()
+        .get(tenant, "rp")
+        .await
+        .expect("get client")
+        .expect("client survives");
+    assert_eq!(rp.token_format, TokenFormat::Opaque);
+    assert_eq!(rp.consent_mode, ConsentMode::SkipFirstParty);
+    assert_eq!(rp.id_token_signed_response_alg.as_deref(), Some("ES256"));
+    assert!(rp.can_introspect);
+    assert_eq!(rp.redirect_uris, ["https://rp.example.test/cb"]);
+    assert!(rp.post_logout_redirect_uris.is_empty());
+    assert_eq!(rp.backchannel_logout_uri, None);
+    assert!(!rp.backchannel_logout_session_required);
+    assert!(rp.allowed_resources.is_empty());
+    assert_eq!(rp.mfa_policy, None);
+
+    // Session: still active with its request context.
+    let session = s
+        .sessions()
+        .get_active(tenant, &SecretHash(V2_SESSION_HASH), now())
+        .await
+        .expect("get session")
+        .expect("session survives");
+    assert_eq!(session.id, SessionId(V2_SESSION));
+    assert_eq!(session.ip.as_deref(), Some("192.0.2.7"));
+    assert_eq!(session.user_agent.as_deref(), Some("fixture-agent"));
+
+    // Family, code and access token: preserved, resource defaults to empty.
+    let family = s
+        .grants()
+        .get_family(tenant, TokenFamilyId(V2_FAMILY))
+        .await
+        .expect("get family")
+        .expect("family survives");
+    assert_eq!(family.session_id, Some(SessionId(V2_SESSION)));
+    assert!(family.resource.is_empty());
+    match s
+        .grants()
+        .consume_code(tenant, &SecretHash(V2_CODE_HASH), now())
+        .await
+        .expect("consume code")
+    {
+        ConsumeOutcome::Consumed(code) => {
+            assert_eq!(code.nonce.as_deref(), Some("n-0.2"));
+            assert_eq!(code.code_challenge.as_deref(), Some("challenge-0.2"));
+            assert_eq!(code.token_family_id, TokenFamilyId(V2_FAMILY));
+            assert!(code.resource.is_empty());
+        }
+        other => panic!("0.2 code not consumable: {other:?}"),
+    }
+    let (at, at_family) = s
+        .grants()
+        .find_access_token(tenant, &SecretHash(V2_AT_HASH))
+        .await
+        .expect("find access token")
+        .expect("access token survives");
+    assert_eq!(at.scope, "openid");
+    assert!(at.resource.is_empty());
+    assert_eq!(at_family.map(|f| f.id), Some(TokenFamilyId(V2_FAMILY)));
+
+    // Flow, self-service token and template rows are intact.
+    let flow = s
+        .flows()
+        .get(tenant, FlowId(V2_FLOW), now())
+        .await
+        .expect("get flow")
+        .expect("flow survives");
+    assert_eq!(flow.kind, FlowKind::Consent);
+    assert_eq!(flow.state, "{\"step\":\"0.2\"}");
+    let (kind, email): (String, String) =
+        sqlx::query_as("SELECT kind, email FROM self_service_token WHERE token_hash = $1")
+            .bind(&V2_TOKEN_HASH[..])
+            .fetch_one(&mut conn)
+            .await
+            .expect("self-service token survives");
+    assert_eq!(
+        (kind.as_str(), email.as_str()),
+        ("recovery", "grace@example.test")
+    );
+    let (subject, text): (String, String) = sqlx::query_as(
+        "SELECT subject, body_text FROM email_template
+          WHERE tenant_id = $1 AND kind = 'password_changed'",
+    )
+    .bind(V2_TENANT)
+    .fetch_one(&mut conn)
+    .await
+    .expect("custom template survives");
+    assert_eq!((subject.as_str(), text.as_str()), ("Changed", "changed"));
+
+    // The widened CHECKs accept the 0.3 kinds through the storage traits...
+    s.flows()
+        .create(
+            tenant,
+            &NewFlow {
+                id: FlowId::new_v7(),
+                kind: FlowKind::Logout,
+                state: "{}".into(),
+                csrf_hash: SecretHash([0x27; 32]),
+                cookie_hash: SecretHash([0x28; 32]),
+                auth_request_id: None,
+                created_at: now(),
+                expires_at: now() + time::Duration::minutes(10),
+            },
+        )
+        .await
+        .expect("a logout flow is accepted");
+    s.users()
+        .issue_self_service_token(
+            tenant,
+            &NewSelfServiceToken {
+                token_hash: SecretHash([0x29; 32]),
+                kind: SelfServiceKind::EmailChange,
+                user_id: UserId(V2_USER),
+                email: "grace.new@example.test".into(),
+                created_at: now(),
+                expires_at: now() + time::Duration::hours(1),
+            },
+            None,
+        )
+        .await
+        .expect("an email change token is accepted");
+    // ...and raw SQL, while unknown values are still rejected.
+    for kind in ["login_code", "email_change", "email_changed"] {
+        exec(
+            &mut conn,
+            &format!(
+                "INSERT INTO email_template (tenant_id, kind, subject, body_html, body_text,
+                                             updated_at)
+                      VALUES ('{V2_TENANT}', '{kind}', 's', 'h', 't', now())"
+            ),
+        )
+        .await
+        .unwrap_or_else(|e| panic!("template kind {kind} must be accepted: {e}"));
+    }
+    for (table, sql) in [
+        (
+            "email_template",
+            format!(
+                "INSERT INTO email_template (tenant_id, kind, subject, body_html, body_text,
+                                             updated_at)
+                      VALUES ('{V2_TENANT}', 'bogus', 's', 'h', 't', now())"
+            ),
+        ),
+        (
+            "flow",
+            format!(
+                "INSERT INTO flow (id, tenant_id, kind, state, csrf_hash, cookie_hash,
+                                   created_at, expires_at)
+                      VALUES ('{}', '{V2_TENANT}', 'bogus', '{{}}',
+                              decode(repeat('01', 32), 'hex'), decode(repeat('02', 32), 'hex'),
+                              now(), now())",
+                Uuid::now_v7()
+            ),
+        ),
+        (
+            "self_service_token",
+            format!(
+                "INSERT INTO self_service_token (token_hash, tenant_id, kind, user_id, email,
+                                                 created_at, expires_at)
+                      VALUES (decode(repeat('0a', 32), 'hex'), '{V2_TENANT}', 'bogus',
+                              '{V2_USER}', 'x@example.test', now(), now())"
+            ),
+        ),
+        (
+            "client.mfa_policy",
+            format!("UPDATE client SET mfa_policy = 'bogus' WHERE tenant_id = '{V2_TENANT}'"),
+        ),
+    ] {
+        let err = exec(&mut conn, &sql)
+            .await
+            .expect_err(&format!("{table}: an unknown kind must still be rejected"));
+        let code = err
+            .as_database_error()
+            .and_then(|d| d.code())
+            .map(|c| c.into_owned());
+        assert_eq!(
+            code.as_deref(),
+            Some("23514"),
+            "{table}: CHECK violation, got {err}"
+        );
+    }
+
+    // A second start finds nothing pending.
+    s.migrate().await.expect("restart after the upgrade");
+    conn.close().await.expect("close");
+}
+
 /// Contract-suite factory: a database built through the upgrade path. The 0.1 fixture tenants
 /// are deleted through the storage traits afterwards (cascading every fixture row through the
 /// upgraded foreign keys), because the contract tests start from an uninstalled database.
