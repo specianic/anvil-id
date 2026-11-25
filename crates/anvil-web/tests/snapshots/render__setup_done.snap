@@ -1,0 +1,38 @@
+---
+source: crates/anvil-web/tests/render.rs
+expression: html
+---
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Setup complete · Acme</title>
+<link rel="stylesheet" href="&#x2f;t&#x2f;acme&#x2f;assets/anvil.css">
+</head>
+<body>
+
+<main id="main" aria-labelledby="page-heading">
+<p class="anvil-tenant">Acme</p>
+<h1 id="page-heading">Setup complete</h1>
+
+<p class="anvil-lead">The administrator account <strong id="admin-email">admin@example.test</strong> has been created.</p>
+<div class="anvil-callout anvil-callout-warning" role="note">
+<p><strong>Copy these credentials now.</strong> The client secret is shown only once and cannot be displayed again.</p>
+</div>
+<dl class="anvil-credentials">
+<dt>Management client ID</dt>
+<dd><code id="mgmt-client-id">mgmt-123</code></dd>
+<dt>Management client secret</dt>
+<dd><code id="mgmt-client-secret">secret-shown-once</code></dd>
+<dt>Token endpoint</dt>
+<dd><code id="token-endpoint">https:&#x2f;&#x2f;op.test&#x2f;t&#x2f;system&#x2f;token</code></dd>
+<dt>Admin API base</dt>
+<dd><code id="admin-api-base">https:&#x2f;&#x2f;op.test&#x2f;api&#x2f;admin&#x2f;v1</code></dd>
+</dl>
+<p class="anvil-muted">Use the client ID and secret with the client credentials grant at the token endpoint to call the admin API.</p>
+
+</main>
+</body>
+</html>

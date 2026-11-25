@@ -1,0 +1,52 @@
+---
+source: crates/anvil-web/tests/render.rs
+expression: "render_form(\"setup.html\", \"Set up AnvilID\", &f)"
+---
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Set up AnvilID · Acme</title>
+<link rel="stylesheet" href="&#x2f;t&#x2f;acme&#x2f;assets/anvil.css">
+</head>
+<body>
+
+<main id="main" aria-labelledby="page-heading">
+<p class="anvil-tenant">Acme</p>
+<h1 id="page-heading">Set up AnvilID</h1>
+
+<p class="anvil-lead">Create the first administrator account. You will use it to sign in to the admin console.</p>
+<form id="setup" method="post" action="&#x2f;t&#x2f;acme&#x2f;ui&#x2f;setup?flow=f1" novalidate>
+<input type="hidden" name="csrf_token" value="csrf-sample-token">
+
+
+<input type="hidden" id="token" name="token" value="setup-tok">
+
+
+
+
+<div class="anvil-field">
+<label for="email">Administrator email</label>
+<input id="email" name="email" type="email" required>
+
+</div>
+
+
+
+
+<div class="anvil-field">
+<label for="password">Password</label>
+<input id="password" name="password" type="password" required>
+
+</div>
+
+
+
+<button type="submit" id="setup-submit">Create administrator</button>
+</form>
+
+</main>
+</body>
+</html>

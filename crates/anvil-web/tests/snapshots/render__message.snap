@@ -1,0 +1,29 @@
+---
+source: crates/anvil-web/tests/render.rs
+expression: html
+---
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Check your email · Acme</title>
+<link rel="stylesheet" href="&#x2f;t&#x2f;acme&#x2f;assets/anvil.css">
+</head>
+<body>
+
+<main id="main" aria-labelledby="page-heading">
+<p class="anvil-tenant">Acme</p>
+<h1 id="page-heading">Check your email</h1>
+
+<p class="anvil-lead" id="message-body" data-message-key="recovery.sent">If an account exists for that address, we have sent instructions.</p>
+
+<nav class="anvil-links" aria-label="Next steps">
+<a id="link-login" href="&#x2f;t&#x2f;acme&#x2f;ui&#x2f;login?flow=f1">Go to sign in</a>
+</nav>
+
+
+</main>
+</body>
+</html>

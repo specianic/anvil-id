@@ -1,0 +1,44 @@
+---
+source: crates/anvil-web/tests/render.rs
+expression: "render_form(\"recovery.html\", \"Reset your password\", &f)"
+---
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Reset your password · Acme</title>
+<link rel="stylesheet" href="&#x2f;t&#x2f;acme&#x2f;assets/anvil.css">
+</head>
+<body>
+
+<main id="main" aria-labelledby="page-heading">
+<p class="anvil-tenant">Acme</p>
+<h1 id="page-heading">Reset your password</h1>
+
+<p class="anvil-lead">Enter the email address for your account. If it is registered, we will send you a link to reset your password.</p>
+<form id="recovery" method="post" action="&#x2f;t&#x2f;acme&#x2f;ui&#x2f;recovery?flow=f1" novalidate>
+<input type="hidden" name="csrf_token" value="csrf-sample-token">
+
+
+
+<div class="anvil-field">
+<label for="email">Email</label>
+<input id="email" name="email" type="email" required>
+
+</div>
+
+
+
+<button type="submit" id="recovery-submit">Send reset link</button>
+</form>
+
+<nav class="anvil-links" aria-label="Account help">
+<a id="link-login" href="&#x2f;t&#x2f;acme&#x2f;ui&#x2f;login?flow=f1">Back to sign in</a>
+</nav>
+
+
+</main>
+</body>
+</html>

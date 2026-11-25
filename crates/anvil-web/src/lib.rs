@@ -3,6 +3,7 @@
 //! [`app`] builds the release 0.1 application. The release 0.0 [`router`] stays in use by the
 //! binary until plan 02-18 switches over.
 
+pub mod adapters;
 pub mod admin;
 mod assets;
 pub mod config;

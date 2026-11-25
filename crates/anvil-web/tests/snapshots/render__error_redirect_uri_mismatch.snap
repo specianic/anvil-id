@@ -1,0 +1,27 @@
+---
+source: crates/anvil-web/tests/render.rs
+expression: html
+---
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Error · Acme</title>
+<link rel="stylesheet" href="&#x2f;t&#x2f;acme&#x2f;assets/anvil.css">
+</head>
+<body>
+
+<main id="main" aria-labelledby="page-heading">
+<p class="anvil-tenant">Acme</p>
+<h1 id="page-heading">Something went wrong</h1>
+
+<p class="anvil-error-text" id="error-message" data-error-key="redirect_uri_mismatch" role="alert">The redirect URI in this request is not registered for this client.</p>
+
+<p class="anvil-muted anvil-status">Error 400</p>
+
+
+</main>
+</body>
+</html>

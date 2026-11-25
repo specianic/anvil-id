@@ -1,0 +1,33 @@
+---
+source: crates/anvil-web/tests/render.rs
+expression: html
+---
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Confirm your email address · Acme</title>
+<link rel="stylesheet" href="&#x2f;t&#x2f;acme&#x2f;assets/anvil.css">
+</head>
+<body>
+
+<main id="main" aria-labelledby="page-heading">
+<p class="anvil-tenant">Acme</p>
+<h1 id="page-heading">Confirm your email address</h1>
+<p class="anvil-lead">Select the button below to confirm your email address.</p>
+<form id="verification" method="post" action="&#x2f;t&#x2f;acme&#x2f;ui&#x2f;verification?flow=f1" novalidate>
+<input type="hidden" name="csrf_token" value="csrf-sample-token">
+
+
+<input type="hidden" id="token" name="token" value="tok-123">
+
+
+
+<button type="submit" id="verification-submit">Confirm email</button>
+</form>
+
+</main>
+</body>
+</html>

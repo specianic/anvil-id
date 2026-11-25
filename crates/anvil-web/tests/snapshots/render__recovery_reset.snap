@@ -1,0 +1,41 @@
+---
+source: crates/anvil-web/tests/render.rs
+expression: "render_form(\"recovery_reset.html\", \"Choose a new password\", &f)"
+---
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Choose a new password · Acme</title>
+<link rel="stylesheet" href="&#x2f;t&#x2f;acme&#x2f;assets/anvil.css">
+</head>
+<body>
+
+<main id="main" aria-labelledby="page-heading">
+<p class="anvil-tenant">Acme</p>
+<h1 id="page-heading">Choose a new password</h1>
+<form id="recovery-reset" method="post" action="&#x2f;t&#x2f;acme&#x2f;ui&#x2f;recovery-reset?flow=f1" novalidate>
+<input type="hidden" name="csrf_token" value="csrf-sample-token">
+
+
+<input type="hidden" id="token" name="token" value="tok-456">
+
+
+
+
+<div class="anvil-field">
+<label for="password">New password</label>
+<input id="password" name="password" type="password" required>
+
+</div>
+
+
+
+<button type="submit" id="recovery-reset-submit">Set new password</button>
+</form>
+
+</main>
+</body>
+</html>
