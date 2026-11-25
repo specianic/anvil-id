@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM self_service_token WHERE ctid IN\n               (SELECT ctid FROM self_service_token WHERE expires_at <= $1 LIMIT $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "13b81b4f55cc429eba03c2d4bb6008326ea016af8189a7674dd82053af0e48e5"
+}

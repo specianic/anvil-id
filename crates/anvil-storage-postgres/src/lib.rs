@@ -7,10 +7,11 @@
 
 mod clients;
 mod convert;
+mod flows;
+mod grants;
 mod keys;
 mod outbox;
-// TRANSITIONAL (plan 02-06 task 1): users, sessions, flows and grants are still `Pending`.
-mod pending;
+mod sessions;
 mod setup;
 mod tenants;
 mod users;
@@ -24,19 +25,29 @@ use sqlx::postgres::PgPoolOptions;
 
 use crate::clients::PgClients;
 use crate::convert::map_err;
+use crate::flows::PgFlows;
+use crate::grants::PgGrants;
 use crate::keys::PgKeys;
 use crate::outbox::PgOutbox;
-use crate::pending::Pending;
+use crate::sessions::PgSessions;
 use crate::setup::PgSetup;
 use crate::tenants::PgTenants;
+use crate::users::PgUsers;
+
+/// Rows deleted per `purge_expired` statement, so a large backlog never holds long locks.
+const PURGE_BATCH: i64 = 1000;
 
 /// Postgres storage backend.
 #[derive(Debug, Clone)]
 pub struct PostgresStorage {
     pool: PgPool,
     tenants: PgTenants,
+    users: PgUsers,
     clients: PgClients,
     keys: PgKeys,
+    sessions: PgSessions,
+    flows: PgFlows,
+    grants: PgGrants,
     setup: PgSetup,
     outbox: PgOutbox,
 }
@@ -55,8 +66,12 @@ impl PostgresStorage {
     fn from_pool(pool: PgPool) -> Self {
         Self {
             tenants: PgTenants { pool: pool.clone() },
+            users: PgUsers { pool: pool.clone() },
             clients: PgClients { pool: pool.clone() },
             keys: PgKeys { pool: pool.clone() },
+            sessions: PgSessions { pool: pool.clone() },
+            flows: PgFlows { pool: pool.clone() },
+            grants: PgGrants { pool: pool.clone() },
             setup: PgSetup { pool: pool.clone() },
             outbox: PgOutbox { pool: pool.clone() },
             pool,
@@ -78,7 +93,7 @@ impl Storage for PostgresStorage {
         &self.tenants
     }
     fn users(&self) -> &dyn UserRepo {
-        &Pending
+        &self.users
     }
     fn clients(&self) -> &dyn ClientRepo {
         &self.clients
@@ -87,13 +102,13 @@ impl Storage for PostgresStorage {
         &self.keys
     }
     fn sessions(&self) -> &dyn SessionRepo {
-        &Pending
+        &self.sessions
     }
     fn flows(&self) -> &dyn FlowRepo {
-        &Pending
+        &self.flows
     }
     fn grants(&self) -> &dyn GrantRepo {
-        &Pending
+        &self.grants
     }
     fn setup(&self) -> &dyn SetupRepo {
         &self.setup
@@ -102,9 +117,62 @@ impl Storage for PostgresStorage {
         &self.outbox
     }
 
-    async fn purge_expired(&self, _now: time::OffsetDateTime) -> Result<u64, StorageError> {
-        Err(StorageError::Unsupported(
-            "postgres: Storage::purge_expired lands in plan 02-06 task 2",
-        ))
+    async fn purge_expired(&self, now: time::OffsetDateTime) -> Result<u64, StorageError> {
+        // Batched `DELETE … WHERE ctid IN (SELECT ctid … LIMIT n)` per table until a batch comes
+        // back short. Consumed codes and refresh tokens stay until they expire (reuse detection).
+        macro_rules! purge {
+            ($sql:literal) => {{
+                let mut deleted = 0u64;
+                loop {
+                    let done = sqlx::query!($sql, now, PURGE_BATCH)
+                        .execute(&self.pool)
+                        .await
+                        .map_err(map_err)?;
+                    deleted += done.rows_affected();
+                    if done.rows_affected() < PURGE_BATCH as u64 {
+                        break deleted;
+                    }
+                }
+            }};
+        }
+        let mut total = 0u64;
+        total += purge!(
+            "DELETE FROM authorization_code WHERE ctid IN
+               (SELECT ctid FROM authorization_code WHERE expires_at <= $1 LIMIT $2)"
+        );
+        total += purge!(
+            "DELETE FROM authorization_request WHERE ctid IN
+               (SELECT ctid FROM authorization_request WHERE expires_at <= $1 LIMIT $2)"
+        );
+        total += purge!(
+            "DELETE FROM flow WHERE ctid IN
+               (SELECT ctid FROM flow WHERE expires_at <= $1 LIMIT $2)"
+        );
+        total += purge!(
+            "DELETE FROM browser_session WHERE ctid IN
+               (SELECT ctid FROM browser_session WHERE expires_at <= $1 LIMIT $2)"
+        );
+        total += purge!(
+            "DELETE FROM refresh_token WHERE ctid IN
+               (SELECT ctid FROM refresh_token WHERE expires_at <= $1 LIMIT $2)"
+        );
+        total += purge!(
+            "DELETE FROM replay_guard WHERE ctid IN
+               (SELECT ctid FROM replay_guard WHERE expires_at <= $1 LIMIT $2)"
+        );
+        total += purge!(
+            "DELETE FROM self_service_token WHERE ctid IN
+               (SELECT ctid FROM self_service_token WHERE expires_at <= $1 LIMIT $2)"
+        );
+        total += purge!(
+            "DELETE FROM admin_setup_token WHERE ctid IN
+               (SELECT ctid FROM admin_setup_token WHERE expires_at <= $1 LIMIT $2)"
+        );
+        total += purge!(
+            "DELETE FROM email_outbox WHERE ctid IN
+               (SELECT ctid FROM email_outbox
+                 WHERE sent_at IS NOT NULL OR expires_at <= $1 LIMIT $2)"
+        );
+        Ok(total)
     }
 }

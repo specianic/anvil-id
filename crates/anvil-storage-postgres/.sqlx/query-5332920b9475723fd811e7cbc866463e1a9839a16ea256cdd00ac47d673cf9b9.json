@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM replay_guard WHERE ctid IN\n               (SELECT ctid FROM replay_guard WHERE expires_at <= $1 LIMIT $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5332920b9475723fd811e7cbc866463e1a9839a16ea256cdd00ac47d673cf9b9"
+}

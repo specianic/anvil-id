@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM authorization_code WHERE ctid IN\n               (SELECT ctid FROM authorization_code WHERE expires_at <= $1 LIMIT $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8eba4228e6db0d1ad1775569db9663b33512bd103b4f541cc4e42757216ecff0"
+}

@@ -1,0 +1,126 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, tenant_id, kind, state, csrf_hash, cookie_hash, auth_request_id,\n                    created_at, expires_at\n               FROM flow\n              WHERE tenant_id = $1 AND id = $2 AND expires_at > $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "flow",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "tenant_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "flow",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "kind",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "flow",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "state",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "flow",
+            "name": "state"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "csrf_hash",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "flow",
+            "name": "csrf_hash"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "cookie_hash",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "flow",
+            "name": "cookie_hash"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "auth_request_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "flow",
+            "name": "auth_request_id"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "flow",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "expires_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "flow",
+            "name": "expires_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "8581ebd73d7dd6581e1cb765fb05fe49674167edc8d94d706b0f07427980bff1"
+}

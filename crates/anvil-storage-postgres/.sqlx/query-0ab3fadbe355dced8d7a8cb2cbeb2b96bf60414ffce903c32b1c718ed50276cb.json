@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO browser_session\n                 (id, tenant_id, user_id, token_hash, auth_time, acr, amr, created_at,\n                  last_seen_at, expires_at, idle_expires_at)\n             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9, $10)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Bytea",
+        "Timestamptz",
+        "Text",
+        "TextArray",
+        "Timestamptz",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0ab3fadbe355dced8d7a8cb2cbeb2b96bf60414ffce903c32b1c718ed50276cb"
+}

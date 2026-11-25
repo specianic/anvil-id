@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM browser_session WHERE ctid IN\n               (SELECT ctid FROM browser_session WHERE expires_at <= $1 LIMIT $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e6d181de368b271230e6549886a91728d4cd96cc8a87c1cebc5f52ea677b796e"
+}

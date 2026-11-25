@@ -1,0 +1,185 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, tenant_id, client_id, user_id, scope, auth_time, acr, amr, session_id, claims,\n                created_at, absolute_expires_at, revoked_at, revoked_reason\n           FROM token_family\n          WHERE tenant_id = $1 AND id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "token_family",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "tenant_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "token_family",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "client_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "token_family",
+            "name": "client_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "user_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "token_family",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "scope",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "token_family",
+            "name": "scope"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "auth_time",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "token_family",
+            "name": "auth_time"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "acr",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "token_family",
+            "name": "acr"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "amr",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "token_family",
+            "name": "amr"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "session_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "token_family",
+            "name": "session_id"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "claims",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "token_family",
+            "name": "claims"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "token_family",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "absolute_expires_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "token_family",
+            "name": "absolute_expires_at"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "revoked_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "token_family",
+            "name": "revoked_at"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "revoked_reason",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "token_family",
+            "name": "revoked_reason"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      true,
+      false,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "3828cce1dba32d3973ec58cb78853ac6917693293b9a9fb828216a835f655ada"
+}

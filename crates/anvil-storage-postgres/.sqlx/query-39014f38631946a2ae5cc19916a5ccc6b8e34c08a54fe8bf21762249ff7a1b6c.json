@@ -1,0 +1,139 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE \"user\" SET email_verified = TRUE, updated_at = $4\n              WHERE tenant_id = $1 AND id = $2 AND email = $3\n          RETURNING id, tenant_id, email, email_verified, username, claims, status, created_at,\n                    updated_at, last_login_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "\"user\"",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "tenant_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "\"user\"",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "email",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"user\"",
+            "name": "email"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "email_verified",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "\"user\"",
+            "name": "email_verified"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "username",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"user\"",
+            "name": "username"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "claims",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"user\"",
+            "name": "claims"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"user\"",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "\"user\"",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "\"user\"",
+            "name": "updated_at"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "last_login_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "\"user\"",
+            "name": "last_login_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "39014f38631946a2ae5cc19916a5ccc6b8e34c08a54fe8bf21762249ff7a1b6c"
+}

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM email_outbox WHERE ctid IN\n               (SELECT ctid FROM email_outbox\n                 WHERE sent_at IS NOT NULL OR expires_at <= $1 LIMIT $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "988fcb492168bc31c288d05d077c9cd1947bcf1503dfedc461c0bb5da9223cef"
+}

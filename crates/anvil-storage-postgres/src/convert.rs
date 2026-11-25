@@ -68,6 +68,14 @@ pub(crate) fn from_json<T: DeserializeOwned>(
     serde_json::from_value(value).map_err(|e| StorageError::Corrupt(format!("{column}: {e}")))
 }
 
+/// Nullable jsonb → optional value.
+pub(crate) fn opt_from_json<T: DeserializeOwned>(
+    column: &str,
+    value: Option<serde_json::Value>,
+) -> Result<Option<T>, StorageError> {
+    value.map(|v| from_json(column, v)).transpose()
+}
+
 /// Non-negative integer column → u32.
 pub(crate) fn to_u32(column: &str, value: i32) -> Result<u32, StorageError> {
     u32::try_from(value).map_err(|_| StorageError::Corrupt(format!("{column}: negative {value}")))

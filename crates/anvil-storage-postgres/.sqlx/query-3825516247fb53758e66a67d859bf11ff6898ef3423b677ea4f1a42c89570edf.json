@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE self_service_token SET consumed_at = $3\n              WHERE tenant_id = $1 AND token_hash = $2 AND kind = ANY($4)\n                AND consumed_at IS NULL AND expires_at > $3\n          RETURNING user_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "self_service_token",
+            "name": "user_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bytea",
+        "Timestamptz",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "3825516247fb53758e66a67d859bf11ff6898ef3423b677ea4f1a42c89570edf"
+}

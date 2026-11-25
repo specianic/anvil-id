@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT consumed_at, family_id FROM refresh_token\n              WHERE tenant_id = $1 AND token_hash = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "consumed_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "refresh_token",
+            "name": "consumed_at"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "family_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "refresh_token",
+            "name": "family_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      true,
+      false
+    ]
+  },
+  "hash": "daaba02e15546a8ecd1cf899c23f15756e1e9bdbb2c5c0021092660121dd51ed"
+}
