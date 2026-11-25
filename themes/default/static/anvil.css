@@ -1,0 +1,108 @@
+/* AnvilID default theme. Self-contained: no external fonts, images or URLs. */
+
+:root {
+  --anvil-bg: #f6f7f9;
+  --anvil-surface: #ffffff;
+  --anvil-text: #1c1f24;
+  --anvil-muted: #5b6270;
+  --anvil-border: #d6dae1;
+  --anvil-primary: #2f5bd3;
+  --anvil-primary-text: #ffffff;
+  --anvil-danger: #b42318;
+  --anvil-focus: #8aa8f0;
+  --anvil-radius: 6px;
+  --anvil-font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --anvil-bg: #14161a;
+    --anvil-surface: #1d2026;
+    --anvil-text: #e7e9ee;
+    --anvil-muted: #a0a7b4;
+    --anvil-border: #343944;
+    --anvil-primary: #6d8ef0;
+    --anvil-primary-text: #0d1020;
+    --anvil-danger: #f97066;
+    --anvil-focus: #3d5fc4;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--anvil-bg);
+  color: var(--anvil-text);
+  font-family: var(--anvil-font);
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+main {
+  width: 100%;
+  max-width: 24rem;
+  padding: 2rem;
+  background: var(--anvil-surface);
+  border: 1px solid var(--anvil-border);
+  border-radius: var(--anvil-radius);
+}
+
+h1 {
+  margin: 0 0 1.5rem;
+  font-size: 1.375rem;
+  font-weight: 600;
+}
+
+form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  color: var(--anvil-muted);
+  font-size: 0.875rem;
+}
+
+input {
+  padding: 0.5rem 0.75rem;
+  font: inherit;
+  color: var(--anvil-text);
+  background: var(--anvil-surface);
+  border: 1px solid var(--anvil-border);
+  border-radius: var(--anvil-radius);
+}
+
+input:focus-visible,
+button:focus-visible {
+  outline: 3px solid var(--anvil-focus);
+  outline-offset: 1px;
+}
+
+button {
+  padding: 0.625rem 1rem;
+  font: inherit;
+  font-weight: 600;
+  color: var(--anvil-primary-text);
+  background: var(--anvil-primary);
+  border: 0;
+  border-radius: var(--anvil-radius);
+  cursor: pointer;
+}
+
+.anvil-error {
+  color: var(--anvil-danger);
+  font-size: 0.875rem;
+}
