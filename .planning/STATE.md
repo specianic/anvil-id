@@ -71,6 +71,7 @@ Progress: [█████░░░░░] 53%
 | Phase 02 P06 | 50min | 3 tasks | 16 files |
 | Phase 02 P12 | 14min | 3 tasks | 40 files |
 | Phase 02 P22 | 25min | 2 tasks | 9 files |
+| Phase 02 P14 | 35min | 2 tasks | 11 files |
 | Phase 02 P13 | 35min | 2 tasks | 10 files |
 | Phase 02 P17 | 30min | 2 tasks | 9 files |
 
@@ -135,6 +136,8 @@ Recent decisions affecting current work:
 - [Phase 02]: 02-12: fetch_metadata_layer() takes allowed origins from the tenant layer's AllowedOrigins extension (public origin + host-tenant origin), fail closed without it
 - [Phase 02]: 02-12: security headers on every response (insert-if-absent); tenant layer skips /health/*; minijinja escapes '/' as &#x2f; (tests compare decoded HTML)
 - [Phase 02]: Outbox payloads sealed with KEK (purpose anvilid/outbox-payload/v1, tenant AAD); FlowService/UserService/OutboxWorker take kek: Arc<Kek> and must share one KEK
+- [Phase 02]: 02-14: /userinfo answers client-credentials ATs with 403 insufficient_scope (never carry openid); query access_token -> 401; header+body -> invalid_request
+- [Phase 02]: 02-14: /token form-only, repeated parameter -> invalid_request, empty values treated as omitted; no-store + Pragma no-cache on all token/userinfo responses
 - [Phase 02]: 02-17: Fuzz targets assert security invariants (RFC 7523 model for client assertions, redirects only to registered URIs, PKCE for public clients); fuzz/ has its own workspace and Cargo.lock seeded from the main lock
 - [Phase 02]: 02-17: Release-graph gate forbids test crates and anvil-storage on anvilid normal/build edges; source check skips #[cfg(test)] mod blocks by rustfmt indentation; http-body-util allowed (axum dep)
 
