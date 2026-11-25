@@ -81,7 +81,7 @@ Plans:
 - [ ] 02-14-PLAN.md — /token and /userinfo, token-side security tests (wave 3)
 - [ ] 02-15-PLAN.md — UI handlers (login, registration, verification, recovery, setup) + CSRF/cookie/CSP/enumeration tests (wave 3)
 - [ ] 02-16-PLAN.md — OpenAPI 3.1 management API with admin scopes + drift check (wave 3)
-- [ ] 02-17-PLAN.md — Fuzz targets (JWT, assertion, authorize, redirect) + SEC-06 release-graph gate (wave 3)
+- [x] 02-17-PLAN.md — Fuzz targets (JWT, assertion, authorize, redirect) + SEC-06 release-graph gate (wave 3)
 - [ ] 02-18-PLAN.md — Binary wiring: zero-config, figment config, CLI, bootstrap, TLS listener, jobs, conformance ratchet refresh (wave 4)
 - [ ] 02-19-PLAN.md — Conformance gate: Basic OP + Config OP over TLS (wave 5)
 - [ ] 02-20-PLAN.md — Container image < 50 MB, QUAL-04 ≤ 2 min on both backends, Playwright self-service e2e (wave 5)

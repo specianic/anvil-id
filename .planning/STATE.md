@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: verifying
-stopped_at: Completed 02-13-PLAN.md
-last_updated: "2026-11-25T02:36:05.295Z"
+stopped_at: Completed 02-17-PLAN.md
+last_updated: "2026-11-25T02:37:16.620Z"
 last_activity: "2026-11-25 — Completed 01-08 (phase gate: CI green on GitHub, spike verdicts, stack confirmed)"
 progress:
   total_phases: 7
   completed_phases: 1
   total_plans: 30
-  completed_plans: 22
+  completed_plans: 23
   percent: 53
 ---
 
@@ -72,6 +72,7 @@ Progress: [█████░░░░░] 53%
 | Phase 02 P12 | 14min | 3 tasks | 40 files |
 | Phase 02 P22 | 25min | 2 tasks | 9 files |
 | Phase 02 P13 | 35min | 2 tasks | 10 files |
+| Phase 02 P17 | 30min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -134,6 +135,8 @@ Recent decisions affecting current work:
 - [Phase 02]: 02-12: fetch_metadata_layer() takes allowed origins from the tenant layer's AllowedOrigins extension (public origin + host-tenant origin), fail closed without it
 - [Phase 02]: 02-12: security headers on every response (insert-if-absent); tenant layer skips /health/*; minijinja escapes '/' as &#x2f; (tests compare decoded HTML)
 - [Phase 02]: Outbox payloads sealed with KEK (purpose anvilid/outbox-payload/v1, tenant AAD); FlowService/UserService/OutboxWorker take kek: Arc<Kek> and must share one KEK
+- [Phase 02]: 02-17: Fuzz targets assert security invariants (RFC 7523 model for client assertions, redirects only to registered URIs, PKCE for public clients); fuzz/ has its own workspace and Cargo.lock seeded from the main lock
+- [Phase 02]: 02-17: Release-graph gate forbids test crates and anvil-storage on anvilid normal/build edges; source check skips #[cfg(test)] mod blocks by rustfmt indentation; http-body-util allowed (axum dep)
 
 ### Pending Todos
 
@@ -146,6 +149,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-25T02:36:05.293Z
-Stopped at: Completed 02-13-PLAN.md
+Last session: 2026-11-25T02:37:16.617Z
+Stopped at: Completed 02-17-PLAN.md
 Resume file: None
