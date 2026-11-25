@@ -113,6 +113,10 @@ fn base_document() -> OpenApi {
             tag("sessions", "Browser sessions of a tenant's users"),
             tag("audit", "Audit log of a tenant"),
             tag("email", "Email templates and SMTP settings of a tenant"),
+            tag(
+                "connections",
+                "Upstream identity providers (social, OIDC, OAuth2) of a tenant",
+            ),
         ]))
         .build()
 }
@@ -160,6 +164,16 @@ fn api_router() -> OpenApiRouter<AppState> {
             email::delete_smtp
         ))
         .routes(routes!(email::test_smtp))
+        .routes(routes!(
+            connections::list_connections,
+            connections::create_connection
+        ))
+        .routes(routes!(
+            connections::get_connection,
+            connections::update_connection,
+            connections::delete_connection
+        ))
+        .routes(routes!(connections::put_connection_secret))
 }
 
 /// Management API routes, including the served OpenAPI document.

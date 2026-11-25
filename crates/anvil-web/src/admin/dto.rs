@@ -3,17 +3,22 @@
 //! spec is defined here; the enums mirror the domain enums one to one.
 
 use anvil_core::model::{
-    ActorKind as CoreActorKind, Address as CoreAddress, ApplicationType as CoreApplicationType,
-    AuditAction as CoreAuditAction, AuditEvent, AuditOutcome as CoreAuditOutcome,
-    CaptchaProvider as CoreCaptchaProvider, Client, ClientAuthMethod as CoreClientAuthMethod,
-    ClientType as CoreClientType, ConsentMode as CoreConsentMode,
+    ActorKind as CoreActorKind, Address as CoreAddress, AppleConfig as CoreAppleConfig,
+    ApplicationType as CoreApplicationType, AuditAction as CoreAuditAction, AuditEvent,
+    AuditOutcome as CoreAuditOutcome, CaptchaProvider as CoreCaptchaProvider,
+    ClaimMapping as CoreClaimMapping, Client, ClientAuthMethod as CoreClientAuthMethod,
+    ClientType as CoreClientType, Connection, ConnectionConfig as CoreConnectionConfig,
+    ConnectionKind as CoreConnectionKind, ConsentMode as CoreConsentMode,
     CredentialKind as CoreCredentialKind, CredentialSummary, DEFAULT_SIGNING_ALG,
-    EmailKind as CoreEmailKind, GrantType as CoreGrantType, Page,
-    RegistrationMode as CoreRegistrationMode, SmtpTls as CoreSmtpTls,
+    EmailKind as CoreEmailKind, EndpointOverrides as CoreEndpointOverrides,
+    GrantType as CoreGrantType, MfaPolicy as CoreMfaPolicy, OAuth2Config as CoreOAuth2Config,
+    OidcConfig as CoreOidcConfig, Page, RegistrationMode as CoreRegistrationMode,
+    SmtpTls as CoreSmtpTls, SocialConfig as CoreSocialConfig, SocialProvider as CoreSocialProvider,
     StandardClaims as CoreStandardClaims, Tenant, TenantSettings as CoreTenantSettings,
     TokenFormat as CoreTokenFormat, User, UserStatus as CoreUserStatus,
 };
 use anvil_core::service::client::{ClientInput, ClientOptions, ClientOptionsPatch, ClientPatch};
+use anvil_core::service::connection::{ConnectionPatch, NewConnectionInput};
 use anvil_core::service::mail_settings::{SmtpInput, SmtpView as CoreSmtpView, TemplateInput};
 use anvil_core::service::session::SessionInfo;
 use anvil_core::service::tenant::{
@@ -188,6 +193,19 @@ wire_enum!(
     /// SMTP transport security.
     SmtpTls => CoreSmtpTls { Starttls, Implicit, None }
 );
+wire_enum!(
+    /// Whether sign-in needs a second factor: `off`, `optional` (users who enrolled one) or
+    /// `required` (users without one enrol first). Across tenant and client the strictest wins.
+    MfaPolicy => CoreMfaPolicy { Off, Optional, Required }
+);
+wire_enum!(
+    /// Social provider preset of a connection.
+    SocialProvider => CoreSocialProvider { Google, Apple, Microsoft, Github }
+);
+wire_enum!(
+    /// Kind of an upstream connection (derived from its config).
+    ConnectionKind => CoreConnectionKind { Google, Apple, Microsoft, Github, Oidc, Oauth2 }
+);
 
 /// RFC 3339 timestamp. The domain only holds times inside years 0..=9999, which always format.
 fn ts(t: OffsetDateTime) -> String {
@@ -261,6 +279,19 @@ pub struct TenantSettings {
     pub signing_algs: Vec<String>,
     /// CAPTCHA on registration and after repeated failed sign-ins; `null` = disabled.
     pub captcha: Option<CaptchaView>,
+    /// Tenant MFA policy (a client may make it stricter).
+    pub mfa_policy: MfaPolicy,
+    /// Sign-in with a one-time code sent by email.
+    pub email_otp: bool,
+    /// Sign-in with a magic link sent by email.
+    pub magic_link: bool,
+    /// Link an upstream identity automatically when it asserts a trusted, verified email equal
+    /// to an existing account's verified email.
+    pub auto_link: bool,
+    /// Whether upstream sign-in may create accounts; `null` follows `registration`.
+    pub upstream_registration: Option<bool>,
+    /// Page language when neither `ui_locales` nor `Accept-Language` matches.
+    pub default_locale: String,
 }
 
 impl From<CoreTenantSettings> for TenantSettings {
@@ -274,6 +305,12 @@ impl From<CoreTenantSettings> for TenantSettings {
                 site_key: c.site_key,
                 configured: true,
             }),
+            mfa_policy: s.mfa_policy.into(),
+            email_otp: s.email_otp,
+            magic_link: s.magic_link,
+            auto_link: s.auto_link,
+            upstream_registration: s.upstream_registration,
+            default_locale: s.default_locale,
         }
     }
 }
@@ -328,6 +365,18 @@ pub struct NewTenantSettings {
     pub require_verified_email: bool,
     /// Signing algorithms to enable besides RS256 (`ES256`, `Ed25519`).
     pub signing_algs: Vec<String>,
+    /// Default `optional`.
+    pub mfa_policy: MfaPolicy,
+    /// Default `false`; needs SMTP (the installation's, for a new tenant).
+    pub email_otp: bool,
+    /// Default `false`; needs SMTP (the installation's, for a new tenant).
+    pub magic_link: bool,
+    /// Default `true`.
+    pub auto_link: bool,
+    /// Default `null` (follow `registration`).
+    pub upstream_registration: Option<bool>,
+    /// Default `en`; a language tag such as `de` or `pt-BR`.
+    pub default_locale: String,
 }
 
 impl Default for NewTenantSettings {
@@ -337,6 +386,12 @@ impl Default for NewTenantSettings {
             registration: core.registration.into(),
             require_verified_email: core.require_verified_email,
             signing_algs: core.signing_algs,
+            mfa_policy: core.mfa_policy.into(),
+            email_otp: core.email_otp,
+            magic_link: core.magic_link,
+            auto_link: core.auto_link,
+            upstream_registration: core.upstream_registration,
+            default_locale: core.default_locale,
         }
     }
 }
@@ -348,8 +403,12 @@ impl From<NewTenantSettings> for CoreTenantSettings {
             require_verified_email: s.require_verified_email,
             signing_algs: s.signing_algs,
             captcha: None,
-            // Phase 4 settings are not on the wire yet (04-11 / 04-18 expose them).
-            ..CoreTenantSettings::default()
+            mfa_policy: s.mfa_policy.into(),
+            email_otp: s.email_otp,
+            magic_link: s.magic_link,
+            auto_link: s.auto_link,
+            upstream_registration: s.upstream_registration,
+            default_locale: s.default_locale,
         }
     }
 }
@@ -370,6 +429,22 @@ pub struct TenantSettingsPatch {
     #[serde(default, deserialize_with = "double_option")]
     #[schema(value_type = Option<CaptchaInput>)]
     pub captcha: Option<Option<CaptchaInput>>,
+    #[serde(default)]
+    pub mfa_policy: Option<MfaPolicy>,
+    /// Turning it on needs SMTP (tenant SMTP settings or the installation SMTP).
+    #[serde(default)]
+    pub email_otp: Option<bool>,
+    /// Turning it on needs SMTP (tenant SMTP settings or the installation SMTP).
+    #[serde(default)]
+    pub magic_link: Option<bool>,
+    #[serde(default)]
+    pub auto_link: Option<bool>,
+    /// `null` follows `registration`.
+    #[serde(default, deserialize_with = "double_option")]
+    #[schema(value_type = Option<bool>)]
+    pub upstream_registration: Option<Option<bool>>,
+    #[serde(default)]
+    pub default_locale: Option<String>,
 }
 
 impl TenantSettingsPatch {
@@ -385,7 +460,13 @@ impl TenantSettingsPatch {
         });
         let touched = self.registration.is_some()
             || self.require_verified_email.is_some()
-            || self.signing_algs.is_some();
+            || self.signing_algs.is_some()
+            || self.mfa_policy.is_some()
+            || self.email_otp.is_some()
+            || self.magic_link.is_some()
+            || self.auto_link.is_some()
+            || self.upstream_registration.is_some()
+            || self.default_locale.is_some();
         let settings = touched.then(|| CoreTenantSettings {
             registration: self.registration.map_or(current.registration, Into::into),
             require_verified_email: self
@@ -395,8 +476,16 @@ impl TenantSettingsPatch {
                 .signing_algs
                 .unwrap_or_else(|| current.signing_algs.clone()),
             captcha: current.captcha.clone(),
-            // Settings not (yet) patchable over the API keep their current value.
-            ..current.clone()
+            mfa_policy: self.mfa_policy.map_or(current.mfa_policy, Into::into),
+            email_otp: self.email_otp.unwrap_or(current.email_otp),
+            magic_link: self.magic_link.unwrap_or(current.magic_link),
+            auto_link: self.auto_link.unwrap_or(current.auto_link),
+            upstream_registration: self
+                .upstream_registration
+                .unwrap_or(current.upstream_registration),
+            default_locale: self
+                .default_locale
+                .unwrap_or_else(|| current.default_locale.clone()),
         });
         (settings, captcha)
     }
@@ -459,14 +548,15 @@ pub struct CreateTenant {
     pub settings: NewTenantSettings,
 }
 
-impl From<CreateTenant> for NewTenantInput {
-    fn from(c: CreateTenant) -> Self {
-        Self {
-            slug: c.slug,
-            display_name: c.display_name,
-            host: c.host,
-            settings: c.settings.into(),
-            installation_smtp: false,
+impl CreateTenant {
+    /// The core input; `installation_smtp` = whether the installation SMTP is configured.
+    pub fn into_input(self, installation_smtp: bool) -> NewTenantInput {
+        NewTenantInput {
+            slug: self.slug,
+            display_name: self.display_name,
+            host: self.host,
+            settings: self.settings.into(),
+            installation_smtp,
         }
     }
 }
@@ -487,7 +577,12 @@ pub struct UpdateTenant {
 
 impl UpdateTenant {
     /// The core patch and CAPTCHA change, with settings merged onto `current`.
-    pub fn into_patch(self, current: &CoreTenantSettings) -> (TenantPatch, Option<CaptchaChange>) {
+    /// `installation_smtp` = whether the installation SMTP is configured.
+    pub fn into_patch(
+        self,
+        current: &CoreTenantSettings,
+        installation_smtp: bool,
+    ) -> (TenantPatch, Option<CaptchaChange>) {
         let (settings, captcha) = match self.settings {
             Some(p) => p.merge(current),
             None => (None, None),
@@ -497,7 +592,7 @@ impl UpdateTenant {
                 display_name: self.display_name,
                 host: self.host,
                 settings,
-                installation_smtp: false,
+                installation_smtp,
             },
             captcha,
         )
@@ -530,6 +625,16 @@ pub struct ClientView {
     pub id_token_signed_response_alg: String,
     /// May introspect any token of the tenant (confidential clients only).
     pub can_introspect: bool,
+    /// Where RP-initiated logout may redirect after signing out.
+    pub post_logout_redirect_uris: Vec<String>,
+    /// OIDC Back-Channel Logout endpoint; `null` = none.
+    pub backchannel_logout_uri: Option<String>,
+    /// Logout tokens carry `sid`.
+    pub backchannel_logout_session_required: bool,
+    /// Resource indicators (RFC 8707) the client may request.
+    pub allowed_resources: Vec<String>,
+    /// Client MFA policy; `null` = the tenant's. The strictest of both wins.
+    pub mfa_policy: Option<MfaPolicy>,
     #[schema(format = DateTime)]
     pub created_at: String,
     #[schema(format = DateTime)]
@@ -558,6 +663,11 @@ impl From<Client> for ClientView {
                 .id_token_signed_response_alg
                 .unwrap_or_else(|| DEFAULT_SIGNING_ALG.to_owned()),
             can_introspect: c.can_introspect,
+            post_logout_redirect_uris: c.post_logout_redirect_uris,
+            backchannel_logout_uri: c.backchannel_logout_uri,
+            backchannel_logout_session_required: c.backchannel_logout_session_required,
+            allowed_resources: c.allowed_resources,
+            mfa_policy: c.mfa_policy.map(Into::into),
             created_at: ts(c.created_at),
             updated_at: ts(c.updated_at),
             client_secret: None,
@@ -648,6 +758,21 @@ pub struct CreateClient {
     /// Default `false`; confidential clients only.
     #[serde(default)]
     pub can_introspect: Option<bool>,
+    /// Redirect URI rules of the application type.
+    #[serde(default)]
+    pub post_logout_redirect_uris: Vec<String>,
+    /// Absolute, no fragment; https (http only to loopback).
+    #[serde(default)]
+    pub backchannel_logout_uri: Option<String>,
+    /// Default `false`.
+    #[serde(default)]
+    pub backchannel_logout_session_required: bool,
+    /// Absolute URIs without fragment or query (RFC 8707).
+    #[serde(default)]
+    pub allowed_resources: Vec<String>,
+    /// Default `null` (the tenant's policy).
+    #[serde(default)]
+    pub mfa_policy: Option<MfaPolicy>,
 }
 
 impl CreateClient {
@@ -662,7 +787,11 @@ impl CreateClient {
                 .clone()
                 .or(defaults.id_token_signed_response_alg),
             can_introspect: self.can_introspect.unwrap_or(defaults.can_introspect),
-            ..ClientOptions::default()
+            post_logout_redirect_uris: self.post_logout_redirect_uris.clone(),
+            backchannel_logout_uri: self.backchannel_logout_uri.clone(),
+            backchannel_logout_session_required: self.backchannel_logout_session_required,
+            allowed_resources: self.allowed_resources.clone(),
+            mfa_policy: self.mfa_policy.map(Into::into),
         };
         (self.into(), options)
     }
@@ -717,6 +846,20 @@ pub struct UpdateClient {
     pub id_token_signed_response_alg: Option<Option<String>>,
     #[serde(default)]
     pub can_introspect: Option<bool>,
+    #[serde(default)]
+    pub post_logout_redirect_uris: Option<Vec<String>>,
+    /// `null` removes the back-channel logout URI.
+    #[serde(default, deserialize_with = "double_option")]
+    #[schema(value_type = Option<String>)]
+    pub backchannel_logout_uri: Option<Option<String>>,
+    #[serde(default)]
+    pub backchannel_logout_session_required: Option<bool>,
+    #[serde(default)]
+    pub allowed_resources: Option<Vec<String>>,
+    /// `null` falls back to the tenant's policy.
+    #[serde(default, deserialize_with = "double_option")]
+    #[schema(value_type = Option<MfaPolicy>)]
+    pub mfa_policy: Option<Option<MfaPolicy>>,
 }
 
 impl UpdateClient {
@@ -727,7 +870,11 @@ impl UpdateClient {
             consent_mode: self.consent_mode.map(Into::into),
             id_token_signed_response_alg: self.id_token_signed_response_alg,
             can_introspect: self.can_introspect,
-            ..ClientOptionsPatch::default()
+            post_logout_redirect_uris: self.post_logout_redirect_uris,
+            backchannel_logout_uri: self.backchannel_logout_uri,
+            backchannel_logout_session_required: self.backchannel_logout_session_required,
+            allowed_resources: self.allowed_resources,
+            mfa_policy: self.mfa_policy.map(|m| m.map(Into::into)),
         };
         let patch = ClientPatch {
             name: self.name,
@@ -1317,4 +1464,378 @@ pub struct SmtpTestResult {
     /// The SMTP error (credentials redacted) when delivery failed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+// ---------------------------------------------------------------------------------------------
+// Upstream connections
+// ---------------------------------------------------------------------------------------------
+
+/// Endpoint overrides of a social preset (`null` = the preset's value). Absolute https URLs
+/// (plain http only to loopback hosts).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct EndpointOverrides {
+    pub issuer: Option<String>,
+    pub authorization_endpoint: Option<String>,
+    pub token_endpoint: Option<String>,
+    pub userinfo_endpoint: Option<String>,
+    pub jwks_uri: Option<String>,
+    /// GitHub only: REST API base.
+    pub api_base_url: Option<String>,
+}
+
+impl From<EndpointOverrides> for CoreEndpointOverrides {
+    fn from(o: EndpointOverrides) -> Self {
+        Self {
+            issuer: o.issuer,
+            authorization_endpoint: o.authorization_endpoint,
+            token_endpoint: o.token_endpoint,
+            userinfo_endpoint: o.userinfo_endpoint,
+            jwks_uri: o.jwks_uri,
+            api_base_url: o.api_base_url,
+        }
+    }
+}
+
+impl From<CoreEndpointOverrides> for EndpointOverrides {
+    fn from(o: CoreEndpointOverrides) -> Self {
+        Self {
+            issuer: o.issuer,
+            authorization_endpoint: o.authorization_endpoint,
+            token_endpoint: o.token_endpoint,
+            userinfo_endpoint: o.userinfo_endpoint,
+            jwks_uri: o.jwks_uri,
+            api_base_url: o.api_base_url,
+        }
+    }
+}
+
+/// Sign in with Apple: the team and key the `.p8` private key (the connection secret) belongs
+/// to.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AppleConfig {
+    pub team_id: String,
+    pub key_id: String,
+}
+
+/// A social preset (Google, Apple, Microsoft, GitHub).
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SocialConnectionConfig {
+    pub provider: SocialProvider,
+    pub client_id: String,
+    /// Requested scopes; empty = the preset's defaults.
+    #[serde(default)]
+    pub scopes: Vec<String>,
+    #[serde(default)]
+    pub endpoints: EndpointOverrides,
+    /// Microsoft only: `common` (default), `organizations`, `consumers` or a tenant id.
+    #[serde(default)]
+    pub microsoft_tenant: Option<String>,
+    /// Microsoft only: accepted `tid` values (empty = any).
+    #[serde(default)]
+    pub allowed_tenants: Vec<String>,
+    /// Google only: accepted `hd` values (empty = any).
+    #[serde(default)]
+    pub hosted_domains: Vec<String>,
+    /// Apple only (required there).
+    #[serde(default)]
+    pub apple: Option<AppleConfig>,
+}
+
+/// A generic OpenID Connect provider (discovery at `{issuer}/.well-known/openid-configuration`).
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OidcConnectionConfig {
+    /// Absolute https URL (plain http only to loopback hosts).
+    pub issuer: String,
+    pub client_id: String,
+    /// `openid` is always requested.
+    #[serde(default)]
+    pub scopes: Vec<String>,
+    /// Default `true`.
+    #[serde(default = "default_true")]
+    pub use_pkce: bool,
+    /// Also call the UserInfo endpoint after the ID token was validated.
+    #[serde(default)]
+    pub fetch_userinfo: bool,
+}
+
+/// JSON pointers (RFC 6901, e.g. `/id`) into a generic OAuth2 profile response.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ClaimMapping {
+    pub subject: String,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub email_verified: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+/// A generic OAuth2 provider (no ID token; identity from a profile endpoint).
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OAuth2ConnectionConfig {
+    pub authorization_endpoint: String,
+    pub token_endpoint: String,
+    pub userinfo_endpoint: String,
+    pub client_id: String,
+    #[serde(default)]
+    pub scopes: Vec<String>,
+    /// Default `true`.
+    #[serde(default = "default_true")]
+    pub use_pkce: bool,
+    pub mapping: ClaimMapping,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Connection configuration, tagged by `type`. It never contains the client secret.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ConnectionConfig {
+    Social(SocialConnectionConfig),
+    Oidc(OidcConnectionConfig),
+    Oauth2(OAuth2ConnectionConfig),
+}
+
+impl From<ConnectionConfig> for CoreConnectionConfig {
+    fn from(c: ConnectionConfig) -> Self {
+        match c {
+            ConnectionConfig::Social(s) => Self::Social(CoreSocialConfig {
+                provider: s.provider.into(),
+                client_id: s.client_id,
+                scopes: s.scopes,
+                endpoints: s.endpoints.into(),
+                microsoft_tenant: s.microsoft_tenant,
+                allowed_tenants: s.allowed_tenants,
+                hosted_domains: s.hosted_domains,
+                apple: s.apple.map(|a| CoreAppleConfig {
+                    team_id: a.team_id,
+                    key_id: a.key_id,
+                }),
+            }),
+            ConnectionConfig::Oidc(o) => Self::Oidc(CoreOidcConfig {
+                issuer: o.issuer,
+                client_id: o.client_id,
+                scopes: o.scopes,
+                use_pkce: o.use_pkce,
+                fetch_userinfo: o.fetch_userinfo,
+            }),
+            ConnectionConfig::Oauth2(o) => Self::Oauth2(CoreOAuth2Config {
+                authorization_endpoint: o.authorization_endpoint,
+                token_endpoint: o.token_endpoint,
+                userinfo_endpoint: o.userinfo_endpoint,
+                client_id: o.client_id,
+                scopes: o.scopes,
+                use_pkce: o.use_pkce,
+                mapping: CoreClaimMapping {
+                    subject: o.mapping.subject,
+                    email: o.mapping.email,
+                    email_verified: o.mapping.email_verified,
+                    name: o.mapping.name,
+                },
+            }),
+        }
+    }
+}
+
+impl From<CoreConnectionConfig> for ConnectionConfig {
+    fn from(c: CoreConnectionConfig) -> Self {
+        match c {
+            CoreConnectionConfig::Social(s) => Self::Social(SocialConnectionConfig {
+                provider: s.provider.into(),
+                client_id: s.client_id,
+                scopes: s.scopes,
+                endpoints: s.endpoints.into(),
+                microsoft_tenant: s.microsoft_tenant,
+                allowed_tenants: s.allowed_tenants,
+                hosted_domains: s.hosted_domains,
+                apple: s.apple.map(|a| AppleConfig {
+                    team_id: a.team_id,
+                    key_id: a.key_id,
+                }),
+            }),
+            CoreConnectionConfig::Oidc(o) => Self::Oidc(OidcConnectionConfig {
+                issuer: o.issuer,
+                client_id: o.client_id,
+                scopes: o.scopes,
+                use_pkce: o.use_pkce,
+                fetch_userinfo: o.fetch_userinfo,
+            }),
+            CoreConnectionConfig::Oauth2(o) => Self::Oauth2(OAuth2ConnectionConfig {
+                authorization_endpoint: o.authorization_endpoint,
+                token_endpoint: o.token_endpoint,
+                userinfo_endpoint: o.userinfo_endpoint,
+                client_id: o.client_id,
+                scopes: o.scopes,
+                use_pkce: o.use_pkce,
+                mapping: ClaimMapping {
+                    subject: o.mapping.subject,
+                    email: o.mapping.email,
+                    email_verified: o.mapping.email_verified,
+                    name: o.mapping.name,
+                },
+            }),
+        }
+    }
+}
+
+/// An upstream connection. The client secret (Apple: the `.p8` key) is write-only:
+/// `secret_configured` tells whether one is stored.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ConnectionView {
+    pub id: Uuid,
+    /// Unique per tenant, immutable; part of `redirect_uri`.
+    pub slug: String,
+    pub display_name: String,
+    pub kind: ConnectionKind,
+    pub enabled: bool,
+    pub config: ConnectionConfig,
+    /// Treat the provider's `email_verified` as proof of address ownership (auto-linking).
+    pub trust_email_verified: bool,
+    pub secret_configured: bool,
+    /// The callback URL to register at the provider.
+    pub redirect_uri: String,
+    #[schema(format = DateTime)]
+    pub created_at: String,
+    #[schema(format = DateTime)]
+    pub updated_at: String,
+}
+
+impl ConnectionView {
+    /// The view of `c`; `issuer` is the tenant's issuer (the callback lives below it).
+    pub fn new(c: Connection, issuer: &str) -> Self {
+        Self {
+            id: c.id.0,
+            redirect_uri: format!("{issuer}/ui/login/upstream/{}/callback", c.slug),
+            kind: c.kind().into(),
+            slug: c.slug,
+            display_name: c.display_name,
+            enabled: c.enabled,
+            config: c.config.into(),
+            trust_email_verified: c.trust_email_verified,
+            secret_configured: c.secret_enc.is_some(),
+            created_at: ts(c.created_at),
+            updated_at: ts(c.updated_at),
+        }
+    }
+}
+
+/// Every connection of a tenant, in slug order.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ConnectionList {
+    pub items: Vec<ConnectionView>,
+}
+
+/// Body of `POST /tenants/{slug}/connections`.
+#[derive(Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CreateConnection {
+    /// 1-63 characters of a-z, 0-9 and '-', starting with a letter or digit.
+    pub slug: String,
+    pub display_name: String,
+    /// Default `true`.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    pub config: ConnectionConfig,
+    /// Client secret; Apple: the `.p8` private key PEM. Write-only.
+    #[serde(default)]
+    #[schema(format = Password)]
+    pub secret: Option<String>,
+    /// Default: `true` for Google, Apple and GitHub, `false` otherwise.
+    #[serde(default)]
+    pub trust_email_verified: Option<bool>,
+    /// Required to trust email addresses asserted by Microsoft, which can be unverified
+    /// ("nOAuth"). Default `false`.
+    #[serde(default)]
+    pub accept_email_trust_risk: bool,
+}
+
+impl std::fmt::Debug for CreateConnection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CreateConnection")
+            .field("slug", &self.slug)
+            .field("display_name", &self.display_name)
+            .field("enabled", &self.enabled)
+            .field("config", &self.config)
+            .field("secret", &self.secret.as_ref().map(|_| "<redacted>"))
+            .field("trust_email_verified", &self.trust_email_verified)
+            .field("accept_email_trust_risk", &self.accept_email_trust_risk)
+            .finish()
+    }
+}
+
+impl From<CreateConnection> for NewConnectionInput {
+    fn from(c: CreateConnection) -> Self {
+        Self {
+            slug: c.slug,
+            display_name: c.display_name,
+            enabled: c.enabled,
+            config: c.config.into(),
+            secret: c.secret.map(SecretString::from),
+            trust_email_verified: c.trust_email_verified,
+            accept_email_trust_risk: c.accept_email_trust_risk,
+        }
+    }
+}
+
+/// Body of `PATCH …/connections/{id}`: absent fields stay unchanged. The slug is immutable and
+/// `config` must keep the kind; the secret is changed with `PUT …/secret`.
+#[derive(Debug, Default, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateConnection {
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    /// The complete new configuration (same kind).
+    #[serde(default)]
+    pub config: Option<ConnectionConfig>,
+    #[serde(default)]
+    pub trust_email_verified: Option<bool>,
+    /// Required when turning on email trust for a Microsoft connection.
+    #[serde(default)]
+    pub accept_email_trust_risk: bool,
+}
+
+impl From<UpdateConnection> for ConnectionPatch {
+    fn from(u: UpdateConnection) -> Self {
+        Self {
+            display_name: u.display_name,
+            enabled: u.enabled,
+            config: u.config.map(Into::into),
+            trust_email_verified: u.trust_email_verified,
+            accept_email_trust_risk: u.accept_email_trust_risk,
+        }
+    }
+}
+
+/// Body of `PUT …/connections/{id}/secret`: a new secret, or `null` to remove it. The field is
+/// required.
+#[derive(Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PutConnectionSecret {
+    #[serde(default, deserialize_with = "double_option")]
+    #[schema(value_type = Option<String>, format = Password, required = true)]
+    pub secret: Option<Option<String>>,
+}
+
+impl std::fmt::Debug for PutConnectionSecret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PutConnectionSecret")
+            .field(
+                "secret",
+                &self
+                    .secret
+                    .as_ref()
+                    .map(|s| s.as_ref().map(|_| "<redacted>")),
+            )
+            .finish()
+    }
 }

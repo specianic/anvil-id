@@ -70,7 +70,11 @@ pub(crate) async fn create_tenant(
     auth.require(Resource::Tenants, Access::Write)?;
     let tenant = state
         .admin_tenants()
-        .create(body.into(), auth.actor(), &ctx)
+        .create(
+            body.into_input(state.config().installation_smtp),
+            auth.actor(),
+            &ctx,
+        )
         .await?;
     let location = format!("/api/admin/v1/tenants/{}", tenant.slug);
     Ok(created(&location, &TenantView::from(tenant)))
@@ -107,7 +111,8 @@ pub(crate) async fn get_tenant(
 }
 
 /// Update a tenant (the slug is immutable). Settings are merged with the current ones; the
-/// CAPTCHA secret is write-only. Enabling a signing algorithm creates its key at once; disabling
+/// CAPTCHA secret is write-only. Turning on `email_otp` or `magic_link` needs SMTP (the tenant's
+/// SMTP settings or the installation SMTP). Enabling a signing algorithm creates its key at once; disabling
 /// one that a client still uses for its ID tokens is refused (409, the problem lists the
 /// clients).
 #[utoipa::path(
@@ -140,7 +145,7 @@ pub(crate) async fn update_tenant(
     auth.require(Resource::Tenants, Access::Write)?;
     let tenants = state.admin_tenants();
     let current = tenants.get(&slug).await?;
-    let (patch, captcha) = body.into_patch(&current.settings);
+    let (patch, captcha) = body.into_patch(&current.settings, state.config().installation_smtp);
     let tenant = tenants
         .update(&slug, patch, captcha, auth.actor(), &ctx)
         .await?;

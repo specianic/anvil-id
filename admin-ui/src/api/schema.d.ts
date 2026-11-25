@@ -39,7 +39,8 @@ export interface paths {
         head?: never;
         /**
          * Update a tenant (the slug is immutable). Settings are merged with the current ones; the
-         *     CAPTCHA secret is write-only. Enabling a signing algorithm creates its key at once; disabling
+         *     CAPTCHA secret is write-only. Turning on `email_otp` or `magic_link` needs SMTP (the tenant's
+         *     SMTP settings or the installation SMTP). Enabling a signing algorithm creates its key at once; disabling
          *     one that a client still uses for its ID tokens is refused (409, the problem lists the
          *     clients).
          */
@@ -114,6 +115,70 @@ export interface paths {
         put?: never;
         /** Rotate the client secret. The new secret is returned once; the old one stops working. */
         post: operations["rotateClientSecret"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/connections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the upstream connections of a tenant. */
+        get: operations["listConnections"];
+        put?: never;
+        /**
+         * Create an upstream connection. The secret (Apple: the `.p8` key PEM) is sealed and never
+         *     returned.
+         */
+        post: operations["createConnection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/connections/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get an upstream connection (never includes the secret). */
+        get: operations["getConnection"];
+        put?: never;
+        post?: never;
+        /** Delete an upstream connection and every identity link made through it. */
+        delete: operations["deleteConnection"];
+        options?: never;
+        head?: never;
+        /**
+         * Update an upstream connection. Absent fields stay unchanged; the slug is immutable and a new
+         *     `config` must keep the kind. Trusting Microsoft-asserted email needs
+         *     `accept_email_trust_risk`.
+         */
+        patch: operations["updateConnection"];
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/connections/{id}/secret": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set or remove the client secret of a connection (Apple: the `.p8` private key PEM, which
+         *     must be an ES256 PKCS#8 key). Write-only: the response reports `secret_configured`.
+         */
+        put: operations["putConnectionSecret"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -352,6 +417,14 @@ export interface components {
             street_address: string | null;
         };
         /**
+         * @description Sign in with Apple: the team and key the `.p8` private key (the connection secret) belongs
+         *     to.
+         */
+        AppleConfig: {
+            key_id: string;
+            team_id: string;
+        };
+        /**
          * @description OpenID Connect application type.
          * @enum {string}
          */
@@ -421,6 +494,13 @@ export interface components {
             provider: components["schemas"]["CaptchaProvider"];
             site_key: string;
         };
+        /** @description JSON pointers (RFC 6901, e.g. `/id`) into a generic OAuth2 profile response. */
+        ClaimMapping: {
+            email?: string | null;
+            email_verified?: string | null;
+            name?: string | null;
+            subject: string;
+        };
         /**
          * @description Token endpoint authentication method.
          * @enum {string}
@@ -453,8 +533,14 @@ export interface components {
          *     client; it is never stored in plaintext and cannot be read again.
          */
         ClientView: {
+            /** @description Resource indicators (RFC 8707) the client may request. */
+            allowed_resources: string[];
             application_type: components["schemas"]["ApplicationType"];
             auth_method: components["schemas"]["ClientAuthMethod"];
+            /** @description Logout tokens carry `sid`. */
+            backchannel_logout_session_required: boolean;
+            /** @description OIDC Back-Channel Logout endpoint; `null` = none. */
+            backchannel_logout_uri?: string | null;
             /** @description May introspect any token of the tenant (confidential clients only). */
             can_introspect: boolean;
             client_id: string;
@@ -469,11 +555,57 @@ export interface components {
             id_token_signed_response_alg: string;
             /** @description Inline public JWK Set (`private_key_jwt` only). */
             jwks?: Record<string, never> | null;
+            mfa_policy?: components["schemas"]["MfaPolicy"] | null;
             name: string;
+            /** @description Where RP-initiated logout may redirect after signing out. */
+            post_logout_redirect_uris: string[];
             redirect_uris: string[];
             require_pkce: boolean;
             scopes: string[];
             token_format: components["schemas"]["TokenFormat"];
+            /** Format: date-time */
+            updated_at: string;
+        };
+        /** @description Connection configuration, tagged by `type`. It never contains the client secret. */
+        ConnectionConfig: (components["schemas"]["SocialConnectionConfig"] & {
+            /** @enum {string} */
+            type: "social";
+        }) | (components["schemas"]["OidcConnectionConfig"] & {
+            /** @enum {string} */
+            type: "oidc";
+        }) | (components["schemas"]["OAuth2ConnectionConfig"] & {
+            /** @enum {string} */
+            type: "oauth2";
+        });
+        /**
+         * @description Kind of an upstream connection (derived from its config).
+         * @enum {string}
+         */
+        ConnectionKind: "google" | "apple" | "microsoft" | "github" | "oidc" | "oauth2";
+        /** @description Every connection of a tenant, in slug order. */
+        ConnectionList: {
+            items: components["schemas"]["ConnectionView"][];
+        };
+        /**
+         * @description An upstream connection. The client secret (Apple: the `.p8` key) is write-only:
+         *     `secret_configured` tells whether one is stored.
+         */
+        ConnectionView: {
+            config: components["schemas"]["ConnectionConfig"];
+            /** Format: date-time */
+            created_at: string;
+            display_name: string;
+            enabled: boolean;
+            /** Format: uuid */
+            id: string;
+            kind: components["schemas"]["ConnectionKind"];
+            /** @description The callback URL to register at the provider. */
+            redirect_uri: string;
+            secret_configured: boolean;
+            /** @description Unique per tenant, immutable; part of `redirect_uri`. */
+            slug: string;
+            /** @description Treat the provider's `email_verified` as proof of address ownership (auto-linking). */
+            trust_email_verified: boolean;
             /** Format: date-time */
             updated_at: string;
         };
@@ -485,9 +617,15 @@ export interface components {
         ConsentMode: "required" | "skip_first_party";
         /** @description Body of `POST /tenants/{slug}/clients`. */
         CreateClient: {
+            /** @description Absolute URIs without fragment or query (RFC 8707). */
+            allowed_resources?: string[];
             /** @description Default `web`. */
             application_type?: components["schemas"]["ApplicationType"];
             auth_method?: components["schemas"]["ClientAuthMethod"] | null;
+            /** @description Default `false`. */
+            backchannel_logout_session_required?: boolean;
+            /** @description Absolute, no fragment; https (http only to loopback). */
+            backchannel_logout_uri?: string | null;
             /** @description Default `false`; confidential clients only. */
             can_introspect?: boolean | null;
             client_type: components["schemas"]["ClientType"];
@@ -500,12 +638,36 @@ export interface components {
             jwks?: Record<string, never> | null;
             /** @description Not supported in this release (rejected with 422). */
             jwks_uri?: string | null;
+            mfa_policy?: components["schemas"]["MfaPolicy"] | null;
             name: string;
+            /** @description Redirect URI rules of the application type. */
+            post_logout_redirect_uris?: string[];
             redirect_uris?: string[];
             /** @description Default `true`. Only confidential clients may set `false`. */
             require_pkce?: boolean | null;
             scopes?: string[];
             token_format?: components["schemas"]["TokenFormat"] | null;
+        };
+        /** @description Body of `POST /tenants/{slug}/connections`. */
+        CreateConnection: {
+            /**
+             * @description Required to trust email addresses asserted by Microsoft, which can be unverified
+             *     ("nOAuth"). Default `false`.
+             */
+            accept_email_trust_risk?: boolean;
+            config: components["schemas"]["ConnectionConfig"];
+            display_name: string;
+            /** @description Default `true`. */
+            enabled?: boolean;
+            /**
+             * Format: password
+             * @description Client secret; Apple: the `.p8` private key PEM. Write-only.
+             */
+            secret?: string | null;
+            /** @description 1-63 characters of a-z, 0-9 and '-', starting with a letter or digit. */
+            slug: string;
+            /** @description Default: `true` for Google, Apple and GitHub, `false` otherwise. */
+            trust_email_verified?: boolean | null;
         };
         /** @description Body of `POST /tenants`. */
         CreateTenant: {
@@ -576,6 +738,27 @@ export interface components {
             /** @description Variables the template may use. */
             variables: string[];
         };
+        /**
+         * @description Endpoint overrides of a social preset (`null` = the preset's value). Absolute https URLs
+         *     (plain http only to loopback hosts).
+         */
+        EndpointOverrides: {
+            /**
+             * @description GitHub only: REST API base.
+             * @default null
+             */
+            api_base_url: string | null;
+            /** @default null */
+            authorization_endpoint: string | null;
+            /** @default null */
+            issuer: string | null;
+            /** @default null */
+            jwks_uri: string | null;
+            /** @default null */
+            token_endpoint: string | null;
+            /** @default null */
+            userinfo_endpoint: string | null;
+        };
         /** @description One validation failure. */
         FieldError: {
             field: string;
@@ -592,10 +775,41 @@ export interface components {
          */
         GrantType: "authorization_code" | "refresh_token" | "client_credentials";
         /**
+         * @description Whether sign-in needs a second factor: `off`, `optional` (users who enrolled one) or
+         *     `required` (users without one enrol first). Across tenant and client the strictest wins.
+         * @enum {string}
+         */
+        MfaPolicy: "off" | "optional" | "required";
+        /**
          * @description Settings of a new tenant. Absent fields take their defaults; CAPTCHA is configured with
          *     `PATCH` once the tenant exists.
          */
         NewTenantSettings: {
+            /**
+             * @description Default `true`.
+             * @default true
+             */
+            auto_link: boolean;
+            /**
+             * @description Default `en`; a language tag such as `de` or `pt-BR`.
+             * @default en
+             */
+            default_locale: string;
+            /**
+             * @description Default `false`; needs SMTP (the installation's, for a new tenant).
+             * @default false
+             */
+            email_otp: boolean;
+            /**
+             * @description Default `false`; needs SMTP (the installation's, for a new tenant).
+             * @default false
+             */
+            magic_link: boolean;
+            /**
+             * @description Default `optional`.
+             * @default optional
+             */
+            mfa_policy: components["schemas"]["MfaPolicy"];
             /** @default open */
             registration: components["schemas"]["RegistrationMode"];
             /** @default false */
@@ -607,6 +821,34 @@ export interface components {
              *     ]
              */
             signing_algs: string[];
+            /**
+             * @description Default `null` (follow `registration`).
+             * @default null
+             */
+            upstream_registration: boolean | null;
+        };
+        /** @description A generic OAuth2 provider (no ID token; identity from a profile endpoint). */
+        OAuth2ConnectionConfig: {
+            authorization_endpoint: string;
+            client_id: string;
+            mapping: components["schemas"]["ClaimMapping"];
+            scopes?: string[];
+            token_endpoint: string;
+            /** @description Default `true`. */
+            use_pkce?: boolean;
+            userinfo_endpoint: string;
+        };
+        /** @description A generic OpenID Connect provider (discovery at `{issuer}/.well-known/openid-configuration`). */
+        OidcConnectionConfig: {
+            client_id: string;
+            /** @description Also call the UserInfo endpoint after the ID token was validated. */
+            fetch_userinfo?: boolean;
+            /** @description Absolute https URL (plain http only to loopback hosts). */
+            issuer: string;
+            /** @description `openid` is always requested. */
+            scopes?: string[];
+            /** @description Default `true`. */
+            use_pkce?: boolean;
         };
         /** @description RFC 9457 problem details (`application/problem+json`). */
         Problem: {
@@ -618,6 +860,14 @@ export interface components {
             title: string;
             /** @description `urn:anvilid:problem:{code}`. */
             type: string;
+        };
+        /**
+         * @description Body of `PUT …/connections/{id}/secret`: a new secret, or `null` to remove it. The field is
+         *     required.
+         */
+        PutConnectionSecret: {
+            /** Format: password */
+            secret: string | null;
         };
         /** @description Body of `PUT …/email-templates/{kind}` (minijinja syntax; `.html` is autoescaped). */
         PutEmailTemplate: {
@@ -722,6 +972,26 @@ export interface components {
          * @enum {string}
          */
         SmtpTls: "starttls" | "implicit" | "none";
+        /** @description A social preset (Google, Apple, Microsoft, GitHub). */
+        SocialConnectionConfig: {
+            /** @description Microsoft only: accepted `tid` values (empty = any). */
+            allowed_tenants?: string[];
+            apple?: components["schemas"]["AppleConfig"] | null;
+            client_id: string;
+            endpoints?: components["schemas"]["EndpointOverrides"];
+            /** @description Google only: accepted `hd` values (empty = any). */
+            hosted_domains?: string[];
+            /** @description Microsoft only: `common` (default), `organizations`, `consumers` or a tenant id. */
+            microsoft_tenant?: string | null;
+            provider: components["schemas"]["SocialProvider"];
+            /** @description Requested scopes; empty = the preset's defaults. */
+            scopes?: string[];
+        };
+        /**
+         * @description Social provider preset of a connection.
+         * @enum {string}
+         */
+        SocialProvider: "google" | "apple" | "microsoft" | "github";
         /** @description OIDC Core §5.1 standard claims other than `sub`, `email` and `email_verified`. */
         StandardClaims: {
             /** @default null */
@@ -768,19 +1038,41 @@ export interface components {
         };
         /** @description Per-tenant settings as returned by the API. The CAPTCHA secret is never returned. */
         TenantSettings: {
+            /**
+             * @description Link an upstream identity automatically when it asserts a trusted, verified email equal
+             *     to an existing account's verified email.
+             */
+            auto_link: boolean;
             captcha?: components["schemas"]["CaptchaView"] | null;
+            /** @description Page language when neither `ui_locales` nor `Accept-Language` matches. */
+            default_locale: string;
+            /** @description Sign-in with a one-time code sent by email. */
+            email_otp: boolean;
+            /** @description Sign-in with a magic link sent by email. */
+            magic_link: boolean;
+            /** @description Tenant MFA policy (a client may make it stricter). */
+            mfa_policy: components["schemas"]["MfaPolicy"];
             registration: components["schemas"]["RegistrationMode"];
             /** @description Users must verify their email address before they can sign in. */
             require_verified_email: boolean;
             /** @description Enabled ID-token signing algorithms (`RS256`, `ES256`, `Ed25519`); RS256 is always first. */
             signing_algs: string[];
+            /** @description Whether upstream sign-in may create accounts; `null` follows `registration`. */
+            upstream_registration?: boolean | null;
         };
         /**
          * @description Partial settings update: absent fields keep their current value. `captcha: null` disables
          *     CAPTCHA; an object enables or replaces it.
          */
         TenantSettingsPatch: {
+            auto_link?: boolean | null;
             captcha?: components["schemas"]["CaptchaInput"] | null;
+            default_locale?: string | null;
+            /** @description Turning it on needs SMTP (tenant SMTP settings or the installation SMTP). */
+            email_otp?: boolean | null;
+            /** @description Turning it on needs SMTP (tenant SMTP settings or the installation SMTP). */
+            magic_link?: boolean | null;
+            mfa_policy?: components["schemas"]["MfaPolicy"] | null;
             registration?: components["schemas"]["RegistrationMode"] | null;
             require_verified_email?: boolean | null;
             /**
@@ -788,6 +1080,8 @@ export interface components {
              *     that a client uses for its ID tokens is refused with 409.
              */
             signing_algs?: string[] | null;
+            /** @description `null` follows `registration`. */
+            upstream_registration?: boolean | null;
         };
         /** @description A tenant. */
         TenantView: {
@@ -812,17 +1106,35 @@ export interface components {
          *     fixed at creation. `jwks: null` clears the JWK Set.
          */
         UpdateClient: {
+            allowed_resources?: string[] | null;
+            backchannel_logout_session_required?: boolean | null;
+            /** @description `null` removes the back-channel logout URI. */
+            backchannel_logout_uri?: string | null;
             can_introspect?: boolean | null;
             consent_mode?: components["schemas"]["ConsentMode"] | null;
             grant_types?: components["schemas"]["GrantType"][] | null;
             /** @description `null` resets to RS256. */
             id_token_signed_response_alg?: string | null;
             jwks?: Record<string, never> | null;
+            mfa_policy?: components["schemas"]["MfaPolicy"] | null;
             name?: string | null;
+            post_logout_redirect_uris?: string[] | null;
             redirect_uris?: string[] | null;
             require_pkce?: boolean | null;
             scopes?: string[] | null;
             token_format?: components["schemas"]["TokenFormat"] | null;
+        };
+        /**
+         * @description Body of `PATCH …/connections/{id}`: absent fields stay unchanged. The slug is immutable and
+         *     `config` must keep the kind; the secret is changed with `PUT …/secret`.
+         */
+        UpdateConnection: {
+            /** @description Required when turning on email trust for a Microsoft connection. */
+            accept_email_trust_risk?: boolean;
+            config?: components["schemas"]["ConnectionConfig"] | null;
+            display_name?: string | null;
+            enabled?: boolean | null;
+            trust_email_verified?: boolean | null;
         };
         /**
          * @description Body of `PATCH /tenants/{slug}`. Absent fields stay unchanged; `host: null` clears the host.
@@ -1590,6 +1902,362 @@ export interface operations {
                 };
             };
             /** @description The client does not use a secret */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listConnections: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every connection of the tenant, in slug order */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionList"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    createConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateConnection"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    /** @description URL of the new connection */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Slug already in use in this tenant */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Connection id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The connection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or connection */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    deleteConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Connection id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or connection */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    updateConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Connection id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateConnection"];
+            };
+        };
+        responses: {
+            /** @description The updated connection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or connection */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    putConnectionSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Connection id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutConnectionSecret"];
+            };
+        };
+        responses: {
+            /** @description The connection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or connection */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed */
             422: {
                 headers: {
                     [name: string]: unknown;

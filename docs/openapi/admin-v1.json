@@ -344,7 +344,7 @@
         "tags": [
           "tenants"
         ],
-        "summary": "Update a tenant (the slug is immutable). Settings are merged with the current ones; the\nCAPTCHA secret is write-only. Enabling a signing algorithm creates its key at once; disabling\none that a client still uses for its ID tokens is refused (409, the problem lists the\nclients).",
+        "summary": "Update a tenant (the slug is immutable). Settings are merged with the current ones; the\nCAPTCHA secret is write-only. Turning on `email_otp` or `magic_link` needs SMTP (the tenant's\nSMTP settings or the installation SMTP). Enabling a signing algorithm creates its key at once; disabling\none that a client still uses for its ID tokens is refused (409, the problem lists the\nclients).",
         "operationId": "updateTenant",
         "parameters": [
           {
@@ -1182,6 +1182,575 @@
           {
             "oauth2": [
               "admin:clients:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/connections": {
+      "get": {
+        "tags": [
+          "connections"
+        ],
+        "summary": "List the upstream connections of a tenant.",
+        "operationId": "listConnections",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every connection of the tenant, in slug order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:settings:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:settings:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "connections"
+        ],
+        "summary": "Create an upstream connection. The secret (Apple: the `.p8` key PEM) is sealed and never\nreturned.",
+        "operationId": "createConnection",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateConnection"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "URL of the new connection"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Slug already in use in this tenant",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:settings:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/connections/{id}": {
+      "get": {
+        "tags": [
+          "connections"
+        ],
+        "summary": "Get an upstream connection (never includes the secret).",
+        "operationId": "getConnection",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Connection id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The connection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or connection",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:settings:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:settings:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "connections"
+        ],
+        "summary": "Delete an upstream connection and every identity link made through it.",
+        "operationId": "deleteConnection",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Connection id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or connection",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:settings:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "connections"
+        ],
+        "summary": "Update an upstream connection. Absent fields stay unchanged; the slug is immutable and a new\n`config` must keep the kind. Trusting Microsoft-asserted email needs\n`accept_email_trust_risk`.",
+        "operationId": "updateConnection",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Connection id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateConnection"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated connection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or connection",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:settings:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/connections/{id}/secret": {
+      "put": {
+        "tags": [
+          "connections"
+        ],
+        "summary": "Set or remove the client secret of a connection (Apple: the `.p8` private key PEM, which\nmust be an ES256 PKCS#8 key). Write-only: the response reports `secret_configured`.",
+        "operationId": "putConnectionSecret",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Connection id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutConnectionSecret"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The connection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or connection",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:settings:write"
             ]
           },
           {
@@ -3008,6 +3577,23 @@
         },
         "additionalProperties": false
       },
+      "AppleConfig": {
+        "type": "object",
+        "description": "Sign in with Apple: the team and key the `.p8` private key (the connection secret) belongs\nto.",
+        "required": [
+          "team_id",
+          "key_id"
+        ],
+        "properties": {
+          "key_id": {
+            "type": "string"
+          },
+          "team_id": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "ApplicationType": {
         "type": "string",
         "description": "OpenID Connect application type.",
@@ -3238,6 +3824,37 @@
           }
         }
       },
+      "ClaimMapping": {
+        "type": "object",
+        "description": "JSON pointers (RFC 6901, e.g. `/id`) into a generic OAuth2 profile response.",
+        "required": [
+          "subject"
+        ],
+        "properties": {
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email_verified": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "subject": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "ClientAuthMethod": {
         "type": "string",
         "description": "Token endpoint authentication method.",
@@ -3312,15 +3929,36 @@
           "consent_mode",
           "id_token_signed_response_alg",
           "can_introspect",
+          "post_logout_redirect_uris",
+          "backchannel_logout_session_required",
+          "allowed_resources",
           "created_at",
           "updated_at"
         ],
         "properties": {
+          "allowed_resources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Resource indicators (RFC 8707) the client may request."
+          },
           "application_type": {
             "$ref": "#/components/schemas/ApplicationType"
           },
           "auth_method": {
             "$ref": "#/components/schemas/ClientAuthMethod"
+          },
+          "backchannel_logout_session_required": {
+            "type": "boolean",
+            "description": "Logout tokens carry `sid`."
+          },
+          "backchannel_logout_uri": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "OIDC Back-Channel Logout endpoint; `null` = none."
           },
           "can_introspect": {
             "type": "boolean",
@@ -3363,8 +4001,26 @@
             ],
             "description": "Inline public JWK Set (`private_key_jwt` only)."
           },
+          "mfa_policy": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MfaPolicy",
+                "description": "Client MFA policy; `null` = the tenant's. The strictest of both wins."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "name": {
             "type": "string"
+          },
+          "post_logout_redirect_uris": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Where RP-initiated logout may redirect after signing out."
           },
           "redirect_uris": {
             "type": "array",
@@ -3390,6 +4046,159 @@
           }
         }
       },
+      "ConnectionConfig": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SocialConnectionConfig"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "social"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OidcConnectionConfig"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "oidc"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OAuth2ConnectionConfig"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "oauth2"
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        ],
+        "description": "Connection configuration, tagged by `type`. It never contains the client secret."
+      },
+      "ConnectionKind": {
+        "type": "string",
+        "description": "Kind of an upstream connection (derived from its config).",
+        "enum": [
+          "google",
+          "apple",
+          "microsoft",
+          "github",
+          "oidc",
+          "oauth2"
+        ]
+      },
+      "ConnectionList": {
+        "type": "object",
+        "description": "Every connection of a tenant, in slug order.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConnectionView"
+            }
+          }
+        }
+      },
+      "ConnectionView": {
+        "type": "object",
+        "description": "An upstream connection. The client secret (Apple: the `.p8` key) is write-only:\n`secret_configured` tells whether one is stored.",
+        "required": [
+          "id",
+          "slug",
+          "display_name",
+          "kind",
+          "enabled",
+          "config",
+          "trust_email_verified",
+          "secret_configured",
+          "redirect_uri",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/ConnectionConfig"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ConnectionKind"
+          },
+          "redirect_uri": {
+            "type": "string",
+            "description": "The callback URL to register at the provider."
+          },
+          "secret_configured": {
+            "type": "boolean"
+          },
+          "slug": {
+            "type": "string",
+            "description": "Unique per tenant, immutable; part of `redirect_uri`."
+          },
+          "trust_email_verified": {
+            "type": "boolean",
+            "description": "Treat the provider's `email_verified` as proof of address ownership (auto-linking)."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
       "ConsentMode": {
         "type": "string",
         "description": "When the consent screen is shown: `required` asks for every scope not granted yet;\n`skip_first_party` never asks (first-party clients only).",
@@ -3406,6 +4215,13 @@
           "client_type"
         ],
         "properties": {
+          "allowed_resources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Absolute URIs without fragment or query (RFC 8707)."
+          },
           "application_type": {
             "$ref": "#/components/schemas/ApplicationType",
             "description": "Default `web`."
@@ -3420,6 +4236,17 @@
                 "type": "null"
               }
             ]
+          },
+          "backchannel_logout_session_required": {
+            "type": "boolean",
+            "description": "Default `false`."
+          },
+          "backchannel_logout_uri": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Absolute, no fragment; https (http only to loopback)."
           },
           "can_introspect": {
             "type": [
@@ -3470,8 +4297,26 @@
             ],
             "description": "Not supported in this release (rejected with 422)."
           },
+          "mfa_policy": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MfaPolicy",
+                "description": "Default `null` (the tenant's policy)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "name": {
             "type": "string"
+          },
+          "post_logout_redirect_uris": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Redirect URI rules of the application type."
           },
           "redirect_uris": {
             "type": "array",
@@ -3502,6 +4347,51 @@
                 "type": "null"
               }
             ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "CreateConnection": {
+        "type": "object",
+        "description": "Body of `POST /tenants/{slug}/connections`.",
+        "required": [
+          "slug",
+          "display_name",
+          "config"
+        ],
+        "properties": {
+          "accept_email_trust_risk": {
+            "type": "boolean",
+            "description": "Required to trust email addresses asserted by Microsoft, which can be unverified\n(\"nOAuth\"). Default `false`."
+          },
+          "config": {
+            "$ref": "#/components/schemas/ConnectionConfig"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Default `true`."
+          },
+          "secret": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "password",
+            "description": "Client secret; Apple: the `.p8` private key PEM. Write-only."
+          },
+          "slug": {
+            "type": "string",
+            "description": "1-63 characters of a-z, 0-9 and '-', starting with a letter or digit."
+          },
+          "trust_email_verified": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Default: `true` for Google, Apple and GitHub, `false` otherwise."
           }
         },
         "additionalProperties": false
@@ -3699,6 +4589,56 @@
           }
         }
       },
+      "EndpointOverrides": {
+        "type": "object",
+        "description": "Endpoint overrides of a social preset (`null` = the preset's value). Absolute https URLs\n(plain http only to loopback hosts).",
+        "properties": {
+          "api_base_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "GitHub only: REST API base.",
+            "default": null
+          },
+          "authorization_endpoint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "issuer": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "jwks_uri": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "token_endpoint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "userinfo_endpoint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          }
+        },
+        "additionalProperties": false
+      },
       "FieldError": {
         "type": "object",
         "description": "One validation failure.",
@@ -3733,10 +4673,44 @@
           "client_credentials"
         ]
       },
+      "MfaPolicy": {
+        "type": "string",
+        "description": "Whether sign-in needs a second factor: `off`, `optional` (users who enrolled one) or\n`required` (users without one enrol first). Across tenant and client the strictest wins.",
+        "enum": [
+          "off",
+          "optional",
+          "required"
+        ]
+      },
       "NewTenantSettings": {
         "type": "object",
         "description": "Settings of a new tenant. Absent fields take their defaults; CAPTCHA is configured with\n`PATCH` once the tenant exists.",
         "properties": {
+          "auto_link": {
+            "type": "boolean",
+            "description": "Default `true`.",
+            "default": true
+          },
+          "default_locale": {
+            "type": "string",
+            "description": "Default `en`; a language tag such as `de` or `pt-BR`.",
+            "default": "en"
+          },
+          "email_otp": {
+            "type": "boolean",
+            "description": "Default `false`; needs SMTP (the installation's, for a new tenant).",
+            "default": false
+          },
+          "magic_link": {
+            "type": "boolean",
+            "description": "Default `false`; needs SMTP (the installation's, for a new tenant).",
+            "default": false
+          },
+          "mfa_policy": {
+            "$ref": "#/components/schemas/MfaPolicy",
+            "description": "Default `optional`.",
+            "default": "optional"
+          },
           "registration": {
             "$ref": "#/components/schemas/RegistrationMode",
             "default": "open"
@@ -3754,6 +4728,86 @@
             "default": [
               "RS256"
             ]
+          },
+          "upstream_registration": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Default `null` (follow `registration`).",
+            "default": null
+          }
+        },
+        "additionalProperties": false
+      },
+      "OAuth2ConnectionConfig": {
+        "type": "object",
+        "description": "A generic OAuth2 provider (no ID token; identity from a profile endpoint).",
+        "required": [
+          "authorization_endpoint",
+          "token_endpoint",
+          "userinfo_endpoint",
+          "client_id",
+          "mapping"
+        ],
+        "properties": {
+          "authorization_endpoint": {
+            "type": "string"
+          },
+          "client_id": {
+            "type": "string"
+          },
+          "mapping": {
+            "$ref": "#/components/schemas/ClaimMapping"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "token_endpoint": {
+            "type": "string"
+          },
+          "use_pkce": {
+            "type": "boolean",
+            "description": "Default `true`."
+          },
+          "userinfo_endpoint": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "OidcConnectionConfig": {
+        "type": "object",
+        "description": "A generic OpenID Connect provider (discovery at `{issuer}/.well-known/openid-configuration`).",
+        "required": [
+          "issuer",
+          "client_id"
+        ],
+        "properties": {
+          "client_id": {
+            "type": "string"
+          },
+          "fetch_userinfo": {
+            "type": "boolean",
+            "description": "Also call the UserInfo endpoint after the ID token was validated."
+          },
+          "issuer": {
+            "type": "string",
+            "description": "Absolute https URL (plain http only to loopback hosts)."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`openid` is always requested."
+          },
+          "use_pkce": {
+            "type": "boolean",
+            "description": "Default `true`."
           }
         },
         "additionalProperties": false
@@ -3792,6 +4846,23 @@
             "description": "`urn:anvilid:problem:{code}`."
           }
         }
+      },
+      "PutConnectionSecret": {
+        "type": "object",
+        "description": "Body of `PUT …/connections/{id}/secret`: a new secret, or `null` to remove it. The field is\nrequired.",
+        "required": [
+          "secret"
+        ],
+        "properties": {
+          "secret": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "password"
+          }
+        },
+        "additionalProperties": false
       },
       "PutEmailTemplate": {
         "type": "object",
@@ -4058,6 +5129,75 @@
           "none"
         ]
       },
+      "SocialConnectionConfig": {
+        "type": "object",
+        "description": "A social preset (Google, Apple, Microsoft, GitHub).",
+        "required": [
+          "provider",
+          "client_id"
+        ],
+        "properties": {
+          "allowed_tenants": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Microsoft only: accepted `tid` values (empty = any)."
+          },
+          "apple": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AppleConfig",
+                "description": "Apple only (required there)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "client_id": {
+            "type": "string"
+          },
+          "endpoints": {
+            "$ref": "#/components/schemas/EndpointOverrides"
+          },
+          "hosted_domains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Google only: accepted `hd` values (empty = any)."
+          },
+          "microsoft_tenant": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Microsoft only: `common` (default), `organizations`, `consumers` or a tenant id."
+          },
+          "provider": {
+            "$ref": "#/components/schemas/SocialProvider"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Requested scopes; empty = the preset's defaults."
+          }
+        },
+        "additionalProperties": false
+      },
+      "SocialProvider": {
+        "type": "string",
+        "description": "Social provider preset of a connection.",
+        "enum": [
+          "google",
+          "apple",
+          "microsoft",
+          "github"
+        ]
+      },
       "StandardClaims": {
         "type": "object",
         "description": "OIDC Core §5.1 standard claims other than `sub`, `email` and `email_verified`.",
@@ -4207,9 +5347,18 @@
         "required": [
           "registration",
           "require_verified_email",
-          "signing_algs"
+          "signing_algs",
+          "mfa_policy",
+          "email_otp",
+          "magic_link",
+          "auto_link",
+          "default_locale"
         ],
         "properties": {
+          "auto_link": {
+            "type": "boolean",
+            "description": "Link an upstream identity automatically when it asserts a trusted, verified email equal\nto an existing account's verified email."
+          },
           "captcha": {
             "oneOf": [
               {
@@ -4220,6 +5369,22 @@
                 "type": "null"
               }
             ]
+          },
+          "default_locale": {
+            "type": "string",
+            "description": "Page language when neither `ui_locales` nor `Accept-Language` matches."
+          },
+          "email_otp": {
+            "type": "boolean",
+            "description": "Sign-in with a one-time code sent by email."
+          },
+          "magic_link": {
+            "type": "boolean",
+            "description": "Sign-in with a magic link sent by email."
+          },
+          "mfa_policy": {
+            "$ref": "#/components/schemas/MfaPolicy",
+            "description": "Tenant MFA policy (a client may make it stricter)."
           },
           "registration": {
             "$ref": "#/components/schemas/RegistrationMode"
@@ -4234,6 +5399,13 @@
               "type": "string"
             },
             "description": "Enabled ID-token signing algorithms (`RS256`, `ES256`, `Ed25519`); RS256 is always first."
+          },
+          "upstream_registration": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether upstream sign-in may create accounts; `null` follows `registration`."
           }
         }
       },
@@ -4241,10 +5413,46 @@
         "type": "object",
         "description": "Partial settings update: absent fields keep their current value. `captcha: null` disables\nCAPTCHA; an object enables or replaces it.",
         "properties": {
+          "auto_link": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "captcha": {
             "oneOf": [
               {
                 "$ref": "#/components/schemas/CaptchaInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "default_locale": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email_otp": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Turning it on needs SMTP (tenant SMTP settings or the installation SMTP)."
+          },
+          "magic_link": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Turning it on needs SMTP (tenant SMTP settings or the installation SMTP)."
+          },
+          "mfa_policy": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MfaPolicy"
               },
               {
                 "type": "null"
@@ -4276,6 +5484,13 @@
               "type": "string"
             },
             "description": "The complete list of enabled algorithms (RS256 is always kept). Disabling an algorithm\nthat a client uses for its ID tokens is refused with 409."
+          },
+          "upstream_registration": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "`null` follows `registration`."
           }
         },
         "additionalProperties": false
@@ -4330,6 +5545,28 @@
         "type": "object",
         "description": "Body of `PATCH …/clients/{client_id}`. Client type, application type and auth method are\nfixed at creation. `jwks: null` clears the JWK Set.",
         "properties": {
+          "allowed_resources": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "backchannel_logout_session_required": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "backchannel_logout_uri": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`null` removes the back-channel logout URI."
+          },
           "can_introspect": {
             "type": [
               "boolean",
@@ -4368,11 +5605,31 @@
               "null"
             ]
           },
+          "mfa_policy": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MfaPolicy",
+                "description": "`null` falls back to the tenant's policy."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "name": {
             "type": [
               "string",
               "null"
             ]
+          },
+          "post_logout_redirect_uris": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
           },
           "redirect_uris": {
             "type": [
@@ -4406,6 +5663,46 @@
               {
                 "type": "null"
               }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "UpdateConnection": {
+        "type": "object",
+        "description": "Body of `PATCH …/connections/{id}`: absent fields stay unchanged. The slug is immutable and\n`config` must keep the kind; the secret is changed with `PUT …/secret`.",
+        "properties": {
+          "accept_email_trust_risk": {
+            "type": "boolean",
+            "description": "Required when turning on email trust for a Microsoft connection."
+          },
+          "config": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ConnectionConfig",
+                "description": "The complete new configuration (same kind)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "trust_email_verified": {
+            "type": [
+              "boolean",
+              "null"
             ]
           }
         },
@@ -4621,6 +5918,10 @@
     {
       "name": "email",
       "description": "Email templates and SMTP settings of a tenant"
+    },
+    {
+      "name": "connections",
+      "description": "Upstream identity providers (social, OIDC, OAuth2) of a tenant"
     }
   ]
 }
