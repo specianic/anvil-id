@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO connection\n                 (id, tenant_id, slug, display_name, kind, enabled, config, secret_enc,\n                  trust_email_verified, created_at, updated_at)\n             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 10
+    },
+    "nullable": []
+  },
+  "hash": "fc3d7e7e7622c9ad3a5ba56b6a908976170e0606e10136df2b01d587aa5d84c6"
+}

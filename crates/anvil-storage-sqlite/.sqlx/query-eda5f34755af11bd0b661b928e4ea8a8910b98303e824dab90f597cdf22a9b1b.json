@@ -1,0 +1,158 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id AS \"id!: uuid::Uuid\", tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      client_id AS \"client_id!\", uri AS \"uri!\", sub AS \"sub!\", sid AS \"sid!\",\n                      attempts AS \"attempts!\", next_attempt_at AS \"next_attempt_at!\",\n                      give_up_at AS \"give_up_at!\", created_at AS \"created_at!\",\n                      delivered_at AS \"delivered_at?\", last_error AS \"last_error?\"\n                 FROM logout_delivery\n                WHERE tenant_id = ?1 AND client_id = ?2\n                ORDER BY created_at, id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: uuid::Uuid",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "logout_delivery",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "tenant_id!: uuid::Uuid",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "logout_delivery",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "name": "client_id!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "logout_delivery",
+            "name": "client_id"
+          }
+        }
+      },
+      {
+        "name": "uri!",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "logout_delivery",
+            "name": "uri"
+          }
+        }
+      },
+      {
+        "name": "sub!",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "logout_delivery",
+            "name": "sub"
+          }
+        }
+      },
+      {
+        "name": "sid!",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "logout_delivery",
+            "name": "sid"
+          }
+        }
+      },
+      {
+        "name": "attempts!",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "logout_delivery",
+            "name": "attempts"
+          }
+        }
+      },
+      {
+        "name": "next_attempt_at!",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "logout_delivery",
+            "name": "next_attempt_at"
+          }
+        }
+      },
+      {
+        "name": "give_up_at!",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "logout_delivery",
+            "name": "give_up_at"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 9,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "logout_delivery",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "delivered_at?",
+        "ordinal": 10,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "logout_delivery",
+            "name": "delivered_at"
+          }
+        }
+      },
+      {
+        "name": "last_error?",
+        "ordinal": 11,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "logout_delivery",
+            "name": "last_error"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "eda5f34755af11bd0b661b928e4ea8a8910b98303e824dab90f597cdf22a9b1b"
+}

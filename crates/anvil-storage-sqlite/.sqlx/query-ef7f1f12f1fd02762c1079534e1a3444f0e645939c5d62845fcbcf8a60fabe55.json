@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT scope_key AS \"scope_key!\", draft_tokens AS \"draft_tokens!\",\n                      draft_css AS \"draft_css?\", preview_hash AS \"preview_hash!\",\n                      preview_expires_at AS \"preview_expires_at!\"\n                 FROM branding\n                WHERE tenant_id = ?1 AND preview_hash = ?2 AND preview_expires_at > ?3",
+  "describe": {
+    "columns": [
+      {
+        "name": "scope_key!",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "branding",
+            "name": "scope_key"
+          }
+        }
+      },
+      {
+        "name": "draft_tokens!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "branding",
+            "name": "draft_tokens"
+          }
+        }
+      },
+      {
+        "name": "draft_css?",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "branding",
+            "name": "draft_css"
+          }
+        }
+      },
+      {
+        "name": "preview_hash!",
+        "ordinal": 3,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "branding",
+            "name": "preview_hash"
+          }
+        }
+      },
+      {
+        "name": "preview_expires_at!",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "branding",
+            "name": "preview_expires_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "ef7f1f12f1fd02762c1079534e1a3444f0e645939c5d62845fcbcf8a60fabe55"
+}

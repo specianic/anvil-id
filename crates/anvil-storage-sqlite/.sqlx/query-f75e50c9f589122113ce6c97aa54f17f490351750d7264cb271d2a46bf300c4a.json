@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT tenant_id AS \"tenant_id!: uuid::Uuid\", session_id AS \"session_id!: uuid::Uuid\",\n                      client_id AS \"client_id!\", created_at AS \"created_at!\"\n                 FROM rp_session\n                WHERE tenant_id = ?1 AND session_id = ?2\n                ORDER BY client_id",
+  "describe": {
+    "columns": [
+      {
+        "name": "tenant_id!: uuid::Uuid",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "rp_session",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "name": "session_id!: uuid::Uuid",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "rp_session",
+            "name": "session_id"
+          }
+        }
+      },
+      {
+        "name": "client_id!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "rp_session",
+            "name": "client_id"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "rp_session",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "f75e50c9f589122113ce6c97aa54f17f490351750d7264cb271d2a46bf300c4a"
+}

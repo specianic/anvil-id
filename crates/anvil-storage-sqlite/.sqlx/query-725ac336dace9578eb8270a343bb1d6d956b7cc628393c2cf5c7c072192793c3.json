@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR IGNORE INTO rp_session (tenant_id, session_id, client_id, created_at)\n         SELECT tenant_id, id, ?3, ?4 FROM browser_session WHERE tenant_id = ?1 AND id = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "725ac336dace9578eb8270a343bb1d6d956b7cc628393c2cf5c7c072192793c3"
+}

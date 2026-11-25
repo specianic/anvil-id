@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO logout_delivery\n                     (id, tenant_id, client_id, uri, sub, sid, attempts, next_attempt_at,\n                      give_up_at, created_at, delivered_at, last_error)\n                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?8, ?7, NULL, NULL)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 8
+    },
+    "nullable": []
+  },
+  "hash": "b00da5d4655fc432ede5167dc7556f15d3995dab99faa2dff674df5e6fe2aac3"
+}

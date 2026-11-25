@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT r.client_id AS \"client_id!\", c.backchannel_logout_uri AS \"uri!\"\n                 FROM rp_session r\n                 JOIN client c ON c.tenant_id = r.tenant_id AND c.client_id = r.client_id\n                WHERE r.tenant_id = ?1 AND r.session_id = ?2\n                  AND c.backchannel_logout_uri IS NOT NULL\n                ORDER BY r.client_id",
+  "describe": {
+    "columns": [
+      {
+        "name": "client_id!",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "rp_session",
+            "name": "client_id"
+          }
+        }
+      },
+      {
+        "name": "uri!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "backchannel_logout_uri"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "45076f6e4e9303da29ab92f92b93df5a16509ac4279d59c17e942f706b0b9271"
+}

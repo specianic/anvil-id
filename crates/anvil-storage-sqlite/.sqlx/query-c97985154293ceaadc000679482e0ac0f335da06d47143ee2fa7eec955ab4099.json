@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE branding\n                SET tokens = NULL, custom_css = NULL, logo_sha256 = NULL, logo_type = NULL\n              WHERE tenant_id = ?1 AND scope_key = ?2 AND tokens IS NOT NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "c97985154293ceaadc000679482e0ac0f335da06d47143ee2fa7eec955ab4099"
+}

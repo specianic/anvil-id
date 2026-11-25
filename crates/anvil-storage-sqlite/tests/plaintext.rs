@@ -14,6 +14,10 @@
 //! CAPTCHA secret in the tenant settings. Besides the column scan, the raw bytes of the database
 //! file and its WAL are searched for every Phase 3 plaintext (seed bytes, its base32 and base64url
 //! forms, each recovery code, the SMTP password and the CAPTCHA secret).
+//!
+//! Release 0.3: upstream connection secrets are stored only KEK-sealed (purpose
+//! `CONNECTION_SECRET_PURPOSE`, AAD `connection_aad(tenant, id)`); the raw file is scanned before
+//! and after a WAL checkpoint, and the AAD binding is checked.
 
 use std::collections::BTreeMap;
 
@@ -541,4 +545,149 @@ async fn secrets_never_stored_plaintext() {
         .expect("find digest");
         assert_eq!(found, 1, "{table}.{column} must store the digest of {m}");
     }
+}
+
+/// Release 0.3 (SEC-03): an upstream connection secret is stored only KEK-sealed under
+/// `CONNECTION_SECRET_PURPOSE` with `connection_aad(tenant, id)`. The raw database file and WAL
+/// never contain the plaintext (before and after a WAL checkpoint), the sealed value opens only
+/// with its own tenant and connection id, and published branding CSS (not a secret) is found by
+/// the same scan as a positive control.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connection_secret_sealed_at_rest() {
+    use anvil_core::model::{
+        BrandingScope, CONNECTION_SECRET_PURPOSE, ConnectionId, LogoChange, NewConnection,
+        connection_aad,
+    };
+    use anvil_storage::contract::{new_branding_update, new_connection};
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("anvil.db");
+    let storage = SqliteStorage::connect(&format!("sqlite://{}", path.display()))
+        .await
+        .expect("connect");
+    storage.migrate().await.expect("migrate");
+    let kek = Kek::generate();
+
+    let tenant = new_tenant();
+    let t = storage
+        .tenants()
+        .create(&tenant)
+        .await
+        .expect("create tenant")
+        .id;
+    let other_tenant = TenantId::new_v7();
+
+    let secret = marker("connection-secret");
+    let template = new_connection();
+    let id = template.id;
+    let sealed = kek
+        .seal(
+            CONNECTION_SECRET_PURPOSE,
+            &connection_aad(t, id),
+            secret.as_bytes(),
+        )
+        .expect("seal connection secret");
+    let connection = NewConnection {
+        secret_enc: Some(sealed.clone()),
+        ..template
+    };
+    storage
+        .connections()
+        .create(t, &connection)
+        .await
+        .expect("create connection");
+
+    let mut branding = new_branding_update("#123456", LogoChange::Keep);
+    let css = format!(
+        ".css-control-{} {{ color: red; }}",
+        uuid::Uuid::now_v7().simple()
+    );
+    branding.custom_css = Some(css.clone());
+    storage
+        .branding()
+        .put(t, &BrandingScope::Tenant.scope_key(), &branding, now_ms())
+        .await
+        .expect("put branding");
+
+    // The stored value round-trips exactly and opens only with its own AAD.
+    let stored = storage
+        .connections()
+        .get(t, id)
+        .await
+        .expect("get connection")
+        .expect("connection exists")
+        .secret_enc
+        .expect("secret stored");
+    assert_eq!(
+        stored, sealed,
+        "the sealed secret is stored exactly as given"
+    );
+    let opened = kek
+        .open(CONNECTION_SECRET_PURPOSE, &connection_aad(t, id), &stored)
+        .expect("opens with its own tenant and connection id");
+    assert_eq!(opened.as_slice(), secret.as_bytes());
+    assert!(
+        kek.open(
+            CONNECTION_SECRET_PURPOSE,
+            &connection_aad(other_tenant, id),
+            &stored
+        )
+        .is_err(),
+        "a sealed secret must not open under another tenant"
+    );
+    assert!(
+        kek.open(
+            CONNECTION_SECRET_PURPOSE,
+            &connection_aad(t, ConnectionId::new_v7()),
+            &stored
+        )
+        .is_err(),
+        "a sealed secret must not open under another connection id"
+    );
+    assert!(
+        kek.open(TOTP_SEED_PURPOSE, &connection_aad(t, id), &stored)
+            .is_err(),
+        "a sealed secret must not open under another purpose"
+    );
+
+    // Raw scan while open (database file + WAL).
+    let raw = raw_database_bytes(&path);
+    assert!(
+        raw.iter().any(|(_, bytes)| contains(bytes, css.as_bytes())),
+        "positive control: the raw scan must find the stored branding CSS"
+    );
+    for (file, bytes) in &raw {
+        assert!(
+            !contains(bytes, secret.as_bytes()),
+            "the connection secret is in plaintext in {file}"
+        );
+    }
+    drop(storage);
+
+    // Checkpoint the WAL into the main file and scan the main file again.
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(SqliteConnectOptions::new().filename(&path))
+        .await
+        .expect("plain connection");
+    sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+        .execute(&pool)
+        .await
+        .expect("checkpoint");
+    pool.close().await;
+    let main = std::fs::read(&path).expect("read database file");
+    assert!(
+        contains(&main, css.as_bytes()),
+        "positive control: the checkpointed file holds the branding CSS"
+    );
+    assert!(
+        !contains(&main, secret.as_bytes()),
+        "the connection secret is in plaintext in the checkpointed database file"
+    );
+
+    // Column scan: no TEXT or BLOB cell holds the plaintext; the sealed bytes are in secret_enc.
+    let pool = inspect(&path).await;
+    let columns = all_columns(&pool).await;
+    assert_eq!(hits_anywhere(&pool, &columns, secret.as_bytes()).await, 0);
+    assert_eq!(hits_anywhere(&pool, &columns, &sealed).await, 1);
 }

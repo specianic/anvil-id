@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE logout_delivery SET delivered_at = ?2 WHERE id = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "cbea4c1ced439ce6eab80ecea212b8bff00ac75c7a756ea9364dbbcdaa46f933"
+}

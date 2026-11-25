@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM branding WHERE rowid IN\n               (SELECT rowid FROM branding\n                 WHERE tokens IS NULL AND preview_expires_at <= ?1 LIMIT ?2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "de156394b9f604c96a938e0822d857e571de450cddb6bce7294223d99e5a24e0"
+}

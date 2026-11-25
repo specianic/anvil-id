@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE logout_delivery\n                        SET attempts = attempts + 1, next_attempt_at = ?2, last_error = ?3\n                      WHERE id = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "aff96817d220c07182d3e8f74b12878b598b64b20e68c7392d87a484f751cc47"
+}

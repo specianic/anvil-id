@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM logout_delivery WHERE rowid IN\n               (SELECT rowid FROM logout_delivery WHERE give_up_at <= ?1 LIMIT ?2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "4c79572f9914ab343ce3f74e87c25aa31b19c9b842b0e5b24c6cbeafba967cf4"
+}

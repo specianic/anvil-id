@@ -1,0 +1,98 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT tenant_id AS \"tenant_id!: uuid::Uuid\", scope_key AS \"scope_key!\",\n                      tokens AS \"tokens!\", custom_css AS \"custom_css?\",\n                      logo_sha256 AS \"logo_sha256?\", logo_type AS \"logo_type?\",\n                      updated_at AS \"updated_at!\"\n                 FROM branding\n                WHERE tenant_id = ?1 AND scope_key = ?2 AND tokens IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "tenant_id!: uuid::Uuid",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "branding",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "name": "scope_key!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "branding",
+            "name": "scope_key"
+          }
+        }
+      },
+      {
+        "name": "tokens!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "branding",
+            "name": "tokens"
+          }
+        }
+      },
+      {
+        "name": "custom_css?",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "branding",
+            "name": "custom_css"
+          }
+        }
+      },
+      {
+        "name": "logo_sha256?",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "branding",
+            "name": "logo_sha256"
+          }
+        }
+      },
+      {
+        "name": "logo_type?",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "branding",
+            "name": "logo_type"
+          }
+        }
+      },
+      {
+        "name": "updated_at!",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "branding",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "67b6793941a7ef281c46ea4b77185628387f5bbaf4add1c620e4b1e06c6e4507"
+}

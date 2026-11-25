@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM identity_link WHERE tenant_id = ?1 AND user_id = ?2 AND id = ?3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "a5013ff73f53c4d055baf366406fd6261b8e0bfcdd8a384d926fd05050695920"
+}

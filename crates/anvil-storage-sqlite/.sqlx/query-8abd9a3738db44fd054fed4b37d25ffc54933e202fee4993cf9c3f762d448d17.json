@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE connection SET secret_enc = ?3, updated_at = ?4\n              WHERE tenant_id = ?1 AND id = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "8abd9a3738db44fd054fed4b37d25ffc54933e202fee4993cf9c3f762d448d17"
+}

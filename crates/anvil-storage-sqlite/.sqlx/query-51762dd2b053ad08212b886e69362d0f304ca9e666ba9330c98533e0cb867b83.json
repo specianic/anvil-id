@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE identity_link SET last_used_at = ?3 WHERE tenant_id = ?1 AND id = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "51762dd2b053ad08212b886e69362d0f304ca9e666ba9330c98533e0cb867b83"
+}

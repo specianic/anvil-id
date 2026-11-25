@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE browser_session SET revoked_at = ?3\n                WHERE tenant_id = ?1 AND user_id = ?2 AND revoked_at IS NULL\n            RETURNING id AS \"id!: uuid::Uuid\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: uuid::Uuid",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "browser_session",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "4f631912a4adb755eac77da7f8fb0e350102bcff2c07662743240297c76dc585"
+}

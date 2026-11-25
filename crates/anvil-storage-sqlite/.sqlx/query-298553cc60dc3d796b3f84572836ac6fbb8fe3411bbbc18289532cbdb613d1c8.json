@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR IGNORE INTO branding_logo (tenant_id, sha256, content_type, bytes)\n                 VALUES (?1, ?2, ?3, ?4)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "298553cc60dc3d796b3f84572836ac6fbb8fe3411bbbc18289532cbdb613d1c8"
+}

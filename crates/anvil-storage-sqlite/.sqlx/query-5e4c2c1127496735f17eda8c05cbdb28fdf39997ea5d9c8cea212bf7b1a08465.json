@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE browser_session SET acr = ?3, amr = ?4, auth_time = ?5\n              WHERE tenant_id = ?1 AND id = ?2 AND revoked_at IS NULL\n                AND expires_at > ?6 AND idle_expires_at > ?6",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "5e4c2c1127496735f17eda8c05cbdb28fdf39997ea5d9c8cea212bf7b1a08465"
+}

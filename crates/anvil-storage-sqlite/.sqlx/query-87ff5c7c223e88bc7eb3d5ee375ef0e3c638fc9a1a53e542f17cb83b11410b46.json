@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id AS \"id!: uuid::Uuid\", tenant_id AS \"tenant_id!: uuid::Uuid\",\n                  client_id AS \"client_id!\", user_id AS \"user_id?: uuid::Uuid\", scope AS \"scope!\",\n                  auth_time AS \"auth_time?\", acr AS \"acr?\", amr AS \"amr!\",\n                  session_id AS \"session_id?: uuid::Uuid\", claims AS \"claims?\",\n                  created_at AS \"created_at!\", absolute_expires_at AS \"absolute_expires_at!\",\n                  revoked_at AS \"revoked_at?\", revoked_reason AS \"revoked_reason?\"\n             FROM token_family WHERE tenant_id = ?1 AND id = ?2",
+  "query": "SELECT id AS \"id!: uuid::Uuid\", tenant_id AS \"tenant_id!: uuid::Uuid\",\n                  client_id AS \"client_id!\", user_id AS \"user_id?: uuid::Uuid\", scope AS \"scope!\",\n                  auth_time AS \"auth_time?\", acr AS \"acr?\", amr AS \"amr!\",\n                  session_id AS \"session_id?: uuid::Uuid\", claims AS \"claims?\",\n                  created_at AS \"created_at!\", absolute_expires_at AS \"absolute_expires_at!\",\n                  revoked_at AS \"revoked_at?\", revoked_reason AS \"revoked_reason?\",\n                  resource AS \"resource!\"\n             FROM token_family WHERE tenant_id = ?1 AND id = ?2",
   "describe": {
     "columns": [
       {
@@ -156,6 +156,17 @@
             "name": "revoked_reason"
           }
         }
+      },
+      {
+        "name": "resource!",
+        "ordinal": 14,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "token_family",
+            "name": "resource"
+          }
+        }
       }
     ],
     "parameters": {
@@ -175,8 +186,9 @@
       false,
       false,
       true,
-      true
+      true,
+      false
     ]
   },
-  "hash": "ea94a6b659646d2411aef6c44616c9b31b9bed81ac374fb0ebc815ab794d576d"
+  "hash": "87ff5c7c223e88bc7eb3d5ee375ef0e3c638fc9a1a53e542f17cb83b11410b46"
 }

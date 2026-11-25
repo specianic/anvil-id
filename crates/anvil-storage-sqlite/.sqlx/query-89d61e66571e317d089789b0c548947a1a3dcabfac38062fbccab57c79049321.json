@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "UPDATE authorization_code\n                  SET consumed_at = ?3\n                WHERE tenant_id = ?1 AND code_hash = ?2\n                  AND consumed_at IS NULL AND expires_at > ?3\n            RETURNING code_hash       AS \"code_hash!: Vec<u8>\",\n                      tenant_id       AS \"tenant_id!: uuid::Uuid\",\n                      client_id       AS \"client_id!\",\n                      user_id         AS \"user_id!: uuid::Uuid\",\n                      session_id      AS \"session_id!: uuid::Uuid\",\n                      redirect_uri    AS \"redirect_uri!\",\n                      scope           AS \"scope!\",\n                      nonce           AS \"nonce?\",\n                      code_challenge  AS \"code_challenge?\",\n                      auth_time       AS \"auth_time!\",\n                      acr             AS \"acr!\",\n                      amr             AS \"amr!\",\n                      token_family_id AS \"token_family_id!: uuid::Uuid\",\n                      expires_at      AS \"expires_at!\",\n                      created_at      AS \"created_at!\"",
+  "query": "UPDATE authorization_code\n                  SET consumed_at = ?3\n                WHERE tenant_id = ?1 AND code_hash = ?2\n                  AND consumed_at IS NULL AND expires_at > ?3\n            RETURNING code_hash       AS \"code_hash!: Vec<u8>\",\n                      tenant_id       AS \"tenant_id!: uuid::Uuid\",\n                      client_id       AS \"client_id!\",\n                      user_id         AS \"user_id!: uuid::Uuid\",\n                      session_id      AS \"session_id!: uuid::Uuid\",\n                      redirect_uri    AS \"redirect_uri!\",\n                      scope           AS \"scope!\",\n                      nonce           AS \"nonce?\",\n                      code_challenge  AS \"code_challenge?\",\n                      auth_time       AS \"auth_time!\",\n                      acr             AS \"acr!\",\n                      amr             AS \"amr!\",\n                      token_family_id AS \"token_family_id!: uuid::Uuid\",\n                      expires_at      AS \"expires_at!\",\n                      created_at      AS \"created_at!\",\n                      resource        AS \"resource!\"",
   "describe": {
     "columns": [
       {
@@ -167,6 +167,17 @@
             "name": "created_at"
           }
         }
+      },
+      {
+        "name": "resource!",
+        "ordinal": 15,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "authorization_code",
+            "name": "resource"
+          }
+        }
       }
     ],
     "parameters": {
@@ -187,8 +198,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "bdd2f814ccdddc09cd249eaebb217f93b593d40d7a7f76522f23d503503af387"
+  "hash": "89d61e66571e317d089789b0c548947a1a3dcabfac38062fbccab57c79049321"
 }

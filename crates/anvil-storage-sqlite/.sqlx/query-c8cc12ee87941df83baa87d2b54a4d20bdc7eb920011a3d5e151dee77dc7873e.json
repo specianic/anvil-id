@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT sha256 AS \"sha256!\", content_type AS \"content_type!\", bytes AS \"bytes!\"\n                 FROM branding_logo WHERE tenant_id = ?1 AND sha256 = ?2",
+  "describe": {
+    "columns": [
+      {
+        "name": "sha256!",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "branding_logo",
+            "name": "sha256"
+          }
+        }
+      },
+      {
+        "name": "content_type!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "branding_logo",
+            "name": "content_type"
+          }
+        }
+      },
+      {
+        "name": "bytes!",
+        "ordinal": 2,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "branding_logo",
+            "name": "bytes"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "c8cc12ee87941df83baa87d2b54a4d20bdc7eb920011a3d5e151dee77dc7873e"
+}

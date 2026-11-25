@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT token_hash AS \"token_hash!\", tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      family_id AS \"family_id?: uuid::Uuid\", client_id AS \"client_id!\",\n                      user_id AS \"user_id?: uuid::Uuid\", scope AS \"scope!\",\n                      created_at AS \"created_at!\", expires_at AS \"expires_at!\",\n                      revoked_at AS \"revoked_at?\"\n                 FROM access_token WHERE tenant_id = ?1 AND token_hash = ?2",
+  "query": "SELECT token_hash AS \"token_hash!\", tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      family_id AS \"family_id?: uuid::Uuid\", client_id AS \"client_id!\",\n                      user_id AS \"user_id?: uuid::Uuid\", scope AS \"scope!\",\n                      created_at AS \"created_at!\", expires_at AS \"expires_at!\",\n                      revoked_at AS \"revoked_at?\", resource AS \"resource!\"\n                 FROM access_token WHERE tenant_id = ?1 AND token_hash = ?2",
   "describe": {
     "columns": [
       {
@@ -101,6 +101,17 @@
             "name": "revoked_at"
           }
         }
+      },
+      {
+        "name": "resource!",
+        "ordinal": 9,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "access_token",
+            "name": "resource"
+          }
+        }
       }
     ],
     "parameters": {
@@ -115,8 +126,9 @@
       false,
       false,
       false,
-      true
+      true,
+      false
     ]
   },
-  "hash": "aaea9b754b1f88fd27df3d28698a1b4021fe3f9ee674a13448b0434bf7d9e9a6"
+  "hash": "a35971e37439a34609b05af04c9c4294035b18a1640df0938869d3ee9d1258e8"
 }

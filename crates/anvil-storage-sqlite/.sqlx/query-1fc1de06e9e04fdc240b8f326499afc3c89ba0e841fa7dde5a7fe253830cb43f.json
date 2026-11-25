@@ -1,0 +1,122 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id AS \"id!: uuid::Uuid\", tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      user_id AS \"user_id!: uuid::Uuid\",\n                      connection_id AS \"connection_id!: uuid::Uuid\", subject AS \"subject!\",\n                      email_at_link AS \"email_at_link?\", metadata AS \"metadata!\",\n                      created_at AS \"created_at!\", last_used_at AS \"last_used_at?\"\n                 FROM identity_link\n                WHERE tenant_id = ?1 AND user_id = ?2\n                ORDER BY created_at, id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: uuid::Uuid",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "identity_link",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "tenant_id!: uuid::Uuid",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "identity_link",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "name": "user_id!: uuid::Uuid",
+        "ordinal": 2,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "identity_link",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "name": "connection_id!: uuid::Uuid",
+        "ordinal": 3,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "identity_link",
+            "name": "connection_id"
+          }
+        }
+      },
+      {
+        "name": "subject!",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "identity_link",
+            "name": "subject"
+          }
+        }
+      },
+      {
+        "name": "email_at_link?",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "identity_link",
+            "name": "email_at_link"
+          }
+        }
+      },
+      {
+        "name": "metadata!",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "identity_link",
+            "name": "metadata"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "identity_link",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "last_used_at?",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "identity_link",
+            "name": "last_used_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "1fc1de06e9e04fdc240b8f326499afc3c89ba0e841fa7dde5a7fe253830cb43f"
+}

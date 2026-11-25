@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO branding\n                 (tenant_id, scope_key, draft_tokens, draft_css, preview_hash, preview_expires_at,\n                  updated_at)\n             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)\n             ON CONFLICT (tenant_id, scope_key) DO UPDATE\n                SET draft_tokens = excluded.draft_tokens,\n                    draft_css = excluded.draft_css,\n                    preview_hash = excluded.preview_hash,\n                    preview_expires_at = excluded.preview_expires_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "bc1ead29f03f45dc370a22a4be5d212f2be312a368a31bdbe2736e76cbe94597"
+}
