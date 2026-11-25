@@ -548,3 +548,182 @@ async fn secrets_never_stored_plaintext() {
         .await
         .expect("closing the inspection connection");
 }
+
+/// SEC-03: an upstream connection's client secret is stored only KEK-sealed (purpose
+/// `CONNECTION_SECRET_PURPOSE`, AAD = tenant id || connection id), in `connection.secret_enc`
+/// exactly as sealed, and never appears in plaintext in any column of any table. The sealed
+/// value opens only with this tenant's and this connection's AAD.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn connection_secret_sealed_and_bound_to_tenant_and_connection() {
+    use anvil_core::model::{
+        BrandingScope, BrandingUpdate, CONNECTION_SECRET_PURPOSE, ConnectionId, LogoChange,
+        NewConnection, TenantId, connection_aad,
+    };
+
+    let s = support::postgres().await;
+    let url = s
+        ._guard
+        .downcast_ref::<String>()
+        .expect("the Postgres test guard holds the database URL")
+        .clone();
+    let tenant = seed_tenant(&s).await;
+    let kek = Kek::generate();
+
+    // Seal exactly like the connection service does, then store through the port.
+    let plain = format!(
+        "plaintext-marker-connection-secret-{}",
+        Uuid::now_v7().simple()
+    );
+    let id = ConnectionId::new_v7();
+    let sealed = kek
+        .seal(
+            CONNECTION_SECRET_PURPOSE,
+            &connection_aad(tenant, id),
+            plain.as_bytes(),
+        )
+        .expect("seal connection secret");
+    let connection = NewConnection {
+        id,
+        secret_enc: Some(sealed.clone()),
+        ..new_connection()
+    };
+    s.storage
+        .connections()
+        .create(tenant, &connection)
+        .await
+        .expect("create connection");
+    // A rotated secret goes through set_secret, sealed the same way.
+    let rotated_plain = format!(
+        "plaintext-marker-rotated-secret-{}",
+        Uuid::now_v7().simple()
+    );
+    let rotated = kek
+        .seal(
+            CONNECTION_SECRET_PURPOSE,
+            &connection_aad(tenant, id),
+            rotated_plain.as_bytes(),
+        )
+        .expect("seal rotated secret");
+    let second = seed_connection(&s, tenant).await;
+    assert!(
+        s.storage
+            .connections()
+            .set_secret(tenant, second.id, Some(&rotated), now_ms())
+            .await
+            .expect("set_secret")
+    );
+    // Branding custom CSS is stored too (not a secret; it must not disturb the scan).
+    s.storage
+        .branding()
+        .put(
+            tenant,
+            &BrandingScope::Tenant.scope_key(),
+            &BrandingUpdate {
+                tokens: theme_tokens("#123456"),
+                custom_css: Some(".brand { color: red; }".into()),
+                logo: LogoChange::Keep,
+            },
+            now_ms(),
+        )
+        .await
+        .expect("put branding");
+
+    // --- inspect every column with a plain connection ---------------------------------------
+    let mut conn = PgConnection::connect(&url)
+        .await
+        .expect("inspection connection");
+    let columns = sqlx::query(
+        "SELECT table_name::text, column_name::text, data_type::text, udt_name::text
+           FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND data_type IN ('text', 'bytea', 'jsonb', 'ARRAY')
+          ORDER BY table_name, ordinal_position",
+    )
+    .fetch_all(&mut conn)
+    .await
+    .expect("listing columns");
+    let columns: Vec<(String, String, String, String)> = columns
+        .iter()
+        .map(|r| (r.get(0), r.get(1), r.get(2), r.get(3)))
+        .collect();
+    assert!(
+        columns
+            .iter()
+            .any(|(t, c, _, _)| t == "connection" && c == "secret_enc"),
+        "the scan must cover connection.secret_enc"
+    );
+    for p in [&plain, &rotated_plain] {
+        let found = locations(&mut conn, &columns, p).await;
+        assert!(
+            found.is_empty(),
+            "the connection secret must never be stored in plaintext, found in {found:?}"
+        );
+        let raw = raw_bytes_locations(&mut conn, &columns, p.as_bytes()).await;
+        assert!(raw.is_empty(), "plaintext secret bytes found in {raw:?}");
+    }
+    // Positive controls: the scan finds the sealed bytes and the clear slug.
+    assert_eq!(
+        raw_bytes_locations(&mut conn, &columns, &sealed).await,
+        ["connection.secret_enc"],
+        "the sealed secret is stored exactly as given"
+    );
+    assert!(
+        locations(&mut conn, &columns, &connection.slug)
+            .await
+            .contains(&"connection.slug".to_owned()),
+        "the scan must find a value stored in clear"
+    );
+    conn.close().await.expect("close inspection connection");
+
+    // The stored value opens only with this tenant's and this connection's AAD.
+    let stored = s
+        .storage
+        .connections()
+        .get(tenant, id)
+        .await
+        .expect("get")
+        .expect("connection")
+        .secret_enc
+        .expect("secret stored");
+    assert_eq!(stored, sealed);
+    let opened = kek
+        .open(
+            CONNECTION_SECRET_PURPOSE,
+            &connection_aad(tenant, id),
+            &stored,
+        )
+        .expect("opens with the right AAD");
+    assert_eq!(opened.as_slice(), plain.as_bytes());
+    for (why, aad) in [
+        ("another tenant", connection_aad(TenantId::new_v7(), id)),
+        ("another connection", connection_aad(tenant, second.id)),
+        (
+            "swapped ids",
+            connection_aad(TenantId(id.0), ConnectionId(tenant.0)),
+        ),
+    ] {
+        assert!(
+            kek.open(CONNECTION_SECRET_PURPOSE, &aad, &stored).is_err(),
+            "the sealed secret must not open with {why}'s AAD"
+        );
+    }
+    assert!(
+        kek.open(
+            anvil_core::model::SMTP_PASSWORD_PURPOSE,
+            &connection_aad(tenant, id),
+            &stored
+        )
+        .is_err(),
+        "the sealed secret must not open under another purpose"
+    );
+    assert!(
+        Kek::generate()
+            .open(
+                CONNECTION_SECRET_PURPOSE,
+                &connection_aad(tenant, id),
+                &stored
+            )
+            .is_err(),
+        "the sealed secret must not open with another KEK"
+    );
+}

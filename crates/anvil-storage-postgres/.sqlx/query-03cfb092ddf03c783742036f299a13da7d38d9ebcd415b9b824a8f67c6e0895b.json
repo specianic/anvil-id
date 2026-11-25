@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO branding_logo (tenant_id, sha256, content_type, bytes)\n                     VALUES ($1, $2, $3, $4)\n                     ON CONFLICT (tenant_id, sha256) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "03cfb092ddf03c783742036f299a13da7d38d9ebcd415b9b824a8f67c6e0895b"
+}

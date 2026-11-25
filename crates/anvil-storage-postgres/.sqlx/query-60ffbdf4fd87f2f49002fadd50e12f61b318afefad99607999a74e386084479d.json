@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM branding WHERE tenant_id = $1 AND scope_key = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "60ffbdf4fd87f2f49002fadd50e12f61b318afefad99607999a74e386084479d"
+}

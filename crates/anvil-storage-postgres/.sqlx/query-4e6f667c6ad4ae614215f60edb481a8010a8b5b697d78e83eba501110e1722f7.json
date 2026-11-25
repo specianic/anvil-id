@@ -1,0 +1,78 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT scope_key, tokens, custom_css, preview_hash, preview_expires_at\n               FROM branding_draft\n              WHERE tenant_id = $1 AND preview_hash = $2 AND preview_expires_at > $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "scope_key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "branding_draft",
+            "name": "scope_key"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "tokens",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "branding_draft",
+            "name": "tokens"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "custom_css",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "branding_draft",
+            "name": "custom_css"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "preview_hash",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "branding_draft",
+            "name": "preview_hash"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "preview_expires_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "branding_draft",
+            "name": "preview_expires_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bytea",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "4e6f667c6ad4ae614215f60edb481a8010a8b5b697d78e83eba501110e1722f7"
+}

@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT date_trunc('milliseconds', now()) AS \"now!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "now!",
+        "type_info": "Timestamptz",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "5c2c8720fc486bf6cc28d79a10677e3a19132513de522493a0bd3e3379034725"
+}

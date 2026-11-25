@@ -1,0 +1,53 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT sha256, content_type, bytes FROM branding_logo\n              WHERE tenant_id = $1 AND sha256 = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "sha256",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "branding_logo",
+            "name": "sha256"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "content_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "branding_logo",
+            "name": "content_type"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "bytes",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "branding_logo",
+            "name": "bytes"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "db48c65810c91d6312ec245b1c6faf567b2161f9ad67f6c9dd65d0ab92fe7b1f"
+}

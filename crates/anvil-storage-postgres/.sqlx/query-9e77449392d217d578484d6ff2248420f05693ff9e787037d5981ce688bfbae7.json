@@ -1,0 +1,107 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO branding\n                 (tenant_id, scope_key, tokens, custom_css, logo_sha256, logo_type, updated_at)\n             VALUES ($1, $2, $3, $4, $6, $7, $8)\n             ON CONFLICT (tenant_id, scope_key) DO UPDATE\n                SET tokens = EXCLUDED.tokens,\n                    custom_css = EXCLUDED.custom_css,\n                    logo_sha256 = CASE WHEN $5 THEN EXCLUDED.logo_sha256\n                                       ELSE branding.logo_sha256 END,\n                    logo_type = CASE WHEN $5 THEN EXCLUDED.logo_type\n                                     ELSE branding.logo_type END,\n                    updated_at = EXCLUDED.updated_at\n          RETURNING tenant_id, scope_key, tokens, custom_css, logo_sha256, logo_type,\n                    updated_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "tenant_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "branding",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "scope_key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "branding",
+            "name": "scope_key"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "tokens",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "branding",
+            "name": "tokens"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "custom_css",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "branding",
+            "name": "custom_css"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "logo_sha256",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "branding",
+            "name": "logo_sha256"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "logo_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "branding",
+            "name": "logo_type"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "branding",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Jsonb",
+        "Text",
+        "Bool",
+        "Text",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "9e77449392d217d578484d6ff2248420f05693ff9e787037d5981ce688bfbae7"
+}

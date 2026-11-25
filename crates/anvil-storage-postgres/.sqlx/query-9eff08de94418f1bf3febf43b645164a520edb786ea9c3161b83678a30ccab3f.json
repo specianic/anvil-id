@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rp_session (tenant_id, session_id, client_id, created_at)\n         VALUES ($1, $2, $3, $4)\n         ON CONFLICT (tenant_id, session_id, client_id) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9eff08de94418f1bf3febf43b645164a520edb786ea9c3161b83678a30ccab3f"
+}

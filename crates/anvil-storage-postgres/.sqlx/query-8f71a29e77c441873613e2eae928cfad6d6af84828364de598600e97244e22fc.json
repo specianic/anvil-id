@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE logout_delivery\n                    SET attempts = attempts + 1, next_attempt_at = $2, last_error = $3\n                  WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8f71a29e77c441873613e2eae928cfad6d6af84828364de598600e97244e22fc"
+}

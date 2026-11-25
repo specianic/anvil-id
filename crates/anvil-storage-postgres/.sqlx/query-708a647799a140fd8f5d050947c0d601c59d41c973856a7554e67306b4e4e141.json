@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "UPDATE client\n                SET name = COALESCE($3, name),\n                    redirect_uris = COALESCE($4, redirect_uris),\n                    grant_types = COALESCE($5, grant_types),\n                    scopes = COALESCE($6, scopes),\n                    require_pkce = COALESCE($7, require_pkce),\n                    jwks = CASE WHEN $8 THEN $9 ELSE jwks END,\n                    token_format = COALESCE($11, token_format),\n                    consent_mode = COALESCE($12, consent_mode),\n                    id_token_signed_response_alg =\n                      CASE WHEN $13 THEN $14 ELSE id_token_signed_response_alg END,\n                    can_introspect = COALESCE($15, can_introspect),\n                    updated_at = $10\n              WHERE tenant_id = $1 AND client_id = $2\n          RETURNING id, tenant_id, client_id, name, client_type, application_type, auth_method,\n                    secret_hash, jwks, redirect_uris, grant_types, scopes, require_pkce,\n                    token_format, consent_mode, id_token_signed_response_alg, can_introspect,\n                    created_at, updated_at",
+  "query": "SELECT id, tenant_id, client_id, name, client_type, application_type, auth_method,\n                    secret_hash, jwks, redirect_uris, grant_types, scopes, require_pkce,\n                    token_format, consent_mode, id_token_signed_response_alg, can_introspect,\n                    created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,\n                    backchannel_logout_session_required, allowed_resources, mfa_policy\n               FROM client\n              WHERE tenant_id = $1 AND ($2::uuid IS NULL OR id > $2)\n              ORDER BY id\n              LIMIT $3",
   "describe": {
     "columns": [
       {
@@ -211,25 +211,68 @@
             "name": "updated_at"
           }
         }
+      },
+      {
+        "ordinal": 19,
+        "name": "post_logout_redirect_uris",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "post_logout_redirect_uris"
+          }
+        }
+      },
+      {
+        "ordinal": 20,
+        "name": "backchannel_logout_uri",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "backchannel_logout_uri"
+          }
+        }
+      },
+      {
+        "ordinal": 21,
+        "name": "backchannel_logout_session_required",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "backchannel_logout_session_required"
+          }
+        }
+      },
+      {
+        "ordinal": 22,
+        "name": "allowed_resources",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "allowed_resources"
+          }
+        }
+      },
+      {
+        "ordinal": 23,
+        "name": "mfa_policy",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "mfa_policy"
+          }
+        }
       }
     ],
     "parameters": {
       "Left": [
         "Uuid",
-        "Text",
-        "Text",
-        "TextArray",
-        "TextArray",
-        "TextArray",
-        "Bool",
-        "Bool",
-        "Text",
-        "Timestamptz",
-        "Text",
-        "Text",
-        "Bool",
-        "Text",
-        "Bool"
+        "Uuid",
+        "Int8"
       ]
     },
     "nullable": [
@@ -251,8 +294,13 @@
       true,
       false,
       false,
-      false
+      false,
+      false,
+      true,
+      false,
+      false,
+      true
     ]
   },
-  "hash": "b2ad7469243e6a82845189b5950bc516321e19826da644acaa2de8bce0180d3b"
+  "hash": "708a647799a140fd8f5d050947c0d601c59d41c973856a7554e67306b4e4e141"
 }

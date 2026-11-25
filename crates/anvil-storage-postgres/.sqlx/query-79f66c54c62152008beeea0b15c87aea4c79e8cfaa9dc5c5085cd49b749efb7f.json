@@ -1,16 +1,16 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT token_hash, tenant_id, family_id, client_id, user_id, scope, created_at,\n                    expires_at, revoked_at\n               FROM access_token\n              WHERE tenant_id = $1 AND token_hash = $2",
+  "query": "SELECT id, tenant_id, user_id, connection_id, subject, email_at_link, metadata,\n                    created_at, last_used_at\n               FROM identity_link\n              WHERE tenant_id = $1 AND user_id = $2\n              ORDER BY created_at, id",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "token_hash",
-        "type_info": "Bytea",
+        "name": "id",
+        "type_info": "Uuid",
         "origin": {
           "Table": {
-            "table": "access_token",
-            "name": "token_hash"
+            "table": "identity_link",
+            "name": "id"
           }
         }
       },
@@ -20,85 +20,85 @@
         "type_info": "Uuid",
         "origin": {
           "Table": {
-            "table": "access_token",
+            "table": "identity_link",
             "name": "tenant_id"
           }
         }
       },
       {
         "ordinal": 2,
-        "name": "family_id",
-        "type_info": "Uuid",
-        "origin": {
-          "Table": {
-            "table": "access_token",
-            "name": "family_id"
-          }
-        }
-      },
-      {
-        "ordinal": 3,
-        "name": "client_id",
-        "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "access_token",
-            "name": "client_id"
-          }
-        }
-      },
-      {
-        "ordinal": 4,
         "name": "user_id",
         "type_info": "Uuid",
         "origin": {
           "Table": {
-            "table": "access_token",
+            "table": "identity_link",
             "name": "user_id"
           }
         }
       },
       {
-        "ordinal": 5,
-        "name": "scope",
+        "ordinal": 3,
+        "name": "connection_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "identity_link",
+            "name": "connection_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "subject",
         "type_info": "Text",
         "origin": {
           "Table": {
-            "table": "access_token",
-            "name": "scope"
+            "table": "identity_link",
+            "name": "subject"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "email_at_link",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "identity_link",
+            "name": "email_at_link"
           }
         }
       },
       {
         "ordinal": 6,
-        "name": "created_at",
-        "type_info": "Timestamptz",
+        "name": "metadata",
+        "type_info": "Jsonb",
         "origin": {
           "Table": {
-            "table": "access_token",
-            "name": "created_at"
+            "table": "identity_link",
+            "name": "metadata"
           }
         }
       },
       {
         "ordinal": 7,
-        "name": "expires_at",
+        "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
           "Table": {
-            "table": "access_token",
-            "name": "expires_at"
+            "table": "identity_link",
+            "name": "created_at"
           }
         }
       },
       {
         "ordinal": 8,
-        "name": "revoked_at",
+        "name": "last_used_at",
         "type_info": "Timestamptz",
         "origin": {
           "Table": {
-            "table": "access_token",
-            "name": "revoked_at"
+            "table": "identity_link",
+            "name": "last_used_at"
           }
         }
       }
@@ -106,20 +106,20 @@
     "parameters": {
       "Left": [
         "Uuid",
-        "Bytea"
+        "Uuid"
       ]
     },
     "nullable": [
       false,
       false,
-      true,
+      false,
+      false,
       false,
       true,
-      false,
       false,
       false,
       true
     ]
   },
-  "hash": "fdd9060a3aaf73e6b25843ea19bca583fff587c16a9ec57a3b8334e05725318f"
+  "hash": "79f66c54c62152008beeea0b15c87aea4c79e8cfaa9dc5c5085cd49b749efb7f"
 }

@@ -1,0 +1,101 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT tenant_id, scope_key, tokens, custom_css, logo_sha256, logo_type, updated_at\n               FROM branding\n              WHERE tenant_id = $1 AND scope_key = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "tenant_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "branding",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "scope_key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "branding",
+            "name": "scope_key"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "tokens",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "branding",
+            "name": "tokens"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "custom_css",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "branding",
+            "name": "custom_css"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "logo_sha256",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "branding",
+            "name": "logo_sha256"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "logo_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "branding",
+            "name": "logo_type"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "branding",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "36f0723fe36956a4a07a2b1a1707456ec35c15d25b81b479ea5ce6472abf0a1e"
+}

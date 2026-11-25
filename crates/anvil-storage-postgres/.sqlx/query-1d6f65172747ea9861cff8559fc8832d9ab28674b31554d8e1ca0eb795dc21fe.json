@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE browser_session SET acr = $3, amr = $4, auth_time = $5\n              WHERE tenant_id = $1 AND id = $2 AND revoked_at IS NULL\n                AND expires_at > $6 AND idle_expires_at > $6",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "TextArray",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1d6f65172747ea9861cff8559fc8832d9ab28674b31554d8e1ca0eb795dc21fe"
+}

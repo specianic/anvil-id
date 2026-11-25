@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "UPDATE authorization_code\n                SET consumed_at = $3\n              WHERE tenant_id = $1 AND code_hash = $2\n                AND consumed_at IS NULL AND expires_at > $3\n          RETURNING code_hash, tenant_id, client_id, user_id, session_id, redirect_uri, scope,\n                    nonce, code_challenge, auth_time, acr, amr, token_family_id, expires_at,\n                    created_at",
+  "query": "UPDATE authorization_code\n                SET consumed_at = $3\n              WHERE tenant_id = $1 AND code_hash = $2\n                AND consumed_at IS NULL AND expires_at > $3\n          RETURNING code_hash, tenant_id, client_id, user_id, session_id, redirect_uri, scope,\n                    nonce, code_challenge, auth_time, acr, amr, token_family_id, expires_at,\n                    created_at, resource",
   "describe": {
     "columns": [
       {
@@ -167,6 +167,17 @@
             "name": "created_at"
           }
         }
+      },
+      {
+        "ordinal": 15,
+        "name": "resource",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "authorization_code",
+            "name": "resource"
+          }
+        }
       }
     ],
     "parameters": {
@@ -191,8 +202,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "367b7fd5cbbabc415c75a62d1b43d3a9816a3cf8c32191becde9f9cfd1271577"
+  "hash": "aeb08716e6f2bf1f71cc9ea5e61b1b98cda899e9e5d337e8b3facd25d15523ee"
 }

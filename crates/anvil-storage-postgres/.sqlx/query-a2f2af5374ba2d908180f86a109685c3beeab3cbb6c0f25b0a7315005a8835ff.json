@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO authorization_code\n                 (code_hash, tenant_id, client_id, user_id, session_id, redirect_uri, scope,\n                  nonce, code_challenge, auth_time, acr, amr, token_family_id, expires_at,\n                  consumed_at, created_at, resource)\n             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NULL, $15,\n                     $16)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Text",
+        "TextArray",
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a2f2af5374ba2d908180f86a109685c3beeab3cbb6c0f25b0a7315005a8835ff"
+}

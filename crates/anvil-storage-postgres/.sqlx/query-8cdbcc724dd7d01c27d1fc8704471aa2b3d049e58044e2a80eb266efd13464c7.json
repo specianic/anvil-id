@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO branding_draft\n                 (tenant_id, scope_key, tokens, custom_css, preview_hash, preview_expires_at,\n                  updated_at)\n             VALUES ($1, $2, $3, $4, $5, $6, $7)\n             ON CONFLICT (tenant_id, scope_key) DO UPDATE\n                SET tokens = EXCLUDED.tokens,\n                    custom_css = EXCLUDED.custom_css,\n                    preview_hash = EXCLUDED.preview_hash,\n                    preview_expires_at = EXCLUDED.preview_expires_at,\n                    updated_at = EXCLUDED.updated_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Jsonb",
+        "Text",
+        "Bytea",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8cdbcc724dd7d01c27d1fc8704471aa2b3d049e58044e2a80eb266efd13464c7"
+}

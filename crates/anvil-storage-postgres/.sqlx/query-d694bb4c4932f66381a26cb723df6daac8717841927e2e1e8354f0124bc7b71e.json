@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, tenant_id, client_id, user_id, scope, auth_time, acr, amr, session_id, claims,\n                created_at, absolute_expires_at, revoked_at, revoked_reason\n           FROM token_family\n          WHERE tenant_id = $1 AND id = $2",
+  "query": "SELECT id, tenant_id, client_id, user_id, scope, auth_time, acr, amr, session_id, claims,\n                created_at, absolute_expires_at, revoked_at, revoked_reason, resource\n           FROM token_family\n          WHERE tenant_id = $1 AND id = $2",
   "describe": {
     "columns": [
       {
@@ -156,6 +156,17 @@
             "name": "revoked_reason"
           }
         }
+      },
+      {
+        "ordinal": 14,
+        "name": "resource",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "token_family",
+            "name": "resource"
+          }
+        }
       }
     ],
     "parameters": {
@@ -178,8 +189,9 @@
       false,
       false,
       true,
-      true
+      true,
+      false
     ]
   },
-  "hash": "3828cce1dba32d3973ec58cb78853ac6917693293b9a9fb828216a835f655ada"
+  "hash": "d694bb4c4932f66381a26cb723df6daac8717841927e2e1e8354f0124bc7b71e"
 }
