@@ -15,6 +15,12 @@ all-features = false
 yanked = "deny"
 # `unmaintained` defaults to "workspace" scope (cargo-deny >= 0.22), so transitive
 # unmaintained crates do not fail CI on their own.
+ignore = [
+  # `rsa` is reachable only through crypto-glue (bans.deny wrapper below), i.e. inside webauthn-rs,
+  # which uses it to verify authenticator signatures with public keys. Marvin is a timing attack on
+  # private-key operations; we never hold RSA private keys in RustCrypto (our signing is aws-lc-rs).
+  { id = "RUSTSEC-2023-0071", reason = "rsa used for public-key verification only, via crypto-glue in webauthn-rs (ARCHITECTURE.md §2)" },
+]
 
 [licenses]
 allow = [
@@ -36,6 +42,27 @@ allow = [
 ]
 confidence-threshold = 0.9
 
+# MPL-2.0 (file-level copyleft) is accepted per crate, not globally: we use these crates unmodified.
+[[licenses.exceptions]]
+crate = "webauthn-rs"
+allow = ["MPL-2.0"]
+[[licenses.exceptions]]
+crate = "webauthn-rs-core"
+allow = ["MPL-2.0"]
+[[licenses.exceptions]]
+crate = "webauthn-rs-proto"
+allow = ["MPL-2.0"]
+[[licenses.exceptions]]
+crate = "webauthn-attestation-ca"
+allow = ["MPL-2.0"]
+[[licenses.exceptions]]
+crate = "crypto-glue"
+allow = ["MPL-2.0"]
+# option-ext: via rust-embed `interpolate-folder-path` (shellexpand -> dirs), build-time proc-macro only.
+[[licenses.exceptions]]
+crate = "option-ext"
+allow = ["MPL-2.0"]
+
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
@@ -46,9 +73,7 @@ deny = [
   { crate = "openssl-sys", reason = "single crypto backend: aws-lc-rs" },
   { crate = "native-tls", reason = "rustls only" },
   { crate = "ring", reason = "single crypto backend: aws-lc-rs (not currently in graph; if it becomes unavoidable, use wrappers = [..] and document)" },
-  # webauthn-rs (M2) will need `{ crate = "rsa", wrappers = ["crypto-glue"] }` per ARCHITECTURE.md §2.
-  # Not added now because no such crate is in the graph.
-  { crate = "rsa", reason = "RUSTSEC-2023-0071 (Marvin), no fix" },
+  { crate = "rsa", wrappers = ["crypto-glue"], reason = "RUSTSEC-2023-0071 (Marvin) concerns private-key ops; webauthn-rs verifies with public keys only (ARCHITECTURE.md §2)" },
   { crate = "chrono", reason = "time crate only" },
   { crate = "samael", reason = "C XML security libs" },
   { crate = "xmlsec", reason = "C XML security libs" },

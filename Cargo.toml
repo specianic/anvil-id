@@ -48,7 +48,7 @@ sqlx = { version = "0.9.1", default-features = false, features = [
 ] }
 aws-lc-rs = "1.19"
 mimalloc = "0.1.52"
-rust-embed = { version = "8.14", features = ["mime-guess"] }
+rust-embed = { version = "8.14", features = ["mime-guess", "interpolate-folder-path"] }
 uuid = { version = "1.29", features = ["v7", "serde"] }
 time = { version = "0.3.55", features = ["serde"] }
 thiserror = "2"
@@ -74,7 +74,7 @@ secrecy = "0.10.3"
 zeroize = { version = "1.9.2", features = ["derive"] }
 argon2 = { version = "0.6.0", default-features = false, features = ["alloc", "password-hash"] }
 # serde is off by default in minijinja 3.x; there is no `loader` feature.
-minijinja = { version = "3.1.0", features = ["serde"] }
+minijinja = { version = "3.1.0", features = ["serde", "fuel"] }
 # Never `rustls-tls` (enables ring).
 lettre = { version = "0.11.24", default-features = false, features = [
   "tokio1-rustls",
@@ -98,6 +98,18 @@ rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["aws_lc_rs", "tls12", "logging"] }
 hyper = { version = "1.13", features = ["http1", "http2", "server"] }
 hyper-util = { version = "0.1.21", features = ["server-auto", "tokio", "service"] }
+
+# Phase 3 (release 0.2). Every crate Phase 3 needs is declared here once.
+# rust-embed gains `interpolate-folder-path` (console embedding via $CARGO_MANIFEST_DIR; never `compression`);
+# minijinja gains `fuel` (bounded execution of tenant-editable email templates).
+# webauthn-rs verifies with crypto-glue/RustCrypto; its `rsa` use is public-key only (deny.toml wrapper exception).
+webauthn-rs = { version = "0.6.2", features = ["danger-allow-state-serialisation", "conditional-ui"] }
+# Never `qr` (pulls `image`) or `gen_secret` (secrets come from the aws-lc-rs RNG).
+totp-rs = { version = "6.0.0", default-features = false, features = ["std", "otpauth", "zeroize"] }
+qrcodegen = "1.8"
+governor = "0.10.4"
+moka = { version = "0.12.16", features = ["sync"] }
+ipnet = "2.12"
 
 # Dev-only (tests).
 proptest = "1.12.0"

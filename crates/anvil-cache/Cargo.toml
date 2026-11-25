@@ -10,3 +10,12 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+anvil-core.workspace = true
+async-trait.workspace = true
+governor.workspace = true
+moka.workspace = true
+time.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

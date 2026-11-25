@@ -19,6 +19,7 @@ serde_json.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
 time.workspace = true
+totp-rs.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
