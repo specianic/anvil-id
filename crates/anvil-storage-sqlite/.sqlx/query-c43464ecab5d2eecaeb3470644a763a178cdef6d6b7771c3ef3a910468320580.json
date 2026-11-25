@@ -1,0 +1,134 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE authorization_code\n                  SET consumed_at = ?3\n                WHERE tenant_id = ?1 AND code_hash = ?2\n                  AND consumed_at IS NULL AND expires_at > ?3\n            RETURNING code_hash       AS \"code_hash!: Vec<u8>\",\n                      tenant_id       AS \"tenant_id!: uuid::Uuid\",\n                      client_id       AS \"client_id!\",\n                      redirect_uri    AS \"redirect_uri!\",\n                      scope           AS \"scope!\",\n                      code_challenge  AS \"code_challenge!\",\n                      nonce           AS \"nonce?\",\n                      token_family_id AS \"token_family_id?: uuid::Uuid\",\n                      expires_at      AS \"expires_at!\",\n                      created_at      AS \"created_at!\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "code_hash!: Vec<u8>",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "authorization_code",
+            "name": "code_hash"
+          }
+        }
+      },
+      {
+        "name": "tenant_id!: uuid::Uuid",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "authorization_code",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "name": "client_id!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "authorization_code",
+            "name": "client_id"
+          }
+        }
+      },
+      {
+        "name": "redirect_uri!",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "authorization_code",
+            "name": "redirect_uri"
+          }
+        }
+      },
+      {
+        "name": "scope!",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "authorization_code",
+            "name": "scope"
+          }
+        }
+      },
+      {
+        "name": "code_challenge!",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "authorization_code",
+            "name": "code_challenge"
+          }
+        }
+      },
+      {
+        "name": "nonce?",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "authorization_code",
+            "name": "nonce"
+          }
+        }
+      },
+      {
+        "name": "token_family_id?: uuid::Uuid",
+        "ordinal": 7,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "authorization_code",
+            "name": "token_family_id"
+          }
+        }
+      },
+      {
+        "name": "expires_at!",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "authorization_code",
+            "name": "expires_at"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 9,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "authorization_code",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "c43464ecab5d2eecaeb3470644a763a178cdef6d6b7771c3ef3a910468320580"
+}

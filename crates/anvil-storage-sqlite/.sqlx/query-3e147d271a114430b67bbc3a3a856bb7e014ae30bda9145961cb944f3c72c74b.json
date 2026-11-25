@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT consumed_at     AS \"consumed_at?\",\n                      token_family_id AS \"token_family_id?: uuid::Uuid\"\n                 FROM authorization_code\n                WHERE tenant_id = ?1 AND code_hash = ?2",
+  "describe": {
+    "columns": [
+      {
+        "name": "consumed_at?",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "authorization_code",
+            "name": "consumed_at"
+          }
+        }
+      },
+      {
+        "name": "token_family_id?: uuid::Uuid",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "authorization_code",
+            "name": "token_family_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "3e147d271a114430b67bbc3a3a856bb7e014ae30bda9145961cb944f3c72c74b"
+}
