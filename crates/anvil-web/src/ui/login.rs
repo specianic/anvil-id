@@ -349,7 +349,11 @@ async fn verify_captcha(
     }
     let result = match (
         open_secret(state.kek(), tenant.tenant.id, settings),
-        CaptchaVerifier::new(state.config().captcha_endpoints.clone(), DEFAULT_TIMEOUT),
+        CaptchaVerifier::new(
+            state.outbound_arc(),
+            state.config().captcha_endpoints.clone(),
+            DEFAULT_TIMEOUT,
+        ),
     ) {
         (Ok(secret), Ok(verifier)) => verifier.verify(settings, &secret, token, Some(ip)).await,
         (Err(e), _) | (_, Err(e)) => Err(e),

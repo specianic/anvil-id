@@ -11,7 +11,7 @@ use anvil_core::ports::{Clock, PasswordHasher, Storage};
 use anvil_core::service::bootstrap::{BootstrapService, InstallResult};
 use anvil_core::service::key_rotation::KeyRotationService;
 use anvil_jose::Kek;
-use anvil_web::adapters::{Argon2Pool, breach_checker};
+use anvil_web::adapters::{Argon2Pool, OutboundClient, breach_checker_with};
 use anvil_web::{AppConfig, AppDeps};
 use anyhow::{Context, bail};
 use axum::Router;
@@ -180,11 +180,23 @@ pub async fn start(cfg: &Config) -> anyhow::Result<Started> {
     app_config.insecure_http = cfg.insecure_http;
     app_config.trusted_proxies = cfg.trusted_proxies.clone();
     app_config.rate_limits = cfg.rate_limits.clone();
+    // Outbound (SSRF guard): an explicit allow-list replaces the dev-mode loopback default;
+    // plain http (to allow-listed destinations only) follows development mode, including
+    // `insecure_http` setups.
+    if let Some(cidrs) = &cfg.outbound_allow_cidrs {
+        app_config.outbound.allow_cidrs = cidrs.clone();
+    }
+    app_config.outbound.extra_ca_pem = cfg.outbound_ca_pem.clone();
+    app_config.outbound.allow_http = app_config.dev_mode();
+    let outbound = Arc::new(
+        OutboundClient::new(&app_config.outbound)
+            .context("failed to build the outbound HTTP client")?,
+    );
     let deps = AppDeps {
         storage: Arc::clone(&storage),
         clock: Arc::clone(&clock),
         hasher,
-        breach: breach_checker(cfg.breach_check.clone()),
+        breach: breach_checker_with(cfg.breach_check.clone(), outbound),
         kek: Arc::clone(&kek),
     };
     let app = anvil_web::app(app_config, deps).context("failed to build the application")?;

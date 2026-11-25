@@ -5,7 +5,10 @@ use std::sync::Arc;
 use anvil_cache::limiter::{InProcessLimiter, RateLimiter};
 use anvil_core::ports::{BreachChecker, Clock, PasswordHasher, Storage};
 use anvil_jose::kek::Kek;
+use tokio::sync::Notify;
 
+use crate::adapters::outbound::OutboundClient;
+use crate::adapters::upstream::UpstreamHttp;
 use crate::config::AppConfig;
 use crate::cookies::CookiePolicy;
 use crate::errors::WebError;
@@ -31,6 +34,9 @@ struct Inner {
     renderer: Renderer,
     cookies: CookiePolicy,
     limiter: Arc<dyn RateLimiter>,
+    outbound: Arc<OutboundClient>,
+    upstream: UpstreamHttp,
+    logout_wake: Arc<Notify>,
 }
 
 /// Cheaply clonable handle to the application state.
@@ -51,7 +57,8 @@ impl std::fmt::Debug for AppState {
 impl AppState {
     /// Builds the state: compiles the templates (theme override first), derives the cookie
     /// policy from the public URL and builds the single rate limiter from
-    /// [`AppConfig::rate_limits`], driven by the app clock.
+    /// [`AppConfig::rate_limits`], driven by the app clock, and the single SSRF-guarded outbound
+    /// client from [`AppConfig::outbound`] (fails on an unusable extra CA bundle).
     pub fn new(config: AppConfig, deps: AppDeps) -> Result<Self, WebError> {
         let renderer = Renderer::new(config.theme_dir.as_deref())?;
         let cookies = CookiePolicy::new(config.is_https());
@@ -65,6 +72,8 @@ impl AppState {
             config.rate_limits.clone(),
             Arc::clone(&deps.clock),
         ));
+        let outbound = Arc::new(OutboundClient::new(&config.outbound)?);
+        let upstream = UpstreamHttp::new(Arc::clone(&outbound));
         Ok(Self(Arc::new(Inner {
             config,
             storage: deps.storage,
@@ -75,6 +84,9 @@ impl AppState {
             renderer,
             cookies,
             limiter,
+            outbound,
+            upstream,
+            logout_wake: Arc::new(Notify::new()),
         })))
     }
 
@@ -135,5 +147,25 @@ impl AppState {
     /// [`crate::layers::ratelimit::guard_attempt`] and [`crate::layers::ratelimit::record_attempt`].
     pub fn limiter(&self) -> &dyn RateLimiter {
         self.0.limiter.as_ref()
+    }
+
+    /// The single SSRF-guarded outbound HTTP client (ARCHITECTURE §11).
+    pub fn outbound(&self) -> &OutboundClient {
+        &self.0.outbound
+    }
+
+    pub fn outbound_arc(&self) -> Arc<OutboundClient> {
+        Arc::clone(&self.0.outbound)
+    }
+
+    /// The upstream identity-provider adapter (built on [`Self::outbound`]).
+    pub fn upstream(&self) -> &UpstreamHttp {
+        &self.0.upstream
+    }
+
+    /// Wakes the back-channel logout worker when a delivery job is enqueued. The binary hands
+    /// the same `Notify` to the worker (it gets it from here).
+    pub fn logout_wake(&self) -> Arc<Notify> {
+        Arc::clone(&self.0.logout_wake)
     }
 }

@@ -10,10 +10,11 @@ pub mod hibp;
 pub mod outbound;
 pub mod passkey;
 pub mod qr;
+pub mod upstream;
 
 pub use self::argon2::Argon2Pool;
 pub use self::captcha::{CaptchaEndpoints, CaptchaError, CaptchaVerifier, captcha_csp};
-pub use self::hibp::{BreachCheckMode, HibpChecker, breach_checker};
+pub use self::hibp::{BreachCheckMode, HibpChecker, breach_checker, breach_checker_with};
 pub use self::outbound::{OutboundClient, OutboundError, OutboundPolicy};
 pub use self::passkey::{WebauthnPasskeys, relying_party};
 pub use self::qr::qr_svg;

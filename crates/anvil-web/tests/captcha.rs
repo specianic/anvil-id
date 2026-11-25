@@ -2,6 +2,7 @@
 //! error, no network call for an empty token, and the widget partial. The provider is a wiremock
 //! server (test code only); production code takes the siteverify URL as a constructor argument.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use anvil_core::model::{CaptchaProvider, CaptchaSettings};
@@ -9,6 +10,7 @@ use anvil_web::adapters::captcha::{
     CaptchaEndpoints, CaptchaError, CaptchaVerifier, DEFAULT_TIMEOUT, HCAPTCHA_SITEVERIFY,
     TURNSTILE_SITEVERIFY,
 };
+use anvil_web::adapters::outbound::{OutboundClient, OutboundPolicy};
 use anvil_web::render::Renderer;
 use minijinja::context;
 use secrecy::SecretString;
@@ -30,8 +32,14 @@ fn secret() -> SecretString {
     SecretString::from(SECRET.to_owned())
 }
 
+/// The development-mode outbound policy reaches the loopback mock.
+fn outbound() -> Arc<OutboundClient> {
+    Arc::new(OutboundClient::new(&OutboundPolicy::loopback_dev()).expect("outbound"))
+}
+
 async fn verifier(server: &MockServer, timeout: Duration) -> CaptchaVerifier {
     CaptchaVerifier::new(
+        outbound(),
         CaptchaEndpoints {
             turnstile: format!("{}/turnstile/v0/siteverify", server.uri()),
             hcaptcha: format!("{}/hcaptcha/siteverify", server.uri()),
@@ -259,6 +267,7 @@ async fn empty_token_is_rejected_without_a_network_call() {
 #[tokio::test]
 async fn non_https_endpoints_are_refused() {
     let err = CaptchaVerifier::new(
+        outbound(),
         CaptchaEndpoints {
             turnstile: "http://siteverify.example.test/x".into(),
             hcaptcha: HCAPTCHA_SITEVERIFY.into(),
@@ -267,6 +276,36 @@ async fn non_https_endpoints_are_refused() {
     )
     .expect_err("plain http to a non-loopback host");
     assert!(matches!(err, CaptchaError::Config(_)));
+}
+
+#[tokio::test]
+async fn production_outbound_policy_does_not_reach_a_loopback_endpoint() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"success":true}"#))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let prod = Arc::new(OutboundClient::new(&OutboundPolicy::default()).expect("outbound"));
+    let v = CaptchaVerifier::new(
+        prod,
+        CaptchaEndpoints {
+            turnstile: format!("{}/turnstile/v0/siteverify", server.uri()),
+            hcaptcha: format!("{}/hcaptcha/siteverify", server.uri()),
+        },
+        DEFAULT_TIMEOUT,
+    )
+    .expect("loopback http passes the endpoint rule");
+    let err = v
+        .verify(
+            &settings(CaptchaProvider::Turnstile),
+            &secret(),
+            TOKEN,
+            None,
+        )
+        .await
+        .expect_err("guard refuses plain http in production");
+    assert!(matches!(err, CaptchaError::Unavailable(_)), "{err:?}");
 }
 
 fn render_partial(ctx: minijinja::Value) -> String {

@@ -25,6 +25,7 @@ use anvil_core::ports::Clock as _;
 use anvil_jose::otp::TotpSecret;
 use anvil_web::AppConfig;
 use anvil_web::adapters::captcha::CaptchaEndpoints;
+use anvil_web::adapters::outbound::OutboundPolicy;
 use aws_lc_rs::hmac;
 use axum::body::Body;
 use axum::http::{Method, Request, header};
@@ -283,6 +284,8 @@ async fn with_captcha_the_identifier_tier_requires_a_verified_captcha_before_the
     let app = TestApp::with(|c| {
         base_config(c);
         c.rate_limits.loose_threshold_per_hour = 5;
+        // The mock listens on loopback: allow it (production policy blocks it).
+        c.outbound = OutboundPolicy::loopback_dev();
         c.captcha_endpoints = CaptchaEndpoints {
             turnstile: format!("{uri}/siteverify"),
             hcaptcha: format!("{uri}/siteverify"),
@@ -388,6 +391,8 @@ async fn an_unreachable_captcha_provider_fails_closed() {
         base_config(c);
         c.rate_limits.loose_threshold_per_hour = 1;
         // Nothing listens here: verification is unavailable.
+        // The mock listens on loopback: allow it (production policy blocks it).
+        c.outbound = OutboundPolicy::loopback_dev();
         c.captcha_endpoints = CaptchaEndpoints {
             turnstile: "http://127.0.0.1:9/siteverify".into(),
             hcaptcha: "http://127.0.0.1:9/siteverify".into(),

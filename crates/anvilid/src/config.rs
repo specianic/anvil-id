@@ -10,6 +10,11 @@
 //! Phase 3 keys (0.2): `trusted_proxies` / `trusted_proxy_header` (client IP behind reverse
 //! proxies, OPS-06), `rate_limit_*` (SEC-05), `key_rotation_days` (SEC-02) and
 //! `audit_retention_days` (ADM-04).
+//!
+//! Phase 4 keys (0.3): `outbound_allow_cidrs` (destinations the SSRF-guarded outbound client may
+//! reach even inside a blocked range; an explicit list, even an empty one, replaces the
+//! development-mode loopback default) and `outbound_ca_file` (extra PEM root certificates for
+//! outbound TLS, merged with the built-in roots).
 
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
@@ -78,6 +83,8 @@ pub const KEYS: &[&str] = &[
     "rate_limit_default_per_second",
     "key_rotation_days",
     "audit_retention_days",
+    "outbound_allow_cidrs",
+    "outbound_ca_file",
 ];
 
 /// Keys whose value is a secret as a whole.
@@ -220,6 +227,19 @@ pub struct CliOverrides {
     #[arg(long, value_name = "DAYS")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audit_retention_days: Option<u32>,
+
+    /// Comma-separated CIDRs (or single IPs) the outbound HTTP client may reach even inside
+    /// private/loopback/reserved ranges; empty allows none [default: loopback in dev mode,
+    /// none otherwise].
+    #[arg(long, value_name = "CIDRS")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outbound_allow_cidrs: Option<String>,
+
+    /// PEM bundle of extra root certificates trusted for outbound TLS (merged with the
+    /// built-in roots).
+    #[arg(long, value_name = "PATH")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outbound_ca_file: Option<PathBuf>,
 }
 
 /// A list given either as one comma-separated string (environment, CLI) or as a TOML array.
@@ -279,6 +299,9 @@ pub struct RawConfig {
     pub rate_limit_default_per_second: u32,
     pub key_rotation_days: u32,
     pub audit_retention_days: u32,
+    /// `None` = mode default (loopback in dev mode, none otherwise).
+    pub outbound_allow_cidrs: Option<ListValue>,
+    pub outbound_ca_file: Option<PathBuf>,
 }
 
 impl fmt::Debug for RawConfig {
@@ -319,6 +342,8 @@ impl Default for RawConfig {
             rate_limit_default_per_second: DEFAULT_RATE_LIMIT_DEFAULT_PER_SECOND,
             key_rotation_days: DEFAULT_KEY_ROTATION_DAYS,
             audit_retention_days: DEFAULT_AUDIT_RETENTION_DAYS,
+            outbound_allow_cidrs: None,
+            outbound_ca_file: None,
         }
     }
 }
@@ -333,6 +358,32 @@ pub const DEFAULT_RATE_LIMIT_DEFAULT_PER_SECOND: u32 = 50;
 /// Parses the trusted-proxy list. An entry is a CIDR (`10.0.0.0/8`) or a single address (a host
 /// route). Errors name the key and the entry position, never the value.
 pub fn parse_trusted_proxies(list: &ListValue) -> anyhow::Result<Vec<IpNet>> {
+    parse_cidr_list("trusted_proxies", list)
+}
+
+/// Parses the outbound allow-list (same entry syntax as `trusted_proxies`).
+pub fn parse_outbound_allow_cidrs(list: &ListValue) -> anyhow::Result<Vec<IpNet>> {
+    parse_cidr_list("outbound_allow_cidrs", list)
+}
+
+/// Reads and validates the extra outbound CA bundle. Errors name the key, never the content.
+pub fn read_outbound_ca(path: &Path) -> anyhow::Result<Vec<u8>> {
+    let pem = std::fs::read(path).map_err(|_| {
+        field_error(
+            "outbound_ca_file",
+            format!("cannot read {}", path.display()),
+        )
+    })?;
+    anvil_web::adapters::outbound::validate_ca_pem(&pem).map_err(|_| {
+        field_error(
+            "outbound_ca_file",
+            "is not a PEM bundle of usable certificates",
+        )
+    })?;
+    Ok(pem)
+}
+
+fn parse_cidr_list(key: &str, list: &ListValue) -> anyhow::Result<Vec<IpNet>> {
     list.entries()
         .iter()
         .enumerate()
@@ -342,10 +393,7 @@ pub fn parse_trusted_proxies(list: &ListValue) -> anyhow::Result<Vec<IpNet>> {
                 .map(|net| net.trunc())
                 .or_else(|_| entry.parse::<IpAddr>().map(IpNet::from))
                 .map_err(|_| {
-                    field_error(
-                        "trusted_proxies",
-                        format!("entry {} is not an IP address or CIDR", i + 1),
-                    )
+                    field_error(key, format!("entry {} is not an IP address or CIDR", i + 1))
                 })
         })
         .collect()
@@ -599,6 +647,10 @@ pub struct Config {
     pub rotation: RotationPolicy,
     /// Audit retention; `None` keeps events forever.
     pub audit_retention: Option<time::Duration>,
+    /// Explicit outbound allow-list; `None` keeps the web layer's mode default.
+    pub outbound_allow_cidrs: Option<Vec<IpNet>>,
+    /// Extra outbound root certificates (validated PEM bundle).
+    pub outbound_ca_pem: Option<Vec<u8>>,
     /// Non-fatal findings, logged as warnings on start.
     pub warnings: Vec<String>,
 }
@@ -768,6 +820,17 @@ impl Config {
             d => Some(time::Duration::days(i64::from(d))),
         };
 
+        let outbound_allow_cidrs = raw
+            .outbound_allow_cidrs
+            .as_ref()
+            .map(parse_outbound_allow_cidrs)
+            .transpose()?;
+        let outbound_ca_pem = raw
+            .outbound_ca_file
+            .as_deref()
+            .map(read_outbound_ca)
+            .transpose()?;
+
         Ok(Self {
             kek_file: raw
                 .kek_file
@@ -790,6 +853,8 @@ impl Config {
             rate_limits,
             rotation,
             audit_retention,
+            outbound_allow_cidrs,
+            outbound_ca_pem,
             warnings,
         })
     }
@@ -912,6 +977,23 @@ pub fn show(layers: &Layers, raw: &RawConfig) -> String {
             "rate_limit_default_per_second" => raw.rate_limit_default_per_second.to_string(),
             "key_rotation_days" => raw.key_rotation_days.to_string(),
             "audit_retention_days" => raw.audit_retention_days.to_string(),
+            "outbound_allow_cidrs" => match &raw.outbound_allow_cidrs {
+                Some(list) => {
+                    let entries = list.entries();
+                    if entries.is_empty() {
+                        "<none>".to_owned()
+                    } else {
+                        entries.join(", ")
+                    }
+                }
+                None => if public_url.as_ref().is_some_and(PublicUrl::is_dev_mode) {
+                    "127.0.0.0/8, ::1/128"
+                } else {
+                    "<none>"
+                }
+                .to_owned(),
+            },
+            "outbound_ca_file" => opt_path(raw.outbound_ca_file.as_ref()),
             _ => continue,
         };
         out.push_str(&format!("{key} = {value} ({})\n", layers.source(key)));

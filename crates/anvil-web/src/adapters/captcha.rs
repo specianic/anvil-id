@@ -7,20 +7,24 @@
 //! all errors.
 //!
 //! The siteverify URLs are constructor arguments ([`CaptchaEndpoints`], defaulting to the
-//! provider URLs); request data never selects the destination. The client follows no redirects
-//! and an endpoint must be https (plain http only to a loopback host).
+//! provider URLs); request data never selects the destination. An endpoint must be https (plain
+//! http only to a loopback host), and requests go through the single SSRF-guarded
+//! [`OutboundClient`] (no redirects, no proxies, destination policy).
 //!
 //! Enabling CAPTCHA loads the provider's script and frame on the pages that render the widget:
 //! [`captcha_csp`] gives the CSP for those pages only; every other page keeps the strict default
 //! CSP of [`crate::layers::security_headers::CSP`].
 
 use std::net::IpAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anvil_core::model::{CAPTCHA_SECRET_PURPOSE, CaptchaProvider, CaptchaSettings, TenantId};
 use anvil_jose::kek::Kek;
 use secrecy::{ExposeSecret as _, SecretString};
 use serde::Deserialize;
+
+use crate::adapters::outbound::{self, OutboundClient, OutboundError};
 
 /// Cloudflare Turnstile siteverify endpoint.
 pub const TURNSTILE_SITEVERIFY: &str = "https://challenges.cloudflare.com/turnstile/v0/siteverify";
@@ -125,29 +129,31 @@ struct SiteverifyResponse {
 /// Server-side CAPTCHA verification against the provider's siteverify endpoint.
 #[derive(Debug, Clone)]
 pub struct CaptchaVerifier {
-    client: reqwest::Client,
+    outbound: Arc<OutboundClient>,
     endpoints: CaptchaEndpoints,
+    timeout: Duration,
 }
 
 impl CaptchaVerifier {
-    /// A verifier for `endpoints` with the given request timeout. Fails if an endpoint is not
-    /// https (plain http is allowed only to a loopback host) or the client cannot be built.
-    pub fn new(endpoints: CaptchaEndpoints, timeout: Duration) -> Result<Self, CaptchaError> {
+    /// A verifier for `endpoints` with the given request timeout, sending through `outbound`.
+    /// Fails if an endpoint is not https (plain http is allowed only to a loopback host).
+    pub fn new(
+        outbound: Arc<OutboundClient>,
+        endpoints: CaptchaEndpoints,
+        timeout: Duration,
+    ) -> Result<Self, CaptchaError> {
         check_endpoint(&endpoints.turnstile)?;
         check_endpoint(&endpoints.hcaptcha)?;
-        let client = reqwest::Client::builder()
-            .timeout(timeout)
-            .connect_timeout(timeout)
-            .redirect(reqwest::redirect::Policy::none())
-            .user_agent("anvilid")
-            .build()
-            .map_err(|e| CaptchaError::Config(format!("building the HTTP client failed: {e}")))?;
-        Ok(Self { client, endpoints })
+        Ok(Self {
+            outbound,
+            endpoints,
+            timeout,
+        })
     }
 
     /// A verifier for the providers' public endpoints with [`DEFAULT_TIMEOUT`].
-    pub fn with_defaults() -> Result<Self, CaptchaError> {
-        Self::new(CaptchaEndpoints::default(), DEFAULT_TIMEOUT)
+    pub fn with_defaults(outbound: Arc<OutboundClient>) -> Result<Self, CaptchaError> {
+        Self::new(outbound, CaptchaEndpoints::default(), DEFAULT_TIMEOUT)
     }
 
     /// Verifies `token` for the tenant's provider. `Ok(())` only when the provider answered
@@ -178,31 +184,15 @@ impl CaptchaVerifier {
             form.finish()
         };
         let url = self.endpoints.url(settings.provider);
-        let mut resp = self
-            .client
+        let body = self
+            .outbound
             .post(url)
-            .header(
-                reqwest::header::CONTENT_TYPE,
-                "application/x-www-form-urlencoded",
-            )
-            .body(body)
-            .send()
+            .map_err(siteverify_failed)?
+            .form_body(body)
+            .timeout(self.timeout)
+            .fetch(MAX_BODY)
             .await
-            .map_err(|e| unavailable(format!("siteverify request failed: {e}")))?;
-        if !resp.status().is_success() {
-            return Err(unavailable(format!("siteverify status {}", resp.status())));
-        }
-        let mut body = Vec::new();
-        while let Some(chunk) = resp
-            .chunk()
-            .await
-            .map_err(|e| unavailable(format!("reading the siteverify response failed: {e}")))?
-        {
-            if body.len() + chunk.len() > MAX_BODY {
-                return Err(unavailable("siteverify response too large".to_owned()));
-            }
-            body.extend_from_slice(&chunk);
-        }
+            .map_err(siteverify_failed)?;
         let parsed: SiteverifyResponse = serde_json::from_slice(&body)
             .map_err(|_| unavailable("malformed siteverify response".to_owned()))?;
         if parsed.success {
@@ -217,6 +207,17 @@ impl CaptchaVerifier {
         }
     }
 }
+
+fn siteverify_failed(e: OutboundError) -> CaptchaError {
+    match e {
+        OutboundError::Status(code) => unavailable(format!("siteverify status {code}")),
+        OutboundError::TooLarge => unavailable("siteverify response too large".to_owned()),
+        other => unavailable(format!("siteverify request failed: {other}")),
+    }
+}
+
+// The siteverify body limit stays below the generic document limit.
+const _: () = assert!(MAX_BODY <= outbound::LIMIT_DOCUMENT);
 
 fn unavailable(msg: String) -> CaptchaError {
     tracing::warn!(error = %msg, "CAPTCHA verification unavailable; rejecting (fail closed)");
@@ -294,8 +295,12 @@ mod tests {
             turnstile: "http://example.test/x".into(),
             hcaptcha: HCAPTCHA_SITEVERIFY.into(),
         };
-        assert!(CaptchaVerifier::new(bad, DEFAULT_TIMEOUT).is_err());
-        assert!(CaptchaVerifier::with_defaults().is_ok());
+        let outbound = Arc::new(
+            OutboundClient::new(&crate::adapters::outbound::OutboundPolicy::default())
+                .expect("client"),
+        );
+        assert!(CaptchaVerifier::new(Arc::clone(&outbound), bad, DEFAULT_TIMEOUT).is_err());
+        assert!(CaptchaVerifier::with_defaults(outbound).is_ok());
     }
 
     #[test]
