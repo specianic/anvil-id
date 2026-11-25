@@ -51,9 +51,10 @@ compose() {
 if [[ ! -f "$TAG_MARKER" || "$(cat "$TAG_MARKER")" != "$CONFORMANCE_TAG" ]]; then
   log "fetching conformance suite $CONFORMANCE_TAG"
   rm -rf "$SUITE_DIR"
-  git clone --depth 1 --branch "$CONFORMANCE_TAG" --filter=blob:none --sparse "$SUITE_REPO" "$SUITE_DIR"
-  git -C "$SUITE_DIR" sparse-checkout set scripts
-  git -C "$SUITE_DIR" sparse-checkout add /docker-compose-prebuilt.yml
+  # Blobless clone without checkout, then check out only the paths we need. Avoids sparse-checkout,
+  # whose cone/non-cone defaults differ across git versions (newer git rejects file patterns).
+  git clone --depth 1 --branch "$CONFORMANCE_TAG" --filter=blob:none --no-checkout "$SUITE_REPO" "$SUITE_DIR"
+  git -C "$SUITE_DIR" checkout HEAD -- scripts docker-compose-prebuilt.yml
   printf '%s\n' "$CONFORMANCE_TAG" > "$TAG_MARKER"
 fi
 [[ -f "$SUITE_DIR/docker-compose-prebuilt.yml" && -f "$SUITE_DIR/scripts/run-test-plan.py" ]] \

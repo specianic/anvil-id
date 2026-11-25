@@ -4,3 +4,11 @@ services:
   server:
     extra_hosts:
       - "host.docker.internal:host-gateway"
+  # Replace the upstream ./mongo/data bind mount (same target, so compose overrides it) with a named
+  # volume: `compose down -v` then deletes it, every run starts with an empty database, and no
+  # root-owned files are left in ./suite.
+  mongodb:
+    volumes:
+      - mongo-data:/data/db
+volumes:
+  mongo-data:

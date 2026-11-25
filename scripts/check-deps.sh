@@ -99,7 +99,7 @@ self_test() {
   }
 
   mkdir -p "$tmp/pristine" "$tmp/ws"
-  tar -C "$ROOT" --exclude=./target --exclude=./.git -cf - . | tar -C "$tmp/pristine" -xf -
+  tar -C "$ROOT" --exclude=./target --exclude=./.git --exclude=./suite --exclude=./conformance-results -cf - . | tar -C "$tmp/pristine" -xf -
 
   local failures=0
   # case <name> <expected: pass|fail> <cargo add args...>
