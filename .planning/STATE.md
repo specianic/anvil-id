@@ -6,15 +6,15 @@ current_phase: 03
 current_phase_name: release 0 2 secure by default
 current_plan: Not started
 status: planning
-stopped_at: Completed 03-24-PLAN.md
-last_updated: "2026-11-25T08:03:09.020Z"
+stopped_at: Completed 03-23-PLAN.md
+last_updated: "2026-11-25T08:12:41.226Z"
 last_activity: 2026-11-25
 progress:
   total_phases: 7
   completed_phases: 2
   total_plans: 61
-  completed_plans: 55
-  percent: 80
+  completed_plans: 56
+  percent: 92
 ---
 
 # Project State
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 **Status:** Ready to plan
 **Last Activity:** 2026-11-25
 **Last Activity Description:** Phase 2 complete, transitioned to Phase 03
-**Progress:** [████████░░] 80%
+**Progress:** [█████████░] 92%
 
 Phase 2 plans 02-01 through 02-22 are all complete (22/22 summaries). Next: Phase 2 verification, then Phase 3.
 
@@ -112,6 +112,7 @@ Phase 2 plans 02-01 through 02-22 are all complete (22/22 summaries). Next: Phas
 | Phase 03 P17 | 75min | 2 tasks | 11 files |
 | Phase 03 P20 | 95min | 2 tasks | 11 files |
 | Phase 03 P24 | 25min | 2 tasks | 10 files |
+| Phase 03 P23 | 75min | 3 tasks | 16 files |
 
 ## Accumulated Context
 
@@ -243,6 +244,9 @@ Recent decisions affecting current work:
 - [Phase 03]: 03-24: Audit stdout lines are raw event_json (one object per line) on a dedicated tracing layer for target audit, independent of RUST_LOG; never on stderr
 - [Phase 03]: 03-24: key_rotation_days 1..3650 (prepublish = min(7 d, period/2) >= 1 h); audit_retention_days 0..36500 (0 = forever); rate-limit quota 0 rejected
 - [Phase 03]: 03-24: Periodic jobs run under 15 min job leases released after each run; jobs.rs has no crate:: imports so tests include it via #[path]
+- [Phase 03]: 03-23: Tenant settings PATCH is field-wise (absent fields keep their value); settings.captcha null clears, object {provider, site_key, secret} sets; secret write-only (view: configured: true)
+- [Phase 03]: 03-23: TenantService::update refuses disabling a signing algorithm still used as a client's id_token_signed_response_alg: 409 Conflict naming the algorithms and client ids
+- [Phase 03]: 03-23: e2e createClient and conformance static clients default to consent_mode=skip_first_party; API default stays required
 
 ### Pending Todos
 
@@ -255,6 +259,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-25T08:03:09.017Z
-Stopped at: Completed 03-24-PLAN.md
+Last session: 2026-11-25T08:12:41.223Z
+Stopped at: Completed 03-23-PLAN.md
 Resume file: None

@@ -71,3 +71,17 @@ fail 9 anvil-web tests. Both fixes are in files outside 03-13's files_modified:
   extras (`passkey`, `captcha`, `factor_token`) to the context tables, and add the selectors
   `login-passkey`, `login-passkey-submit`, `login-passkey-status`, `second-factor`,
   `code`, `recovery_code`, `recovery-code-toggle`, `second-factor-submit` to the contract.
+
+## From 03-23
+
+- `tests/e2e/run.sh sqlite` (full suite) has 7 failures unrelated to the admin API or consent:
+  `keyboard.spec.ts` expects the login tab order without the 03-20 passkey button
+  (`login-passkey-submit`), and several login/recovery specs hit the default Auth-class rate
+  limit (all specs post from 127.0.0.1; the anvilid log shows `rate limited ip=127.0.0.1
+  class=Auth`). `nojs.spec.ts` alone passes (sample RP authorization code flow, no consent stop).
+  The e2e plans (03-26/03-27) should update the tab-order expectation and raise the Auth quota for
+  the e2e server (or space the specs).
+- `scripts/check-security-tests.sh` (QUAL-01 map) is outside 03-23's files. Candidate pairs:
+  `security_admin_v02::every_new_route_requires_its_scope`,
+  `admin_api_v02::disabling_a_signing_algorithm_in_use_is_refused_with_the_client_ids`,
+  `security_admin_v02::captcha_secret_and_smtp_password_are_never_disclosed`.
