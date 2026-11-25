@@ -64,6 +64,12 @@ Versions are the latest stable releases as of the date above. Pin them in the wo
 backend, the RustCrypto `rsa` crate for private-key operations (unpatched timing side channel),
 `chrono`, `samael`/`xmlsec` (C XML security libraries), `oxide-auth`.
 
+"Single crypto backend" applies to **our own** signing, encryption and key handling: all of it goes
+through aws-lc-rs. One exception is accepted: webauthn-rs pulls in RustCrypto crates (via
+`crypto-glue`, including `rsa`) for verifying authenticator signatures. Verification uses public keys
+only, so the `rsa` timing side channel does not apply. This exception is scoped in `deny.toml` with a
+`wrappers = ["crypto-glue"]` entry, so no other crate can use `rsa`.
+
 ### 2.1 Conditions on the Rust choice
 
 Rust is chosen on these conditions. If any of them proves unworkable during M0, revisit the language
@@ -170,7 +176,8 @@ from handler code.
 |---|---|---|
 | `tenant` | id, slug, display_name, issuer_mode (path/host), host, settings (JSON), created_at | One `default` tenant created at bootstrap |
 | `user` | id, tenant_id, email, email_verified, phone, phone_verified, username, attributes (JSON, validated against the tenant's schema), status (active/blocked), created_at, updated_at, last_login_at | Unique (tenant_id, lower(email)); unique (tenant_id, username) |
-| `credential` | id, tenant_id, user_id, kind (password/webauthn/totp/recovery_codes), data (encrypted or hashed per kind), label, created_at, last_used_at | Password: PHC string. TOTP: encrypted seed + last step. WebAuthn: credential JSON + counter |
+| `credential` | id, tenant_id, user_id, kind (password/webauthn/totp), data (encrypted or hashed per kind), counter (integer, nullable), label, created_at, last_used_at | Password: PHC string. TOTP: encrypted seed; `counter` = last accepted time step. WebAuthn: credential JSON; `counter` = signature counter. Counters are plain columns so replay and clone checks are a single conditional `UPDATE … WHERE counter < ?` |
+| `recovery_code` | id, tenant_id, user_id, code_hash, created_at, used_at | One row per code, consumed atomically (`UPDATE … SET used_at … WHERE used_at IS NULL`) |
 | `identity_link` | id, tenant_id, user_id, provider_id, subject, email_at_link, created_at | Upstream identities (social/enterprise). Unique (tenant_id, provider_id, subject) |
 | `client` | id, tenant_id, client_id, name, type (confidential/public), auth_method, secret_hash, jwks / jwks_uri, redirect_uris, post_logout_redirect_uris, grant_types, scopes, token_format (jwt/opaque), consent_mode (required/skip_first_party), backchannel_logout_uri, branding (JSON), created_at | `client_id` is unique per tenant; URL-form client IDs (CIMD) are cached in `client_metadata_cache` |
 | `signing_key` | id, tenant_id, kid, alg, state (next/active/retired), private_key (encrypted with KEK), public_jwk, activated_at, retired_at, expires_at | |
@@ -196,7 +203,8 @@ from handler code.
 | Secret | At rest |
 |---|---|
 | User passwords | Argon2id PHC string |
-| Client secrets, refresh/access tokens (opaque), authorization codes, session IDs, setup and recovery tokens, recovery codes, API keys | SHA-256 of a 256-bit random value. The plaintext is shown once and never stored |
+| Client secrets, refresh/access tokens (opaque), authorization codes, session IDs, setup and recovery tokens, API keys | SHA-256 of a 256-bit random value. The plaintext is shown once and never stored |
+| MFA recovery codes | ~80-bit random codes, formatted for typing (e.g. `XXXX-XXXX-XXXX-XXXX`), stored as HMAC-SHA-256 under a key derived from the KEK (a plain hash would be brute-forceable at this length). Shown once |
 | TOTP seeds, upstream IdP client secrets, signing private keys, SAML SP keys | AES-256-GCM with a data key derived from the **key-encryption key (KEK)** via HKDF, using the table and row ID as associated data |
 
 **KEK source:** the `ANVILID_KEK` env var or a key file. In zero-config dev mode the binary generates
@@ -272,6 +280,10 @@ replay guards).
 - Each tenant has its own signing keys. The default algorithm is RS256 (required by OIDC) using
   RSA-2048. ES256 and Ed25519 can be enabled per tenant, and clients can request an algorithm through
   registration metadata (`id_token_signed_response_alg`).
+- `anvil-jose` builds JOSE headers and JWKs itself rather than relying on jsonwebtoken's types,
+  because jsonwebtoken cannot express the fully-specified `Ed25519` algorithm name (RFC 9864). It
+  uses jsonwebtoken / aws-lc-rs only for the signature operations. Whether to also accept or emit the
+  legacy `EdDSA` name for interoperability with older relying parties is decided in Phase 3.
 - Lifecycle: `next` (published in JWKS, not yet signing) → `active` (signing) → `retired` (published
   until every token signed with it has expired) → deleted. Rotation runs as a scheduled job (default
   every 90 days) and on demand (`anvilid keys rotate`). The `next` key is published at least one
@@ -353,8 +365,9 @@ plus `/ui/assets/*` (hashed, immutable static files). The headless API mirrors t
 ### 10.4 How frontend assets ship in the binary
 
 - **Admin console:** `admin-ui/` is built with `npm run build` into static files with content-hashed
-  names. `anvil-web` embeds them at compile time with rust-embed (pre-compressed with brotli and gzip)
-  and serves them from memory at `/console/*`: hashed files with immutable cache headers, every other
+  names. The build step pre-compresses them (brotli and gzip); `anvil-web` embeds the original and
+  compressed variants at compile time with rust-embed and serves the best variant for the request's
+  `Accept-Encoding` from memory (rust-embed's own `compression` feature does not do content negotiation) at `/console/*`: hashed files with immutable cache headers, every other
   path under `/console/` falls back to `index.html` for client-side routing.
 - **Login UI:** templates and CSS in `themes/default/` are embedded the same way. At runtime minijinja
   loads templates from the operator's theme directory first (if configured) and falls back to the
