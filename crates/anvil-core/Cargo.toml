@@ -16,3 +16,6 @@ serde.workspace = true
 thiserror.workspace = true
 time.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+time = { workspace = true, features = ["macros"] }
