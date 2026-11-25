@@ -24,6 +24,7 @@ type ClientAuthMethod = components["schemas"]["ClientAuthMethod"];
 type GrantType = components["schemas"]["GrantType"];
 type TokenFormat = components["schemas"]["TokenFormat"];
 type ConsentMode = components["schemas"]["ConsentMode"];
+type MfaPolicy = components["schemas"]["MfaPolicy"];
 export type CreateClient = components["schemas"]["CreateClient"];
 export type UpdateClient = components["schemas"]["UpdateClient"];
 
@@ -41,6 +42,12 @@ export interface ClientFormValues {
   consent_mode: ConsentMode;
   id_token_signed_response_alg: string;
   can_introspect: boolean;
+  post_logout_redirect_uris: string;
+  backchannel_logout_uri: string;
+  backchannel_logout_session_required: boolean;
+  allowed_resources: string;
+  /** `inherit` = no client override (the tenant policy applies). */
+  mfa_policy: MfaPolicy | "inherit";
 }
 
 export const NEW_CLIENT: ClientFormValues = {
@@ -57,6 +64,11 @@ export const NEW_CLIENT: ClientFormValues = {
   consent_mode: "required",
   id_token_signed_response_alg: "RS256",
   can_introspect: false,
+  post_logout_redirect_uris: "",
+  backchannel_logout_uri: "",
+  backchannel_logout_session_required: false,
+  allowed_resources: "",
+  mfa_policy: "inherit",
 };
 
 export function valuesFromClient(client: ClientView): ClientFormValues {
@@ -74,6 +86,23 @@ export function valuesFromClient(client: ClientView): ClientFormValues {
     consent_mode: client.consent_mode,
     id_token_signed_response_alg: client.id_token_signed_response_alg,
     can_introspect: client.can_introspect,
+    post_logout_redirect_uris: client.post_logout_redirect_uris.join("\n"),
+    backchannel_logout_uri: client.backchannel_logout_uri ?? "",
+    backchannel_logout_session_required: client.backchannel_logout_session_required,
+    allowed_resources: client.allowed_resources.join("\n"),
+    mfa_policy: client.mfa_policy ?? "inherit",
+  };
+}
+
+/** The 0.3 logout, resource and MFA fields, shared by the create and update bodies. */
+function logoutAndPolicy(values: ClientFormValues) {
+  const backchannel = values.backchannel_logout_uri.trim();
+  return {
+    post_logout_redirect_uris: lines(values.post_logout_redirect_uris),
+    backchannel_logout_uri: backchannel === "" ? null : backchannel,
+    backchannel_logout_session_required: values.backchannel_logout_session_required,
+    allowed_resources: lines(values.allowed_resources),
+    mfa_policy: values.mfa_policy === "inherit" ? null : values.mfa_policy,
   };
 }
 
@@ -115,6 +144,7 @@ export function createBody(values: ClientFormValues): CreateClient {
     consent_mode: values.consent_mode,
     id_token_signed_response_alg: values.id_token_signed_response_alg,
     can_introspect: confidential ? values.can_introspect : false,
+    ...logoutAndPolicy(values),
   };
 }
 
@@ -130,6 +160,7 @@ export function updateBody(values: ClientFormValues): UpdateClient {
     consent_mode: values.consent_mode,
     id_token_signed_response_alg: values.id_token_signed_response_alg,
     can_introspect: confidential ? values.can_introspect : false,
+    ...logoutAndPolicy(values),
   };
   if (values.auth_method === "private_key_jwt") body.jwks = parseJwks(values);
   return body;
@@ -155,7 +186,19 @@ const FORM_FIELDS = new Set([
   "consent_mode",
   "id_token_signed_response_alg",
   "can_introspect",
+  "post_logout_redirect_uris",
+  "backchannel_logout_uri",
+  "backchannel_logout_session_required",
+  "allowed_resources",
+  "mfa_policy",
 ]);
+
+const MFA_OPTIONS: readonly { value: MfaPolicy | "inherit"; label: string }[] = [
+  { value: "inherit", label: "Inherit (tenant policy)" },
+  { value: "off", label: "Off" },
+  { value: "optional", label: "Optional (users who enrolled a second factor)" },
+  { value: "required", label: "Required" },
+];
 
 /** The tenant's enabled ID-token signing algorithms (RS256 first). */
 function useSigningAlgs(): string[] {
@@ -370,6 +413,69 @@ export function ClientForm({ mode, initial, submitLabel, pending, error, onSubmi
             errors={errors.can_introspect}
           />
         </div>
+      </fieldset>
+
+      <fieldset className="grid gap-4 sm:grid-cols-2">
+        <legend className="mb-2 text-base font-semibold">Logout</legend>
+        <div className="sm:col-span-2">
+          <TextareaField
+            label="Post-logout redirect URIs"
+            name="post_logout_redirect_uris"
+            rows={2}
+            optional
+            hint="Where RP-initiated logout may send the user afterwards. One per line; matched exactly."
+            value={values.post_logout_redirect_uris}
+            onChange={(e) => set("post_logout_redirect_uris", e.target.value)}
+            errors={errors.post_logout_redirect_uris}
+          />
+        </div>
+        <div className="sm:col-span-2">
+          <TextField
+            label="Back-channel logout URI"
+            name="backchannel_logout_uri"
+            type="url"
+            optional
+            hint="Receives a logout token when the user's session ends. Empty disables back-channel logout."
+            value={values.backchannel_logout_uri}
+            onChange={(e) => set("backchannel_logout_uri", e.target.value)}
+            errors={errors.backchannel_logout_uri}
+          />
+        </div>
+        <div className="sm:col-span-2">
+          <CheckboxField
+            label="Back-channel logout requires the session id"
+            name="backchannel_logout_session_required"
+            hint="Logout tokens carry the sid claim."
+            checked={values.backchannel_logout_session_required}
+            onChange={(e) => set("backchannel_logout_session_required", e.target.checked)}
+            errors={errors.backchannel_logout_session_required}
+          />
+        </div>
+      </fieldset>
+
+      <fieldset className="grid gap-4 sm:grid-cols-2">
+        <legend className="mb-2 text-base font-semibold">Resources and sign-in policy</legend>
+        <div className="sm:col-span-2">
+          <TextareaField
+            label="Allowed resources"
+            name="allowed_resources"
+            rows={2}
+            optional
+            hint="Resource indicators (RFC 8707) the client may request, one absolute URI per line."
+            value={values.allowed_resources}
+            onChange={(e) => set("allowed_resources", e.target.value)}
+            errors={errors.allowed_resources}
+          />
+        </div>
+        <SelectField
+          label="Multi-factor authentication"
+          name="mfa_policy"
+          value={values.mfa_policy}
+          onChange={(e) => set("mfa_policy", e.target.value as MfaPolicy | "inherit")}
+          options={MFA_OPTIONS}
+          hint="The strictest of tenant and client policy applies."
+          errors={errors.mfa_policy}
+        />
       </fieldset>
 
       <Button type="submit" disabled={pending}>

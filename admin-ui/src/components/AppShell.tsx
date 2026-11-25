@@ -10,6 +10,7 @@ const NAV = [
   { to: "/sessions", label: "Sessions" },
   { to: "/audit", label: "Audit log" },
   { to: "/email", label: "Email" },
+  { to: "/settings", label: "Login settings" },
 ] as const;
 
 const focusRing = "focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none";

@@ -22,6 +22,7 @@ import { Route as EmailIndexRouteImport } from './routes/email/index'
 import { Route as EmailKindRouteImport } from './routes/email/$kind'
 import { Route as EmailSmtpRouteImport } from './routes/email/smtp'
 import { Route as SessionsIndexRouteImport } from './routes/sessions/index'
+import { Route as SettingsIndexRouteImport } from './routes/settings/index'
 import { Route as UsersIndexRouteImport } from './routes/users/index'
 import { Route as UsersUserIdRouteImport } from './routes/users/$userId'
 
@@ -90,6 +91,11 @@ const SessionsIndexRoute = SessionsIndexRouteImport.update({
   path: '/sessions/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SettingsIndexRoute = SettingsIndexRouteImport.update({
+  id: '/settings/',
+  path: '/settings/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const UsersIndexRoute = UsersIndexRouteImport.update({
   id: '/users/',
   path: '/users/',
@@ -116,6 +122,7 @@ export interface FileRoutesByFullPath {
   '/connections/': typeof ConnectionsIndexRoute
   '/email/': typeof EmailIndexRoute
   '/sessions/': typeof SessionsIndexRoute
+  '/settings/': typeof SettingsIndexRoute
   '/users/': typeof UsersIndexRoute
 }
 export interface FileRoutesByTo {
@@ -133,6 +140,7 @@ export interface FileRoutesByTo {
   '/connections': typeof ConnectionsIndexRoute
   '/email': typeof EmailIndexRoute
   '/sessions': typeof SessionsIndexRoute
+  '/settings': typeof SettingsIndexRoute
   '/users': typeof UsersIndexRoute
 }
 export interface FileRoutesById {
@@ -151,6 +159,7 @@ export interface FileRoutesById {
   '/connections/': typeof ConnectionsIndexRoute
   '/email/': typeof EmailIndexRoute
   '/sessions/': typeof SessionsIndexRoute
+  '/settings/': typeof SettingsIndexRoute
   '/users/': typeof UsersIndexRoute
 }
 export interface FileRouteTypes {
@@ -170,6 +179,7 @@ export interface FileRouteTypes {
     | '/connections/'
     | '/email/'
     | '/sessions/'
+    | '/settings/'
     | '/users/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -187,6 +197,7 @@ export interface FileRouteTypes {
     | '/connections'
     | '/email'
     | '/sessions'
+    | '/settings'
     | '/users'
   id:
     | '__root__'
@@ -204,6 +215,7 @@ export interface FileRouteTypes {
     | '/connections/'
     | '/email/'
     | '/sessions/'
+    | '/settings/'
     | '/users/'
   fileRoutesById: FileRoutesById
 }
@@ -222,6 +234,7 @@ export interface RootRouteChildren {
   ConnectionsIndexRoute: typeof ConnectionsIndexRoute
   EmailIndexRoute: typeof EmailIndexRoute
   SessionsIndexRoute: typeof SessionsIndexRoute
+  SettingsIndexRoute: typeof SettingsIndexRoute
   UsersIndexRoute: typeof UsersIndexRoute
 }
 
@@ -318,6 +331,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SessionsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/settings/': {
+      id: '/settings/'
+      path: '/settings'
+      fullPath: '/settings/'
+      preLoaderRoute: typeof SettingsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/users/': {
       id: '/users/'
       path: '/users'
@@ -350,6 +370,7 @@ const rootRouteChildren: RootRouteChildren = {
   ConnectionsIndexRoute: ConnectionsIndexRoute,
   EmailIndexRoute: EmailIndexRoute,
   SessionsIndexRoute: SessionsIndexRoute,
+  SettingsIndexRoute: SettingsIndexRoute,
   UsersIndexRoute: UsersIndexRoute,
 }
 export const routeTree = rootRouteImport
