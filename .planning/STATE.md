@@ -6,14 +6,14 @@ current_phase: 03
 current_phase_name: release 0 2 secure by default
 current_plan: Not started
 status: planning
-stopped_at: Completed 03-18-PLAN.md
-last_updated: "2026-11-25T07:37:28.312Z"
+stopped_at: Completed 03-21-PLAN.md
+last_updated: "2026-11-25T07:39:33.074Z"
 last_activity: 2026-11-25
 progress:
   total_phases: 7
   completed_phases: 2
   total_plans: 61
-  completed_plans: 51
+  completed_plans: 52
   percent: 80
 ---
 
@@ -108,6 +108,7 @@ Phase 2 plans 02-01 through 02-22 are all complete (22/22 summaries). Next: Phas
 | Phase 03 P19 | 75min | 2 tasks | 4 files |
 | Phase 03 P30 | 15min | 2 tasks | 5 files |
 | Phase 03 P18 | 75min | 2 tasks | 10 files |
+| Phase 03 P21 | 50min | 2 tasks | 13 files |
 
 ## Accumulated Context
 
@@ -229,6 +230,9 @@ Recent decisions affecting current work:
 - [Phase 03]: 03-18: access-token aud stays client_id until RFC 8707 (Phase 4); family claim is fid
 - [Phase 03]: 03-18: revoking another client's token is 200 with no effect (no oracle); can_introspect never grants revocation
 - [Phase 03]: 03-18: JWT client-credentials access tokens cannot be revoked (unsupported_token_type); opaque CC tokens can
+- [Phase 03]: 03-21: Tenant admin events audited in the system tenant (target = tenant id); client/user events in the owning tenant; admin actor = AuditActor::admin(token sub)
+- [Phase 03]: 03-21: OQ5 - system-tenant users are admins; console = public client anvil-console of the system tenant, reconciled every start by ensure_console_client(public_url); system registration forced disabled
+- [Phase 03]: 03-21: 0.2 client options in ClientOptions/ClientOptionsPatch and CAPTCHA via Option<CaptchaChange> beside the 0.1 structs (dto.rs untouched); signing algs via TenantPatch.settings, ensure_tenant on change
 
 ### Pending Todos
 
@@ -241,6 +245,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-25T07:37:28.309Z
-Stopped at: Completed 03-18-PLAN.md
+Last session: 2026-11-25T07:39:33.071Z
+Stopped at: Completed 03-21-PLAN.md
 Resume file: None
