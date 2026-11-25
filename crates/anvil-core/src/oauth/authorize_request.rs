@@ -194,9 +194,26 @@ pub fn validate(
         Some(_) => return Err(fail(CoreError::UnsupportedResponseType)),
     }
 
-    // 5. request objects
-    if raw.get("request").is_some() {
-        return Err(fail(CoreError::RequestNotSupported));
+    // 5. request objects. They are not supported, but OIDC Core §6.1 lets `response_mode` and
+    // `state` travel only inside the object, so the rejection is delivered the way the client
+    // asked: outer parameters first, then the object's (read unverified, never trusted for
+    // anything but this error's delivery). A `request_uri` is never fetched.
+    if let Some(object) = raw.get("request") {
+        let hints = peek_request_object(object);
+        let response_mode = if raw.single("response_mode").is_some() {
+            response_mode
+        } else {
+            hints
+                .as_ref()
+                .map_or(ResponseMode::Query, |h| h.response_mode)
+        };
+        let state = state.or_else(|| hints.and_then(|h| h.state));
+        return Err(AuthorizeError::Redirect {
+            redirect_uri,
+            state,
+            response_mode,
+            error: CoreError::RequestNotSupported,
+        });
     }
     if raw.get("request_uri").is_some() {
         return Err(fail(CoreError::RequestUriNotSupported));
@@ -309,6 +326,51 @@ pub fn validate(
             response_mode,
         },
         id_token_hint: raw.get("id_token_hint").map(str::to_owned),
+    })
+}
+
+/// Largest request object [`peek_request_object`] looks into.
+const MAX_PEEKED_REQUEST_OBJECT: usize = 8 * 1024;
+
+/// Error-delivery hints read from an unsupported request object.
+#[derive(Debug)]
+struct RequestObjectHints {
+    /// `form_post` only when the object says exactly that; anything else is `query`.
+    response_mode: ResponseMode,
+    state: Option<String>,
+}
+
+/// Reads `response_mode` and `state` from the claims of a compact JWS request object WITHOUT
+/// verifying it. The result only chooses how `request_not_supported` is delivered to an already
+/// validated redirect URI (and echoes `state`); it never authorizes anything. `None` when the
+/// object is larger than [`MAX_PEEKED_REQUEST_OBJECT`], not three dot-separated segments, or its
+/// payload is not strict base64url of a JSON object.
+fn peek_request_object(object: &str) -> Option<RequestObjectHints> {
+    if object.len() > MAX_PEEKED_REQUEST_OBJECT {
+        return None;
+    }
+    let mut parts = object.split('.');
+    let (Some(_header), Some(payload), Some(_signature), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return None;
+    };
+    let bytes = anvil_jose::encoding::b64url_decode(payload).ok()?;
+    let serde_json::Value::Object(claims) = serde_json::from_slice(&bytes).ok()? else {
+        return None;
+    };
+    let response_mode = match claims.get("response_mode").and_then(|v| v.as_str()) {
+        Some("form_post") => ResponseMode::FormPost,
+        _ => ResponseMode::Query,
+    };
+    let state = claims
+        .get("state")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned);
+    Some(RequestObjectHints {
+        response_mode,
+        state,
     })
 }
 
@@ -778,7 +840,10 @@ pub(crate) mod tests {
         let r = with_owned(&["redirect_uri"], &[("request", jwt.clone())]);
         assert_eq!(page_key(validate(&r, Some(&c))), "invalid_request");
         // Unknown client.
-        let r = with_owned(&["client_id"], &[("client_id", "x".to_owned()), ("request", jwt)]);
+        let r = with_owned(
+            &["client_id"],
+            &[("client_id", "x".to_owned()), ("request", jwt)],
+        );
         assert_eq!(page_key(validate(&r, Some(&c))), "unknown_client");
     }
 

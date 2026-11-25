@@ -398,3 +398,92 @@ async fn form_post_to_a_loopback_redirect_allows_exactly_that_origin() {
     assert_eq!(f.action, "http://127.0.0.1:53111/cb");
     assert_eq!(f.field("error"), Some("login_required"));
 }
+
+/// An unsecured (`alg: none`) request object with `claims`.
+fn unsigned_request_object(claims: &str) -> String {
+    format!(
+        "{}.{}.",
+        anvil_jose::encoding::b64url(br#"{"alg":"none"}"#),
+        anvil_jose::encoding::b64url(claims.as_bytes())
+    )
+}
+
+#[tokio::test]
+async fn rejected_request_object_is_delivered_with_its_form_post_mode() {
+    let app = TestApp::new().await;
+    let iss = app.issuer(None);
+    let t = default_tenant(&app);
+    let c = web_client(&app, &t).await;
+    let jwt = unsigned_request_object(&format!(
+        r#"{{"iss":"{id}","aud":"{iss}","client_id":"{id}","response_type":"code","scope":"openid","redirect_uri":"{RP}","response_mode":"form_post","state":"obj-st"}}"#,
+        id = c.client_id
+    ));
+    let mut p = pkce_params(&c.client_id);
+    p.retain(|(k, _)| *k != "state");
+    p.push(("request", jwt.as_str()));
+
+    let resp = get(&app, &authorize_path("", &p), None).await;
+    let f = assert_form_post(&resp, ORIGIN);
+    assert_eq!(f.action, RP);
+    assert_eq!(f.method, "post");
+    let names: Vec<&str> = f.fields.iter().map(|(k, _)| k.as_str()).collect();
+    assert_eq!(names, ["error", "error_description", "state", "iss"]);
+    assert_eq!(f.field("error"), Some("request_not_supported"));
+    assert_eq!(f.field("state"), Some("obj-st"));
+    assert_eq!(f.field("iss"), Some(iss.as_str()));
+
+    // POST parity.
+    let resp = post(&app, "/authorize", &p, None).await;
+    let f = assert_form_post(&resp, ORIGIN);
+    assert_eq!(f.field("error"), Some("request_not_supported"));
+    assert_eq!(f.field("state"), Some("obj-st"));
+
+    // The outer response_mode and state win over the object's.
+    let p = with(
+        pkce_params(&c.client_id),
+        &[("response_mode", "query"), ("request", &jwt)],
+    );
+    let resp = get(&app, &authorize_path("", &p), None).await;
+    assert_error_redirect(&resp, RP, "request_not_supported", &iss);
+    assert_eq!(param(&resp, "state").as_deref(), Some("st-1"));
+}
+
+#[tokio::test]
+async fn rejected_request_object_with_unusable_mode_falls_back_to_query() {
+    let app = TestApp::new().await;
+    let iss = app.issuer(None);
+    let t = default_tenant(&app);
+    let c = web_client(&app, &t).await;
+    let fragment = unsigned_request_object(r#"{"response_mode":"fragment","state":"obj-st"}"#);
+    let oversized = unsigned_request_object(&format!(
+        r#"{{"response_mode":"form_post","pad":"{}"}}"#,
+        "a".repeat(8 * 1024)
+    ));
+    for jwt in [fragment.as_str(), "not.a-jwt", oversized.as_str()] {
+        let p = with(pkce_params(&c.client_id), &[("request", jwt)]);
+        let resp = get(&app, &authorize_path("", &p), None).await;
+        assert_error_redirect(&resp, RP, "request_not_supported", &iss);
+        assert_eq!(param(&resp, "state").as_deref(), Some("st-1"));
+    }
+}
+
+#[tokio::test]
+async fn request_object_with_invalid_redirect_is_an_error_page() {
+    let app = TestApp::new().await;
+    let t = default_tenant(&app);
+    let c = web_client(&app, &t).await;
+    let jwt = unsigned_request_object(&format!(
+        r#"{{"response_mode":"form_post","redirect_uri":"{RP}","state":"obj-st"}}"#
+    ));
+    let p = replace(
+        pkce_params(&c.client_id),
+        "redirect_uri",
+        "https://evil.example/cb",
+    );
+    let p = with(p, &[("request", &jwt)]);
+    let resp = get(&app, &authorize_path("", &p), None).await;
+    assert_error_page(&resp, "redirect_uri_mismatch");
+    let raw = resp.text();
+    assert!(!raw.contains("<form"), "{raw}");
+    assert!(!raw.contains("evil.example"), "{raw}");
+}
