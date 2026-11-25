@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO tenant (id, slug, display_name, host, settings, created_at)\n         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "d1b6d688be18f922b659952346ccc3bf2c18bdb739f0766e56ef6adb3bf3da67"
+}

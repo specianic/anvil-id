@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT EXISTS(SELECT 1 FROM admin_setup_token\n                              WHERE token_hash = ?1 AND consumed_at IS NULL AND expires_at > ?2)\n                      AS \"valid!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "valid!: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "8123d7e2249d8d47109fbc066b77a30ac4db250648e4ded366b742e978527f4f"
+}

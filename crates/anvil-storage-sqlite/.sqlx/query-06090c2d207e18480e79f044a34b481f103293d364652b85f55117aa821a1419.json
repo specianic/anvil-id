@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE client SET secret_hash = ?3, updated_at = ?4\n              WHERE tenant_id = ?1 AND client_id = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "06090c2d207e18480e79f044a34b481f103293d364652b85f55117aa821a1419"
+}

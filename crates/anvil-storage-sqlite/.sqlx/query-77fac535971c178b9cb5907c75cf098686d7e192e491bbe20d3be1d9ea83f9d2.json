@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE admin_setup_token SET consumed_at = ?2\n              WHERE token_hash = ?1 AND consumed_at IS NULL AND expires_at > ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "77fac535971c178b9cb5907c75cf098686d7e192e491bbe20d3be1d9ea83f9d2"
+}

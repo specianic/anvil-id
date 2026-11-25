@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO signing_key\n             (id, tenant_id, kid, alg, state, private_key_enc, public_jwk, created_at,\n              activated_at, retired_at, expires_at)\n         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 11
+    },
+    "nullable": []
+  },
+  "hash": "1aa47fbbaec9cf8801a62fd411bf9724d493e7e497297a3354ddf4c9a91ddf8a"
+}

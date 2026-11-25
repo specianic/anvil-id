@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO client\n             (id, tenant_id, client_id, name, client_type, application_type, auth_method,\n              secret_hash, jwks, redirect_uris, grant_types, scopes, require_pkce, created_at,\n              updated_at)\n         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 14
+    },
+    "nullable": []
+  },
+  "hash": "b0e4063712d66341475ecfb0c9af8b756e595c1c7b826523e1be6ac2954f1151"
+}

@@ -1,0 +1,146 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE email_outbox\n                  SET next_attempt_at = ?1, attempts = attempts + 1\n                WHERE id IN (SELECT id FROM email_outbox\n                              WHERE sent_at IS NULL AND next_attempt_at <= ?2 AND expires_at > ?2\n                              ORDER BY created_at, id\n                              LIMIT ?3)\n            RETURNING id AS \"id!: uuid::Uuid\", tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      recipient AS \"recipient!\", template AS \"template!\", payload AS \"payload!\",\n                      attempts AS \"attempts!\", next_attempt_at AS \"next_attempt_at!\",\n                      created_at AS \"created_at!\", expires_at AS \"expires_at!\",\n                      sent_at AS \"sent_at?\", last_error AS \"last_error?\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: uuid::Uuid",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "email_outbox",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "tenant_id!: uuid::Uuid",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "email_outbox",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "name": "recipient!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "email_outbox",
+            "name": "recipient"
+          }
+        }
+      },
+      {
+        "name": "template!",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "email_outbox",
+            "name": "template"
+          }
+        }
+      },
+      {
+        "name": "payload!",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "email_outbox",
+            "name": "payload"
+          }
+        }
+      },
+      {
+        "name": "attempts!",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "email_outbox",
+            "name": "attempts"
+          }
+        }
+      },
+      {
+        "name": "next_attempt_at!",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "email_outbox",
+            "name": "next_attempt_at"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "email_outbox",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "expires_at!",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "email_outbox",
+            "name": "expires_at"
+          }
+        }
+      },
+      {
+        "name": "sent_at?",
+        "ordinal": 9,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "email_outbox",
+            "name": "sent_at"
+          }
+        }
+      },
+      {
+        "name": "last_error?",
+        "ordinal": 10,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "email_outbox",
+            "name": "last_error"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "59aef7fadd41af03886ab6bbbf2bab3bff37e7ec6de2c4fb54639839c19719aa"
+}

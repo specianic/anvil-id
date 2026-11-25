@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO admin_setup_token (token_hash, created_at, expires_at, consumed_at)\n         VALUES (?1, ?2, ?3, NULL)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "e08f861e413257092a0481e6f47d6af2ec7f3f09d9cd2f67c581d30607513b92"
+}

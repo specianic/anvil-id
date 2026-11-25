@@ -4,10 +4,16 @@
 //! All writes (including the atomic `consume_code` UPDATE) go through the one writer, so SQLite
 //! never sees concurrent writers.
 
+mod clients;
 mod convert;
-// TRANSITIONAL (plan 02-02): tenants.rs and grants.rs stay on disk as reference for plan 02-05
-// but are not compiled; every repository is `pending::Pending` until 02-05 lands.
+mod keys;
+mod outbox;
+// TRANSITIONAL (plan 02-02): users, sessions, flows and grants are `pending::Pending` until the
+// second half of plan 02-05 lands.
 mod pending;
+mod setup;
+mod tenants;
+mod users;
 
 use std::str::FromStr;
 use std::time::Duration;
@@ -19,8 +25,13 @@ use anvil_core::ports::{
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 
+use crate::clients::SqliteClients;
 use crate::convert::map_err;
+use crate::keys::SqliteKeys;
+use crate::outbox::SqliteOutbox;
 use crate::pending::Pending;
+use crate::setup::SqliteSetup;
+use crate::tenants::SqliteTenants;
 
 /// Maximum number of reader connections for file databases.
 const READER_CONNECTIONS: u32 = 8;
@@ -29,11 +40,11 @@ const READER_CONNECTIONS: u32 = 8;
 #[derive(Debug, Clone)]
 pub struct SqliteStorage {
     writer: SqlitePool,
-    #[expect(
-        dead_code,
-        reason = "held so the reader pool's lifetime is tied to the storage"
-    )]
-    reader: SqlitePool,
+    tenants: SqliteTenants,
+    clients: SqliteClients,
+    keys: SqliteKeys,
+    setup: SqliteSetup,
+    outbox: SqliteOutbox,
 }
 
 fn is_memory_url(url: &str) -> bool {
@@ -81,7 +92,28 @@ impl SqliteStorage {
             (writer, reader)
         };
 
-        Ok(Self { writer, reader })
+        Ok(Self {
+            tenants: SqliteTenants {
+                writer: writer.clone(),
+                reader: reader.clone(),
+            },
+            clients: SqliteClients {
+                writer: writer.clone(),
+                reader: reader.clone(),
+            },
+            keys: SqliteKeys {
+                writer: writer.clone(),
+                reader: reader.clone(),
+            },
+            setup: SqliteSetup {
+                writer: writer.clone(),
+                reader,
+            },
+            outbox: SqliteOutbox {
+                writer: writer.clone(),
+            },
+            writer,
+        })
     }
 
     /// Runs embedded migrations on the writer.
@@ -96,16 +128,16 @@ impl SqliteStorage {
 #[async_trait::async_trait]
 impl Storage for SqliteStorage {
     fn tenants(&self) -> &dyn TenantRepo {
-        &Pending
+        &self.tenants
     }
     fn users(&self) -> &dyn UserRepo {
         &Pending
     }
     fn clients(&self) -> &dyn ClientRepo {
-        &Pending
+        &self.clients
     }
     fn keys(&self) -> &dyn KeyRepo {
-        &Pending
+        &self.keys
     }
     fn sessions(&self) -> &dyn SessionRepo {
         &Pending
@@ -117,10 +149,10 @@ impl Storage for SqliteStorage {
         &Pending
     }
     fn setup(&self) -> &dyn SetupRepo {
-        &Pending
+        &self.setup
     }
     fn outbox(&self) -> &dyn OutboxRepo {
-        &Pending
+        &self.outbox
     }
 
     async fn purge_expired(&self, _now: time::OffsetDateTime) -> Result<u64, StorageError> {

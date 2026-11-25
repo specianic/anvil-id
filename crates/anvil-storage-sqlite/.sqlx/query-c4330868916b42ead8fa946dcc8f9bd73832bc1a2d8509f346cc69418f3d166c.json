@@ -1,0 +1,146 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id AS \"id!: uuid::Uuid\", tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      kid AS \"kid!\", alg AS \"alg!\", state AS \"state!\",\n                      private_key_enc AS \"private_key_enc!\", public_jwk AS \"public_jwk!\",\n                      created_at AS \"created_at!\", activated_at AS \"activated_at?\",\n                      retired_at AS \"retired_at?\", expires_at AS \"expires_at?\"\n                 FROM signing_key\n                WHERE tenant_id = ?1 AND (expires_at IS NULL OR expires_at > ?2)\n                ORDER BY id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: uuid::Uuid",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "signing_key",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "tenant_id!: uuid::Uuid",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "signing_key",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "name": "kid!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "signing_key",
+            "name": "kid"
+          }
+        }
+      },
+      {
+        "name": "alg!",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "signing_key",
+            "name": "alg"
+          }
+        }
+      },
+      {
+        "name": "state!",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "signing_key",
+            "name": "state"
+          }
+        }
+      },
+      {
+        "name": "private_key_enc!",
+        "ordinal": 5,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "signing_key",
+            "name": "private_key_enc"
+          }
+        }
+      },
+      {
+        "name": "public_jwk!",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "signing_key",
+            "name": "public_jwk"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "signing_key",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "activated_at?",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "signing_key",
+            "name": "activated_at"
+          }
+        }
+      },
+      {
+        "name": "retired_at?",
+        "ordinal": 9,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "signing_key",
+            "name": "retired_at"
+          }
+        }
+      },
+      {
+        "name": "expires_at?",
+        "ordinal": 10,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "signing_key",
+            "name": "expires_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "c4330868916b42ead8fa946dcc8f9bd73832bc1a2d8509f346cc69418f3d166c"
+}

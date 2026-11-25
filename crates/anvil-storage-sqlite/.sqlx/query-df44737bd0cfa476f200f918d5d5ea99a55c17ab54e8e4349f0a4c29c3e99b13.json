@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id AS \"id!: uuid::Uuid\", slug AS \"slug!\", display_name AS \"display_name!\",\n                      created_at AS \"created_at!\"\n                 FROM tenant WHERE id = ?1",
+  "query": "SELECT id AS \"id!: uuid::Uuid\", slug AS \"slug!\", display_name AS \"display_name!\",\n                      host AS \"host?\", settings AS \"settings!\", created_at AS \"created_at!\"\n                 FROM tenant WHERE host = ?1",
   "describe": {
     "columns": [
       {
@@ -37,8 +37,30 @@
         }
       },
       {
-        "name": "created_at!",
+        "name": "host?",
         "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tenant",
+            "name": "host"
+          }
+        }
+      },
+      {
+        "name": "settings!",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tenant",
+            "name": "settings"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 5,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -55,8 +77,10 @@
       false,
       false,
       false,
+      true,
+      false,
       false
     ]
   },
-  "hash": "c6d9c1f315eed3dd33069304304bd2006ed38e34c3484ec96ba3c16cd60986db"
+  "hash": "df44737bd0cfa476f200f918d5d5ea99a55c17ab54e8e4349f0a4c29c3e99b13"
 }
