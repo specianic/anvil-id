@@ -16,6 +16,13 @@ ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
 FUZZ_DIR="$ROOT/fuzz"
 SMOKE_RUNS=10000
 
+# cargo-fuzz defaults --target to the platform cargo-fuzz itself was built for. Prebuilt binaries
+# (CI installs one) are musl builds, and ASan cannot link against a static libc, so always build
+# for the nightly toolchain's host triple.
+fuzz_target_triple() {
+  (cd "$ROOT" && rustc +nightly -vV | sed -n 's/^host: //p')
+}
+
 targets() {
   (cd "$ROOT" && cargo +nightly fuzz list --fuzz-dir "$FUZZ_DIR")
 }
@@ -28,7 +35,7 @@ run_target() {
   log=$(mktemp)
   echo "==> fuzz $target $*"
   set +e
-  (cd "$ROOT" && cargo +nightly fuzz run --fuzz-dir "$FUZZ_DIR" "$target" -- "$@") 2>&1 | tee "$log"
+  (cd "$ROOT" && cargo +nightly fuzz run --fuzz-dir "$FUZZ_DIR" --target "$(fuzz_target_triple)" "$target" -- "$@") 2>&1 | tee "$log"
   status=${PIPESTATUS[0]}
   set -e
   if ((status != 0)); then
