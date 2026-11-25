@@ -18,15 +18,8 @@ sqlx = { workspace = true, features = ["postgres"] }
 thiserror.workspace = true
 time.workspace = true
 uuid.workspace = true
-# Only with the `testing` feature (test support); never in a release build.
-testcontainers-modules = { workspace = true, optional = true }
-
-[features]
-testing = ["dep:testcontainers-modules"]
-
 [dev-dependencies]
 anvil-jose.workspace = true
-anvil-storage = { workspace = true, features = ["contract"] }
-anvil-storage-postgres = { path = ".", features = ["testing"] }
+anvil-storage = { workspace = true, features = ["contract", "postgres-container"] }
 testcontainers-modules.workspace = true
 tokio.workspace = true

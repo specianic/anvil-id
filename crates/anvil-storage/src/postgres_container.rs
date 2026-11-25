@@ -1,4 +1,5 @@
-//! Throwaway Postgres 18 containers for tests (feature `testing`; never in release builds).
+//! Throwaway Postgres 18 containers for tests (feature `postgres-container`; this crate is
+//! test support only and is banned from the release binary's dependency graph).
 //!
 //! The one place tests start a Postgres container. Two rules keep Docker from filling up:
 //!

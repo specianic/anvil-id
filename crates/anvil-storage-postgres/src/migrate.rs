@@ -183,7 +183,7 @@ mod tests {
 
     /// A fresh database on a throwaway container (kept alive by the returned handle).
     async fn storage() -> (PostgresStorage, ContainerAsync<Postgres>) {
-        let (container, server) = crate::testing::start(100).await;
+        let (container, server) = anvil_storage::postgres_container::start(100).await;
         let url = format!("{server}/postgres");
         let mut last = None;
         for _ in 0..50 {

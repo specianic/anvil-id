@@ -1,7 +1,7 @@
 //! Postgres factory for the shared storage contract suite.
 //!
 //! One Postgres 18 container per test binary (started lazily and never dropped; the next run
-//! removes it once this process has exited, see `anvil_storage_postgres::testing`), and a fresh database per test. Each
+//! removes it once this process has exited, see `anvil_storage::postgres_container`), and a fresh database per test. Each
 //! `#[tokio::test]` has its own runtime, so no pool is kept across tests; only the container
 //! handle and the admin URL are shared.
 
@@ -24,7 +24,7 @@ static PG: tokio::sync::OnceCell<(ContainerAsync<Postgres>, String)> =
 /// Server URL of the shared container without a database name (`postgres://user:pass@host:port`).
 async fn server_url() -> &'static str {
     let (_, url) = PG
-        .get_or_init(|| anvil_storage_postgres::testing::start(500))
+        .get_or_init(|| anvil_storage::postgres_container::start(500))
         .await;
     url
 }

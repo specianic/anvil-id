@@ -99,7 +99,7 @@ mod pg {
 
     async fn server_url() -> &'static str {
         let (_, url) = PG
-            .get_or_init(|| anvil_storage_postgres::testing::start(500))
+            .get_or_init(|| anvil_storage::postgres_container::start(500))
             .await;
         url
     }

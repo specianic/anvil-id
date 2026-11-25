@@ -23,8 +23,6 @@ mod outbox;
 mod sessions;
 mod setup;
 mod tenants;
-#[cfg(any(test, feature = "testing"))]
-pub mod testing;
 mod users;
 
 use anvil_core::ports::{
@@ -279,7 +277,7 @@ mod tests {
     #[tokio::test]
     async fn migration_0003_upgrades_a_populated_0_1_database() {
         // Held to the end of the test; dropping it removes the container.
-        let (_container, server) = crate::testing::start(100).await;
+        let (_container, server) = anvil_storage::postgres_container::start(100).await;
         let url = format!("{server}/postgres");
         let mut conn = connect(&url).await;
 
@@ -464,7 +462,7 @@ mod tests {
     #[tokio::test]
     async fn composite_tenant_foreign_keys_reject_cross_tenant_rows() {
         // Held to the end of the test; dropping it removes the container.
-        let (_container, server) = crate::testing::start(100).await;
+        let (_container, server) = anvil_storage::postgres_container::start(100).await;
         let url = format!("{server}/postgres");
         let mut conn = connect(&url).await;
         migrator_up_to(i64::MAX)

@@ -9,3 +9,6 @@
 
 #[cfg(feature = "contract")]
 pub mod contract;
+
+#[cfg(feature = "postgres-container")]
+pub mod postgres_container;

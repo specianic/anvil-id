@@ -12,6 +12,8 @@ workspace = true
 [features]
 # Shared storage contract test suite, used by the backends as a dev-dependency.
 contract = ["dep:tokio"]
+# Self-cleaning Postgres test containers (anvil_storage::postgres_container), dev-only.
+postgres-container = ["dep:testcontainers-modules"]
 
 [dependencies]
 anvil-core.workspace = true
@@ -19,5 +21,6 @@ async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 time.workspace = true
+testcontainers-modules = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true, features = ["rt", "sync", "macros"] }
 uuid.workspace = true

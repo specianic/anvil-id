@@ -45,7 +45,8 @@ webauthn-rs.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
-anvil-storage-postgres = { workspace = true, features = ["testing"] }
+anvil-storage = { workspace = true, features = ["postgres-container"] }
+anvil-storage-postgres.workspace = true
 anvil-storage-sqlite.workspace = true
 http-body-util.workspace = true
 insta.workspace = true

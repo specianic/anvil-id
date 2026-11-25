@@ -54,10 +54,10 @@ const MAX_CONNECTIONS: u32 = 40;
 static PG: tokio::sync::OnceCell<(ContainerAsync<Postgres>, String)> =
     tokio::sync::OnceCell::const_new();
 
-/// Server URL of the shared container (never dropped; see `anvil_storage_postgres::testing` for cleanup).
+/// Server URL of the shared container (never dropped; see `anvil_storage::postgres_container` for cleanup).
 async fn server_url() -> &'static str {
     let (_, url) = PG
-        .get_or_init(|| anvil_storage_postgres::testing::start(500))
+        .get_or_init(|| anvil_storage::postgres_container::start(500))
         .await;
     url
 }
