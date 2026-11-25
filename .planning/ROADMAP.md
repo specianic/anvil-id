@@ -103,7 +103,7 @@ Note: the multi-tenant data model and the `serve`, `migrate`, `config` and `admi
 **Plans**: 29 plans in 7 waves
 
 Plans:
-- [ ] 03-01-PLAN.md — All Phase 3 dependencies (deny rsa wrapper) + anvil-jose ES256/Ed25519 JWS/JWK, per-alg at_hash, TOTP, peppered recovery codes (wave 1)
+- [x] 03-01-PLAN.md — All Phase 3 dependencies (deny rsa wrapper) + anvil-jose ES256/Ed25519 JWS/JWK, per-alg at_hash, TOTP, peppered recovery codes (wave 1)
 - [ ] 03-02-PLAN.md — Core model/ports for all of Phase 3, AuditAction + AuditService, pre-declared modules, full contract suite, backend shims (wave 1)
 - [x] 03-03-PLAN.md — Admin console SPA scaffold (Vite/React/TanStack/shadcn, OpenAPI types, oidc-client-ts), Users + Clients pages, Node CI job (wave 1)
 - [ ] 03-04-PLAN.md — E2E infra (CDP authenticator, axe, TOTP helper, nojs project) + WCAG 2.2 AA baseline of Phase 2 pages (wave 1)
@@ -189,7 +189,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 |-------|----------------|--------|-----------|
 | 1. Foundations and Spikes (M0) | 8/8 | Complete    | 2026-11-25 |
 | 2. Release 0.1 "First login" | 22/22 | Complete   | 2026-11-25 |
-| 3. Release 0.2 "Secure by default" | 1/29 | In Progress|  |
+| 3. Release 0.2 "Secure by default" | 2/29 | In Progress|  |
 | 4. Release 0.3 "Real-world logins" | 0/TBD | Not started | - |
 | 5. Release 0.4 "Operate it" | 0/TBD | Not started | - |
 | 6. Release 1.0 (Organizations and SSO) | 0/TBD | Not started | - |
