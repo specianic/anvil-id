@@ -60,7 +60,10 @@ pub fn pkcs8_der_from_pem(pem: &str) -> Result<Zeroizing<Vec<u8>>, JoseError> {
         }
         body.push_str(line);
     }
-    if !ended || body.is_empty() {
+    // PEM bodies are always padded (RFC 7468 §3). b64std_decode also accepts unpadded input
+    // (for HTTP Basic), so a length that isn't a multiple of 4 is refused here: otherwise a
+    // truncated body can decode as unpadded base64.
+    if !ended || body.is_empty() || !body.len().is_multiple_of(4) {
         return Err(malformed());
     }
     let der = Zeroizing::new(b64std_decode(&body).map_err(|_| malformed())?);
@@ -173,7 +176,7 @@ mod tests {
     #[test]
     fn pem_rejects_invalid_base64() {
         let (_, pem) = es256_pem();
-        let mut lines: Vec<String> = pem.lines().map(str::to_owned).collect();
+        let lines: Vec<String> = pem.lines().map(str::to_owned).collect();
         // URL alphabet.
         let mut url = lines.clone();
         url[1] = url[1].replacen(|c: char| c.is_ascii_alphanumeric(), "-", 1);
@@ -187,9 +190,22 @@ mod tests {
         ws[1] = lines[1].clone();
         ws[1].insert(10, '\t');
         assert_rejected(&ws.join("\n"), "tab inside a line");
-        // Non-canonical: a dropped character breaks the length.
-        lines[1].pop();
-        assert_rejected(&lines.join("\n"), "truncated base64");
+        // A dropped character breaks the padded length. Try every possible truncation length,
+        // so the check doesn't depend on which random key was generated.
+        for drop in 1..=3 {
+            let mut cut = lines.clone();
+            for _ in 0..drop {
+                cut[1].pop();
+            }
+            assert_rejected(&cut.join("\n"), "truncated base64");
+        }
+        // Valid unpadded base64 (accepted by b64std_decode for HTTP Basic) is not a PEM body.
+        let der = pkcs8_der_from_pem(&pem).unwrap();
+        // A byte length of 3k+2 always needs one `=` of padding.
+        let n = der.len() - der.len() % 3 - 1;
+        let unpadded = crate::encoding::b64std(&der[..n]);
+        let unpadded = unpadded.trim_end_matches('=');
+        assert_rejected(&format!("{BEGIN}\n{unpadded}\n{END}"), "unpadded body");
         // A body that decodes to nothing is still Malformed (only padding).
         assert_rejected(&format!("{BEGIN}\n====\n{END}"), "padding only");
     }
