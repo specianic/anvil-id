@@ -227,3 +227,210 @@ async fn gcra_housekeeping_never_resets_an_active_denial() {
         Decision::Deny { .. }
     ));
 }
+
+// --- progressive backoff and brute-force gate (Task 2) ---------------------------------------
+
+fn ident(seed: u8) -> [u8; 32] {
+    [seed; 32]
+}
+
+fn strict(tenant: TenantId, seed: u8) -> LimitKey {
+    LimitKey::IdentIp { tenant, ident: ident(seed), ip: IpAddr::V4(Ipv4Addr::new(192, 0, 2, 9)) }
+}
+
+fn loose(tenant: TenantId, seed: u8) -> LimitKey {
+    LimitKey::Identifier { tenant, ident: ident(seed) }
+}
+
+const CAP: Duration = Duration::from_secs(15 * 60);
+
+#[tokio::test]
+async fn backoff_free_attempts_then_doubling_lock_capped_at_fifteen_minutes() {
+    let (l, clock) = limiter();
+    let key = strict(TenantId::new_v7(), 1);
+    for n in 1..=5 {
+        let b = l.record_failure(&key).await;
+        assert_eq!(b.failures, n);
+        assert_eq!(b.locked_for, None, "failure {n} must be free");
+        assert_eq!(l.backoff(&key).await, None);
+    }
+    let mut expected = Duration::from_secs(1);
+    for n in 6..=20 {
+        let b = l.record_failure(&key).await;
+        assert_eq!(b.failures, n);
+        assert_eq!(b.locked_for, Some(expected.min(CAP)), "failure {n}");
+        assert_eq!(l.backoff(&key).await, Some(expected.min(CAP)));
+        expected *= 2;
+        // Wait out the lock (always well under 2·cap, so the entry survives).
+        clock.advance(expected.min(CAP) / 2);
+        clock.advance(expected.min(CAP) / 2);
+    }
+}
+
+#[tokio::test]
+async fn backoff_reports_remaining_lock_window() {
+    let (l, clock) = limiter();
+    let key = ip(1);
+    for _ in 0..7 {
+        l.record_failure(&key).await;
+    }
+    assert_eq!(l.backoff(&key).await, Some(Duration::from_secs(2)));
+    clock.advance(Duration::from_millis(1_500));
+    assert_eq!(l.backoff(&key).await, Some(Duration::from_millis(500)));
+    clock.advance(Duration::from_millis(500));
+    assert_eq!(l.backoff(&key).await, None);
+}
+
+#[tokio::test]
+async fn backoff_success_clears_the_key() {
+    let (l, _clock) = limiter();
+    let key = strict(TenantId::new_v7(), 2);
+    for _ in 0..8 {
+        l.record_failure(&key).await;
+    }
+    assert!(l.backoff(&key).await.is_some());
+    l.record_success(&key).await;
+    assert_eq!(l.backoff(&key).await, None);
+    assert_eq!(l.record_failure(&key).await.failures, 1);
+}
+
+#[tokio::test]
+async fn backoff_entry_expires_after_twice_the_cap_of_inactivity() {
+    let (l, clock) = limiter();
+    let key = strict(TenantId::new_v7(), 3);
+    for _ in 0..30 {
+        l.record_failure(&key).await;
+    }
+    assert_eq!(l.backoff(&key).await, Some(CAP));
+
+    // Never a permanent lock: after the cap window the key is usable again.
+    clock.advance(CAP);
+    assert_eq!(l.backoff(&key).await, None);
+    let gate = l.brute_force_gate(&key, &loose(TenantId::new_v7(), 3), false).await;
+    assert_eq!(gate, Decision::Allow);
+
+    // Just before 2·cap idle the failure count is still remembered...
+    clock.advance(CAP - Duration::from_secs(1));
+    assert_eq!(l.backoff(&key).await, None);
+    // ...after 2·cap idle the entry is gone and counting restarts at zero.
+    clock.advance(Duration::from_secs(1));
+    assert_eq!(l.backoff(&key).await, None);
+    assert_eq!(l.record_failure(&key).await, anvil_cache::limiter::Backoff {
+        failures: 1,
+        locked_for: None
+    });
+}
+
+#[tokio::test]
+async fn backoff_keys_are_independent() {
+    let (l, _clock) = limiter();
+    let tenant = TenantId::new_v7();
+    for _ in 0..10 {
+        l.record_failure(&strict(tenant, 1)).await;
+    }
+    assert!(l.backoff(&strict(tenant, 1)).await.is_some());
+    assert_eq!(l.backoff(&strict(tenant, 2)).await, None);
+    assert_eq!(l.backoff(&strict(TenantId::new_v7(), 1)).await, None);
+}
+
+#[tokio::test]
+async fn gate_allows_a_clean_key() {
+    let (l, _clock) = limiter();
+    let t = TenantId::new_v7();
+    assert_eq!(l.brute_force_gate(&strict(t, 1), &loose(t, 1), true).await, Decision::Allow);
+}
+
+#[tokio::test]
+async fn gate_denies_while_the_strict_key_is_locked() {
+    let (l, clock) = limiter();
+    let t = TenantId::new_v7();
+    for _ in 0..8 {
+        l.record_failure(&strict(t, 1)).await;
+    }
+    // 8th failure: 4 s lock.
+    let wait = retry_after(l.brute_force_gate(&strict(t, 1), &loose(t, 1), true).await);
+    assert_eq!(wait, Duration::from_secs(4));
+    clock.advance(Duration::from_secs(4));
+    assert_eq!(l.brute_force_gate(&strict(t, 1), &loose(t, 1), true).await, Decision::Allow);
+}
+
+#[tokio::test]
+async fn gate_loose_tier_requires_captcha_or_delays_once_over_the_hourly_threshold() {
+    let (l, clock) = limiter();
+    let t = TenantId::new_v7();
+    let lk = loose(t, 5);
+    // 49 failures from "many IPs": the loose tier is counted but never locked.
+    for _ in 0..49 {
+        let b = l.record_failure(&lk).await;
+        assert_eq!(b.locked_for, None);
+    }
+    assert_eq!(l.backoff(&lk).await, None);
+    assert_eq!(l.brute_force_gate(&strict(t, 5), &lk, true).await, Decision::Allow);
+
+    l.record_failure(&lk).await; // 50th within the hour
+    assert_eq!(l.brute_force_gate(&strict(t, 5), &lk, true).await, Decision::RequireCaptcha);
+    let delay = retry_after(l.brute_force_gate(&strict(t, 5), &lk, false).await);
+    assert!(delay > Duration::ZERO && delay <= Duration::from_secs(2), "{delay:?}");
+
+    // A new hourly window starts clean.
+    clock.advance(Duration::from_secs(3_600));
+    assert_eq!(l.brute_force_gate(&strict(t, 5), &lk, true).await, Decision::Allow);
+}
+
+#[tokio::test]
+async fn gate_strict_lock_takes_precedence_over_captcha() {
+    let (l, _clock) = limiter();
+    let t = TenantId::new_v7();
+    for _ in 0..50 {
+        l.record_failure(&loose(t, 6)).await;
+    }
+    for _ in 0..6 {
+        l.record_failure(&strict(t, 6)).await;
+    }
+    assert_eq!(
+        l.brute_force_gate(&strict(t, 6), &loose(t, 6), true).await,
+        Decision::Deny { retry_after: Duration::from_secs(1) }
+    );
+}
+
+#[tokio::test]
+async fn gate_known_and_unknown_identifiers_behave_identically() {
+    // The limiter only ever sees hashes, so two identifiers (one standing for an existing
+    // account, one for a non-existent one) must produce identical outcomes step by step.
+    let (l, _clock) = limiter();
+    let t = TenantId::new_v7();
+    let (known, unknown) = (7u8, 8u8);
+    for _ in 0..60 {
+        let a = l.record_failure(&strict(t, known)).await;
+        let b = l.record_failure(&strict(t, unknown)).await;
+        assert_eq!(a, b);
+        let la = l.record_failure(&loose(t, known)).await;
+        let lb = l.record_failure(&loose(t, unknown)).await;
+        assert_eq!(la, lb);
+        assert_eq!(
+            l.brute_force_gate(&strict(t, known), &loose(t, known), true).await,
+            l.brute_force_gate(&strict(t, unknown), &loose(t, unknown), true).await,
+        );
+    }
+}
+
+#[tokio::test]
+async fn gate_and_backoff_are_off_when_disabled() {
+    let config = LimiterConfig { enabled: false, ..LimiterConfig::default() };
+    let (l, _clock) = limiter_with(config);
+    let t = TenantId::new_v7();
+    for _ in 0..100 {
+        assert_eq!(l.record_failure(&strict(t, 1)).await.locked_for, None);
+        l.record_failure(&loose(t, 1)).await;
+    }
+    assert_eq!(l.backoff(&strict(t, 1)).await, None);
+    assert_eq!(l.brute_force_gate(&strict(t, 1), &loose(t, 1), true).await, Decision::Allow);
+}
+
+#[tokio::test]
+async fn limiter_is_usable_as_a_trait_object() {
+    let (l, _clock) = limiter();
+    let dynamic: Arc<dyn RateLimiter> = Arc::new(l);
+    assert_eq!(dynamic.check(RouteClass::Default, &ip(1)).await, Decision::Allow);
+    assert_eq!(dynamic.record_failure(&ip(1)).await.failures, 1);
+}
