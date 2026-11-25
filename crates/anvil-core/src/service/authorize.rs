@@ -1,5 +1,11 @@
-//! The authorization endpoint service: validate, decide on the session, persist requests that
-//! need a login, issue codes and resume after login.
+//! The authorization endpoint service: validate, decide on the session and on consent, persist
+//! requests that need a login or the consent screen, issue codes and resume after either.
+//!
+//! Consent (OIDC-13) is decided after the session: [`ConsentService::decide`] skips it for
+//! `skip_first_party` clients and for grants covering the requested scopes, forces it for
+//! `prompt=consent`, and answers `consent_required` for `prompt=none`. When it is needed the
+//! request is stored and the user is sent to the consent screen ([`AuthorizeOutcome::Consent`]);
+//! the screen's decision continues the request with [`AuthorizeService::finish_consent`].
 //!
 //! The protocol decisions live in pure functions ([`crate::oauth::authorize_request::validate`],
 //! [`crate::oauth::decision::decide`], [`build_code`], [`AuthorizationResponse`]);
@@ -7,11 +13,14 @@
 
 use std::sync::Arc;
 
-use anvil_jose::{ExpiryCheck, Jwks, verify_op_token};
+use anvil_jose::{ExpiryCheck, Jwks, verify_op_token_algs};
 use secrecy::{ExposeSecret, SecretString};
 use time::{Duration, OffsetDateTime};
 
+use super::consent::ConsentService;
+use super::key_rotation::enabled_algs;
 use crate::error::CoreError;
+use crate::flow::consent::{ConsentDecision, requested_scopes};
 use crate::model::{
     AuthRequestId, AuthorizationParams, BrowserSession, Client, GrantType, NewAuthorizationCode,
     NewAuthorizationRequest, NewTokenFamily, SecretHash, Tenant, TokenFamilyId, UserStatus,
@@ -39,6 +48,9 @@ pub enum AuthorizeOutcome {
     Respond(AuthorizationResponse),
     /// Send the user to the login flow, then call [`AuthorizeService::resume`].
     Login { request_id: AuthRequestId },
+    /// Send the signed-in user to the consent screen for the stored request, then call
+    /// [`AuthorizeService::finish_consent`] with the decision.
+    Consent { request_id: AuthRequestId },
     /// Show an error page; never redirect. `error_key` is one of `invalid_request`,
     /// `unknown_client`, `redirect_uri_mismatch`, `flow_expired`.
     ErrorPage {
@@ -105,6 +117,16 @@ pub fn build_code(
     (SecretString::from(plaintext), code, family)
 }
 
+/// Where a stored authorization request continues from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stage {
+    /// After the login flow: decide on the session, then on consent.
+    AfterLogin,
+    /// After the consent screen: `approved` (Allow) issues the code once the stored grant
+    /// covers the request; Deny answers `access_denied`.
+    AfterConsent { approved: bool },
+}
+
 /// Authorization endpoint service.
 pub struct AuthorizeService {
     pub storage: Arc<dyn Storage>,
@@ -112,6 +134,58 @@ pub struct AuthorizeService {
 }
 
 impl AuthorizeService {
+    fn consent(&self) -> ConsentService {
+        ConsentService {
+            storage: self.storage.clone(),
+            clock: self.clock.clone(),
+        }
+    }
+
+    /// Stores `params` as an authorization request (for the login flow or the consent screen).
+    async fn store_request(
+        &self,
+        tenant: &Tenant,
+        client: &Client,
+        params: &AuthorizationParams,
+        now: OffsetDateTime,
+    ) -> Result<AuthRequestId, CoreError> {
+        let request_id = AuthRequestId::new_v7();
+        let request = NewAuthorizationRequest {
+            id: request_id,
+            client_id: client.client_id.clone(),
+            params: params.clone(),
+            created_at: now,
+            expires_at: now + AUTH_REQUEST_TTL,
+        };
+        self.storage
+            .grants()
+            .create_authorization_request(tenant.id, &request)
+            .await?;
+        Ok(request_id)
+    }
+
+    /// The consent decision for `session`'s user. `prompt` is the request's prompt (after the
+    /// consent screen without `consent`, so an Allow is not asked again).
+    async fn consent_needed(
+        &self,
+        tenant: &Tenant,
+        client: &Client,
+        params: &AuthorizationParams,
+        session: &BrowserSession,
+        prompt: &[String],
+    ) -> Result<Result<ConsentDecision, CoreError>, CoreError> {
+        let requested = requested_scopes(&params.scope);
+        match self
+            .consent()
+            .decide(tenant.id, session.user_id, client, &requested, prompt)
+            .await
+        {
+            Ok(d) => Ok(Ok(d)),
+            Err(CoreError::ConsentRequired) => Ok(Err(CoreError::ConsentRequired)),
+            Err(e) => Err(e),
+        }
+    }
+
     /// Handles an authorization request.
     pub async fn authorize(
         &self,
@@ -184,22 +258,23 @@ impl AuthorizeService {
                 let session = session.ok_or_else(|| {
                     CoreError::Internal("UseSession decided without a session".to_owned())
                 })?;
-                self.issue(tenant, issuer, &client, &params, &session, now)
-                    .await
+                match self
+                    .consent_needed(tenant, &client, &params, &session, &params.prompt)
+                    .await?
+                {
+                    Ok(ConsentDecision::Skip) => {
+                        self.issue(tenant, issuer, &client, &params, &session, now)
+                            .await
+                    }
+                    Ok(ConsentDecision::Required) => {
+                        let request_id = self.store_request(tenant, &client, &params, now).await?;
+                        Ok(AuthorizeOutcome::Consent { request_id })
+                    }
+                    Err(error) => Ok(fail(error)),
+                }
             }
             SessionDecision::RequireLogin => {
-                let request_id = AuthRequestId::new_v7();
-                let request = NewAuthorizationRequest {
-                    id: request_id,
-                    client_id: client.client_id.clone(),
-                    params: params.clone(),
-                    created_at: now,
-                    expires_at: now + AUTH_REQUEST_TTL,
-                };
-                self.storage
-                    .grants()
-                    .create_authorization_request(tenant.id, &request)
-                    .await?;
+                let request_id = self.store_request(tenant, &client, &params, now).await?;
                 Ok(AuthorizeOutcome::Login { request_id })
             }
             SessionDecision::Fail(error) => Ok(fail(error)),
@@ -213,6 +288,41 @@ impl AuthorizeService {
         issuer: &str,
         request_id: AuthRequestId,
         session: Option<BrowserSession>,
+    ) -> Result<AuthorizeOutcome, CoreError> {
+        self.continue_request(tenant, issuer, request_id, session, Stage::AfterLogin)
+            .await
+    }
+
+    /// Continues a stored authorization request after the consent screen. Call only with a
+    /// decision taken by [`ConsentService::approve`] / [`ConsentService::deny`] for this request
+    /// and session. Allow issues the code once the stored grant covers the request (a grant
+    /// revoked in between shows the screen again); Deny answers `access_denied` through the
+    /// request's response mode. Either way the request is used up.
+    pub async fn finish_consent(
+        &self,
+        tenant: &Tenant,
+        issuer: &str,
+        request_id: AuthRequestId,
+        session: Option<BrowserSession>,
+        approved: bool,
+    ) -> Result<AuthorizeOutcome, CoreError> {
+        self.continue_request(
+            tenant,
+            issuer,
+            request_id,
+            session,
+            Stage::AfterConsent { approved },
+        )
+        .await
+    }
+
+    async fn continue_request(
+        &self,
+        tenant: &Tenant,
+        issuer: &str,
+        request_id: AuthRequestId,
+        session: Option<BrowserSession>,
+        stage: Stage,
     ) -> Result<AuthorizeOutcome, CoreError> {
         let now = self.clock.now();
         let Some(request) = self
@@ -255,6 +365,21 @@ impl AuthorizeService {
                 issuer,
             ));
         }
+        if stage == (Stage::AfterConsent { approved: false }) {
+            if !self
+                .storage
+                .grants()
+                .delete_authorization_request(tenant.id, request_id)
+                .await?
+            {
+                return Ok(flow_expired());
+            }
+            return Ok(error_response(
+                &params,
+                &CoreError::AccessDenied("the user denied the request".to_owned()),
+                issuer,
+            ));
+        }
 
         let session = self.usable_session(tenant, session).await?;
         match decide(
@@ -269,6 +394,32 @@ impl AuthorizeService {
                 let session = session.ok_or_else(|| {
                     CoreError::Internal("UseSession decided without a session".to_owned())
                 })?;
+                // After an Allow the stored grant decides; `prompt=consent` was just honoured.
+                let prompt: Vec<String> = match stage {
+                    Stage::AfterLogin => params.prompt.clone(),
+                    Stage::AfterConsent { .. } => params
+                        .prompt
+                        .iter()
+                        .filter(|p| p.as_str() != "consent")
+                        .cloned()
+                        .collect(),
+                };
+                match self
+                    .consent_needed(tenant, &client, &params, &session, &prompt)
+                    .await?
+                {
+                    Ok(ConsentDecision::Skip) => {}
+                    Ok(ConsentDecision::Required) => {
+                        return Ok(AuthorizeOutcome::Consent { request_id });
+                    }
+                    Err(error) => {
+                        self.storage
+                            .grants()
+                            .delete_authorization_request(tenant.id, request_id)
+                            .await?;
+                        return Ok(error_response(&params, &error, issuer));
+                    }
+                }
                 // Deleting first makes the request single-use: a concurrent resume loses.
                 if !self
                     .storage
@@ -350,8 +501,10 @@ impl AuthorizeService {
                 "a published signing key has an unreadable public JWK".to_owned(),
             ));
         };
+        // Every algorithm the tenant signs ID tokens with (RS256, ES256, Ed25519).
+        let algs = enabled_algs(tenant)?;
         Ok(
-            verify_op_token(hint, &jwks, issuer, None, ExpiryCheck::Ignore, now)
+            verify_op_token_algs(hint, &jwks, &algs, issuer, None, ExpiryCheck::Ignore, now)
                 .ok()
                 .and_then(|jwt| {
                     jwt.claims
