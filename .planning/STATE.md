@@ -7,7 +7,7 @@ current_phase_name: release 0 3 real world logins
 current_plan: Not started
 status: planning
 stopped_at: "Completed 03-34-PLAN.md (Phase 3 gap closure: single base64 implementation)"
-last_updated: "2026-11-25T15:15:26.062Z"
+last_updated: "2026-11-25T15:16:48.515Z"
 last_activity: 2026-11-25
 progress:
   total_phases: 7
@@ -123,6 +123,7 @@ Phase 3 plans 03-01 through 03-34 are all complete (34/34 summaries); v0.2.0 is 
 | Phase 03 P34 | 40min | 2 tasks | 18 files |
 | Phase 04 P03 | 25min | 2 tasks | 8 files |
 | Phase 04 P02 | 50min | 3 tasks | 29 files |
+| Phase 04 P01 | 31min | 3 tasks | 97 files |
 
 ## Accumulated Context
 
@@ -269,6 +270,10 @@ Recent decisions affecting current work:
 - [Phase 03]: 03-34: anvil_jose::encoding is the only base64 implementation (b64url/b64url_decode, b64std/b64std_decode: padded or unpadded, canonical); check-deps.sh rejects base64 deps, base64:: and alphabet tables elsewhere under crates/
 - [Phase 04]: 04-03: e2e mock IdP (lib/mock-idp.ts, node:http/crypto only) binds 127.0.0.1 vs AnvilID on localhost; sample RP verifies back-channel logout tokens with node:crypto against the issuer JWKS; run.sh default globs specs/*.spec.ts (a11y first, qual04 excluded)
 - [Phase 04]: 04-02: one OutboundClient (adapters/outbound.rs) for every server-side fetch; dev mode allows loopback + http to allow-listed only; outbound_allow_cidrs replaces the default; outbound_ca_file merges extra roots
+- [Phase 04]: 04-01: Revoking storage intents enqueue back-channel logout deliveries in the same transaction (one per revoked session x rp_session with backchannel_logout_uri; sub=user id, sid=session id, give_up 24h); create_code records rp_session
+- [Phase 04]: 04-01: Backends refuse Phase 4 values they cannot store yet (client fields, resource, logout flows, email_change tokens) with Unsupported until 04-04/04-05; 32 new contract tests fail only with Unsupported
+- [Phase 04]: 04-01: anvil_jose::pem is the only PEM parser (strict single PRIVATE KEY block); email codes hashed HMAC(derive_key anvilid/email-otp/v1, flow_id||0x00||code)
+- [Phase 04]: 04-01: New EmailKinds (login_code, email_change, email_changed) have no template contract until 04-15 (explicit error via has_contract)
 
 ### Pending Todos
 
