@@ -7,13 +7,13 @@ current_phase_name: Release 0.1 "First login" (M1)
 current_plan: 22
 status: verifying
 stopped_at: Completed 02-21-PLAN.md
-last_updated: "2026-11-25T04:38:14.105Z"
+last_updated: "2026-11-25T05:36:51.324Z"
 last_activity: 2026-11-25
 progress:
   total_phases: 7
-  completed_phases: 2
-  total_plans: 59
-  completed_plans: 30
+  completed_phases: 1
+  total_plans: 60
+  completed_plans: 31
   percent: 51
 ---
 
@@ -88,6 +88,7 @@ Phase 2 plans 02-01 through 02-22 are all complete (22/22 summaries). Next: Phas
 | Phase 02 P20 | 25min | 3 tasks | 15 files |
 | Phase 02 P19 | 90min | 2 tasks | 13 files |
 | Phase 02 P21 | 80min | 3 tasks | 10 files |
+| Phase 03 P03 | 40min | 2 tasks | 37 files |
 
 ## Accumulated Context
 
@@ -168,6 +169,9 @@ Recent decisions affecting current work:
 - [Phase 02]: 02-21: serde_json float_roundtrip enabled workspace-wide (jwt_decode fuzz finding: f64 claims did not round-trip)
 - [Phase 02]: 02-21: scripts/fuzz.sh pins --target to the nightly host triple (prebuilt cargo-fuzz defaults to musl; ASan cannot link)
 - [Phase 02]: 02-21: Conformance on GitHub Linux runners showed 0 TLS handshake interruptions in 3 runs; the 02-19 local interruptions are a Docker Desktop/WSL2 environment issue
+- [Phase 03]: 03-03: Console list paging uses the API's after/next_cursor; src/routeTree.gen.ts committed and drift-checked in CI
+- [Phase 03]: 03-03: Console sign-out revokes the refresh token at /t/system/revoke (404 ignored until 03-18) then clears sessionStorage; return targets restricted to /console/ paths
+- [Phase 03]: 03-03: No console component needs inline styles; /console CSP can stay script-src 'self' and style-src 'self' (recheck in 03-25)
 
 ### Pending Todos
 
