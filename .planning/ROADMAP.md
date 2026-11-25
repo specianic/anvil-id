@@ -159,7 +159,7 @@ Plans:
 - [ ] 04-05-PLAN.md — Postgres 0004, repos (SKIP LOCKED delivery leasing), enqueue-on-revoke, upgrade + plaintext tests (wave 2)
 - [ ] 04-06-PLAN.md — i18n infrastructure: Fluent catalogs, negotiation, t(), localized forms, all templates converted, en catalog, ui_locales_supported (wave 2)
 - [ ] 04-07-PLAN.md — Pure upstream logic: provider presets, ID-token validation, claim normalisation, link decision (TDD) (wave 2)
-- [ ] 04-08-PLAN.md — Pure protocol decisions: end-session table, logout token + delivery classification, RFC 8707, MFA policy (TDD) (wave 2)
+- [x] 04-08-PLAN.md — Pure protocol decisions: end-session table, logout token + delivery classification, RFC 8707, MFA policy (TDD) (wave 2)
 - [ ] 04-09-PLAN.md — Pure theming rules: token/contrast validation, CSS validator, merge, stylesheet, logo sniffing (TDD) (wave 2)
 - [x] 04-10-PLAN.md — Conformance harness: logout/backchannel selections, callback CA + leaf, outbound settings, browser tasks (wave 2)
 - [ ] 04-11-PLAN.md — Admin API 0.3: connections CRUD with sealed write-only secrets, client logout/resource/MFA fields, tenant settings, OpenAPI regen (wave 3)
@@ -231,7 +231,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 1. Foundations and Spikes (M0) | 8/8 | Complete    | 2026-11-25 |
 | 2. Release 0.1 "First login" | 23/23 | Complete    | 2026-11-25 |
 | 3. Release 0.2 "Secure by default" | 34/34 | Complete    | 2026-11-25 |
-| 4. Release 0.3 "Real-world logins" | 4/33 | In Progress | - |
+| 4. Release 0.3 "Real-world logins" | 5/33 | In Progress | - |
 | 5. Release 0.4 "Operate it" | 0/TBD | Not started | - |
 | 6. Release 1.0 (Organizations and SSO) | 0/TBD | Not started | - |
 | 7. Release 1.0 (Certification and release) | 0/TBD | Not started | - |

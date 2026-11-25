@@ -7,13 +7,13 @@ current_phase_name: release 0 3 real world logins
 current_plan: Not started
 status: planning
 stopped_at: "Completed 03-34-PLAN.md (Phase 3 gap closure: single base64 implementation)"
-last_updated: "2026-11-25T15:25:40.740Z"
+last_updated: "2026-11-25T15:26:57.000Z"
 last_activity: 2026-11-25
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 98
-  completed_plans: 69
+  completed_plans: 70
   percent: 100
 ---
 
@@ -125,6 +125,7 @@ Phase 3 plans 03-01 through 03-34 are all complete (34/34 summaries); v0.2.0 is 
 | Phase 04 P02 | 50min | 3 tasks | 29 files |
 | Phase 04 P01 | 31min | 3 tasks | 97 files |
 | Phase 04 P10 | 25min | 2 tasks | 4 files |
+| Phase 04 P08 | 25min | 1 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -277,6 +278,9 @@ Recent decisions affecting current work:
 - [Phase 04]: 04-01: New EmailKinds (login_code, email_change, email_changed) have no template contract until 04-15 (explicit error via has_contract)
 - [Phase 04]: 04-10: Conformance callback leaf is RSA-2048 signed by a per-run P-256 CA (suite nginx has an ECDHE-RSA-only listener); anvilid reaches it via ANVILID_OUTBOUND_CA_FILE + ANVILID_OUTBOUND_ALLOW_CIDRS=127.0.0.1/32
 - [Phase 04]: 04-10: Logout browser contract is URL-based: confirm page under /ui/logout*, signed-out page not under /ui/logout*, errors under the tenant base URL
+- [Phase 04]: 04-08: End-session decisions are pure (oauth::logout::validate_end_session over a caller-verified HintCheck); added LogoutError::UnknownClient; a valid hint for another session confirms without redirect
+- [Phase 04]: 04-08: Back-channel delivery: 200/204 delivered, 5xx/network/timeout retry 10s*2^n capped 1h until created_at+24h, everything else (incl. Blocked) gives up
+- [Phase 04]: 04-08: MFA effective policy = max(tenant, client); essential ACR_MFA without a factor -> Unmet unless policy Required (-> Enroll); Off + no acr request never prompts
 
 ### Pending Todos
 
