@@ -1,0 +1,71 @@
+[workspace]
+# Virtual manifests do not infer the resolver from the edition; set it explicitly.
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2024"
+# Equal to the pinned toolchain (the only version we test). sqlx's floor is 1.94.
+rust-version = "1.100"
+license = "MIT"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+# CI turns warnings into errors with `-D warnings`.
+all = { level = "warn", priority = -1 }
+
+[workspace.dependencies]
+# Internal crates (ARCHITECTURE.md §4)
+anvil-core = { path = "crates/anvil-core" }
+anvil-jose = { path = "crates/anvil-jose" }
+anvil-storage = { path = "crates/anvil-storage" }
+anvil-storage-sqlite = { path = "crates/anvil-storage-sqlite" }
+anvil-storage-postgres = { path = "crates/anvil-storage-postgres" }
+anvil-cache = { path = "crates/anvil-cache" }
+anvil-web = { path = "crates/anvil-web" }
+anvil-mail = { path = "crates/anvil-mail" }
+anvilid = { path = "crates/anvilid" }
+
+# Third-party crates
+tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
+axum = "0.8.9"
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+# Never default features (they include `any`), never `tls-rustls` (= ring), never `sqlite`/`sqlite-unbundled`.
+# Backends add `sqlite-bundled` or `postgres` in their own manifests.
+sqlx = { version = "0.9.1", default-features = false, features = [
+  "runtime-tokio",
+  "tls-rustls-aws-lc-rs",
+  "macros",
+  "migrate",
+  "sqlx-toml",
+  "uuid",
+  "time",
+  "json",
+] }
+aws-lc-rs = "1.19"
+mimalloc = "0.1.52"
+rust-embed = { version = "8.14", features = ["mime-guess"] }
+uuid = { version = "1.29", features = ["v7", "serde"] }
+time = { version = "0.3.55", features = ["serde"] }
+thiserror = "2"
+async-trait = "0.1.92"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2"
+clap = { version = "4.6", features = ["derive", "env"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+anyhow = "1"
+# Use the re-export `testcontainers_modules::testcontainers`; do not add `testcontainers` directly.
+testcontainers-modules = { version = "0.15", default-features = false, features = ["postgres"] }
+tempfile = "3.27"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "abort"

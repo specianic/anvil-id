@@ -19,3 +19,12 @@
 
 # Internal research notes (unverified third-party claims; not published)
 /docs/research/
+
+# Local tooling and test artifacts
+/suite/
+/conformance-results/
+*.db
+*.db-shm
+*.db-wal
+/.cargo-home/
+/mongo/

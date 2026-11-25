@@ -1,0 +1,5 @@
+[toolchain]
+channel = "1.100.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
+# Do not list musl targets here: every contributor would download them. CI/Alpine handles musl.

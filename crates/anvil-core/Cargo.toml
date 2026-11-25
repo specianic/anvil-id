@@ -1,0 +1,18 @@
+[package]
+name = "anvil-core"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+# Pure domain crate: no I/O dependencies (allowlist enforced by scripts/check-deps.sh).
+[dependencies]
+async-trait.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+time.workspace = true
+uuid.workspace = true

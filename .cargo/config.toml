@@ -1,0 +1,5 @@
+[env]
+# Compile sqlx query macros against the committed .sqlx/ metadata by default.
+# `force = false`: a real environment variable wins, so scripts/sqlx.sh can set
+# SQLX_OFFLINE=false when running `cargo sqlx prepare`.
+SQLX_OFFLINE = { value = "true", force = false }
