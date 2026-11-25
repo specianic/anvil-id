@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: verifying
-stopped_at: Completed 02-17-PLAN.md
-last_updated: "2026-11-25T02:37:16.620Z"
+stopped_at: Completed 02-16-PLAN.md
+last_updated: "2026-11-25T02:41:18.612Z"
 last_activity: "2026-11-25 — Completed 01-08 (phase gate: CI green on GitHub, spike verdicts, stack confirmed)"
 progress:
   total_phases: 7
   completed_phases: 1
   total_plans: 30
-  completed_plans: 23
+  completed_plans: 25
   percent: 53
 ---
 
@@ -74,6 +74,7 @@ Progress: [█████░░░░░] 53%
 | Phase 02 P14 | 35min | 2 tasks | 11 files |
 | Phase 02 P13 | 35min | 2 tasks | 10 files |
 | Phase 02 P17 | 30min | 2 tasks | 9 files |
+| Phase 02 P16 | 25min | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -140,6 +141,8 @@ Recent decisions affecting current work:
 - [Phase 02]: 02-14: /token form-only, repeated parameter -> invalid_request, empty values treated as omitted; no-store + Pragma no-cache on all token/userinfo responses
 - [Phase 02]: 02-17: Fuzz targets assert security invariants (RFC 7523 model for client assertions, redirects only to registered URIs, PKCE for public clients); fuzz/ has its own workspace and Cargo.lock seeded from the main lock
 - [Phase 02]: 02-17: Release-graph gate forbids test crates and anvil-storage on anvilid normal/build edges; source check skips #[cfg(test)] mod blocks by rustfmt indentation; http-body-util allowed (axum dep)
+- [Phase 02]: 02-16: Admin API rejects ATs of deleted system clients (live client check) and requires admin:write for system-tenant client writes (no escalation from admin:clients:write)
+- [Phase 02]: 02-16: one api_router() feeds admin::routes() and admin::openapi(); docs/openapi/admin-v1.json drift-checked (just openapi-update)
 
 ### Pending Todos
 
@@ -152,6 +155,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-25T02:37:16.617Z
-Stopped at: Completed 02-17-PLAN.md
+Last session: 2026-11-25T02:41:18.610Z
+Stopped at: Completed 02-16-PLAN.md
 Resume file: None
