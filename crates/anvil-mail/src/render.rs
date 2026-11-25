@@ -97,9 +97,6 @@ impl EmailRenderer {
         kind: EmailKind,
         payload: &BTreeMap<String, String>,
     ) -> Result<(String, String, String), MailError> {
-        if !crate::check::has_contract(kind) {
-            return Err(MailError::Template(crate::check::no_contract_message(kind)));
-        }
         let Some(t) = override_ else {
             return self.render(kind.as_str(), payload);
         };
@@ -239,30 +236,35 @@ mod tests {
         ])
     }
 
+    /// The contract variables of `kind` with sample values (as the worker would seal them).
+    fn contract_payload(kind: EmailKind) -> BTreeMap<String, String> {
+        let mut p = crate::check::sample_context(kind);
+        p.insert("tenant_name".into(), "Acme".into());
+        p
+    }
+
     #[test]
-    fn kinds_without_contract_are_explicit_errors() {
-        use anvil_core::ports::EmailTemplateCheck as _;
+    fn phase4_kinds_render_from_defaults_and_overrides() {
         let r = EmailRenderer::embedded();
-        let t = EmailTemplate {
-            kind: EmailKind::LoginCode,
-            subject: "Code".into(),
-            body_html: "<p>hi</p>".into(),
-            body_text: "hi".into(),
-            updated_at: time::OffsetDateTime::UNIX_EPOCH,
-        };
         for kind in [
             EmailKind::LoginCode,
             EmailKind::EmailChange,
             EmailKind::EmailChanged,
         ] {
-            let err = r.render_with(None, kind, &payload("x")).unwrap_err();
-            assert!(err.to_string().contains("no template contract"), "{err}");
-            let err = r.render_with(Some(&t), kind, &payload("x")).unwrap_err();
-            assert!(err.to_string().contains("no template contract"), "{err}");
-            let issue = crate::check::TemplateChecker
-                .check(kind, "Subject", "<p>x</p>", "x")
-                .unwrap_err();
-            assert!(issue.message.contains("no template contract"), "{issue:?}");
+            let p = contract_payload(kind);
+            let (subject, text, html) = r.render_with(None, kind, &p).unwrap();
+            assert!(subject.contains("Acme"), "{kind:?}: {subject}");
+            assert!(!text.starts_with(&subject), "{kind:?}: subject left in body");
+            assert!(html.contains("Acme"), "{kind:?}");
+            let t = EmailTemplate {
+                kind,
+                subject: "Hello {{ tenant_name }}".into(),
+                body_html: "<p>{{ tenant_name }}</p>".into(),
+                body_text: "{{ tenant_name }}".into(),
+                updated_at: time::OffsetDateTime::UNIX_EPOCH,
+            };
+            let (subject, _, _) = r.render_with(Some(&t), kind, &p).unwrap();
+            assert_eq!(subject, "Hello Acme");
         }
     }
 
@@ -370,6 +372,14 @@ mod tests {
         for name in ["verification", "recovery", "invitation", "password_changed"] {
             r.render(name, &payload("https://id.example.test/l?token=abc"))
                 .unwrap_or_else(|e| panic!("{name}: {e}"));
+        }
+        for kind in [
+            EmailKind::LoginCode,
+            EmailKind::EmailChange,
+            EmailKind::EmailChanged,
+        ] {
+            r.render_with(None, kind, &contract_payload(kind))
+                .unwrap_or_else(|e| panic!("{kind:?}: {e}"));
         }
     }
 

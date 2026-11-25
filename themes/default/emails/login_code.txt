@@ -1,0 +1,18 @@
+Your {{ tenant_name }} sign-in code
+
+Hello,
+
+Use this code to finish signing in to {{ tenant_name }}:
+
+    {{ code }}
+
+Or open this link to sign in directly:
+
+{{ link }}
+
+The code and the link expire in {{ expires_minutes }} minutes and can be used only once. Never share this code with anyone.
+
+If you did not try to sign in, ignore this email. Nobody can sign in without the code.
+
+-- 
+{{ tenant_name }}

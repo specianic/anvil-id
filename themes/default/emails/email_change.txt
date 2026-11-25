@@ -1,0 +1,14 @@
+Confirm your new email address for {{ tenant_name }}
+
+Hello,
+
+Someone asked to change the email address of a {{ tenant_name }} account to {{ new_email }}. To confirm this change, open the link below:
+
+{{ link }}
+
+The link expires in {{ expires_minutes }} minutes and can be used only once. Opening it shows a page with a "Confirm new email" button; the address changes only after you select that button.
+
+If you did not ask for this change, you can ignore this email. The account keeps its current address.
+
+-- 
+{{ tenant_name }}

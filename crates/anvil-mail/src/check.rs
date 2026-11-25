@@ -13,6 +13,13 @@
 //! | `invitation`         | `tenant_name`, `email`, `link`, `expires_in` |
 //! | `password_changed`   | `tenant_name`, `email`                      |
 //! | `recovery_code_used` | `tenant_name`, `remaining`                  |
+//! | `login_code`         | `tenant_name`, `code`, `link`, `expires_minutes` |
+//! | `email_change`       | `tenant_name`, `link`, `new_email`, `expires_minutes` |
+//! | `email_changed`      | `tenant_name`, `new_email`                  |
+//!
+//! `email_change` goes to the new address; `email_changed` is the notice to the address before
+//! the change. The outbox worker adds the recipient as `email` when a payload has none; that
+//! extra value is not part of a contract that does not list it.
 //!
 //! # What is checked
 //!
@@ -38,8 +45,7 @@ use minijinja::{Environment, ErrorKind};
 
 use crate::render::{clean_subject, environment};
 
-/// The variables a template of `kind` may use (see the module docs). Empty for kinds without a
-/// contract yet ([`has_contract`]); those are rejected by [`TemplateChecker`] and the renderer.
+/// The variables a template of `kind` may use (see the module docs).
 pub fn variables(kind: EmailKind) -> &'static [&'static str] {
     match kind {
         EmailKind::Verification | EmailKind::Recovery | EmailKind::Invitation => {
@@ -47,24 +53,10 @@ pub fn variables(kind: EmailKind) -> &'static [&'static str] {
         }
         EmailKind::PasswordChanged => &["tenant_name", "email"],
         EmailKind::RecoveryCodeUsed => &["tenant_name", "remaining"],
-        // TRANSITIONAL(04-15): the Phase 4 kinds get their variable contracts and default
-        // templates in plan 04-15. Until then checking or rendering them is an explicit error.
-        EmailKind::LoginCode | EmailKind::EmailChange | EmailKind::EmailChanged => &[],
+        EmailKind::LoginCode => &["tenant_name", "code", "link", "expires_minutes"],
+        EmailKind::EmailChange => &["tenant_name", "link", "new_email", "expires_minutes"],
+        EmailKind::EmailChanged => &["tenant_name", "new_email"],
     }
-}
-
-/// Whether `kind` has a variable contract (and default templates).
-pub fn has_contract(kind: EmailKind) -> bool {
-    // TRANSITIONAL(04-15): see `variables`.
-    !matches!(
-        kind,
-        EmailKind::LoginCode | EmailKind::EmailChange | EmailKind::EmailChanged
-    )
-}
-
-/// The error for a kind without a contract.
-pub(crate) fn no_contract_message(kind: EmailKind) -> String {
-    format!("no template contract for kind {} yet", kind.as_str())
 }
 
 /// Sample values for every variable of `kind`, used for the test render.
@@ -78,6 +70,9 @@ pub fn sample_context(kind: EmailKind) -> BTreeMap<String, String> {
                 "link" => "https://id.example.com/t/default/ui/verification?token=sample-token",
                 "expires_in" => "1 hour",
                 "remaining" => "7",
+                "code" => "123456",
+                "new_email" => "new.address@example.com",
+                "expires_minutes" => "15",
                 _ => "sample",
             };
             (name.to_owned(), value.to_owned())
@@ -97,9 +92,6 @@ impl EmailTemplateCheck for TemplateChecker {
         html: &str,
         text: &str,
     ) -> Result<(), TemplateIssue> {
-        if !has_contract(kind) {
-            return Err(issue("subject", None, &no_contract_message(kind)));
-        }
         if subject.contains(['\r', '\n']) {
             return Err(issue("subject", None, "the subject must be a single line"));
         }

@@ -1092,7 +1092,10 @@ async fn email_templates_default_override_validation_and_reset() {
             "recovery",
             "invitation",
             "password_changed",
-            "recovery_code_used"
+            "recovery_code_used",
+            "login_code",
+            "email_change",
+            "email_changed"
         ]
     );
     assert!(items.iter().all(|i| i["customized"] == false));

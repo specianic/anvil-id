@@ -1,0 +1,12 @@
+Your {{ tenant_name }} email address was changed
+
+Hello,
+
+The email address of your {{ tenant_name }} account was just changed to {{ new_email }}. Messages about the account now go to the new address; this is the last one sent to this address.
+
+If you made this change, you do not need to do anything.
+
+If you did not change your email address, someone else may control your account. Contact your administrator immediately and ask them to restore your address and reset your password.
+
+-- 
+{{ tenant_name }}

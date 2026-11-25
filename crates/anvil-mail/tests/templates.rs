@@ -198,3 +198,126 @@ fn override_render_errors_do_not_leak_payload_values() {
         .to_string();
     assert!(msg.contains("fuel"), "{msg}");
 }
+
+// ---------------------------------------------------------------------------------------------
+// Phase 4 kinds: login_code, email_change, email_changed
+// ---------------------------------------------------------------------------------------------
+
+const PHASE4_KINDS: [EmailKind; 3] = [
+    EmailKind::LoginCode,
+    EmailKind::EmailChange,
+    EmailKind::EmailChanged,
+];
+
+fn phase4_payload(kind: EmailKind) -> BTreeMap<String, String> {
+    let mut p = BTreeMap::new();
+    for v in variables(kind) {
+        let value = match *v {
+            "tenant_name" => "Acme",
+            "code" => "482913",
+            "link" => "https://id.test/t/default/ui/account/email/confirm?token=tok-123",
+            "new_email" => "<b>new</b>@example.com",
+            "expires_minutes" => "15",
+            other => panic!("unexpected contract variable {other}"),
+        };
+        p.insert((*v).to_owned(), value.to_owned());
+    }
+    p
+}
+
+#[test]
+fn phase4_contracts_are_exact() {
+    assert_eq!(
+        variables(EmailKind::LoginCode),
+        ["tenant_name", "code", "link", "expires_minutes"]
+    );
+    assert_eq!(
+        variables(EmailKind::EmailChange),
+        ["tenant_name", "link", "new_email", "expires_minutes"]
+    );
+    assert_eq!(
+        variables(EmailKind::EmailChanged),
+        ["tenant_name", "new_email"]
+    );
+}
+
+#[test]
+fn phase4_defaults_render_with_their_contract_variables() {
+    let r = EmailRenderer::embedded();
+    for kind in PHASE4_KINDS {
+        let p = phase4_payload(kind);
+        let (subject, text, html) = r
+            .render_with(None, kind, &p)
+            .unwrap_or_else(|e| panic!("{kind:?}: {e}"));
+        assert!(subject.contains("Acme"), "{kind:?}: {subject}");
+        assert!(!subject.contains("482913"), "{kind:?}: code in subject");
+        assert!(!text.starts_with(&subject), "{kind:?}: subject left in body");
+        if p.contains_key("link") {
+            assert!(text.contains(&p["link"]), "{kind:?}: link missing from text");
+            assert!(html.contains("token=tok-123"), "{kind:?}: link missing from html");
+        }
+        if p.contains_key("new_email") {
+            // Text is plain, HTML is escaped.
+            assert!(text.contains("<b>new</b>@example.com"), "{kind:?}");
+            assert!(!html.contains("<b>new</b>"), "{kind:?}: {html}");
+            assert!(html.contains("&lt;b&gt;new"), "{kind:?}");
+        }
+        if p.contains_key("expires_minutes") {
+            assert!(text.contains("15 minutes"), "{kind:?}");
+        }
+    }
+    let (_, text, html) = r
+        .render_with(None, EmailKind::LoginCode, &phase4_payload(EmailKind::LoginCode))
+        .unwrap();
+    assert!(text.contains("482913") && html.contains("<b>482913</b>"));
+    assert!(text.contains("If you did not try to sign in, ignore this email"));
+}
+
+#[test]
+fn phase4_defaults_pass_their_own_check() {
+    // The admin API shows the defaults as editable overrides; saving them unchanged must work.
+    for kind in PHASE4_KINDS {
+        let name = kind.as_str();
+        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../themes/default/emails/");
+        let text = std::fs::read_to_string(format!("{root}{name}.txt")).unwrap();
+        let html = std::fs::read_to_string(format!("{root}{name}.html")).unwrap();
+        let (subject, body) = text.split_once('\n').unwrap();
+        TemplateChecker
+            .check(kind, subject.trim(), &html, body.trim_start())
+            .unwrap_or_else(|e| panic!("{kind:?}: {e:?}"));
+    }
+}
+
+#[test]
+fn phase4_override_with_unknown_variable_is_rejected() {
+    for kind in PHASE4_KINDS {
+        // `email` is in no Phase 4 contract (the worker may add it, templates may not use it).
+        let err = TemplateChecker
+            .check(kind, "Hi {{ tenant_name }}", "<p>x</p>", "Hello\n{{ email }}\n")
+            .unwrap_err();
+        assert!(err.message.starts_with("body_text: "), "{kind:?}: {err:?}");
+        assert!(err.message.contains("email"), "{kind:?}: {err:?}");
+        assert_eq!(err.line, Some(2), "{kind:?}");
+    }
+    // `code` belongs to login_code only.
+    let err = TemplateChecker
+        .check(EmailKind::EmailChange, "{{ code }}", "x", "x")
+        .unwrap_err();
+    assert!(err.message.starts_with("subject: "), "{err:?}");
+}
+
+#[test]
+fn phase4_missing_variable_fails_rendering() {
+    let r = EmailRenderer::embedded();
+    for kind in PHASE4_KINDS {
+        for var in variables(kind) {
+            let mut p = phase4_payload(kind);
+            p.remove(*var);
+            let err = r.render_with(None, kind, &p).unwrap_err();
+            let msg = err.to_string();
+            assert!(matches!(err, MailError::Template(_)), "{kind:?}/{var}");
+            assert!(msg.contains("undefined"), "{kind:?}/{var}: {msg}");
+            assert!(!msg.contains("tok-123"), "{kind:?}/{var}: {msg}");
+        }
+    }
+}
