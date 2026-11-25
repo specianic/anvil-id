@@ -6,14 +6,14 @@ current_phase: 2
 current_phase_name: Release 0.1 "First login" (M1)
 current_plan: 22
 status: verifying
-stopped_at: Completed 03-06-PLAN.md
-last_updated: "2026-11-25T06:25:00.253Z"
+stopped_at: Completed 03-08-PLAN.md
+last_updated: "2026-11-25T06:26:51.278Z"
 last_activity: 2026-11-25
 progress:
   total_phases: 7
   completed_phases: 1
   total_plans: 60
-  completed_plans: 38
+  completed_plans: 39
   percent: 51
 ---
 
@@ -96,6 +96,7 @@ Phase 2 plans 02-01 through 02-22 are all complete (22/22 summaries). Next: Phas
 | Phase 03 P09 | 15min | 2 tasks | 5 files |
 | Phase 03 P05 | 20min | 3 tasks | 18 files |
 | Phase 03 P06 | 45min | 3 tasks | 17 files |
+| Phase 03 P08 | 45min | 2 tasks | 20 files |
 
 ## Accumulated Context
 
@@ -195,6 +196,8 @@ Recent decisions affecting current work:
 - [Phase 03]: 03-05: SQLite 0004 rebuilds token_family as a sqlx -- no-transaction migration (foreign_keys OFF, BEGIN, copy, drop/rename, pragma_foreign_key_check count into CHECK(n=0) temp table, COMMIT, foreign_keys ON); last 0.1 migration version = 2; codes/refresh tokens preserved (unit test)
 - [Phase 03]: 03-05: SQLite credential rows have own ids (migrated passwords randomblob(16)); TOTP sealed seed as base64url in credential.secret; passkey counter and TOTP last step share credential.counter
 - [Phase 03]: 03-06: Postgres 0003 additive (credential uuid PK swap, CHECK swaps via DROP/ADD CONSTRAINT); TOTP seed hex in credential.data; user-owned inserts check tenant via WHERE EXISTS since PG FKs reference user(id) only; consent scopes merged by one ON CONFLICT DO UPDATE in C order
+- [Phase 03]: 03-08: Client IP only via anvil_web::client_ip (ClientIp) and request_context::AuditContext(RequestContext); missing ConnectInfo is a generic 500; production trusts no proxies, dev mode trusts loopback
+- [Phase 03]: 03-08: anvilid builds AppConfig via AppConfig::new + field assignment; trusted-proxy operator config still to be mapped in 03-24
 
 ### Pending Todos
 
@@ -207,6 +210,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-25T06:25:00.251Z
-Stopped at: Completed 03-06-PLAN.md
+Last session: 2026-11-25T06:26:51.276Z
+Stopped at: Completed 03-08-PLAN.md
 Resume file: None
