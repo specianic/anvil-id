@@ -114,3 +114,20 @@ No requirement checkbox was ticked (wave rule). Contributes to AUTH-07 and AUTH-
 
 - FOUND: tests/e2e/specs/social.spec.ts (263 lines), linking.spec.ts (255), nojs-linking.spec.ts (73), console-connections.spec.ts (167)
 - FOUND: commits 187375d, 77af3ce, d014e6e
+
+## CI follow-up (run 45720491636)
+
+Three tests failed on both backends. All three causes were in the tests; no product bug was found. The fix is commit `90942c6`, which changes `lib/mock-idp.ts` (forced extra), `specs/mock-idp.spec.ts` and `social.spec.ts`.
+
+- **Apple-like sign-in and account-page Connect** (`upstream.link_failed`):
+  - **Cause:** the 04-03 mock signed its ID tokens with ES256. Real Apple signs with RS256, and AnvilID's social presets accept RS256 only (`providers.rs`, `allowed_algs = [RS256]`). The callback therefore rejected the token.
+  - **Fix:** the mock now signs ID tokens with RS256 using a per-start RSA key, and its JWKS publishes that key. The ES256 client-secret check is unchanged.
+  - The 04-03 summary's "ES256 ID tokens" no longer holds.
+- **AnvilID as a generic OIDC upstream:**
+  - **Cause:** the audit reason was `email_missing`. AnvilID returns `email` from UserInfo, not in the ID token (OIDC Core 5.4), and the connection had `fetch_userinfo` off.
+  - **Fix:** the spec now sets `fetch_userinfo: true`.
+  - Possible product follow-up, not done here: fall back to UserInfo when the ID token lacks `email`, or turn `fetch_userinfo` on by default for generic OIDC.
+- **Local run without Docker:**
+  - Setup: the debug anvilid built at 00:00. The main tree did not compile at that point because of 04-34 work in progress. It ran from a scratch copy with a fresh data dir and the run.sh flags.
+  - Result: `social`, `linking`, `nojs-linking` and `mock-idp` all pass (12 passed).
+  - `console-connections` was not re-run locally because it needs the console embedded in a release build. It passed in CI.
