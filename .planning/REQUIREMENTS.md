@@ -13,7 +13,7 @@ Source of truth for wording and detail: [docs/PRD.md](../docs/PRD.md) §8–9. I
 
 - [x] **FND-01**: Contributor can build, lint and test the Cargo workspace (crate layout per ARCHITECTURE.md §4) with one command, and CI runs fmt, clippy, cargo-deny and tests on every PR
 - [x] **FND-02**: CI enforces the crate dependency rules (core has no I/O deps; web never imports a concrete storage crate)
-- [ ] **FND-03**: Spike A: a tenant repository and atomic `consume_code` work on both SQLite and Postgres, proven by a shared contract suite including a concurrency test
+- [x] **FND-03**: Spike A: a tenant repository and atomic `consume_code` work on both SQLite and Postgres, proven by a shared contract suite including a concurrency test
 - [ ] **FND-04**: Spike B: a static musl release binary (amd64 + arm64) with aws-lc-rs, mimalloc and embedded assets builds in CI, with binary size and idle memory reported
 - [x] **FND-05**: Spike C: the OpenID conformance suite runs in CI against a freshly started binary
 
@@ -171,7 +171,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 |-------------|-------|--------|
 | FND-01 | Phase 1 | Complete |
 | FND-02 | Phase 1 | Complete |
-| FND-03 | Phase 1 | Pending |
+| FND-03 | Phase 1 | Complete |
 | FND-04 | Phase 1 | Pending |
 | FND-05 | Phase 1 | Complete |
 | OIDC-01 | Phase 2 | Pending |

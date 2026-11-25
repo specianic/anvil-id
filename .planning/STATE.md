@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 01-06-PLAN.md
-last_updated: "2026-11-25T01:00:42.422Z"
-last_activity: 2026-11-25 — Completed 01-06 (conformance harness, M0 ratchet, conformance.yml)
+stopped_at: Completed 01-05-PLAN.md
+last_updated: "2026-11-25T01:01:22.354Z"
+last_activity: 2026-11-25 — Completed 01-05 (Postgres backend, offline metadata, duplication cost)
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 8
-  completed_plans: 5
-  percent: 63
+  completed_plans: 6
+  percent: 75
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 ## Current Position
 
 Phase: 1 of 7 (Foundations and Spikes (M0))
-Plan: 5 of 8 in current phase (01-01, 01-02, 01-03, 01-04, 01-06 complete)
+Plan: 6 of 8 in current phase (01-01, 01-02, 01-03, 01-04, 01-05, 01-06 complete)
 Status: In progress
-Last activity: 2026-11-25 — Completed 01-06 (conformance harness, M0 ratchet, conformance.yml)
+Last activity: 2026-11-25 — Completed 01-05 (Postgres backend, offline metadata, duplication cost)
 
-Progress: [██████░░░░] 63%
+Progress: [████████░░] 75%
 
 ## Performance Metrics
 
@@ -55,6 +55,7 @@ Progress: [██████░░░░] 63%
 | Phase 01 P03 | 4min | 3 tasks | 13 files |
 | Phase 01 P02 | 15min | 3 tasks | 3 files |
 | Phase 01 P06 | 9min | 2 tasks | 6 files |
+| Phase 01 P05 | 4min | 2 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -76,6 +77,7 @@ Recent decisions affecting current work:
 - [Phase 01]: Dependency rules apply to normal+build edges only (cargo tree -p, --target all); self-test counts only RULE VIOLATION output as rejection
 - [Phase 01]: Conformance: INTERRUPTED module counts as complete in run-test-plan.py, so the M0 ratchet passes over plain http (no TLS fallback needed for M0)
 - [Phase 01]: M0 discovery advertises only ES256 but ARCHITECTURE makes RS256 default and certification requires it: Phase 2 must advertise RS256 (raised as doc/code divergence)
+- [Phase 01]: Postgres backend passes the shared contract (incl. 32-way consume) with one PgPool and zero query overrides; two sqlx backends judged manageable (§2.1 condition 3 met)
 
 ### Pending Todos
 
@@ -89,6 +91,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-25T01:00:42.420Z
-Stopped at: Completed 01-06-PLAN.md
+Last session: 2026-11-25T01:01:22.353Z
+Stopped at: Completed 01-05-PLAN.md
 Resume file: None
