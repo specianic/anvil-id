@@ -488,6 +488,21 @@ fn map_error(err: reqwest::Error) -> OutboundError {
     OutboundError::Network
 }
 
+/// Upstream IdP calls report outbound failures through the core port's error. An unusable URL
+/// (scheme, userinfo, plain http where not allowed) is a refused destination.
+impl From<OutboundError> for anvil_core::ports::UpstreamError {
+    fn from(err: OutboundError) -> Self {
+        use anvil_core::ports::UpstreamError as U;
+        match err {
+            OutboundError::Blocked | OutboundError::InvalidUrl => U::Blocked,
+            OutboundError::Network => U::Network,
+            OutboundError::Timeout => U::Timeout,
+            OutboundError::Status(code) => U::Status(code),
+            OutboundError::TooLarge => U::TooLarge,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
