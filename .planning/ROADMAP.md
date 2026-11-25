@@ -156,7 +156,7 @@ Plans:
 - [x] 04-02-PLAN.md — The single SSRF-guarded outbound client + operator config, CAPTCHA/HIBP migrated, AppState handles, pre-registered web modules (wave 1)
 - [x] 04-03-PLAN.md — E2E infra: Node mock IdP (Apple-like, GitHub-like), upstream/logout helpers, sample RP logout + back-channel endpoint, run.sh spec glob (wave 1)
 - [ ] 04-04-PLAN.md — SQLite 0005 (CHECK rebuilds, new tables/columns), repos, enqueue-on-revoke, upgrade + plaintext tests (wave 2)
-- [ ] 04-05-PLAN.md — Postgres 0004, repos (SKIP LOCKED delivery leasing), enqueue-on-revoke, upgrade + plaintext tests (wave 2)
+- [x] 04-05-PLAN.md — Postgres 0004, repos (SKIP LOCKED delivery leasing), enqueue-on-revoke, upgrade + plaintext tests (wave 2)
 - [x] 04-06-PLAN.md — i18n infrastructure: Fluent catalogs, negotiation, t(), localized forms, all templates converted, en catalog, ui_locales_supported (wave 2)
 - [x] 04-07-PLAN.md — Pure upstream logic: provider presets, ID-token validation, claim normalisation, link decision (TDD) (wave 2)
 - [x] 04-08-PLAN.md — Pure protocol decisions: end-session table, logout token + delivery classification, RFC 8707, MFA policy (TDD) (wave 2)
