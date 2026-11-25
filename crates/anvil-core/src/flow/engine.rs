@@ -93,8 +93,9 @@ impl FlowState {
     /// The initial state and form of a new flow. For verification and recovery, `token` (from
     /// the emailed link) goes into a hidden field unvalidated; it is only consumed on POST.
     ///
-    /// `Settings` and `Consent` flows are declared in the model (plan 03-02) but not implemented
-    /// by this engine yet: starting one is an explicit error.
+    /// `Settings` and `Consent` flows have their own state machines (`flow::settings`, driven by
+    /// `service::account`, and `flow::consent`, driven by `service::consent`) and are never
+    /// started here: asking this engine for one is an explicit error.
     pub fn initial(
         kind: FlowKind,
         token: Option<String>,
@@ -116,7 +117,7 @@ impl FlowState {
             }
             FlowKind::Settings | FlowKind::Consent => {
                 return Err(CoreError::Internal(format!(
-                    "the {} flow is not implemented",
+                    "the {} flow is not started by the flow engine",
                     kind.as_str()
                 )));
             }

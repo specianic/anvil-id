@@ -15,7 +15,6 @@ async-trait.workspace = true
 governor.workspace = true
 moka.workspace = true
 time.workspace = true
-tokio.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true
