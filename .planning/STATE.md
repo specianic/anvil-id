@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 01-04-PLAN.md
-last_updated: "2026-11-25T00:53:18.186Z"
+stopped_at: Completed 01-03-PLAN.md
+last_updated: "2026-11-25T00:54:54.137Z"
 last_activity: 2026-11-25 — Completed 01-04 (anvil-web router, anvilid serve)
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 8
-  completed_plans: 2
+  completed_plans: 3
   percent: 25
 ---
 
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 ## Current Position
 
 Phase: 1 of 7 (Foundations and Spikes (M0))
-Plan: 2 of 8 in current phase (01-01, 01-04 complete)
+Plan: 3 of 8 in current phase (01-01, 01-03, 01-04 complete)
 Status: In progress
-Last activity: 2026-11-25 — Completed 01-04 (anvil-web router, anvilid serve)
+Last activity: 2026-11-25 — Completed 01-03 (storage contract suite, SQLite backend, sqlx.sh)
 
-Progress: [███░░░░░░░] 25%
+Progress: [████░░░░░░] 38%
 
 ## Performance Metrics
 
@@ -52,6 +52,7 @@ Progress: [███░░░░░░░] 25%
 *Updated after each plan completion*
 | Phase 01 P01 | 15min | 3 tasks | 28 files |
 | Phase 01 P04 | 5min | 2 tasks | 7 files |
+| Phase 01 P03 | 4min | 3 tasks | 13 files |
 
 ## Accumulated Context
 
@@ -67,6 +68,8 @@ Recent decisions affecting current work:
 - [Phase 01]: ConsumeOutcome::Consumed holds AuthorizationCode unboxed (documented clippy expect)
 - [Phase 01]: If-None-Match uses RFC 9110 weak comparison; anvilid rejects issuers with query, fragment or non-http(s) scheme
 - [Phase 01]: Discovery document serialised once at router build; advertised-but-unbuilt endpoints return 501 JSON
+- [Phase 01]: SQLite storage passes the contract (incl. 32-way consume) with the production single-writer config; no multi-connection writer
+- [Phase 01]: sqlx metadata prepared per crate via scripts/sqlx.sh (skips crates without sqlx.toml); dev Postgres bound to 127.0.0.1
 
 ### Pending Todos
 
@@ -80,6 +83,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-25T00:53:18.184Z
-Stopped at: Completed 01-04-PLAN.md
+Last session: 2026-11-25T00:54:54.135Z
+Stopped at: Completed 01-03-PLAN.md
 Resume file: None

@@ -45,7 +45,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 Plans:
 - [ ] 01-01-PLAN.md — Workspace skeleton, toolchain, Cargo.lock, storage ports in anvil-core, justfile (wave 1)
 - [ ] 01-02-PLAN.md — cargo-deny policy, dependency-rule checker + self-test, ci.yml (wave 2)
-- [ ] 01-03-PLAN.md — Spike A: shared contract suite + SQLite backend + .sqlx (wave 2)
+- [x] 01-03-PLAN.md — Spike A: shared contract suite + SQLite backend + .sqlx (wave 2)
 - [x] 01-04-PLAN.md — anvil-web router (discovery, assets, 501s) + `anvilid serve` with mimalloc (wave 2)
 - [ ] 01-05-PLAN.md — Spike A: Postgres backend on testcontainers + duplication cost (wave 3)
 - [ ] 01-06-PLAN.md — Spike C: conformance harness (Config OP plan, ratchet) + conformance.yml (wave 3)
@@ -132,7 +132,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundations and Spikes (M0) | 2/8 | In Progress|  |
+| 1. Foundations and Spikes (M0) | 3/8 | In Progress|  |
 | 2. Release 0.1 "First login" | 0/TBD | Not started | - |
 | 3. Release 0.2 "Secure by default" | 0/TBD | Not started | - |
 | 4. Release 0.3 "Real-world logins" | 0/TBD | Not started | - |
