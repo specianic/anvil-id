@@ -212,8 +212,14 @@ async fn concurrent_submissions_complete_setup_exactly_once() {
         .filter(|r| r.status == 200 && r.html().contains("id=\"mgmt-client-secret\""))
         .count();
     assert_eq!(done, 1, "exactly one setup_done");
+    // Losers are refused (403); with rate limiting on by default, submissions beyond the auth
+    // burst from the same peer are refused earlier with 429. Either way only one setup wins.
     for r in &all {
-        assert!(r.status == 200 || r.status == 403, "{}", r.status);
+        assert!(
+            r.status == 200 || r.status == 403 || r.status == 429,
+            "{}",
+            r.status
+        );
     }
     assert_eq!(user_count(&app, SYSTEM_TENANT_SLUG).await, 1);
 }

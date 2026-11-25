@@ -425,6 +425,16 @@ impl OwnApp {
             header::HOST,
             self.config.public_url.host_port().parse().expect("host"),
         );
+        // The production router needs the TCP peer (rate limiting, audit context); mirror
+        // `support::TestApp::send`, which adds DEFAULT_PEER unless the test set its own.
+        if req
+            .extensions()
+            .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+            .is_none()
+        {
+            req.extensions_mut()
+                .insert(axum::extract::ConnectInfo(crate::support::DEFAULT_PEER));
+        }
         let cookie_header = self
             .jar
             .lock()
