@@ -13,3 +13,4 @@
 - `themes/default/README.md` should document `page.lang`/`page.dir`, `t()`, the `locales/` override directory and the logout pages (04-06, 04-13).
 - Postgres `purge_expired` never deletes expired token families (SQLite does); pre-dates Phase 4 (04-05).
 - `state advance-plan` cannot parse STATE.md during parallel waves; fix STATE.md Current Position at the phase gate.
+- In-flow passkey registration as an MFA enrolment choice under `required` is not built; only TOTP enrolment is offered (04-16). Check against AUTH-08 wording at verification.
