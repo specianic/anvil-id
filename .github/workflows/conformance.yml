@@ -1,0 +1,54 @@
+# OpenID conformance pipeline (FND-05, Spike C). Starts the pinned conformance suite and a fresh anvilid,
+# runs the Config OP plan and enforces tests/conformance/expected-failures-m0.json exactly.
+# Same entry point as local runs: `just conformance` (tests/conformance/run.sh). Dev mode, no secrets.
+name: conformance
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  # Phase 1: prove the spike before merge on PRs that can affect it.
+  pull_request:
+    paths:
+      - "crates/**"
+      - "tests/conformance/**"
+      - ".github/workflows/conformance.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "themes/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  conformance:
+    name: OpenID conformance (Config OP)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Run conformance suite
+        run: just conformance
+      - name: Upload results and logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: conformance-results
+          path: conformance-results/
+          if-no-files-found: warn

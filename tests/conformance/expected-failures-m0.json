@@ -1,1 +1,98 @@
-[]
+[
+  {
+    "test-name": "oidcc-discovery-endpoint-verification",
+    "variant": {
+      "server_metadata": "discovery",
+      "client_registration": "static_client"
+    },
+    "configuration-filename": "tests/conformance/config-m0.json",
+    "current-block": "",
+    "condition": "CheckDiscEndpointDiscoveryUrl",
+    "expected-result": "failure",
+    "comment": "server.discoveryUrl is http, not https. M0 harness uses a plain-http issuer (http://host.docker.internal:9090); removed in Phase 2 when the conformance job serves https."
+  },
+  {
+    "test-name": "oidcc-discovery-endpoint-verification",
+    "variant": {
+      "server_metadata": "discovery",
+      "client_registration": "static_client"
+    },
+    "configuration-filename": "tests/conformance/config-m0.json",
+    "current-block": "",
+    "condition": "CheckDiscEndpointIssuerIsValidUrl",
+    "expected-result": "failure",
+    "comment": "RFC 8414 issuer must use https. M0 harness uses a plain-http issuer (http://host.docker.internal:9090); removed in Phase 2 when the conformance job serves https."
+  },
+  {
+    "test-name": "oidcc-discovery-endpoint-verification",
+    "variant": {
+      "server_metadata": "discovery",
+      "client_registration": "static_client"
+    },
+    "configuration-filename": "tests/conformance/config-m0.json",
+    "current-block": "",
+    "condition": "CheckDiscEndpointAuthorizationEndpoint",
+    "expected-result": "failure",
+    "comment": "authorization_endpoint is http. M0 harness uses a plain-http issuer (http://host.docker.internal:9090); removed in Phase 2 when the conformance job serves https."
+  },
+  {
+    "test-name": "oidcc-discovery-endpoint-verification",
+    "variant": {
+      "server_metadata": "discovery",
+      "client_registration": "static_client"
+    },
+    "configuration-filename": "tests/conformance/config-m0.json",
+    "current-block": "",
+    "condition": "CheckDiscEndpointTokenEndpoint",
+    "expected-result": "failure",
+    "comment": "token_endpoint is http. M0 harness uses a plain-http issuer (http://host.docker.internal:9090); removed in Phase 2 when the conformance job serves https."
+  },
+  {
+    "test-name": "oidcc-discovery-endpoint-verification",
+    "variant": {
+      "server_metadata": "discovery",
+      "client_registration": "static_client"
+    },
+    "configuration-filename": "tests/conformance/config-m0.json",
+    "current-block": "",
+    "condition": "CheckJwksUri",
+    "expected-result": "failure",
+    "comment": "jwks_uri is http. M0 harness uses a plain-http issuer (http://host.docker.internal:9090); removed in Phase 2 when the conformance job serves https."
+  },
+  {
+    "test-name": "oidcc-discovery-endpoint-verification",
+    "variant": {
+      "server_metadata": "discovery",
+      "client_registration": "static_client"
+    },
+    "configuration-filename": "tests/conformance/config-m0.json",
+    "current-block": "",
+    "condition": "OIDCCCheckDiscEndpointIdTokenSigningAlgValuesSupported",
+    "expected-result": "failure",
+    "comment": "Discovery advertises only ES256; OpenID certification requires RS256 in id_token_signing_alg_values_supported. Must be resolved in Phase 2 (M1 signing keys) before Basic/Config OP can pass."
+  },
+  {
+    "test-name": "oidcc-discovery-endpoint-verification",
+    "variant": {
+      "server_metadata": "discovery",
+      "client_registration": "static_client"
+    },
+    "configuration-filename": "tests/conformance/config-m0.json",
+    "current-block": "",
+    "condition": "CheckDiscEndpointUserinfoEndpoint",
+    "expected-result": "warning",
+    "comment": "M0 discovery has no userinfo_endpoint; removed in Phase 2 when /userinfo is implemented and advertised."
+  },
+  {
+    "test-name": "oidcc-discovery-endpoint-verification",
+    "variant": {
+      "server_metadata": "discovery",
+      "client_registration": "static_client"
+    },
+    "configuration-filename": "tests/conformance/config-m0.json",
+    "current-block": "",
+    "condition": "FetchServerKeys",
+    "expected-result": "failure",
+    "comment": "/jwks returns an explicit 501 in M0 (no signing keys yet); this is callAndStopOnFailure, so the module stops here (INTERRUPTED). Removed in Phase 2 when /jwks serves keys; later conditions will then surface and must be added or fixed."
+  }
+]
