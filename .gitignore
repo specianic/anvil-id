@@ -28,3 +28,10 @@
 *.db-wal
 /.cargo-home/
 /mongo/
+
+# Node / end-to-end tests
+node_modules/
+/anvilid-data/
+/e2e-results/
+tests/e2e/test-results/
+tests/e2e/playwright-report/
