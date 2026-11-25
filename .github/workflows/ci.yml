@@ -1,0 +1,97 @@
+# PR and main CI (FND-01, FND-02). Every Rust job delegates to the justfile so local runs and CI
+# cannot drift. Toolchain comes from rust-toolchain.toml; SQLX_OFFLINE from .cargo/config.toml.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    name: fmt + clippy
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - run: just fmt-check lint
+
+  deny:
+    name: cargo deny
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      # Needs cargo-deny >= 0.22 (unmaintained advisories scoped to workspace crates).
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          arguments: --locked
+
+  deps:
+    name: dependency rules
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      # Checker on the real tree, then the negative self-test (forbidden normal deps are rejected,
+      # dev deps are accepted).
+      - run: just deps deps-selftest
+
+  test:
+    name: tests (SQLite + Postgres)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      # Plain cargo test (not nextest): one Postgres container per test binary.
+      # The runner's Docker serves testcontainers.
+      - run: just test
+
+  sqlx-check:
+    name: sqlx offline metadata
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - name: Cache sqlx-cli
+        id: sqlx-cli-cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/bin/sqlx
+            ~/.cargo/bin/cargo-sqlx
+          key: sqlx-cli-0.9.1-${{ runner.os }}-${{ runner.arch }}
+      - name: Install sqlx-cli
+        if: steps.sqlx-cli-cache.outputs.cache-hit != 'true'
+        run: cargo install sqlx-cli --version 0.9.1 --no-default-features --features rustls,sqlite,postgres,sqlx-toml --locked
+      # Starts its own Postgres container and fails if a crate's .sqlx/ is stale.
+      - run: just sqlx-check
