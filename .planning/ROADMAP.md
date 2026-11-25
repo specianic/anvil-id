@@ -79,7 +79,7 @@ Plans:
 - [x] 02-12-PLAN.md — Web shell: AppState, tenant resolution, errors, CSRF/CSP/cookies, renderer, Argon2/HIBP adapters, test harness (wave 2)
 - [x] 02-13-PLAN.md — Discovery (both paths), JWKS, /authorize + continue, authorize-side security tests (wave 3)
 - [x] 02-14-PLAN.md — /token and /userinfo, token-side security tests (wave 3)
-- [ ] 02-15-PLAN.md — UI handlers (login, registration, verification, recovery, setup) + CSRF/cookie/CSP/enumeration tests (wave 3)
+- [x] 02-15-PLAN.md — UI handlers (login, registration, verification, recovery, setup) + CSRF/cookie/CSP/enumeration tests (wave 3)
 - [x] 02-16-PLAN.md — OpenAPI 3.1 management API with admin scopes + drift check (wave 3)
 - [x] 02-17-PLAN.md — Fuzz targets (JWT, assertion, authorize, redirect) + SEC-06 release-graph gate (wave 3)
 - [ ] 02-18-PLAN.md — Binary wiring: zero-config, figment config, CLI, bootstrap, TLS listener, jobs, conformance ratchet refresh (wave 4)
