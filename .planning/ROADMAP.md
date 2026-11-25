@@ -62,7 +62,7 @@ Plans:
   3. A scripted CI check goes from zero-config `docker run` to a completed login in the sample app in 2 minutes or less; on an empty database the operator gets a one-time setup URL and there are no default credentials
   4. Every ARCHITECTURE.md §11 control in scope has a passing negative test (wrong/unregistered redirect URI, missing or `plain` PKCE, code reuse, refresh reuse revoking the family, bad client secret, replayed `jti`, CSRF failure), and the test suite runs on both backends
   5. A user can self-register, verify their email, log in with a password and recover the account through built-in pages with no external assets, and an admin can manage tenants, clients and users through the OpenAPI management API
-**Plans**: 21 plans in 6 waves
+**Plans**: 22 plans in 6 waves
 
 Plans:
 - [x] 02-01-PLAN.md — Dependency foundation (all manifests, lockfile, recipes, workflows) + anvil-jose (keys, KEK, JWKS, signing, client assertions, PKCE) (wave 1)
@@ -86,6 +86,7 @@ Plans:
 - [ ] 02-19-PLAN.md — Conformance gate: Basic OP + Config OP over TLS (wave 5)
 - [ ] 02-20-PLAN.md — Container image < 50 MB, QUAL-04 ≤ 2 min on both backends, Playwright self-service e2e (wave 5)
 - [ ] 02-21-PLAN.md — Phase gate: security-test map, `just ci`, docs sync, push + CI green (checkpoint) (wave 6)
+- [x] 02-22-PLAN.md — Gap closure: seal email outbox payloads at rest with the KEK; worker opens before render; plaintext tests on both backends (wave 3)
 
 Note: the multi-tenant data model and the `serve`, `migrate`, `config` and `admin setup-url` CLI commands land here; ORG-01 and ADM-07 are mapped to Phase 5, where they are completed.
 
@@ -156,7 +157,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundations and Spikes (M0) | 8/8 | Complete    | 2026-11-25 |
-| 2. Release 0.1 "First login" | 9/21 | In Progress|  |
+| 2. Release 0.1 "First login" | 13/22 | In Progress|  |
 | 3. Release 0.2 "Secure by default" | 0/TBD | Not started | - |
 | 4. Release 0.3 "Real-world logins" | 0/TBD | Not started | - |
 | 5. Release 0.4 "Operate it" | 0/TBD | Not started | - |

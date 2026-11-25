@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: verifying
-stopped_at: Completed 02-10-PLAN.md
-last_updated: "2026-11-25T02:14:02.523Z"
+stopped_at: Completed 02-22-PLAN.md
+last_updated: "2026-11-25T02:23:58.911Z"
 last_activity: "2026-11-25 — Completed 01-08 (phase gate: CI green on GitHub, spike verdicts, stack confirmed)"
 progress:
   total_phases: 7
   completed_phases: 1
-  total_plans: 29
-  completed_plans: 20
+  total_plans: 30
+  completed_plans: 21
   percent: 53
 ---
 
@@ -70,6 +70,7 @@ Progress: [█████░░░░░] 53%
 | Phase 02 P05 | 30min | 3 tasks | 16 files |
 | Phase 02 P06 | 50min | 3 tasks | 16 files |
 | Phase 02 P12 | 14min | 3 tasks | 40 files |
+| Phase 02 P22 | 25min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -131,6 +132,7 @@ Recent decisions affecting current work:
 - [Phase 02]: 02-06: Postgres token families/codes/refresh tokens reference only tenant (+family); user/client delete revokes families instead of cascading
 - [Phase 02]: 02-12: fetch_metadata_layer() takes allowed origins from the tenant layer's AllowedOrigins extension (public origin + host-tenant origin), fail closed without it
 - [Phase 02]: 02-12: security headers on every response (insert-if-absent); tenant layer skips /health/*; minijinja escapes '/' as &#x2f; (tests compare decoded HTML)
+- [Phase 02]: Outbox payloads sealed with KEK (purpose anvilid/outbox-payload/v1, tenant AAD); FlowService/UserService/OutboxWorker take kek: Arc<Kek> and must share one KEK
 
 ### Pending Todos
 
@@ -143,6 +145,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-25T02:05:16.593Z
-Stopped at: Completed 02-10-PLAN.md
+Last session: 2026-11-25T02:23:58.909Z
+Stopped at: Completed 02-22-PLAN.md
 Resume file: None
