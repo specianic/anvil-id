@@ -14,10 +14,10 @@
 //!    did not run yet, and renders the form it returns. A failure never triggers further I/O.
 //!
 //! The last effect of every list is terminal: [`Effect::Render`], [`Effect::Message`],
-//! [`Effect::CreateSession`], [`Effect::SubmitSetup`] or (only through
-//! `FlowService::passkey_options`) [`Effect::StartPasskey`]. [`Effect::CheckSecondFactor`] can
-//! end a list early by moving the login to its second-factor step
-//! ([`second_factor_required`]).
+//! [`Effect::CreateSession`], [`Effect::UpgradeSession`], [`Effect::SubmitSetup`] or (only
+//! through `FlowService::passkey_options`) [`Effect::StartPasskey`].
+//! [`Effect::CheckSecondFactor`] can end a list early by moving the login to its second-factor
+//! step ([`second_factor_required`]) or its enrolment step ([`enroll_required`]).
 //!
 //! # Forms
 //!
@@ -32,7 +32,10 @@ use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
 use super::form::{FieldKind, FormDescription, FormField, FormMessage, MessageLevel};
-pub use super::login::{LoginState, LoginStep, SecondFactorMethods, second_factor_required};
+pub use super::login::{
+    AfterPrimary, LoginState, LoginStep, SecondFactorMethods, after_primary_auth, enroll_required,
+    second_factor_required, step_up,
+};
 pub use super::recovery::RecoveryState;
 pub use super::registration::RegistrationState;
 pub use super::setup::SetupState;
@@ -41,8 +44,9 @@ use super::{login, recovery, registration, setup, verification};
 use crate::error::CoreError;
 use crate::model::{
     ACR_MFA, ACR_PWD, AMR_HWK, AMR_MFA, AMR_OTP, AMR_PWD, AMR_SWK, AMR_USER, FlowKind,
-    RegistrationMode, UserId, normalize_email,
+    RegistrationMode, SessionId, UserId, normalize_email,
 };
+use crate::policy::mfa::acr_for;
 use crate::policy::{PasswordPolicy, check_password};
 
 /// Placeholder for the CSRF token in forms produced by the engine. The service replaces it with
@@ -266,6 +270,25 @@ pub fn session_acr_amr(
     }
 }
 
+/// `(acr, amr)` of a session upgraded by a step-up with `auth`: the session's `amr` followed by
+/// the values `auth` adds that it does not have yet (always including `mfa` for a second
+/// factor); `acr` follows from the result ([`acr_for`]).
+pub fn upgraded_acr_amr(
+    existing: &[String],
+    auth: SessionAuth,
+    passkey_backup_eligible: bool,
+) -> (&'static str, Vec<String>) {
+    let (_, added) = session_acr_amr(auth, passkey_backup_eligible);
+    let mut amr = existing.to_vec();
+    for a in added {
+        // A step-up after a password sign-in keeps `pwd` once.
+        if !amr.contains(&a) {
+            amr.push(a);
+        }
+    }
+    (acr_for(&amr), amr)
+}
+
 /// Emails an effect list can request next to a domain change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmailKind {
@@ -295,9 +318,10 @@ pub enum Effect {
     },
     /// Enqueue an email (see [`EmailKind`] for where each kind is valid).
     EnqueueEmail(EmailKind),
-    /// After a successful [`Effect::VerifyPassword`]: if the established user has a TOTP
-    /// credential, the login moves to its second-factor step ([`second_factor_required`]) and
-    /// the remaining effects are dropped; otherwise nothing happens.
+    /// After a successful [`Effect::VerifyPassword`]: applies the MFA policy
+    /// ([`after_primary_auth`]): the login moves to its second-factor step
+    /// ([`second_factor_required`]) or its enrolment step ([`enroll_required`]) and the remaining
+    /// effects are dropped; or nothing happens (sign in single-factor).
     CheckSecondFactor,
     /// Terminal for `FlowService::passkey_options`: create a discoverable WebAuthn challenge and
     /// store its server-side state in [`LoginState::passkey_challenge`].
@@ -316,9 +340,25 @@ pub enum Effect {
     /// Consume a recovery code of `user_id` (atomically, with the notification email).
     /// Establishes the user. Fails with `SecondFactorInvalid`.
     ConsumeRecoveryCode { user_id: UserId, code: SecretString },
-    /// Terminal: sign the established user in (rotating any current session) and finish the
-    /// flow.
+    /// Confirm the enrolment of the sealed `pending` TOTP secret with `code`; the secret is taken
+    /// out of the flow state (compare-and-swap, single use) only when the code is right. Creates
+    /// the credential and a recovery-code set and establishes the user. Fails with
+    /// `SecondFactorInvalid`.
+    ConfirmTotpEnrolment {
+        user_id: UserId,
+        pending: String,
+        code: SecretString,
+    },
+    /// Terminal: sign the established user in (rotating any current session of the same user;
+    /// revoking, with its token families, a session of another user) and finish the flow.
     CreateSession(SessionAuth),
+    /// Terminal (step-up): upgrade the request's own `session` in place (`amr` union, `acr` from
+    /// it, `auth_time` now) for the established user, who must be the session's user, and finish
+    /// the flow.
+    UpgradeSession {
+        session: SessionId,
+        auth: SessionAuth,
+    },
     /// Look the address up; if an active user has it, issue a recovery token and email it.
     /// Never fails visibly: the outcome is the same whether or not the account exists.
     IssueRecovery { email: String },
@@ -377,7 +417,18 @@ impl std::fmt::Debug for Effect {
                 .field("user_id", user_id)
                 .field("code", &REDACTED)
                 .finish(),
+            Self::ConfirmTotpEnrolment { user_id, .. } => f
+                .debug_struct("ConfirmTotpEnrolment")
+                .field("user_id", user_id)
+                .field("pending", &REDACTED)
+                .field("code", &REDACTED)
+                .finish(),
             Self::CreateSession(auth) => f.debug_tuple("CreateSession").field(auth).finish(),
+            Self::UpgradeSession { session, auth } => f
+                .debug_struct("UpgradeSession")
+                .field("session", session)
+                .field("auth", auth)
+                .finish(),
             Self::IssueRecovery { email } => f
                 .debug_struct("IssueRecovery")
                 .field("email", email)
@@ -608,9 +659,10 @@ pub(super) fn secret(s: String) -> SecretString {
 pub(crate) mod test_support {
     use super::super::form::{FieldKind, FormDescription};
 
-    pub const IDS: [&str; 7] = [
+    pub const IDS: [&str; 8] = [
         "login",
         "second-factor",
+        "mfa-enroll",
         "registration",
         "verification",
         "recovery",
@@ -818,6 +870,18 @@ mod tests {
             f.label.is_empty(),
             "labels are filled by the presentation layer"
         );
+    }
+
+    #[test]
+    fn step_up_amr_is_the_union_plus_mfa() {
+        let pwd = vec![AMR_PWD.to_owned()];
+        let (acr, amr) = upgraded_acr_amr(&pwd, SessionAuth::SecondFactor, false);
+        assert_eq!(acr, ACR_MFA);
+        assert_eq!(amr, vec![AMR_PWD, AMR_OTP, AMR_MFA]);
+        // Nothing is duplicated when the session already had some of the values.
+        let had = vec![AMR_PWD.to_owned(), AMR_OTP.to_owned()];
+        let (_, amr) = upgraded_acr_amr(&had, SessionAuth::SecondFactor, false);
+        assert_eq!(amr, vec![AMR_PWD, AMR_OTP, AMR_MFA]);
     }
 
     #[test]

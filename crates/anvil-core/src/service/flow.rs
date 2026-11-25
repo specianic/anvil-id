@@ -36,6 +36,31 @@
 //! - Throttling of attempts is the web layer's job: every [`SubmitResult`] carries the
 //!   [`AuthAttempt`] it represents.
 //!
+//! # MFA policy, enrolment and step-up (AUTH-08)
+//!
+//! After a correct password, [`Effect::CheckSecondFactor`] reads the flow's authorization
+//! request (if it still exists) for the client's MFA policy and the requested `acr`, and applies
+//! `flow::login::after_primary_auth` with the tenant's policy (strictest wins). `Required` without
+//! a factor moves the login to the enrolment step: a fresh TOTP secret is sealed into the flow
+//! state under the flow id (the account page's sealing, `service::account`) and the page shows it
+//! ([`FlowOutcome::Enroll`]). The confirming code takes the secret out with a compare-and-swap,
+//! creates the credential and recovery codes (shown once on the next page) and signs in with
+//! `[pwd, otp, mfa]`.
+//!
+//! [`FlowService::start_login`] starts a step-up flow when the stored request decides
+//! `StepUp` for the caller's session: the flow begins at the second-factor (or enrolment) step
+//! for the session's user and ends with `SessionRepo::upgrade_auth` on that same session (amr
+//! union plus `mfa`, `acr` from it, `auth_time` now), audited `step_up_completed`. The upgrade
+//! is refused unless the submitting browser still holds that session and its user is the
+//! verified one.
+//!
+//! # Session switch
+//!
+//! Signing in rotates the caller's current session. When the current session belongs to
+//! another user, it is revoked with `SessionRepo::revoke_with_families` (its token families
+//! too; the intent enqueues back-channel logout deliveries) before the new user's session is
+//! created, and `session_revoked` is audited with reason `session_switch`.
+//!
 //! # Audit
 //!
 //! `login_succeeded`, `login_failed`, `second_factor_failed`, `passkey_clone_suspected`,
@@ -53,26 +78,36 @@ use anvil_jose::recovery_code::{normalize_recovery_code, recovery_code_hash};
 use secrecy::{ExposeSecret as _, SecretString};
 use time::{Duration, OffsetDateTime};
 
+use super::account::{
+    TotpEnrolment, create_confirmed_totp, enrolment, open_pending_totp, pending_totp_step,
+    seal_pending_totp,
+};
 use super::audit::AuditService;
+use super::authorize::mfa_context;
 use super::session::{NewSessionCookie, SessionService};
 use crate::error::CoreError;
 use crate::flow::engine::{
-    Effect, EmailKind, Failure, FlowEnv, FlowInput, FlowState, SecondFactorMethods, on_failure,
-    second_factor_required, session_acr_amr, transition,
+    AfterPrimary, Effect, EmailKind, Failure, FlowEnv, FlowInput, FlowState, LoginStep,
+    SecondFactorMethods, after_primary_auth, enroll_required, on_failure, second_factor_required,
+    session_acr_amr, step_up, transition, upgraded_acr_amr,
 };
 use crate::flow::form::{FormDescription, FormMessage, MessageLevel};
 use crate::model::{
-    ActorKind, AuditAction, AuditActor, AuditDetails, AuditOutcome, AuthRequestId, CounterOutcome,
-    CredentialKind, Flow, FlowId, FlowKind, NewEmail, NewFlow, NewPasswordCredential,
-    NewSelfServiceToken, NewUser, OutboxId, PasskeyCredential, RecoveryCodeHash, RecoveryNotice,
-    RequestContext, SecretHash, SelfServiceKind, SessionId, StandardClaims, TOTP_SEED_PURPOSE,
-    Tenant, TenantId, TotpCredential, User, UserId, UserStatus, credential_aad, seal_payload,
+    ActorKind, AuditAction, AuditActor, AuditDetails, AuditOutcome, AuthRequestId, BrowserSession,
+    CounterOutcome, CredentialKind, Flow, FlowId, FlowKind, NewEmail, NewFlow,
+    NewPasswordCredential, NewSelfServiceToken, NewUser, OutboxId, PasskeyCredential,
+    RecoveryCodeHash, RecoveryNotice, RequestContext, SecretHash, SelfServiceKind, SessionId,
+    StandardClaims, TOTP_SEED_PURPOSE, Tenant, TenantId, TotpCredential, User, UserId, UserStatus,
+    credential_aad, seal_payload,
 };
+use crate::oauth::decision::{SessionDecision, decide};
 use crate::policy::PasswordPolicy;
+use crate::policy::mfa::{AcrRequest, MfaRequirement, mfa_requirement};
 use crate::ports::{
     AssertionIdentity, BreachChecker, Clock, PasskeyCeremonies, PasskeyError, PasswordCheck,
     PasswordHasher, RelyingParty, Storage, StorageError,
 };
+use anvil_jose::otp::TotpSecret as PendingSecret;
 
 /// Lifetime of a self-service flow.
 pub const FLOW_LIFETIME: Duration = Duration::minutes(15);
@@ -115,6 +150,10 @@ pub struct StartedFlow {
     pub flow_id: FlowId,
     pub cookie_token: SecretString,
     pub form: FormDescription,
+    /// A step-up flow: the user of the second-factor or enrolment step it starts at.
+    pub factor_user: Option<UserId>,
+    /// A step-up flow that starts at enrolment: the pending secret to show.
+    pub totp: Option<TotpEnrolment>,
 }
 
 /// Result of a submission.
@@ -122,11 +161,24 @@ pub struct StartedFlow {
 pub enum FlowOutcome {
     /// Render the form again. HTTP 400 if it carries an error message, 200 otherwise.
     Render(FormDescription),
+    /// Render the enrolment form (form id `mfa-enroll`) with the pending authenticator-app secret.
+    Enroll {
+        form: FormDescription,
+        totp: TotpEnrolment,
+    },
     /// The user signed in: set the session cookie and continue the authorization request (or go
-    /// to the default page).
+    /// to the default page). `recovery_codes` is non-empty when a second factor was enrolled in
+    /// this flow: show them once before continuing.
     SignedIn {
         cookie: NewSessionCookie,
         continue_to: Option<AuthRequestId>,
+        recovery_codes: Vec<SecretString>,
+    },
+    /// Step-up completed: the caller's session was upgraded in place (no new cookie). Continue
+    /// as for `SignedIn`.
+    SteppedUp {
+        continue_to: Option<AuthRequestId>,
+        recovery_codes: Vec<SecretString>,
     },
     /// Show a message page. The flow is finished.
     Message { key: &'static str },
@@ -318,6 +370,8 @@ enum Step {
     Done(Box<FlowOutcome>),
     /// The established user must present a second factor.
     SecondFactor(SecondFactorMethods),
+    /// The established user must enrol a second factor.
+    Enroll,
 }
 
 /// Per-submission execution state threaded through the effect runner.
@@ -332,6 +386,8 @@ struct Exec<'a> {
     /// Login method for the audit log (`password`, `totp`, `recovery_code`, `passkey`).
     method: &'static str,
     passkey_backup_eligible: bool,
+    /// Recovery codes of a second factor enrolled in this submission.
+    recovery_codes: Vec<SecretString>,
 }
 
 enum Loaded {
@@ -425,11 +481,25 @@ impl FlowService {
         form: FormDescription,
         auth_request: Option<AuthRequestId>,
     ) -> Result<StartedFlow, CoreError> {
+        self.create_flow_with_id(cx, FlowId::new_v7(), state, form, auth_request)
+            .await
+    }
+
+    /// [`Self::create_flow`] with a chosen id (a pending enrolment secret is sealed under it
+    /// before the flow is stored).
+    async fn create_flow_with_id(
+        &self,
+        cx: &FlowContext<'_>,
+        id: FlowId,
+        state: &FlowState,
+        form: FormDescription,
+        auth_request: Option<AuthRequestId>,
+    ) -> Result<StartedFlow, CoreError> {
         let now = self.clock.now();
         let cookie = random_token();
         let csrf = random_token();
         let new = NewFlow {
-            id: FlowId::new_v7(),
+            id,
             kind: state.kind(),
             state: encode_state(state)?,
             csrf_hash: SecretHash(secret_hash(&csrf)),
@@ -443,6 +513,8 @@ impl FlowService {
             flow_id: new.id,
             cookie_token: SecretString::from(cookie),
             form: bind_form(form, cx, new.id, &csrf),
+            factor_user: None,
+            totp: None,
         })
     }
 
@@ -576,6 +648,7 @@ impl FlowService {
             attempt: None,
             method: "password",
             passkey_backup_eligible: false,
+            recovery_codes: Vec::new(),
         };
 
         while let Some(effect) = queue.pop_front() {
@@ -602,6 +675,17 @@ impl FlowService {
                             ));
                         };
                         let (state, form) = second_factor_required(s, user.id, methods);
+                        self.render(cx, &flow, csrf_token, &state, form).await?
+                    }
+                    Step::Enroll => {
+                        let (FlowState::Login(s), Some(user)) = (state, exec.subject.take()) else {
+                            return Err(CoreError::Internal(
+                                "enrolment outside a login with an established user".into(),
+                            ));
+                        };
+                        let pending =
+                            seal_pending_totp(&self.kek, flow.id, &PendingSecret::generate())?;
+                        let (state, form) = enroll_required(s, user.id, pending);
                         self.render(cx, &flow, csrf_token, &state, form).await?
                     }
                 },
@@ -631,9 +715,178 @@ impl FlowService {
                 .update_state(cx.tenant.id, flow.id, &json, self.clock.now())
                 .await?;
         }
-        Ok(FlowOutcome::Render(bind_form(
-            form, cx, flow.id, csrf_token,
-        )))
+        let form = bind_form(form, cx, flow.id, csrf_token);
+        match self.pending_enrolment(cx, flow.id, state).await? {
+            Some(totp) => Ok(FlowOutcome::Enroll { form, totp }),
+            None => Ok(FlowOutcome::Render(form)),
+        }
+    }
+
+    /// The display data of the pending enrolment of a login in its enrolment step.
+    async fn pending_enrolment(
+        &self,
+        cx: &FlowContext<'_>,
+        flow: FlowId,
+        state: &FlowState,
+    ) -> Result<Option<TotpEnrolment>, CoreError> {
+        let FlowState::Login(s) = state else {
+            return Ok(None);
+        };
+        let (LoginStep::Enroll { user_id }, Some(sealed)) = (s.step, s.pending_totp.as_deref())
+        else {
+            return Ok(None);
+        };
+        let Some(user) = self.second_factor_user(cx.tenant.id, user_id).await? else {
+            return Err(CoreError::Forbidden);
+        };
+        let secret = open_pending_totp(&self.kek, flow, sealed)?;
+        Ok(Some(enrolment(cx.tenant, &user, &secret)?))
+    }
+
+    /// Starts a login flow. With an authorization request and a signed-in `current` session
+    /// for which the request decides step-up (`oauth::decision::decide`), the flow starts at the
+    /// second-factor or enrolment step for the session's user and later upgrades that session
+    /// (module docs); otherwise it is a plain [`FlowService::start`] of a login.
+    pub async fn start_login(
+        &self,
+        cx: &FlowContext<'_>,
+        auth_request: Option<AuthRequestId>,
+        current: Option<&BrowserSession>,
+    ) -> Result<StartedFlow, CoreError> {
+        if let (Some(request_id), Some(session)) = (auth_request, current)
+            && let Some(started) = self.start_step_up(cx, request_id, session).await?
+        {
+            return Ok(started);
+        }
+        self.start(cx, FlowKind::Login, auth_request, None).await
+    }
+
+    async fn start_step_up(
+        &self,
+        cx: &FlowContext<'_>,
+        request_id: AuthRequestId,
+        session: &BrowserSession,
+    ) -> Result<Option<StartedFlow>, CoreError> {
+        let tenant = cx.tenant.id;
+        let now = self.clock.now();
+        if session.tenant_id != tenant || session.revoked_at.is_some() {
+            return Ok(None);
+        }
+        let Some(user) = self.second_factor_user(tenant, session.user_id).await? else {
+            return Ok(None);
+        };
+        let Some(request) = self
+            .storage
+            .grants()
+            .get_authorization_request(tenant, request_id, now)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let client = self
+            .storage
+            .clients()
+            .get(tenant, &request.client_id)
+            .await?;
+        let mfa = mfa_context(
+            self.storage.as_ref(),
+            cx.tenant,
+            client.as_ref(),
+            &request.params,
+            Some(session),
+        )
+        .await?;
+        let p = &request.params;
+        if !matches!(
+            decide(
+                &p.prompt,
+                p.max_age,
+                Some(session),
+                None,
+                request.created_at,
+                now,
+                mfa
+            ),
+            SessionDecision::StepUp
+        ) {
+            return Ok(None);
+        }
+        let flow_id = FlowId::new_v7();
+        let (state, form, totp) =
+            match mfa_requirement(mfa.policy, mfa.acr, false, mfa.user_has_factor) {
+                MfaRequirement::SecondFactor => {
+                    let methods = self.second_factor_methods(tenant, user.id).await?;
+                    let (state, form) = step_up(session.id, user.id, methods, None);
+                    (state, form, None)
+                }
+                MfaRequirement::Enroll => {
+                    let secret = PendingSecret::generate();
+                    let display = enrolment(cx.tenant, &user, &secret)?;
+                    let sealed = seal_pending_totp(&self.kek, flow_id, &secret)?;
+                    let (state, form) = step_up(
+                        session.id,
+                        user.id,
+                        SecondFactorMethods::default(),
+                        Some(sealed),
+                    );
+                    (state, form, Some(display))
+                }
+                MfaRequirement::None | MfaRequirement::Unmet => return Ok(None),
+            };
+        let mut started = self
+            .create_flow_with_id(cx, flow_id, &state, form, Some(request_id))
+            .await?;
+        started.factor_user = Some(user.id);
+        started.totp = totp;
+        Ok(Some(started))
+    }
+
+    /// The second factors `user` can use at the second-factor step.
+    async fn second_factor_methods(
+        &self,
+        tenant: TenantId,
+        user: UserId,
+    ) -> Result<SecondFactorMethods, CoreError> {
+        let users = self.storage.users();
+        let totp = users.totp(tenant, user).await?.is_some();
+        let recovery = totp && users.recovery_codes_remaining(tenant, user).await? > 0;
+        Ok(SecondFactorMethods { totp, recovery })
+    }
+
+    /// The effective MFA policy and `acr` request of the flow's authorization request; the
+    /// tenant's policy and no request when the flow has none (or it expired).
+    async fn flow_mfa(
+        &self,
+        cx: &FlowContext<'_>,
+        flow: &Flow,
+    ) -> Result<(crate::model::MfaPolicy, AcrRequest), CoreError> {
+        let tenant = cx.tenant.id;
+        let request = match flow.auth_request_id {
+            Some(id) => {
+                self.storage
+                    .grants()
+                    .get_authorization_request(tenant, id, self.clock.now())
+                    .await?
+            }
+            None => None,
+        };
+        let Some(request) = request else {
+            return Ok((cx.tenant.settings.mfa_policy, AcrRequest::None));
+        };
+        let client = self
+            .storage
+            .clients()
+            .get(tenant, &request.client_id)
+            .await?;
+        let mfa = mfa_context(
+            self.storage.as_ref(),
+            cx.tenant,
+            client.as_ref(),
+            &request.params,
+            None,
+        )
+        .await?;
+        Ok((mfa.policy, mfa.acr))
     }
 
     async fn run(
@@ -705,14 +958,14 @@ impl FlowService {
                         "CheckSecondFactor without an established user".into(),
                     ));
                 };
-                if users.totp(tenant, user.id).await?.is_none() {
-                    return Ok(Step::Continue);
-                }
-                let remaining = users.recovery_codes_remaining(tenant, user.id).await?;
-                Ok(Step::SecondFactor(SecondFactorMethods {
-                    totp: true,
-                    recovery: remaining > 0,
-                }))
+                let user = user.id;
+                let methods = self.second_factor_methods(tenant, user).await?;
+                let (policy, acr) = self.flow_mfa(cx, exec.flow).await?;
+                Ok(match after_primary_auth(policy, acr, methods) {
+                    AfterPrimary::SignIn => Step::Continue,
+                    AfterPrimary::SecondFactor(methods) => Step::SecondFactor(methods),
+                    AfterPrimary::Enroll => Step::Enroll,
+                })
             }
             Effect::StartPasskey => Err(CoreError::Internal(
                 "StartPasskey runs only through passkey_options".into(),
@@ -773,6 +1026,17 @@ impl FlowService {
                 }
                 self.second_factor_result(cx, exec, *user_id, accepted, "recovery_code")
                     .await
+            }
+            Effect::ConfirmTotpEnrolment {
+                user_id,
+                pending,
+                code,
+            } => {
+                self.confirm_enrolment(cx, exec, *user_id, pending, code)
+                    .await
+            }
+            Effect::UpgradeSession { session, auth } => {
+                self.upgrade_session(cx, exec, *session, *auth).await
             }
             Effect::CheckBreach { password } => {
                 match self.breach.is_breached(password.expose_secret()).await {
@@ -864,9 +1128,12 @@ impl FlowService {
                     ));
                 };
                 let (acr, amr) = session_acr_amr(*auth, exec.passkey_backup_eligible);
+                let replaces = self
+                    .switch_session(cx, exec.current_session, user.id)
+                    .await?;
                 let cookie = self
                     .sessions()
-                    .create(tenant, user.id, acr, &amr, exec.current_session, cx.ctx)
+                    .create(tenant, user.id, acr, &amr, replaces, cx.ctx)
                     .await?;
                 users
                     .record_login(tenant, user.id, self.clock.now())
@@ -883,6 +1150,7 @@ impl FlowService {
                 Ok(Step::Done(Box::new(FlowOutcome::SignedIn {
                     cookie,
                     continue_to: exec.flow.auth_request_id,
+                    recovery_codes: std::mem::take(&mut exec.recovery_codes),
                 })))
             }
             Effect::IssueRecovery { email } => {
@@ -963,6 +1231,157 @@ impl FlowService {
                 "terminal effect reached the effect runner".into(),
             )),
         }
+    }
+
+    /// Session switch (module docs): the session `CreateSession` should rotate. A current session
+    /// of the same user is returned (rotated by `SessionService::create`); one of another user
+    /// is revoked here with its token families (back-channel deliveries enqueued) and audited.
+    async fn switch_session(
+        &self,
+        cx: &FlowContext<'_>,
+        current: Option<SessionId>,
+        user: UserId,
+    ) -> Result<Option<SessionId>, CoreError> {
+        let Some(id) = current else {
+            return Ok(None);
+        };
+        let tenant = cx.tenant.id;
+        let Some(old) = self.storage.sessions().get(tenant, id).await? else {
+            return Ok(None);
+        };
+        if old.user_id == user {
+            return Ok(Some(id));
+        }
+        if self
+            .storage
+            .sessions()
+            .revoke_with_families(tenant, id, self.clock.now())
+            .await?
+        {
+            self.audit()
+                .record(
+                    tenant,
+                    AuditActor::user(old.user_id),
+                    AuditAction::SessionRevoked,
+                    Some(id.to_string()),
+                    AuditOutcome::Success,
+                    cx.ctx,
+                    AuditDetails::reason("session_switch"),
+                )
+                .await?;
+        }
+        Ok(None)
+    }
+
+    /// Confirms an in-flow TOTP enrolment (see [`Effect::ConfirmTotpEnrolment`]).
+    async fn confirm_enrolment(
+        &self,
+        cx: &FlowContext<'_>,
+        exec: &mut Exec<'_>,
+        user_id: UserId,
+        pending: &str,
+        code: &SecretString,
+    ) -> Result<Step, CoreError> {
+        let tenant = cx.tenant.id;
+        let now = self.clock.now();
+        let Some(user) = self.second_factor_user(tenant, user_id).await? else {
+            return self
+                .second_factor_result(cx, exec, user_id, None, "totp")
+                .await;
+        };
+        let secret = open_pending_totp(&self.kek, exec.flow.id, pending)?;
+        let Some(step) = pending_totp_step(&secret, code.expose_secret(), now) else {
+            return self
+                .second_factor_result(cx, exec, user_id, None, "totp")
+                .await;
+        };
+        // Single use: the state without the pending secret replaces the stored one; a replayed
+        // or concurrent confirmation loses the swap.
+        let mut next: FlowState = serde_json::from_str(exec.state_json)
+            .map_err(|e| CoreError::Internal(format!("corrupt flow state: {e}")))?;
+        if let FlowState::Login(s) = &mut next {
+            s.pending_totp = None;
+        }
+        let next = encode_state(&next)?;
+        if !self
+            .storage
+            .flows()
+            .swap_state(tenant, exec.flow.id, &exec.flow.state, &next, now)
+            .await?
+        {
+            return self
+                .second_factor_result(cx, exec, user_id, None, "totp")
+                .await;
+        }
+        let Some(codes) = create_confirmed_totp(
+            self.storage.as_ref(),
+            &self.kek,
+            &self.audit(),
+            tenant,
+            user.id,
+            &secret,
+            step,
+            now,
+            cx.ctx,
+        )
+        .await?
+        else {
+            // Enrolled concurrently elsewhere: the user signs in with that factor instead.
+            return self
+                .second_factor_result(cx, exec, user_id, None, "totp")
+                .await;
+        };
+        exec.recovery_codes = codes;
+        self.second_factor_result(cx, exec, user_id, Some(user), "totp")
+            .await
+    }
+
+    /// Completes a step-up (see [`Effect::UpgradeSession`]).
+    async fn upgrade_session(
+        &self,
+        cx: &FlowContext<'_>,
+        exec: &mut Exec<'_>,
+        session_id: SessionId,
+        auth: crate::flow::engine::SessionAuth,
+    ) -> Result<Step, CoreError> {
+        let tenant = cx.tenant.id;
+        let now = self.clock.now();
+        let Some(user) = exec.subject.take() else {
+            return Err(CoreError::Internal(
+                "UpgradeSession without an established user".into(),
+            ));
+        };
+        // The browser must still present the session being upgraded, and it must be the
+        // verified user's.
+        if exec.current_session != Some(session_id) {
+            return Err(CoreError::Forbidden);
+        }
+        let session = match self.storage.sessions().get(tenant, session_id).await? {
+            Some(s) if s.user_id == user.id => s,
+            _ => return Err(CoreError::Forbidden),
+        };
+        let (acr, amr) = upgraded_acr_amr(&session.amr, auth, exec.passkey_backup_eligible);
+        if !self
+            .storage
+            .sessions()
+            .upgrade_auth(tenant, session_id, acr, &amr, now, now)
+            .await?
+        {
+            return Err(CoreError::Forbidden);
+        }
+        self.storage.flows().delete(tenant, exec.flow.id).await?;
+        self.audit_user(
+            cx,
+            AuditAction::StepUpCompleted,
+            user.id,
+            AuditOutcome::Success,
+            AuditDetails::login(exec.method),
+        )
+        .await?;
+        Ok(Step::Done(Box::new(FlowOutcome::SteppedUp {
+            continue_to: exec.flow.auth_request_id,
+            recovery_codes: std::mem::take(&mut exec.recovery_codes),
+        })))
     }
 
     /// The user a second-factor step is for, if still active.

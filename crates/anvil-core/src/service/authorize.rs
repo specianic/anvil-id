@@ -7,6 +7,14 @@
 //! request is stored and the user is sent to the consent screen ([`AuthorizeOutcome::Consent`]);
 //! the screen's decision continues the request with [`AuthorizeService::finish_consent`].
 //!
+//! Step-up (AUTH-08): the effective MFA policy (strictest of tenant and client) and the
+//! request's `acr` ([`requested_acr`]) go into [`decide`]. A usable single-factor session that
+//! must add a second factor answers [`AuthorizeOutcome::Login`]; the login flow sees the stored
+//! request and the session and starts at the second-factor (or enrolment) step for that user,
+//! then upgrades the session in place (`FlowService::start_login`). `resume` decides again, so an
+//! essential `acr` that is still unmet answers `unmet_authentication_requirements` through the
+//! response mode, and a voluntary one issues the lower `acr` truthfully.
+//!
 //! The protocol decisions live in pure functions ([`crate::oauth::authorize_request::validate`],
 //! [`crate::oauth::decision::decide`], [`build_code`], [`AuthorizationResponse`]);
 //! this service only orchestrates the ports. It is tested end to end over HTTP on both backends.
@@ -26,9 +34,10 @@ use crate::model::{
     NewAuthorizationRequest, NewTokenFamily, SecretHash, Tenant, TokenFamilyId, UserStatus,
 };
 use crate::oauth::authorize_request::{AuthorizeError, RawParams, validate};
-use crate::oauth::decision::{SessionDecision, decide};
+use crate::oauth::decision::{MfaContext, SessionDecision, decide, requested_acr, session_is_mfa};
 use crate::oauth::redirect::redirect_matches;
 use crate::oauth::response_mode::AuthorizationResponse;
+use crate::policy::mfa::effective_policy;
 use crate::ports::{Clock, Storage};
 
 /// Lifetime of an authorization code.
@@ -72,6 +81,33 @@ fn error_response(
         issuer,
         params.response_mode,
     ))
+}
+
+/// The MFA inputs of a request for `session`'s user: effective policy of tenant and client,
+/// the request's `acr`, and (only when a single-factor session would be checked) whether the
+/// user has a TOTP credential.
+pub(crate) async fn mfa_context(
+    storage: &dyn Storage,
+    tenant: &Tenant,
+    client: Option<&Client>,
+    params: &AuthorizationParams,
+    session: Option<&BrowserSession>,
+) -> Result<MfaContext, CoreError> {
+    let mut ctx = MfaContext {
+        policy: effective_policy(
+            tenant.settings.mfa_policy,
+            client.and_then(|c| c.mfa_policy),
+        ),
+        acr: requested_acr(params),
+        user_has_factor: false,
+    };
+    if let Some(s) = session
+        && !session_is_mfa(s)
+        && ctx.wants_mfa()
+    {
+        ctx.user_has_factor = storage.users().totp(tenant.id, s.user_id).await?.is_some();
+    }
+    Ok(ctx)
 }
 
 /// Builds a code and its pre-created token family. Returns the plaintext code (sent to the
@@ -248,6 +284,14 @@ impl AuthorizeService {
         };
 
         let session = self.usable_session(tenant, session).await?;
+        let mfa = mfa_context(
+            self.storage.as_ref(),
+            tenant,
+            Some(&client),
+            &params,
+            session.as_ref(),
+        )
+        .await?;
         match decide(
             &params.prompt,
             params.max_age,
@@ -255,6 +299,7 @@ impl AuthorizeService {
             hint_sub.as_deref(),
             now,
             now,
+            mfa,
         ) {
             SessionDecision::UseSession => {
                 let session = session.ok_or_else(|| {
@@ -275,7 +320,7 @@ impl AuthorizeService {
                     Err(error) => Ok(fail(error)),
                 }
             }
-            SessionDecision::RequireLogin => {
+            SessionDecision::RequireLogin | SessionDecision::StepUp => {
                 let request_id = self.store_request(tenant, &client, &params, now).await?;
                 Ok(AuthorizeOutcome::Login { request_id })
             }
@@ -384,6 +429,14 @@ impl AuthorizeService {
         }
 
         let session = self.usable_session(tenant, session).await?;
+        let mfa = mfa_context(
+            self.storage.as_ref(),
+            tenant,
+            Some(&client),
+            &params,
+            session.as_ref(),
+        )
+        .await?;
         match decide(
             &params.prompt,
             params.max_age,
@@ -391,6 +444,7 @@ impl AuthorizeService {
             None,
             request.created_at,
             now,
+            mfa,
         ) {
             SessionDecision::UseSession => {
                 let session = session.ok_or_else(|| {
@@ -434,7 +488,9 @@ impl AuthorizeService {
                 self.issue(tenant, issuer, &client, &params, &session, now)
                     .await
             }
-            SessionDecision::RequireLogin => Ok(AuthorizeOutcome::Login { request_id }),
+            SessionDecision::RequireLogin | SessionDecision::StepUp => {
+                Ok(AuthorizeOutcome::Login { request_id })
+            }
             SessionDecision::Fail(error) => {
                 self.storage
                     .grants()

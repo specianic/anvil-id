@@ -10,6 +10,26 @@
 //!   [`LoginState::passkey_challenge`] (put there by [`Effect::StartPasskey`]).
 //! - [`LoginStep::SecondFactor`]: a TOTP code or a recovery code for the user whose password
 //!   was verified; success signs in with `amr = [pwd, otp, mfa]`.
+//! - [`LoginStep::Enroll`]: the effective policy is `Required` and the user has no second factor:
+//!   they enrol an authenticator app (the sealed pending secret is in
+//!   [`LoginState::pending_totp`]) and the confirming code signs them in with
+//!   `amr = [pwd, otp, mfa]`.
+//!
+//! # MFA policy (AUTH-08)
+//!
+//! After the password, [`after_primary_auth`] applies
+//! [`mfa_requirement`](crate::policy::mfa::mfa_requirement) to the effective policy (strictest of
+//! tenant and client), the authorization request's `acr` and the user's factors: `Off` never
+//! prompts, `Optional` prompts users who have a factor, `Required` prompts or forces enrolment.
+//! An essential `acr` that cannot be met still signs the user in single-factor (truthful `acr`);
+//! the authorization endpoint then answers `unmet_authentication_requirements`.
+//!
+//! # Step-up
+//!
+//! A flow started for a signed-in single-factor session ([`step_up`]) begins at
+//! [`LoginStep::SecondFactor`] or [`LoginStep::Enroll`] for the session's user, with
+//! [`LoginState::step_up_session`] set. Success then ends in [`Effect::UpgradeSession`] (the
+//! session is upgraded in place) instead of [`Effect::CreateSession`].
 //!
 //! Inputs that do not belong to the current step re-render the step's form with
 //! `flow.invalid_input` and plan no effects.
@@ -28,10 +48,13 @@ use super::engine::{
     password_field, secret,
 };
 use super::form::{FieldKind, FormDescription, FormMessage};
-use crate::model::{UserId, normalize_email};
+use crate::model::{MfaPolicy, SessionId, UserId, normalize_email};
+use crate::policy::mfa::{AcrRequest, MfaRequirement, mfa_requirement};
 
 /// Id of the second-factor form.
 pub const SECOND_FACTOR_FORM_ID: &str = "second-factor";
+/// Id of the in-flow enrolment form.
+pub const ENROLL_FORM_ID: &str = "mfa-enroll";
 
 /// Login state, stored as flow JSON. Every field has a serde default so flow JSON written by
 /// release 0.1 (`{"kind":"login","identifier":…}`) still decodes.
@@ -46,6 +69,13 @@ pub struct LoginState {
     /// single-use: taken out with a compare-and-swap before verification).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub passkey_challenge: Option<String>,
+    /// Step-up: the signed-in session this flow upgrades instead of creating a new one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step_up_session: Option<SessionId>,
+    /// Enrolment: the pending TOTP secret, sealed with the KEK under the flow id (base64url).
+    /// Taken out with a compare-and-swap when the confirming code is accepted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_totp: Option<String>,
 }
 
 /// Where the login stands.
@@ -60,6 +90,33 @@ pub enum LoginStep {
         user_id: UserId,
         methods: SecondFactorMethods,
     },
+    /// The policy requires a second factor `user_id` does not have: enrol one first.
+    Enroll { user_id: UserId },
+}
+
+/// What follows a successful primary authentication.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AfterPrimary {
+    /// Sign in single-factor.
+    SignIn,
+    /// Ask for one of these second factors.
+    SecondFactor(SecondFactorMethods),
+    /// Enrol a second factor first.
+    Enroll,
+}
+
+/// The policy decision after the password ([`mfa_requirement`] with a single-factor sign-in).
+/// `Unmet` signs in (the authorization endpoint answers the RP); see the module docs.
+pub fn after_primary_auth(
+    policy: MfaPolicy,
+    acr: AcrRequest,
+    methods: SecondFactorMethods,
+) -> AfterPrimary {
+    match mfa_requirement(policy, acr, false, methods.totp) {
+        MfaRequirement::None | MfaRequirement::Unmet => AfterPrimary::SignIn,
+        MfaRequirement::SecondFactor => AfterPrimary::SecondFactor(methods),
+        MfaRequirement::Enroll => AfterPrimary::Enroll,
+    }
 }
 
 /// Second factors the user can use.
@@ -141,34 +198,59 @@ pub(super) fn passkey_assertion(
     }
 }
 
+/// The terminal effect after a second factor: upgrade the step-up session, or sign in.
+fn finish(state: &LoginState) -> Effect {
+    match state.step_up_session {
+        Some(session) => Effect::UpgradeSession {
+            session,
+            auth: SessionAuth::SecondFactor,
+        },
+        None => Effect::CreateSession(SessionAuth::SecondFactor),
+    }
+}
+
 pub(super) fn totp(state: LoginState, code: String) -> (FlowState, Vec<Effect>) {
     match state.step {
-        LoginStep::SecondFactor { user_id, methods } if methods.totp => (
-            FlowState::Login(state),
-            vec![
+        LoginStep::SecondFactor { user_id, methods } if methods.totp => {
+            let effects = vec![
                 Effect::VerifyTotp {
                     user_id,
                     code: secret(code),
                 },
-                Effect::CreateSession(SessionAuth::SecondFactor),
-            ],
-        ),
+                finish(&state),
+            ];
+            (FlowState::Login(state), effects)
+        }
+        LoginStep::Enroll { user_id } => match state.pending_totp.clone() {
+            Some(pending) => {
+                let effects = vec![
+                    Effect::ConfirmTotpEnrolment {
+                        user_id,
+                        pending,
+                        code: secret(code),
+                    },
+                    finish(&state),
+                ];
+                (FlowState::Login(state), effects)
+            }
+            None => invalid_input(state),
+        },
         _ => invalid_input(state),
     }
 }
 
 pub(super) fn recovery_code(state: LoginState, code: String) -> (FlowState, Vec<Effect>) {
     match state.step {
-        LoginStep::SecondFactor { user_id, methods } if methods.recovery => (
-            FlowState::Login(state),
-            vec![
+        LoginStep::SecondFactor { user_id, methods } if methods.recovery => {
+            let effects = vec![
                 Effect::ConsumeRecoveryCode {
                     user_id,
                     code: secret(code),
                 },
-                Effect::CreateSession(SessionAuth::SecondFactor),
-            ],
-        ),
+                finish(&state),
+            ];
+            (FlowState::Login(state), effects)
+        }
         _ => invalid_input(state),
     }
 }
@@ -185,6 +267,37 @@ pub fn second_factor_required(
     state.passkey_challenge = None;
     let f = second_factor_form(methods, Vec::new());
     (FlowState::Login(state), f)
+}
+
+/// The policy requires enrolment for `user_id`: move to the enrolment step with the sealed
+/// pending secret (no session yet) and render its form.
+pub fn enroll_required(
+    mut state: LoginState,
+    user_id: UserId,
+    pending_totp: String,
+) -> (FlowState, FormDescription) {
+    state.step = LoginStep::Enroll { user_id };
+    state.passkey_challenge = None;
+    state.pending_totp = Some(pending_totp);
+    (FlowState::Login(state), enroll_form(Vec::new()))
+}
+
+/// The state of a step-up flow for `session` of `user`: the second-factor step, or (with a
+/// sealed pending secret) the enrolment step.
+pub fn step_up(
+    session: SessionId,
+    user: UserId,
+    methods: SecondFactorMethods,
+    pending_totp: Option<String>,
+) -> (FlowState, FormDescription) {
+    let state = LoginState {
+        step_up_session: Some(session),
+        ..LoginState::default()
+    };
+    match pending_totp {
+        Some(p) => enroll_required(state, user, p),
+        None => second_factor_required(state, user, methods),
+    }
 }
 
 fn invalid_input(state: LoginState) -> (FlowState, Vec<Effect>) {
@@ -210,6 +323,13 @@ pub(super) fn on_failure(state: &LoginState, failure: Failure) -> FormDescriptio
             };
             second_factor_form(methods, vec![error(key)])
         }
+        LoginStep::Enroll { .. } => {
+            let key = match failure {
+                Failure::Overloaded => "service.overloaded",
+                _ => "mfa_enroll.code_invalid",
+            };
+            enroll_form(vec![error(key)])
+        }
     }
 }
 
@@ -218,7 +338,26 @@ pub(super) fn current_form(state: &LoginState, messages: Vec<FormMessage>) -> Fo
     match state.step {
         LoginStep::Identify => form(state, messages),
         LoginStep::SecondFactor { methods, .. } => second_factor_form(methods, messages),
+        LoginStep::Enroll { .. } => enroll_form(messages),
     }
+}
+
+/// The enrolment form: the `code` of the newly added authenticator app.
+pub(super) fn enroll_form(messages: Vec<FormMessage>) -> FormDescription {
+    build_form(
+        ENROLL_FORM_ID,
+        "login",
+        vec![field(
+            "code",
+            FieldKind::Text,
+            "field.code",
+            None,
+            true,
+            Some("one-time-code"),
+            Vec::new(),
+        )],
+        messages,
+    )
 }
 
 pub(super) fn form(state: &LoginState, messages: Vec<FormMessage>) -> FormDescription {
@@ -309,6 +448,7 @@ mod tests {
                 methods,
             },
             passkey_challenge: None,
+            ..LoginState::default()
         };
         (user, state)
     }
@@ -669,7 +809,7 @@ mod tests {
             FlowState::Login(LoginState {
                 identifier: Some("alice@example.com".into()),
                 step: LoginStep::Identify,
-                passkey_challenge: None,
+                ..LoginState::default()
             })
         );
         let old = r#"{"kind":"login","identifier":null}"#;
@@ -691,5 +831,137 @@ mod tests {
         });
         let json = serde_json::to_string(&s).unwrap();
         assert_eq!(serde_json::from_str::<FlowState>(&json).unwrap(), s);
+    }
+
+    #[test]
+    fn policy_decides_what_follows_the_password() {
+        use crate::model::MfaPolicy::{Off, Optional, Required};
+        let none = SecondFactorMethods::default();
+        let a = AcrRequest::None;
+        assert_eq!(after_primary_auth(Off, a, BOTH), AfterPrimary::SignIn);
+        assert_eq!(
+            after_primary_auth(Optional, a, BOTH),
+            AfterPrimary::SecondFactor(BOTH)
+        );
+        assert_eq!(after_primary_auth(Optional, a, none), AfterPrimary::SignIn);
+        assert_eq!(after_primary_auth(Required, a, none), AfterPrimary::Enroll);
+        assert_eq!(
+            after_primary_auth(Required, a, BOTH),
+            AfterPrimary::SecondFactor(BOTH)
+        );
+        // acr_values asks for MFA even under Off.
+        assert_eq!(
+            after_primary_auth(Off, AcrRequest::Voluntary, BOTH),
+            AfterPrimary::SecondFactor(BOTH)
+        );
+        // An essential acr that cannot be met signs in single-factor; authorize answers unmet.
+        assert_eq!(
+            after_primary_auth(Optional, AcrRequest::Essential, none),
+            AfterPrimary::SignIn
+        );
+    }
+
+    #[test]
+    fn enrolment_step_confirms_the_pending_secret_then_signs_in() {
+        let user = UserId::new_v7();
+        let (state, f) = enroll_required(
+            LoginState {
+                passkey_challenge: Some("c".into()),
+                ..LoginState::default()
+            },
+            user,
+            "sealed".into(),
+        );
+        assert_eq!(f.id, ENROLL_FORM_ID);
+        assert_form_invariants(&f, &[]);
+        let FlowState::Login(s) = state.clone() else {
+            panic!("login state")
+        };
+        assert_eq!(s.step, LoginStep::Enroll { user_id: user });
+        assert_eq!(s.passkey_challenge, None);
+        assert_eq!(s.pending_totp.as_deref(), Some("sealed"));
+        let (_, effects) = engine_transition(
+            state.clone(),
+            FlowInput::Totp {
+                code: "123456".into(),
+            },
+            &env(),
+        );
+        assert_eq!(effects.len(), 2);
+        match &effects[0] {
+            Effect::ConfirmTotpEnrolment {
+                user_id, pending, ..
+            } => {
+                assert_eq!(*user_id, user);
+                assert_eq!(pending, "sealed");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(
+            effects[1],
+            Effect::CreateSession(SessionAuth::SecondFactor)
+        ));
+        // A wrong code re-renders the enrolment form.
+        let (state, f) = engine_on_failure(state, &effects, Failure::SecondFactorInvalid, &env());
+        assert_eq!(f.id, ENROLL_FORM_ID);
+        assert_eq!(all_keys(&f), vec!["mfa_enroll.code_invalid"]);
+        // Recovery codes and passwords are not inputs of the enrolment step.
+        for input in [
+            FlowInput::RecoveryCode { code: "x".into() },
+            FlowInput::Login {
+                identifier: "alice@example.com".into(),
+                password: PW.into(),
+            },
+        ] {
+            let (_, effects) = engine_transition(state.clone(), input, &env());
+            let f = rendered(&effects);
+            assert_eq!(f.id, ENROLL_FORM_ID);
+            assert_eq!(all_keys(f), vec!["flow.invalid_input"]);
+        }
+    }
+
+    #[test]
+    fn step_up_ends_in_upgrade_session_not_a_new_session() {
+        let session = SessionId::new_v7();
+        let user = UserId::new_v7();
+        let (state, f) = step_up(session, user, BOTH, None);
+        assert_eq!(f.id, SECOND_FACTOR_FORM_ID);
+        for input in [
+            FlowInput::Totp {
+                code: "123456".into(),
+            },
+            FlowInput::RecoveryCode {
+                code: "ABCD".into(),
+            },
+        ] {
+            let (_, effects) = engine_transition(state.clone(), input, &env());
+            assert_eq!(effects.len(), 2);
+            assert!(matches!(
+                effects[1],
+                Effect::UpgradeSession {
+                    session: s,
+                    auth: SessionAuth::SecondFactor
+                } if s == session
+            ));
+        }
+        // Step-up into enrolment.
+        let (state, f) = step_up(
+            session,
+            user,
+            SecondFactorMethods::default(),
+            Some("p".into()),
+        );
+        assert_eq!(f.id, ENROLL_FORM_ID);
+        let (_, effects) = engine_transition(
+            state.clone(),
+            FlowInput::Totp {
+                code: "123456".into(),
+            },
+            &env(),
+        );
+        assert!(matches!(effects[1], Effect::UpgradeSession { .. }));
+        // The state round-trips through JSON.
+        let json = serde_json::to_string(&state).unwrap();
+        assert_eq!(serde_json::from_str::<FlowState>(&json).unwrap(), state);
     }
 }

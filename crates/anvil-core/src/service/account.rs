@@ -491,16 +491,9 @@ impl AccountService {
         }
         let user = self.user(tenant.id, session.user_id).await?;
         let secret = TotpSecret::generate();
-        let sealed = self
-            .kek
-            .seal(
-                SETTINGS_TOTP_PURPOSE,
-                &settings_totp_aad(opened.flow.id),
-                secret.as_bytes(),
-            )
-            .map_err(|_| CoreError::Internal("sealing the pending TOTP secret failed".into()))?;
+        let sealed = seal_pending_totp(&self.kek, opened.flow.id, &secret)?;
         let enrolment = enrolment(tenant, &user, &secret)?;
-        let next = opened.state.clone().with_totp_secret(b64url(&sealed));
+        let next = opened.state.clone().with_totp_secret(sealed);
         if !self.swap(tenant.id, &opened, &next).await? {
             return Err(AccountFailure::Concurrent.into());
         }
@@ -524,13 +517,7 @@ impl AccountService {
     }
 
     fn open_pending(&self, flow: FlowId, sealed_b64: &str) -> Result<TotpSecret, CoreError> {
-        let corrupt = || CoreError::Internal("pending TOTP secret does not open".into());
-        let sealed = b64url_decode(sealed_b64).map_err(|_| corrupt())?;
-        let raw = self
-            .kek
-            .open(SETTINGS_TOTP_PURPOSE, &settings_totp_aad(flow), &sealed)
-            .map_err(|_| corrupt())?;
-        TotpSecret::from_bytes(&raw).map_err(|_| corrupt())
+        open_pending_totp(&self.kek, flow, sealed_b64)
     }
 
     /// Confirms the pending TOTP enrolment with a code from the authenticator app. A wrong code
@@ -551,56 +538,26 @@ impl AccountService {
         };
         let secret = self.open_pending(opened.flow.id, &sealed)?;
         let now = self.clock.now();
-        let code: String = code.chars().filter(|c| !c.is_whitespace()).collect();
-        let unix = u64::try_from(now.unix_timestamp()).unwrap_or(0);
-        let Some(step) = check_code(&secret, &code, unix) else {
+        let Some(step) = pending_totp_step(&secret, code, now) else {
             return Err(AccountFailure::TotpInvalidCode.into());
         };
         let (next, _) = opened.state.clone().take_totp();
         if !self.swap(tenant.id, &opened, &next).await? {
             return Err(AccountFailure::TotpNotPending.into());
         }
-        let id = CredentialId::new_v7();
-        let secret_enc = self
-            .kek
-            .seal(TOTP_SEED_PURPOSE, &credential_aad(id), secret.as_bytes())
-            .map_err(|_| CoreError::Internal("sealing the TOTP seed failed".into()))?;
-        let (codes, hashes) = new_recovery_codes(&self.kek)?;
-        let users = self.storage.users();
-        match users
-            .create_totp(
-                tenant.id,
-                session.user_id,
-                &NewTotp {
-                    id,
-                    secret_enc,
-                    created_at: now,
-                },
-                &hashes,
-                now,
-            )
-            .await
-        {
-            Ok(()) => {}
-            Err(StorageError::Conflict(_)) => return Err(AccountFailure::TotpExists.into()),
-            Err(e) => return Err(e.into()),
-        }
-        // The confirming code must not also sign the user in later.
-        users
-            .advance_totp_step(tenant.id, session.user_id, step, now)
-            .await?;
-        self.audit()
-            .record(
-                tenant.id,
-                AuditActor::user(session.user_id),
-                AuditAction::TotpEnrolled,
-                Some(id.to_string()),
-                AuditOutcome::Success,
-                ctx,
-                AuditDetails::credential(CredentialKind::Totp),
-            )
-            .await?;
-        Ok(codes)
+        create_confirmed_totp(
+            self.storage.as_ref(),
+            &self.kek,
+            &self.audit(),
+            tenant.id,
+            session.user_id,
+            &secret,
+            step,
+            now,
+            ctx,
+        )
+        .await?
+        .ok_or_else(|| AccountFailure::TotpExists.into())
     }
 
     /// Replaces the user's recovery codes (the old set stops working) and returns the new codes
@@ -1157,8 +1114,109 @@ fn is_locale_tag(value: &str) -> bool {
         && parts.all(|p| (2..=8).contains(&p.len()) && p.bytes().all(|b| b.is_ascii_alphanumeric()))
 }
 
+/// Seals a pending TOTP secret into flow state (purpose [`SETTINGS_TOTP_PURPOSE`], AAD = the
+/// flow id, base64url). Used by the settings flow and by in-flow enrolment at sign-in; the AAD
+/// binds it to the one flow.
+pub(crate) fn seal_pending_totp(
+    kek: &Kek,
+    flow: FlowId,
+    secret: &TotpSecret,
+) -> Result<String, CoreError> {
+    kek.seal(
+        SETTINGS_TOTP_PURPOSE,
+        &settings_totp_aad(flow),
+        secret.as_bytes(),
+    )
+    .map(|sealed| b64url(&sealed))
+    .map_err(|_| CoreError::Internal("sealing the pending TOTP secret failed".into()))
+}
+
+/// Opens a pending TOTP secret sealed by [`seal_pending_totp`] for `flow`.
+pub(crate) fn open_pending_totp(
+    kek: &Kek,
+    flow: FlowId,
+    sealed_b64: &str,
+) -> Result<TotpSecret, CoreError> {
+    let corrupt = || CoreError::Internal("pending TOTP secret does not open".into());
+    let sealed = b64url_decode(sealed_b64).map_err(|_| corrupt())?;
+    let raw = kek
+        .open(SETTINGS_TOTP_PURPOSE, &settings_totp_aad(flow), &sealed)
+        .map_err(|_| corrupt())?;
+    TotpSecret::from_bytes(&raw).map_err(|_| corrupt())
+}
+
+/// The time step a confirming `code` (whitespace ignored) matches for a pending secret at `now`.
+pub(crate) fn pending_totp_step(
+    secret: &TotpSecret,
+    code: &str,
+    now: time::OffsetDateTime,
+) -> Option<u64> {
+    let code: String = code.chars().filter(|c| !c.is_whitespace()).collect();
+    let unix = u64::try_from(now.unix_timestamp()).ok()?;
+    check_code(secret, &code, unix)
+}
+
+/// Stores a confirmed TOTP enrolment: the credential (seed sealed under the credential AAD) and a
+/// fresh recovery-code set in one storage call, then records the confirming `step` as used (the
+/// code cannot sign in later) and audits `totp_enrolled`. Returns the recovery codes (shown
+/// once), or `None` if the user already has a TOTP credential.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "shared by the settings flow and the sign-in enrolment; every argument is needed"
+)]
+pub(crate) async fn create_confirmed_totp(
+    storage: &dyn Storage,
+    kek: &Kek,
+    audit: &AuditService,
+    tenant: TenantId,
+    user: UserId,
+    secret: &TotpSecret,
+    step: u64,
+    now: time::OffsetDateTime,
+    ctx: &RequestContext,
+) -> Result<Option<Vec<SecretString>>, CoreError> {
+    let id = CredentialId::new_v7();
+    let secret_enc = kek
+        .seal(TOTP_SEED_PURPOSE, &credential_aad(id), secret.as_bytes())
+        .map_err(|_| CoreError::Internal("sealing the TOTP seed failed".into()))?;
+    let (codes, hashes) = new_recovery_codes(kek)?;
+    let users = storage.users();
+    match users
+        .create_totp(
+            tenant,
+            user,
+            &NewTotp {
+                id,
+                secret_enc,
+                created_at: now,
+            },
+            &hashes,
+            now,
+        )
+        .await
+    {
+        Ok(()) => {}
+        Err(StorageError::Conflict(_)) => return Ok(None),
+        Err(e) => return Err(e.into()),
+    }
+    // The confirming code must not also sign the user in later.
+    users.advance_totp_step(tenant, user, step, now).await?;
+    audit
+        .record(
+            tenant,
+            AuditActor::user(user),
+            AuditAction::TotpEnrolled,
+            Some(id.to_string()),
+            AuditOutcome::Success,
+            ctx,
+            AuditDetails::credential(CredentialKind::Totp),
+        )
+        .await?;
+    Ok(Some(codes))
+}
+
 /// Display data of a TOTP secret: issuer = tenant display name, account = user email.
-fn enrolment(
+pub(crate) fn enrolment(
     tenant: &Tenant,
     user: &User,
     secret: &TotpSecret,
