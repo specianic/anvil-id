@@ -8,7 +8,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anvil_cache::limiter::{Decision, LimitKey, RateQuota};
+use anvil_cache::limiter::{Decision, RateQuota};
 use anvil_core::model::{AuditAction, AuditQuery, RequestContext};
 use anvil_core::ports::Clock;
 use anvil_web::adapters::argon2::Argon2Pool;
@@ -390,8 +390,8 @@ async fn brute_force_helpers_lock_audit_and_recover() {
         guard_attempt(&state, &strict, &loose, false).await,
         Decision::Allow
     );
-    record_attempt(&state, tenant, &ctx, &[strict.clone()], true).await;
-    record_attempt(&state, tenant, &ctx, &[strict.clone()], false).await;
+    record_attempt(&state, tenant, &ctx, std::slice::from_ref(&strict), true).await;
+    record_attempt(&state, tenant, &ctx, std::slice::from_ref(&strict), false).await;
     assert_eq!(
         guard_attempt(&state, &strict, &loose, false).await,
         Decision::Allow
@@ -407,5 +407,4 @@ async fn brute_force_helpers_lock_audit_and_recover() {
         guard_attempt(&state, &other_strict, &loose, false).await,
         Decision::Allow
     );
-    let _ = LimitKey::Ip(ip);
 }
