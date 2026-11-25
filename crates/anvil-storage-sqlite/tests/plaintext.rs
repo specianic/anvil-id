@@ -7,15 +7,27 @@
 //! store it). Then it opens the database file with a plain connection and checks that no TEXT or
 //! BLOB column of any table contains any marker, and that every hash column holds exactly 32 bytes
 //! (the expected digest for the seeded rows).
+//!
+//! Release 0.2 secrets are covered too: a TOTP credential whose seed is sealed with the KEK
+//! (`TOTP_SEED_PURPOSE`, `credential_aad`), recovery codes stored as peppered digests, an opaque
+//! access token stored by hash, per-tenant SMTP settings with a sealed password and a sealed
+//! CAPTCHA secret in the tenant settings. Besides the column scan, the raw bytes of the database
+//! file and its WAL are searched for every Phase 3 plaintext (seed bytes, its base32 and base64url
+//! forms, each recovery code, the SMTP password and the CAPTCHA secret).
 
 use std::collections::BTreeMap;
 
 use anvil_core::model::{
-    NewEmail, OutboxId, ReplayKind, SecretHash, SelfServiceKind, seal_payload,
+    CAPTCHA_SECRET_PURPOSE, CaptchaProvider, CaptchaSettings, CredentialId, NewAccessToken,
+    NewEmail, NewTotp, OutboxId, RecoveryCodeHash, ReplayKind, SMTP_PASSWORD_PURPOSE, SecretHash,
+    SelfServiceKind, SmtpSettings, SmtpTls, TOTP_SEED_PURPOSE, TenantId, TenantSettings,
+    TenantUpdate, UserId, credential_aad, seal_payload,
 };
 use anvil_core::ports::{RotateOutcome, Storage};
-use anvil_jose::Kek;
-use anvil_jose::encoding::secret_hash;
+use anvil_jose::encoding::{b64url, secret_hash};
+use anvil_jose::{
+    Kek, TotpSecret, generate_recovery_codes, normalize_recovery_code, recovery_code_hash,
+};
 use anvil_storage::contract::{
     GrantCtx, new_client, new_code, new_family, new_flow, new_password, new_refresh,
     new_self_service_token, new_session, new_setup_token, new_tenant, new_user, now_ms,
@@ -37,6 +49,8 @@ const HASH_COLUMNS: &[(&str, &str)] = &[
     ("flow", "csrf_hash"),
     ("flow", "cookie_hash"),
     ("replay_guard", "value_hash"),
+    ("recovery_code", "code_hash"),
+    ("access_token", "token_hash"),
 ];
 
 fn marker(kind: &str) -> String {
@@ -52,6 +66,8 @@ struct Seeded {
     markers: Vec<(String, &'static str, &'static str)>,
     /// Markers stored only inside sealed values (no digest to look for).
     sealed_markers: Vec<String>,
+    /// Release 0.2 plaintext secrets that must not appear anywhere, not even in the raw file.
+    phase3_secrets: Vec<(&'static str, Vec<u8>)>,
 }
 
 async fn seed(storage: &SqliteStorage) -> Seeded {
@@ -197,10 +213,153 @@ async fn seed(storage: &SqliteStorage) -> Seeded {
         .await
         .expect("record_jti");
 
+    let opaque_marker = track("opaque-access-token", "access_token", "token_hash");
+    storage
+        .grants()
+        .create_access_token(
+            tenant,
+            &NewAccessToken {
+                token_hash: hash_of(&opaque_marker),
+                family_id: Some(family.id),
+                client_id: ctx.client.client_id.clone(),
+                user_id: Some(ctx.user.id),
+                scope: "openid".to_owned(),
+                created_at: now_ms(),
+                expires_at: now_ms() + Duration::minutes(10),
+            },
+        )
+        .await
+        .expect("opaque access token");
+
+    let phase3_secrets = seed_phase3(storage, tenant, ctx.user.id).await;
+
     Seeded {
         markers,
         sealed_markers: vec![link_marker],
+        phase3_secrets,
     }
+}
+
+/// Seeds the Release 0.2 secrets exactly as the core services store them and returns every
+/// plaintext form that must never reach the database.
+async fn seed_phase3(
+    storage: &SqliteStorage,
+    tenant: TenantId,
+    user: UserId,
+) -> Vec<(&'static str, Vec<u8>)> {
+    let kek = Kek::generate();
+    let mut secrets = Vec::new();
+
+    // TOTP seed sealed with the KEK, bound to the credential id; recovery codes as digests.
+    let seed = TotpSecret::generate();
+    let id = CredentialId::new_v7();
+    let secret_enc = kek
+        .seal(TOTP_SEED_PURPOSE, &credential_aad(id), seed.as_bytes())
+        .expect("seal TOTP seed");
+    secrets.push(("totp seed bytes", seed.as_bytes().to_vec()));
+    secrets.push(("totp seed base32", seed.to_base32().as_bytes().to_vec()));
+    secrets.push(("totp seed base64url", b64url(seed.as_bytes()).into_bytes()));
+    let codes = generate_recovery_codes(10).expect("recovery codes");
+    let hashes: Vec<RecoveryCodeHash> = codes
+        .iter()
+        .map(|c| {
+            let normalized = normalize_recovery_code(c).expect("normalize");
+            secrets.push(("recovery code", c.as_bytes().to_vec()));
+            secrets.push(("normalised recovery code", normalized.as_bytes().to_vec()));
+            RecoveryCodeHash(recovery_code_hash(&kek, &normalized))
+        })
+        .collect();
+    storage
+        .users()
+        .create_totp(
+            tenant,
+            user,
+            &NewTotp {
+                id,
+                secret_enc,
+                created_at: now_ms(),
+            },
+            &hashes,
+            now_ms(),
+        )
+        .await
+        .expect("create_totp");
+
+    // SMTP settings with the password sealed under the tenant id.
+    let smtp_password = marker("smtp-password");
+    let password_enc = kek
+        .seal(
+            SMTP_PASSWORD_PURPOSE,
+            tenant.0.as_bytes(),
+            smtp_password.as_bytes(),
+        )
+        .expect("seal SMTP password");
+    secrets.push(("smtp password", smtp_password.into_bytes()));
+    storage
+        .mail_settings()
+        .put_smtp(
+            tenant,
+            &SmtpSettings {
+                host: "smtp.example.test".to_owned(),
+                port: 587,
+                username: Some("mailer".to_owned()),
+                password_enc: Some(password_enc),
+                from: "noreply@example.test".to_owned(),
+                tls: SmtpTls::Starttls,
+                updated_at: now_ms(),
+            },
+        )
+        .await
+        .expect("put_smtp");
+
+    // CAPTCHA secret sealed into the tenant settings JSON.
+    let captcha_secret = marker("captcha-secret");
+    let secret_sealed = b64url(
+        &kek.seal(
+            CAPTCHA_SECRET_PURPOSE,
+            tenant.0.as_bytes(),
+            captcha_secret.as_bytes(),
+        )
+        .expect("seal CAPTCHA secret"),
+    );
+    secrets.push(("captcha secret", captcha_secret.into_bytes()));
+    storage
+        .tenants()
+        .update(
+            tenant,
+            &TenantUpdate {
+                settings: Some(TenantSettings {
+                    captcha: Some(CaptchaSettings {
+                        provider: CaptchaProvider::Turnstile,
+                        site_key: "site-key-public".to_owned(),
+                        secret_sealed,
+                    }),
+                    ..TenantSettings::default()
+                }),
+                ..TenantUpdate::default()
+            },
+        )
+        .await
+        .expect("tenant update")
+        .expect("tenant exists");
+
+    secrets
+}
+
+/// Raw bytes of the database file and its WAL (whichever exist).
+fn raw_database_bytes(path: &std::path::Path) -> Vec<(String, Vec<u8>)> {
+    let mut files = Vec::new();
+    for suffix in ["", "-wal"] {
+        let p = std::path::PathBuf::from(format!("{}{suffix}", path.display()));
+        if let Ok(bytes) = std::fs::read(&p) {
+            files.push((p.display().to_string(), bytes));
+        }
+    }
+    files
+}
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty() && haystack.windows(needle.len()).any(|w| w == needle)
 }
 
 async fn inspect(path: &std::path::Path) -> SqlitePool {
@@ -264,6 +423,28 @@ async fn secrets_never_stored_plaintext() {
         .expect("connect");
     storage.migrate().await.expect("migrate");
     let seeded = seed(&storage).await;
+
+    // Raw file scan while the storage is open, so pages still in the WAL are covered too.
+    let raw = raw_database_bytes(&path);
+    assert!(!raw.is_empty(), "the database file must exist");
+    assert!(
+        raw.iter()
+            .any(|(_, bytes)| contains(bytes, b"smtp.example.test")),
+        "positive control: the raw scan must find the stored SMTP host"
+    );
+    assert!(
+        raw.iter()
+            .any(|(_, bytes)| contains(bytes, b"site-key-public")),
+        "positive control: the raw scan must find the stored CAPTCHA site key"
+    );
+    for (what, secret) in &seeded.phase3_secrets {
+        for (file, bytes) in &raw {
+            assert!(
+                !contains(bytes, secret),
+                "{what} found in plaintext in {file}"
+            );
+        }
+    }
     drop(storage);
 
     let pool = inspect(&path).await;
@@ -315,6 +496,21 @@ async fn secrets_never_stored_plaintext() {
             "the plaintext marker {m} is stored somewhere"
         );
     }
+    for (what, secret) in &seeded.phase3_secrets {
+        assert_eq!(
+            hits_anywhere(&pool, &columns, secret).await,
+            0,
+            "{what} is stored in plaintext in some column"
+        );
+    }
+    let recovery_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM recovery_code")
+        .fetch_one(&pool)
+        .await
+        .expect("count recovery codes");
+    assert_eq!(
+        recovery_rows, 10,
+        "every recovery code is stored, as a digest"
+    );
 
     // Every hash column holds exactly 32 bytes.
     for (table, column) in HASH_COLUMNS {
