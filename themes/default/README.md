@@ -148,11 +148,16 @@ Catalog layout: `locales/{lang}/{feature}.ftl` (Fluent syntax), for example `loc
   message.
 - Do not reword the sentences marked as a contract below (they are matched by the conformance and
   e2e suites); translate them in other languages as usual.
-- **Completeness:** English must define every key the code and templates use; the test
-  `embedded_english_has_every_message_key_in_use` (crates/anvil-web/tests/i18n.rs) fails
-  otherwise. Other languages may be partial and fall back to English per message.
-- A new language is a new directory `locales/{lang}/` with the same file names. Discovery lists the
-  languages that have a catalog in `ui_locales_supported`.
+- **Completeness:** English must define every key the code and templates use (test
+  `embedded_english_has_every_message_key_in_use` in `crates/anvil-web/tests/i18n.rs`). Every
+  language shipped under `themes/default/locales/` must define exactly the English message ids,
+  file by file, use no variables English does not declare and keep English's plural selectors
+  (`crates/anvil-web/tests/i18n_catalogs.rs`). So a new `en/{feature}.ftl` needs a counterpart in
+  every shipped language in the same change.
+- **Contributing a language:** add a directory `locales/{lang}/` with the same file names as `en/`
+  and translate every message; the parity test above tells you what is missing. Discovery lists
+  the languages that have a catalog in `ui_locales_supported`. At runtime a message missing from an
+  operator override falls back to English.
 
 Operators override single messages, or add a language, without recompiling: put `.ftl` files in
 `{theme_dir}/locales/{lang}/`. A message there wins over the embedded one with the same id; every
