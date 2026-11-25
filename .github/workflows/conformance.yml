@@ -1,14 +1,18 @@
 # OpenID conformance: starts the pinned conformance suite and a fresh anvilid over TLS (throwaway
 # self-signed certificate generated at run time), provisions it through /setup and the admin API, runs
-# the Basic OP and Config OP plans and enforces the committed expected-skips and expected-failures files
-# exactly. Same entry point as local runs: `just conformance` (tests/conformance/run.sh). No secrets.
+# the Basic OP, Config OP and Form Post OP plans (oidcc-formpost-basic-certification-test-plan) against
+# one suite instance and one anvilid, and enforces the committed expected-skips and expected-failures
+# files exactly. Same entry point as local runs: `tests/conformance/run.sh all` (= `just conformance`).
+# No secrets.
 name: conformance
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
-  # PRs that touch protocol code, the theme (browser automation selectors) or the harness.
+  # PRs that touch protocol code, the theme (browser automation selectors, form_post page) or the
+  # harness. crates/** covers crates/anvil-core/src/oauth/**, service/{authorize,token,consent}.rs and
+  # crates/anvil-web/src/protocol/**, plus everything they depend on (storage, JOSE, limiter).
   pull_request:
     paths:
       - "crates/**"
@@ -30,7 +34,7 @@ env:
 
 jobs:
   conformance:
-    name: OpenID conformance (Basic + Config OP)
+    name: OpenID conformance (Basic, Config and Form Post OP)
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -44,8 +48,10 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - name: Run conformance suite
-        run: just conformance
+      # One suite instance and one fresh anvilid for all three plans, run in sequence by the
+      # suite's run-test-plan.py: basic, config, formpost.
+      - name: Run conformance suite (basic, config, formpost)
+        run: tests/conformance/run.sh all
       - name: Upload results and logs
         if: always()
         uses: actions/upload-artifact@v7
