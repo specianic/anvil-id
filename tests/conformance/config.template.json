@@ -1,6 +1,6 @@
 {
   "alias": "anvilid",
-  "description": "anvilid (Basic OP, Config OP and Form Post OP). Rendered by tests/conformance/setup.sh; placeholders are replaced with per-run values.",
+  "description": "anvilid (Basic OP, Config OP, Form Post OP, RP-Initiated and Back-Channel Logout OP). Rendered by tests/conformance/setup.sh; placeholders are replaced with per-run values.",
   "server": {
     "discoveryUrl": "@BASE_URL@/.well-known/openid-configuration"
   },
@@ -47,6 +47,35 @@
         {
           "task": "Verify Complete",
           "match": "*/test/*/callback*",
+          "commands": [
+            [
+              "wait",
+              "id",
+              "submission_complete",
+              10
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "match": "@BASE_URL@/logout*",
+      "tasks": [
+        {
+          "task": "Confirm sign-out",
+          "optional": true,
+          "match": "@BASE_URL@/ui/logout*",
+          "commands": [
+            [
+              "click",
+              "id",
+              "logout-confirm-submit"
+            ]
+          ]
+        },
+        {
+          "task": "Verify Complete",
+          "match": "*/test/*/post_logout_redirect*",
           "commands": [
             [
               "wait",
@@ -208,6 +237,562 @@
                   "//*",
                   10,
                   "The redirect URI in this request is not registered for this client",
+                  "update-image-placeholder"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "oidcc-rp-initiated-logout-bad-post-logout-redirect-uri": {
+      "browser": [
+        {
+          "match": "@BASE_URL@/authorize*",
+          "tasks": [
+            {
+              "task": "Login",
+              "optional": true,
+              "match": "@BASE_URL@/ui/login*",
+              "commands": [
+                [
+                  "text",
+                  "id",
+                  "identifier",
+                  "@USER@"
+                ],
+                [
+                  "text",
+                  "id",
+                  "password",
+                  "@PASSWORD@"
+                ],
+                [
+                  "click",
+                  "id",
+                  "login-submit"
+                ]
+              ]
+            },
+            {
+              "task": "Verify Complete",
+              "match": "*/test/*/callback*",
+              "commands": [
+                [
+                  "wait",
+                  "id",
+                  "submission_complete",
+                  10
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "comment": "expect an error page instead of a redirect to post_logout_redirect_uri",
+          "match": "@BASE_URL@/logout*",
+          "tasks": [
+            {
+              "task": "Expect sign-out error page",
+              "match": "@BASE_URL@/*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "The sign-out request is invalid: the post_logout_redirect_uri is not registered for this client.",
+                  "update-image-placeholder"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "oidcc-rp-initiated-logout-query-added-to-post-logout-redirect-uri": {
+      "browser": [
+        {
+          "match": "@BASE_URL@/authorize*",
+          "tasks": [
+            {
+              "task": "Login",
+              "optional": true,
+              "match": "@BASE_URL@/ui/login*",
+              "commands": [
+                [
+                  "text",
+                  "id",
+                  "identifier",
+                  "@USER@"
+                ],
+                [
+                  "text",
+                  "id",
+                  "password",
+                  "@PASSWORD@"
+                ],
+                [
+                  "click",
+                  "id",
+                  "login-submit"
+                ]
+              ]
+            },
+            {
+              "task": "Verify Complete",
+              "match": "*/test/*/callback*",
+              "commands": [
+                [
+                  "wait",
+                  "id",
+                  "submission_complete",
+                  10
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "comment": "expect an error page instead of a redirect to post_logout_redirect_uri",
+          "match": "@BASE_URL@/logout*",
+          "tasks": [
+            {
+              "task": "Expect sign-out error page",
+              "match": "@BASE_URL@/*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "The sign-out request is invalid: the post_logout_redirect_uri is not registered for this client.",
+                  "update-image-placeholder"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "oidcc-rp-initiated-logout-modified-id-token-hint": {
+      "browser": [
+        {
+          "match": "@BASE_URL@/authorize*",
+          "tasks": [
+            {
+              "task": "Login",
+              "optional": true,
+              "match": "@BASE_URL@/ui/login*",
+              "commands": [
+                [
+                  "text",
+                  "id",
+                  "identifier",
+                  "@USER@"
+                ],
+                [
+                  "text",
+                  "id",
+                  "password",
+                  "@PASSWORD@"
+                ],
+                [
+                  "click",
+                  "id",
+                  "login-submit"
+                ]
+              ]
+            },
+            {
+              "task": "Verify Complete",
+              "match": "*/test/*/callback*",
+              "commands": [
+                [
+                  "wait",
+                  "id",
+                  "submission_complete",
+                  10
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "comment": "expect an error page instead of a redirect to post_logout_redirect_uri",
+          "match": "@BASE_URL@/logout*",
+          "tasks": [
+            {
+              "task": "Expect sign-out error page",
+              "match": "@BASE_URL@/*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "The sign-out request is invalid: the id_token_hint could not be verified.",
+                  "update-image-placeholder"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "oidcc-rp-initiated-logout-bad-id-token-hint": {
+      "browser": [
+        {
+          "match": "@BASE_URL@/authorize*",
+          "tasks": [
+            {
+              "task": "Login",
+              "optional": true,
+              "match": "@BASE_URL@/ui/login*",
+              "commands": [
+                [
+                  "text",
+                  "id",
+                  "identifier",
+                  "@USER@"
+                ],
+                [
+                  "text",
+                  "id",
+                  "password",
+                  "@PASSWORD@"
+                ],
+                [
+                  "click",
+                  "id",
+                  "login-submit"
+                ]
+              ]
+            },
+            {
+              "task": "Verify Complete",
+              "match": "*/test/*/callback*",
+              "commands": [
+                [
+                  "wait",
+                  "id",
+                  "submission_complete",
+                  10
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "comment": "expect an error page instead of a redirect to post_logout_redirect_uri",
+          "match": "@BASE_URL@/logout*",
+          "tasks": [
+            {
+              "task": "Expect sign-out error page",
+              "match": "@BASE_URL@/*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "The sign-out request is invalid: the id_token_hint could not be verified.",
+                  "update-image-placeholder"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "oidcc-rp-initiated-logout-no-id-token-hint": {
+      "browser": [
+        {
+          "match": "@BASE_URL@/authorize*",
+          "tasks": [
+            {
+              "task": "Login",
+              "optional": true,
+              "match": "@BASE_URL@/ui/login*",
+              "commands": [
+                [
+                  "text",
+                  "id",
+                  "identifier",
+                  "@USER@"
+                ],
+                [
+                  "text",
+                  "id",
+                  "password",
+                  "@PASSWORD@"
+                ],
+                [
+                  "click",
+                  "id",
+                  "login-submit"
+                ]
+              ]
+            },
+            {
+              "task": "Verify Complete",
+              "match": "*/test/*/callback*",
+              "commands": [
+                [
+                  "wait",
+                  "id",
+                  "submission_complete",
+                  10
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "comment": "expect an error page instead of a redirect to post_logout_redirect_uri",
+          "match": "@BASE_URL@/logout*",
+          "tasks": [
+            {
+              "task": "Expect sign-out error page",
+              "match": "@BASE_URL@/*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "The sign-out request is invalid: post_logout_redirect_uri requires id_token_hint or client_id.",
+                  "update-image-placeholder"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "oidcc-rp-initiated-logout-no-params": {
+      "browser": [
+        {
+          "match": "@BASE_URL@/authorize*",
+          "tasks": [
+            {
+              "task": "Login",
+              "optional": true,
+              "match": "@BASE_URL@/ui/login*",
+              "commands": [
+                [
+                  "text",
+                  "id",
+                  "identifier",
+                  "@USER@"
+                ],
+                [
+                  "text",
+                  "id",
+                  "password",
+                  "@PASSWORD@"
+                ],
+                [
+                  "click",
+                  "id",
+                  "login-submit"
+                ]
+              ]
+            },
+            {
+              "task": "Verify Complete",
+              "match": "*/test/*/callback*",
+              "commands": [
+                [
+                  "wait",
+                  "id",
+                  "submission_complete",
+                  10
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "comment": "confirm if asked, then expect the signed-out page (no post_logout_redirect_uri to return to)",
+          "match": "@BASE_URL@/logout*",
+          "tasks": [
+            {
+              "task": "Confirm sign-out",
+              "optional": true,
+              "match": "@BASE_URL@/ui/logout*",
+              "commands": [
+                [
+                  "click",
+                  "id",
+                  "logout-confirm-submit"
+                ]
+              ]
+            },
+            {
+              "task": "Expect signed-out page",
+              "match": "@BASE_URL@/*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "You have been signed out.",
+                  "update-image-placeholder"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "oidcc-rp-initiated-logout-no-post-logout-redirect-uri": {
+      "browser": [
+        {
+          "match": "@BASE_URL@/authorize*",
+          "tasks": [
+            {
+              "task": "Login",
+              "optional": true,
+              "match": "@BASE_URL@/ui/login*",
+              "commands": [
+                [
+                  "text",
+                  "id",
+                  "identifier",
+                  "@USER@"
+                ],
+                [
+                  "text",
+                  "id",
+                  "password",
+                  "@PASSWORD@"
+                ],
+                [
+                  "click",
+                  "id",
+                  "login-submit"
+                ]
+              ]
+            },
+            {
+              "task": "Verify Complete",
+              "match": "*/test/*/callback*",
+              "commands": [
+                [
+                  "wait",
+                  "id",
+                  "submission_complete",
+                  10
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "comment": "confirm if asked, then expect the signed-out page (no post_logout_redirect_uri to return to)",
+          "match": "@BASE_URL@/logout*",
+          "tasks": [
+            {
+              "task": "Confirm sign-out",
+              "optional": true,
+              "match": "@BASE_URL@/ui/logout*",
+              "commands": [
+                [
+                  "click",
+                  "id",
+                  "logout-confirm-submit"
+                ]
+              ]
+            },
+            {
+              "task": "Expect signed-out page",
+              "match": "@BASE_URL@/*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "You have been signed out.",
+                  "update-image-placeholder"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "oidcc-rp-initiated-logout-only-state": {
+      "browser": [
+        {
+          "match": "@BASE_URL@/authorize*",
+          "tasks": [
+            {
+              "task": "Login",
+              "optional": true,
+              "match": "@BASE_URL@/ui/login*",
+              "commands": [
+                [
+                  "text",
+                  "id",
+                  "identifier",
+                  "@USER@"
+                ],
+                [
+                  "text",
+                  "id",
+                  "password",
+                  "@PASSWORD@"
+                ],
+                [
+                  "click",
+                  "id",
+                  "login-submit"
+                ]
+              ]
+            },
+            {
+              "task": "Verify Complete",
+              "match": "*/test/*/callback*",
+              "commands": [
+                [
+                  "wait",
+                  "id",
+                  "submission_complete",
+                  10
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "comment": "confirm if asked, then expect the signed-out page (no post_logout_redirect_uri to return to)",
+          "match": "@BASE_URL@/logout*",
+          "tasks": [
+            {
+              "task": "Confirm sign-out",
+              "optional": true,
+              "match": "@BASE_URL@/ui/logout*",
+              "commands": [
+                [
+                  "click",
+                  "id",
+                  "logout-confirm-submit"
+                ]
+              ]
+            },
+            {
+              "task": "Expect signed-out page",
+              "match": "@BASE_URL@/*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "You have been signed out.",
                   "update-image-placeholder"
                 ]
               ]

@@ -8,6 +8,16 @@ against a freshly started `anvilid` over TLS. It runs three plans:
 - `oidcc-formpost-basic-certification-test-plan[server_metadata=discovery][client_registration=static_client]`
   (Form Post OP: the Basic plan's module list, error cases included, with `response_mode=form_post`)
 
+Two logout plans have their own selections. They are not part of `all` yet; they join it in plan 04-23,
+once RP-initiated logout and back-channel delivery pass:
+
+- `oidcc-rp-initiated-logout-certification-test-plan[response_type=code][client_registration=static_client]`
+  (RP-Initiated Logout OP; override with `LOGOUT_PLAN`)
+- `oidcc-backchannel-rp-initiated-logout-certification-test-plan[response_type=code][client_registration=static_client]`
+  (Back-Channel Logout OP; override with `BACKCHANNEL_PLAN`)
+
+The variant strings have not been confirmed by a passing run yet, which is why they can be overridden.
+
 Local runs and CI use the same script. Run it from the repository root:
 
 ```sh
@@ -15,6 +25,8 @@ tests/conformance/run.sh all        # all three plans (default; also `just confo
 tests/conformance/run.sh basic      # Basic OP only
 tests/conformance/run.sh config     # Config OP only
 tests/conformance/run.sh formpost   # Form Post OP only
+tests/conformance/run.sh logout     # RP-Initiated Logout OP only (not in `all` yet)
+tests/conformance/run.sh backchannel  # Back-Channel Logout OP only (not in `all` yet)
 ```
 
 Every selection starts its own suite and its own fresh `anvilid`; `all` runs the three plans against one
@@ -34,9 +46,11 @@ minutes (one Basic OP module waits 30 seconds on purpose).
    (gitignored), using a blobless clone at `CONFORMANCE_TAG`. The scripts and the prebuilt images
    (`registry.gitlab.com/openid/conformance-suite:<tag>`) always use the same tag.
 2. It builds `anvilid` (`cargo build --locked -p anvilid`).
-3. It starts the suite with `docker compose -p anvil-conformance`. `compose.override.yml` maps
-   `host.docker.internal` to the host gateway so the suite server (and its scripted browser) can reach
-   the binary.
+3. It generates a throwaway CA and a leaf certificate for `localhost.emobix.co.uk` (see
+   [Back-channel callback certificate](#back-channel-callback-certificate)), then starts the suite with
+   `docker compose -p anvil-conformance`. `compose.override.yml` maps `host.docker.internal` to the host
+   gateway so the suite server (and its scripted browser) can reach the binary, and mounts the leaf
+   certificate into the suite's nginx.
 4. It generates a throwaway self-signed P-256 certificate for `host.docker.internal` and `localhost` with
    `openssl req -x509` in `conformance-results/tmp/`, then starts
 
@@ -49,7 +63,9 @@ minutes (one Basic OP module waits 30 seconds on purpose).
    zero-config first start (new SQLite database, KEK, signing keys and setup token). The breach check is
    off so the run does not depend on an external API. Port 9443 is used because the suite's nginx
    publishes 8443 and 8444 on the host. Rate limiting stays on with its defaults except for the login
-   quota (see [Rate limits](#rate-limits)).
+   quota (see [Rate limits](#rate-limits)). Every selection also sets the two outbound settings
+   `ANVILID_OUTBOUND_CA_FILE` and `ANVILID_OUTBOUND_ALLOW_CIDRS=127.0.0.1/32` (see below). They have no
+   effect on plans that never make anvilid call out.
 5. It waits for discovery, reads the one-time `Setup URL:` line from the log and runs `setup.sh`.
 6. It runs the selected plans with the suite's own driver, `scripts/run-test-plan.py`, in dev mode (no API token) against
    `https://localhost.emobix.co.uk:8443/`. That hostname is the suite's public name for loopback: it
@@ -66,6 +82,42 @@ so a self-signed certificate is enough and no CA is installed anywhere. The Conf
 advertised endpoint is not https, which is why the harness uses the TLS listener rather than
 `--insecure-http`. The key is generated per run in a gitignored temporary directory and is never
 committed.
+
+### Back-channel callback certificate
+
+In the Back-Channel Logout plan anvilid itself makes an HTTPS request: it POSTs the logout token to
+`https://localhost.emobix.co.uk:8443/test/a/anvilid/backchannel_logout`. With default settings this
+request is refused twice:
+
+- The host name resolves to 127.0.0.1, and anvilid's outbound client (the SSRF guard) blocks loopback
+  and private addresses.
+- The suite's nginx serves a self-signed `CN=localhost` certificate, which fails anvilid's TLS
+  verification (untrusted issuer, wrong name).
+
+The harness does not switch either check off. It uses two operator settings that any deployment can use:
+
+- `ANVILID_OUTBOUND_ALLOW_CIDRS=127.0.0.1/32` lets the guard reach exactly the loopback address.
+  Everything else stays blocked.
+- `ANVILID_OUTBOUND_CA_FILE=conformance-results/tmp/callback-ca.pem` adds one trusted CA for outbound
+  requests, in addition to the system roots. Hostname and chain verification stay on.
+
+`run.sh` (`gen_callback_cert`) generates, per run, a P-256 CA (one day, `CA:TRUE`) and an RSA-2048 leaf
+for `localhost.emobix.co.uk` (SAN DNS name, `serverAuth`, `CA:FALSE`) signed by that CA. It checks the
+chain with `openssl verify` before the suite starts. `compose.override.yml` mounts the leaf and its key
+read-only over `/etc/ssl/certs/nginx-selfsigned.crt` and `/etc/ssl/private/nginx-selfsigned.key`,
+the paths from the suite's `nginx/Dockerfile`. Notes on the choices:
+
+- It is a CA plus a leaf, not one self-signed certificate, because webpki rejects a CA certificate used
+  as an end-entity certificate.
+- The leaf is RSA because one listener in the suite's `nginx.conf` allows only ECDHE-RSA ciphers.
+- The suite's own HTTP client and browser trust every certificate, so the replacement does not affect
+  them.
+- All four files are mode 600 in `conformance-results/tmp/` and are deleted on exit. With
+  `KEEP_SUITE=1` nginx keeps serving the certificate it has already loaded, but restarting the
+  container fails because the files are gone.
+
+The static client's `post_logout_redirect_uris` and `backchannel_logout_uri` are added to `setup.sh` in
+04-23, together with the admin API fields they depend on.
 
 ### Setup flow (`setup.sh`)
 
@@ -106,8 +158,33 @@ waits for the suite callback. Overrides:
   the error page sentence "The redirect URI in this request is not registered for this client" and
   capture it (`update-image-placeholder`).
 
-These ids and the sentence are a contract documented in `themes/default/README.md`. Modules that
-upload a placeholder finish with result `REVIEW`, which is what the suite expects for them.
+Logout (RP-Initiated and Back-Channel plans). Each logout module first signs in through the
+`/authorize*` block above, then the suite sends the browser to `end_session_endpoint`. A second block
+matches `/logout*`:
+
+- "Confirm sign-out" (optional): on a confirmation page under `/ui/logout*`, click
+  `#logout-confirm-submit` (button text "Sign out").
+- "Verify Complete": wait for the suite's `*/test/*/post_logout_redirect*` page.
+
+Module overrides replace the whole browser list, so each one repeats the `/authorize*` block:
+
+| Modules | Expected page (captured with `update-image-placeholder`) |
+|---------|------------------------------------------------------------|
+| `oidcc-rp-initiated-logout-bad-post-logout-redirect-uri`, `-query-added-to-post-logout-redirect-uri` | "The sign-out request is invalid: the post_logout_redirect_uri is not registered for this client." |
+| `oidcc-rp-initiated-logout-modified-id-token-hint`, `-bad-id-token-hint` | "The sign-out request is invalid: the id_token_hint could not be verified." |
+| `oidcc-rp-initiated-logout-no-id-token-hint` | "The sign-out request is invalid: post_logout_redirect_uri requires id_token_hint or client_id." |
+| `oidcc-rp-initiated-logout-no-params`, `-no-post-logout-redirect-uri`, `-only-state` | Confirm if asked, then "You have been signed out." |
+
+The browser tells pages apart by URL. That makes three more points part of the contract:
+
+- The confirmation page lives under `/ui/logout*`.
+- The signed-out page does not live there, because the optional confirm task would match it and fail
+  to find the button.
+- The error pages are served under the tenant base URL.
+
+These ids and sentences are a contract documented in `themes/default/README.md` (the logout pages are
+added in 04-13). Modules that upload a placeholder finish with result `REVIEW`, which is what the suite
+expects for them.
 
 The Form Post plan uses the same automation. With `response_mode=form_post` the OP answers with the
 themed `form_post.html` page instead of a redirect; the suite's browser runs JavaScript, so the
@@ -130,6 +207,8 @@ The suite's callback does not redirect, so this does not affect the conformance 
 | `RESULTS_DIR` | `conformance-results` | Output directory |
 | `KEEP_SUITE` | `0` | `1` leaves the suite containers running after the run, for debugging |
 | `CONFORMANCE_AUTH_PER_MINUTE` | `600` | Login quota of the conformance instance, passed as `ANVILID_RATE_LIMIT_AUTH_PER_MINUTE` |
+| `LOGOUT_PLAN` | `oidcc-rp-initiated-logout-certification-test-plan[response_type=code][client_registration=static_client]` | Plan run by `run.sh logout` |
+| `BACKCHANNEL_PLAN` | `oidcc-backchannel-rp-initiated-logout-certification-test-plan[response_type=code][client_registration=static_client]` | Plan run by `run.sh backchannel` |
 
 ### Rate limits
 
@@ -163,8 +242,9 @@ Some modules in the Basic plan source do not run at all with `client_registratio
 entry. `oidcc-ensure-request-object-with-redirect-uri` is not skipped: the OP shows the invalid
 redirect URI error page, which the module accepts.
 
-The Config OP plan has no skip. `run-test-plan.py` fails on skip entries no module used, so
-`run.sh config` checks against an empty skip list generated in `conformance-results/tmp/`.
+The Config OP and the two logout plans have no skip. `run-test-plan.py` fails on skip entries no
+module used, so `run.sh config`, `run.sh logout` and `run.sh backchannel` check against an empty skip
+list generated in `conformance-results/tmp/`.
 
 ## Running locally
 
