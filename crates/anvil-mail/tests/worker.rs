@@ -527,3 +527,51 @@ async fn production_factory_opens_the_sealed_password_and_caches_by_updated_at()
         .to_string();
     assert!(err.contains("could not be decrypted"), "{err}");
 }
+
+#[tokio::test]
+async fn missing_email_variable_is_filled_from_the_recipient() {
+    let h = harness(CapturingTransport::default());
+    // The password_changed notice of a recovery is sealed before the address is known, so its
+    // payload has no `email`; the worker supplies the row's recipient.
+    let notice = std::collections::BTreeMap::from([(
+        "tenant_name".to_owned(),
+        "Acme".to_owned(),
+    )]);
+    let e = email_with_payload(
+        &h.kek,
+        h.tenant,
+        "alice@example.test",
+        "password_changed",
+        &notice,
+        start_time(),
+    );
+    h.outbox.enqueue(h.tenant, &e).await.unwrap();
+
+    assert_eq!(h.worker.run_once().await.unwrap(), 1);
+    let sent = h.transport.sent();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].to, "alice@example.test");
+    assert!(sent[0].text.contains("The password for alice@example.test at Acme"));
+    assert!(sent[0].html.contains("alice@example.test"));
+    assert!(h.outbox.row(e.id).sent_at.is_some());
+}
+
+#[tokio::test]
+async fn payload_email_variable_is_never_overridden_by_the_recipient() {
+    let h = harness(CapturingTransport::default());
+    let e = email_with_payload(
+        &h.kek,
+        h.tenant,
+        "row-recipient@example.test",
+        "password_changed",
+        &payload("payload-address@example.test", "https://id.test/unused"),
+        start_time(),
+    );
+    h.outbox.enqueue(h.tenant, &e).await.unwrap();
+
+    assert_eq!(h.worker.run_once().await.unwrap(), 1);
+    let sent = h.transport.sent();
+    assert_eq!(sent[0].to, "row-recipient@example.test");
+    assert!(sent[0].text.contains("payload-address@example.test"));
+    assert!(!sent[0].text.contains("row-recipient@example.test"));
+}
