@@ -5,19 +5,22 @@
 //! never sees concurrent writers.
 
 mod convert;
-mod grants;
-mod tenants;
+// TRANSITIONAL (plan 02-02): tenants.rs and grants.rs stay on disk as reference for plan 02-05
+// but are not compiled; every repository is `pending::Pending` until 02-05 lands.
+mod pending;
 
 use std::str::FromStr;
 use std::time::Duration;
 
-use anvil_core::ports::{GrantRepo, Storage, StorageError, TenantRepo};
+use anvil_core::ports::{
+    ClientRepo, FlowRepo, GrantRepo, KeyRepo, OutboxRepo, SessionRepo, SetupRepo, Storage,
+    StorageError, TenantRepo, UserRepo,
+};
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 
 use crate::convert::map_err;
-use crate::grants::SqliteGrants;
-use crate::tenants::SqliteTenants;
+use crate::pending::Pending;
 
 /// Maximum number of reader connections for file databases.
 const READER_CONNECTIONS: u32 = 8;
@@ -31,8 +34,6 @@ pub struct SqliteStorage {
         reason = "held so the reader pool's lifetime is tied to the storage"
     )]
     reader: SqlitePool,
-    tenants: SqliteTenants,
-    grants: SqliteGrants,
 }
 
 fn is_memory_url(url: &str) -> bool {
@@ -80,17 +81,7 @@ impl SqliteStorage {
             (writer, reader)
         };
 
-        Ok(Self {
-            tenants: SqliteTenants {
-                writer: writer.clone(),
-                reader: reader.clone(),
-            },
-            grants: SqliteGrants {
-                writer: writer.clone(),
-            },
-            writer,
-            reader,
-        })
+        Ok(Self { writer, reader })
     }
 
     /// Runs embedded migrations on the writer.
@@ -102,12 +93,39 @@ impl SqliteStorage {
     }
 }
 
+#[async_trait::async_trait]
 impl Storage for SqliteStorage {
     fn tenants(&self) -> &dyn TenantRepo {
-        &self.tenants
+        &Pending
+    }
+    fn users(&self) -> &dyn UserRepo {
+        &Pending
+    }
+    fn clients(&self) -> &dyn ClientRepo {
+        &Pending
+    }
+    fn keys(&self) -> &dyn KeyRepo {
+        &Pending
+    }
+    fn sessions(&self) -> &dyn SessionRepo {
+        &Pending
+    }
+    fn flows(&self) -> &dyn FlowRepo {
+        &Pending
+    }
+    fn grants(&self) -> &dyn GrantRepo {
+        &Pending
+    }
+    fn setup(&self) -> &dyn SetupRepo {
+        &Pending
+    }
+    fn outbox(&self) -> &dyn OutboxRepo {
+        &Pending
     }
 
-    fn grants(&self) -> &dyn GrantRepo {
-        &self.grants
+    async fn purge_expired(&self, _now: time::OffsetDateTime) -> Result<u64, StorageError> {
+        Err(StorageError::Unsupported(
+            "sqlite: Storage::purge_expired lands in plan 02-05",
+        ))
     }
 }

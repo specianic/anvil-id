@@ -8,17 +8,29 @@ use time::OffsetDateTime;
 ///
 /// Every `OffsetDateTime` (years ±9999) fits in an `i64` of milliseconds, so the cast is lossless
 /// apart from the documented sub-millisecond truncation.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "transitional: used again by plan 02-05")
+)]
 pub(crate) fn odt_to_ms(t: OffsetDateTime) -> i64 {
     (t.unix_timestamp_nanos() / 1_000_000) as i64
 }
 
 /// Unix milliseconds → timestamp. Out-of-range values are corrupt data.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "transitional: used again by plan 02-05")
+)]
 pub(crate) fn ms_to_odt(ms: i64) -> Result<OffsetDateTime, StorageError> {
     OffsetDateTime::from_unix_timestamp_nanos(i128::from(ms) * 1_000_000)
         .map_err(|e| StorageError::Corrupt(format!("timestamp {ms} ms out of range: {e}")))
 }
 
 /// BLOB → code hash. Anything other than 32 bytes is corrupt data.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "transitional: used again by plan 02-05")
+)]
 pub(crate) fn blob_to_code_hash(bytes: &[u8]) -> Result<CodeHash, StorageError> {
     CodeHash::from_slice(bytes).map_err(|e| StorageError::Corrupt(format!("code_hash: {e}")))
 }

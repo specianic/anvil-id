@@ -127,8 +127,8 @@ docs/
 
 **Dependency rules** (checked in CI with a small script over per-crate `cargo tree -p` output; `cargo metadata` unifies features across the workspace and gives false positives):
 
-- `anvil-core` depends only on `anvil-jose` and pure libraries (serde, time, uuid, url, thiserror,
-  async-trait).
+- `anvil-core` depends only on `anvil-jose` and pure libraries (serde, serde_json, secrecy, time,
+  uuid, url, thiserror, async-trait).
 - `anvil-storage-*` normal-depend on `anvil-core` (for the ports and domain types) and sqlx, never on
   `anvil-web`. They use `anvil-storage` only as a dev-dependency, for the contract suite.
 - `anvil-web` depends on `anvil-core` (including the storage ports), `anvil-cache`, `anvil-mail`.
@@ -181,19 +181,19 @@ from handler code.
 
 | Entity | Key fields | Notes |
 |---|---|---|
-| `tenant` | id, slug, display_name, issuer_mode (path/host), host, settings (JSON), created_at | One `default` tenant created at bootstrap |
-| `user` | id, tenant_id, email, email_verified, phone, phone_verified, username, attributes (JSON, validated against the tenant's schema), status (active/blocked), created_at, updated_at, last_login_at | Unique (tenant_id, lower(email)); unique (tenant_id, username) |
+| `tenant` | id, slug, display_name, issuer_mode (path/host), host, settings (JSON), created_at | One `system` and one `default` tenant created at bootstrap. `host` is unique and set only for host-based tenants. 0.1 settings: registration mode (open/invite_only/disabled), require_verified_email |
+| `user` | id, tenant_id, email, email_verified, phone, phone_verified, username, attributes (JSON, validated against the tenant's schema), status (active/blocked), created_at, updated_at, last_login_at | Unique (tenant_id, email); unique (tenant_id, username). Core stores email normalised (trimmed, lowercased). In 0.1 the OIDC standard claims (§5.1, incl. phone and address) are a typed `StandardClaims` record stored as JSON; tenant schemas come later |
 | `credential` | id, tenant_id, user_id, kind (password/webauthn/totp), data (encrypted or hashed per kind), counter (integer, nullable), label, created_at, last_used_at | Password: PHC string. TOTP: encrypted seed; `counter` = last accepted time step. WebAuthn: credential JSON; `counter` = signature counter. Counters are plain columns so replay and clone checks are a single conditional `UPDATE … WHERE counter < ?` |
 | `recovery_code` | id, tenant_id, user_id, code_hash, created_at, used_at | One row per code, consumed atomically (`UPDATE … SET used_at … WHERE used_at IS NULL`) |
 | `identity_link` | id, tenant_id, user_id, provider_id, subject, email_at_link, created_at | Upstream identities (social/enterprise). Unique (tenant_id, provider_id, subject) |
-| `client` | id, tenant_id, client_id, name, type (confidential/public), auth_method, secret_hash, jwks / jwks_uri, redirect_uris, post_logout_redirect_uris, grant_types, scopes, token_format (jwt/opaque), consent_mode (required/skip_first_party), backchannel_logout_uri, branding (JSON), created_at | `client_id` is unique per tenant; URL-form client IDs (CIMD) are cached in `client_metadata_cache` |
+| `client` | id, tenant_id, client_id, name, type (confidential/public), application_type (web/native), require_pkce, auth_method, secret_hash, jwks / jwks_uri, redirect_uris, post_logout_redirect_uris, grant_types, scopes, token_format (jwt/opaque), consent_mode (required/skip_first_party), backchannel_logout_uri, branding (JSON), created_at | `client_id` is unique per tenant; URL-form client IDs (CIMD) are cached in `client_metadata_cache` |
 | `signing_key` | id, tenant_id, kid, alg, state (next/active/retired), private_key (encrypted with KEK), public_jwk, activated_at, retired_at, expires_at | |
 | `browser_session` | id, tenant_id, user_id, auth_time, acr, amr (JSON), ip, user_agent, created_at, last_seen_at, expires_at, idle_expires_at | Session cookie holds an opaque random ID; only its hash is stored |
 | `rp_session` | browser_session_id, client_id, sid, created_at | Which clients the session logged in to (for back-channel logout) |
 | `flow` | id, tenant_id, kind (login/registration/recovery/verification/settings/consent), state (JSON), csrf_hash, expires_at, browser_session_id? | Short-lived flow state machines (§9) |
 | `authorization_request` | id, tenant_id, client_id, params (JSON: redirect_uri, scope, state, nonce, code_challenge, resource, prompt, max_age, acr_values…), created_at, expires_at | Created at `/authorize`, consumed when a code is issued. Also used for PAR |
-| `authorization_code` | code_hash (PK), tenant_id, client_id, user_id, browser_session_id, redirect_uri, scope, nonce, code_challenge, resource, auth_time, acr, amr, expires_at, consumed_at, token_family_id? | |
-| `token_family` | id, tenant_id, client_id, user_id?, scope, resource, created_at, revoked_at, revoked_reason | Groups a refresh-token chain; revoking the family revokes all of its tokens |
+| `authorization_code` | code_hash (PK), tenant_id, client_id, user_id, browser_session_id, redirect_uri, scope, nonce, code_challenge, resource, auth_time, acr, amr, expires_at, consumed_at, token_family_id | The token family is created in the same transaction as the code, so a code replay that races the exchange still finds and revokes it |
+| `token_family` | id, tenant_id, client_id, user_id?, scope, resource, auth_time?, acr?, amr, browser_session_id?, claims request (JSON)?, created_at, absolute_expires_at, revoked_at, revoked_reason | Groups a refresh-token chain; revoking the family revokes all of its tokens. Carries the authentication context so refreshed ID tokens repeat `auth_time` and UserInfo applies `claims.userinfo`. Access tokens carry the family id and UserInfo checks `revoked_at` |
 | `refresh_token` | token_hash (PK), tenant_id, family_id, parent_hash?, expires_at, consumed_at | Rotation: each use consumes the token and issues a child |
 | `access_token` | token_hash (PK), tenant_id, family_id?, client_id, user_id?, scope, resource, expires_at, revoked_at | Only for opaque tokens; JWT access tokens are not stored. Revocation of a JWT revokes its family |
 | `consent_grant` | id, tenant_id, user_id, client_id, scopes, resource?, created_at, revoked_at | |
@@ -204,6 +204,7 @@ from handler code.
 | `job_lease` | name, owner, leased_until | Background job coordination |
 | `replay_guard` | tenant_id, kind (jti/dpop/nonce), value_hash, expires_at | `private_key_jwt` assertion `jti`s; later DPoP |
 | `admin_setup_token` | token_hash, expires_at, used_at | One-time bootstrap URL (ADM-3) |
+| `self_service_token` | token_hash (PK), tenant_id, kind (verification/recovery/invitation), user_id, email, created_at, expires_at, consumed_at | Emailed one-time links, consumed atomically. Verification succeeds only while the user's email still equals `email` |
 
 ### 6.2 Storage of secrets
 
@@ -223,24 +224,34 @@ Losing the KEK makes encrypted columns unrecoverable; the docs say so prominentl
 ### 7.1 Traits
 
 `anvil-core` defines the storage ports (`anvil_core::ports`): **repository traits grouped by
-aggregate**, plus a transaction abstraction:
+aggregate**. There is no generic transaction handle:
 
 ```rust
 #[async_trait]
 pub trait Storage: Send + Sync + 'static {
-    async fn begin(&self) -> Result<Box<dyn Tx>, StorageError>;
     fn tenants(&self) -> &dyn TenantRepo;
-    fn users(&self) -> &dyn UserRepo;
+    fn users(&self) -> &dyn UserRepo;          // users, password credentials, self-service tokens
     fn clients(&self) -> &dyn ClientRepo;
-    fn grants(&self) -> &dyn GrantRepo;       // authorization requests, codes, tokens, families, consent
-    fn sessions(&self) -> &dyn SessionRepo;
     fn keys(&self) -> &dyn KeyRepo;
+    fn sessions(&self) -> &dyn SessionRepo;
     fn flows(&self) -> &dyn FlowRepo;
-    fn audit(&self) -> &dyn AuditRepo;
-    fn jobs(&self) -> &dyn JobRepo;
-    // later: orgs(), connections(), roles(), …
+    fn grants(&self) -> &dyn GrantRepo;        // authorization requests, codes, families, refresh tokens, replay guards
+    fn setup(&self) -> &dyn SetupRepo;         // installation-wide bootstrap
+    fn outbox(&self) -> &dyn OutboxRepo;
+    async fn purge_expired(&self, now: OffsetDateTime) -> Result<u64, StorageError>;
+    // later: audit(), jobs(), orgs(), connections(), roles(), …
 }
 ```
+
+**Intent methods instead of `begin() -> Box<dyn Tx>`.** An earlier draft of this section had a
+generic transaction handle. It was replaced (Phase 2) by making every multi-row change that must be
+atomic a single repository method. Reasons: the traits stay dyn-compatible, a caller cannot forget a
+commit or hold a transaction across an await on unrelated I/O, and every atomic unit is a named
+method that the shared contract suite tests on both backends. The atomic methods in 0.1 are
+`GrantRepo::create_code` (family + code), `consume_code`, `rotate_refresh`, `record_jti`,
+`UserRepo::create` (user + password + token + email), `delete`, `issue_self_service_token`,
+`complete_verification`, `complete_recovery`, `ClientRepo::delete` (client + family revocation),
+`SetupRepo::install` and `SetupRepo::complete_setup`.
 
 Repository methods express **intent**, not generic CRUD. The security-critical ones are atomic by
 contract:
@@ -249,8 +260,10 @@ contract:
 |---|---|---|---|
 | `GrantRepo::consume_code(tenant, code_hash, now)` | Returns the code only if it exists, is unexpired and unconsumed, **and marks it consumed in the same statement**. If it was already consumed, returns `AlreadyConsumed { family_id }` so the caller can revoke that family (OIDC-3) | `UPDATE … SET consumed_at=? WHERE code_hash=? AND consumed_at IS NULL AND expires_at>? RETURNING *` | same |
 | `GrantRepo::rotate_refresh(tenant, token_hash, new_token, now)` | Atomically consumes the presented token and inserts its child. If the presented token was already consumed, revokes the entire family and returns `ReuseDetected` (OIDC-5) | One transaction | One transaction |
-| `UserRepo::create(tenant, user)` | Fails with `Conflict` on duplicate email/username (unique index), never "check then insert" | Unique index | Unique index |
-| `GrantRepo::record_jti(tenant, jti_hash, exp)` | Insert-or-fail for replay prevention | `INSERT` with primary key | same |
+| `UserRepo::create(tenant, user, password?, token?, email?)` | One transaction. Fails with `Conflict` on duplicate email/username (unique index), never "check then insert"; nothing is persisted on conflict | Unique index | Unique index |
+| `GrantRepo::record_jti(tenant, kind, jti_hash, exp, now)` | Insert-or-fail for replay prevention; an expired entry may be replaced | `INSERT` with primary key | same |
+| `UserRepo::complete_recovery(tenant, token_hash, phc, now, notice?)` | One transaction: consumes the token, sets the password, marks the email verified, revokes all sessions and token families of the user, enqueues the notice | One transaction | One transaction |
+| `SetupRepo::complete_setup(token_hash, now, …)` | One transaction: consumes the setup token, creates the first administrator and the admin client | One transaction | One transaction |
 
 ### 7.2 Two implementations, one contract
 

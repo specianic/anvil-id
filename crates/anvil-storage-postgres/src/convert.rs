@@ -6,6 +6,10 @@ use anvil_core::model::CodeHash;
 use anvil_core::ports::StorageError;
 
 /// bytea → code hash. Anything other than 32 bytes is corrupt data.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "transitional: used again by plan 02-06")
+)]
 pub(crate) fn bytea_to_code_hash(bytes: &[u8]) -> Result<CodeHash, StorageError> {
     CodeHash::from_slice(bytes).map_err(|e| StorageError::Corrupt(format!("code_hash: {e}")))
 }

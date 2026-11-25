@@ -4,23 +4,24 @@
 //! All repositories share one connection pool.
 
 mod convert;
-mod grants;
-mod tenants;
+// TRANSITIONAL (plan 02-02): tenants.rs and grants.rs stay on disk as reference for plan 02-06
+// but are not compiled; every repository is `pending::Pending` until 02-06 lands.
+mod pending;
 
-use anvil_core::ports::{GrantRepo, Storage, StorageError, TenantRepo};
+use anvil_core::ports::{
+    ClientRepo, FlowRepo, GrantRepo, KeyRepo, OutboxRepo, SessionRepo, SetupRepo, Storage,
+    StorageError, TenantRepo, UserRepo,
+};
 use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
 
 use crate::convert::map_err;
-use crate::grants::PgGrants;
-use crate::tenants::PgTenants;
+use crate::pending::Pending;
 
 /// Postgres storage backend.
 #[derive(Debug, Clone)]
 pub struct PostgresStorage {
     pool: PgPool,
-    tenants: PgTenants,
-    grants: PgGrants,
 }
 
 impl PostgresStorage {
@@ -31,11 +32,7 @@ impl PostgresStorage {
             .connect(url)
             .await
             .map_err(map_err)?;
-        Ok(Self {
-            tenants: PgTenants { pool: pool.clone() },
-            grants: PgGrants { pool: pool.clone() },
-            pool,
-        })
+        Ok(Self { pool })
     }
 
     /// Runs embedded migrations.
@@ -47,12 +44,39 @@ impl PostgresStorage {
     }
 }
 
+#[async_trait::async_trait]
 impl Storage for PostgresStorage {
     fn tenants(&self) -> &dyn TenantRepo {
-        &self.tenants
+        &Pending
+    }
+    fn users(&self) -> &dyn UserRepo {
+        &Pending
+    }
+    fn clients(&self) -> &dyn ClientRepo {
+        &Pending
+    }
+    fn keys(&self) -> &dyn KeyRepo {
+        &Pending
+    }
+    fn sessions(&self) -> &dyn SessionRepo {
+        &Pending
+    }
+    fn flows(&self) -> &dyn FlowRepo {
+        &Pending
+    }
+    fn grants(&self) -> &dyn GrantRepo {
+        &Pending
+    }
+    fn setup(&self) -> &dyn SetupRepo {
+        &Pending
+    }
+    fn outbox(&self) -> &dyn OutboxRepo {
+        &Pending
     }
 
-    fn grants(&self) -> &dyn GrantRepo {
-        &self.grants
+    async fn purge_expired(&self, _now: time::OffsetDateTime) -> Result<u64, StorageError> {
+        Err(StorageError::Unsupported(
+            "postgres: Storage::purge_expired lands in plan 02-06",
+        ))
     }
 }
