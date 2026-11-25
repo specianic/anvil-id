@@ -1,7 +1,7 @@
 ---
 phase: 03-release-0-2-secure-by-default
 verified: 2026-11-25T10:04:01Z
-status: gaps_found
+status: passed
 score: 5/5 success criteria verified (16/16 requirements satisfied); 1 CLAUDE.md rule gap
 re_verification: false
 gaps:
@@ -141,3 +141,7 @@ The one gap is the CLAUDE.md non-negotiable "one implementation per concern" for
 
 _Verified: 2026-11-25T10:04:01Z_
 _Verifier: Claude (gsd-verifier)_
+
+## Re-verification (2026-11-25)
+
+Gap closed by plan 03-34 (commits 9b206b5, d5c8415): single base64 implementation in anvil_jose::encoding; no `base64::` use or base64 dependency outside crates/anvil-jose; guarded by scripts/check-deps.sh (+ self-test). CI run 45627156784 green on d5c8415. Status: passed.

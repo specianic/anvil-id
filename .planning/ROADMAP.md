@@ -22,7 +22,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Foundations and Spikes (M0)** - Workspace, CI and the three stack spikes (dual storage, static binary, conformance in CI) (completed 2026-11-25)
 - [x] **Phase 2: Release 0.1 "First login"** - Zero-config binary with spec-correct auth code + PKCE, refresh, client credentials, password login and bootstrap admin (completed 2026-11-25)
-- [ ] **Phase 3: Release 0.2 "Secure by default"** - Passkeys, TOTP, consent, sessions, brute-force protection, audit log, introspection/revocation, key rotation, admin console v1
+- [x] **Phase 3: Release 0.2 "Secure by default"** - Passkeys, TOTP, consent, sessions, brute-force protection, audit log, introspection/revocation, key rotation, admin console v1 (completed 2026-11-25)
 - [ ] **Phase 4: Release 0.3 "Real-world logins"** - Social login, account linking, MFA policy, logout profiles, theming, i18n, account page, resource indicators
 - [ ] **Phase 5: Release 0.4 "Operate it"** - Multi-tenant console, RBAC, webhooks, declarative config, DCR, MCP basics, HA on Postgres, observability, Helm
 - [ ] **Phase 6: Release 1.0 "Credible for business" (Organizations and SSO)** - Organizations, per-org SAML/OIDC SSO with JIT, home-realm discovery, complete admin console
