@@ -1,0 +1,24 @@
+# Linked accounts page (plan 04-25, AUTH-11).
+title-account_linked = Linked accounts
+account_nav-linked = Linked accounts
+account-last_sign_in_method = This is your only way to sign in. Set a password or add a passkey before you disconnect it.
+account-link_not_found = That linked account no longer exists.
+linked-unlinked = The account was disconnected.
+linked-heading = Accounts you sign in with
+linked-caption = Accounts from other providers that are connected to this account.
+linked-col_provider = Provider
+linked-col_email = Email at the provider
+linked-col_linked = Connected
+linked-col_last_used = Last used
+linked-col_action = Action
+linked-no_email = Not shared
+linked-never_used = Never
+linked-none = No other accounts are connected.
+linked-disconnect = Disconnect
+linked-disconnect_provider = Disconnect { $provider }
+linked-available_heading = Connect another account
+linked-available_help = After you connect an account, you can use it to sign in here.
+linked-connect_provider = Connect { $provider }
+linked-reauth_before = For your security,
+linked-reauth_link = sign in again
+linked-reauth_after = before connecting or disconnecting an account.

@@ -34,7 +34,7 @@ use anvil_jose::recovery_code::{
     generate_recovery_codes, normalize_recovery_code, recovery_code_hash,
 };
 use secrecy::{ExposeSecret as _, SecretString};
-use time::Duration;
+use time::{Duration, OffsetDateTime};
 
 use super::audit::AuditService;
 use super::flow::{BindingError, FLOW_LIFETIME, NOTICE_EMAIL_TTL, check_binding};
@@ -44,8 +44,8 @@ use crate::flow::settings::{
 };
 use crate::model::{
     AuditAction, AuditActor, AuditDetails, AuditOutcome, BrowserSession, CredentialId,
-    CredentialKind, CredentialSummary, EmailKind, Flow, FlowId, FlowKind, NewEmail, NewFlow,
-    NewPasskey, NewSelfServiceToken, NewTotp, OutboxId, RecoveryCodeHash, RecoveryNotice,
+    CredentialKind, CredentialSummary, EmailKind, Flow, FlowId, FlowKind, IdentityLinkId, NewEmail,
+    NewFlow, NewPasskey, NewSelfServiceToken, NewTotp, OutboxId, RecoveryCodeHash, RecoveryNotice,
     RequestContext, SecretHash, SelfServiceKind, TOTP_SEED_PURPOSE, Tenant, TenantId, User, UserId,
     UserUpdate, credential_aad, normalize_email, seal_payload,
 };
@@ -103,6 +103,10 @@ pub enum AccountFailure {
     PasswordBreached,
     /// Hashing or the breach check is overloaded: try again shortly.
     Overloaded,
+    /// Disconnecting this identity would leave the account without any way to sign in.
+    LastSignInMethod,
+    /// No such linked identity of this user.
+    LinkNotFound,
 }
 
 impl AccountFailure {
@@ -129,6 +133,8 @@ impl AccountFailure {
         Self::PasswordTooLong,
         Self::PasswordBreached,
         Self::Overloaded,
+        Self::LastSignInMethod,
+        Self::LinkNotFound,
     ];
 
     /// The stable message key.
@@ -155,6 +161,8 @@ impl AccountFailure {
             Self::PasswordTooLong => "account.password_too_long",
             Self::PasswordBreached => "account.password_breached",
             Self::Overloaded => "account.overloaded",
+            Self::LastSignInMethod => "account.last_sign_in_method",
+            Self::LinkNotFound => "account.link_not_found",
         }
     }
 }
@@ -1083,6 +1091,169 @@ impl AccountService {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// Linked upstream identities (AUTH-11, AUTH-13)
+// ---------------------------------------------------------------------------------------------
+
+/// A linked upstream identity as the account page shows it. Never the upstream subject or
+/// provider metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkedIdentityView {
+    pub id: IdentityLinkId,
+    pub connection_display_name: String,
+    pub slug: String,
+    /// The upstream email when the link was made (display only).
+    pub email_at_link: Option<String>,
+    pub created_at: OffsetDateTime,
+    pub last_used_at: Option<OffsetDateTime>,
+}
+
+/// An enabled connection the user has not linked yet (a "Connect" button).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AvailableConnection {
+    pub slug: String,
+    pub display_name: String,
+}
+
+impl AccountService {
+    /// The user's linked identities, oldest first, with the display name of their connection
+    /// (also for a connection that is disabled now).
+    pub async fn linked_identities(
+        &self,
+        tenant: TenantId,
+        user: UserId,
+    ) -> Result<Vec<LinkedIdentityView>, CoreError> {
+        let connections = self.storage.connections();
+        let all = connections.list(tenant).await?;
+        let links = connections.links_for_user(tenant, user).await?;
+        Ok(links
+            .into_iter()
+            .filter_map(|l| {
+                let c = all.iter().find(|c| c.id == l.connection_id)?;
+                Some(LinkedIdentityView {
+                    id: l.id,
+                    connection_display_name: c.display_name.clone(),
+                    slug: c.slug.clone(),
+                    email_at_link: l.email_at_link,
+                    created_at: l.created_at,
+                    last_used_at: l.last_used_at,
+                })
+            })
+            .collect())
+    }
+
+    /// The tenant's enabled connections the user has no link at, in slug order.
+    pub async fn available_connections(
+        &self,
+        tenant: TenantId,
+        user: UserId,
+    ) -> Result<Vec<AvailableConnection>, CoreError> {
+        let connections = self.storage.connections();
+        let links = connections.links_for_user(tenant, user).await?;
+        Ok(connections
+            .list(tenant)
+            .await?
+            .into_iter()
+            .filter(|c| c.enabled && !links.iter().any(|l| l.connection_id == c.id))
+            .map(|c| AvailableConnection {
+                slug: c.slug,
+                display_name: c.display_name,
+            })
+            .collect())
+    }
+
+    /// Checks a submission that starts linking a provider from the account page: flow cookie,
+    /// CSRF token, flow owner and a sign-in within the last 15 minutes. Changes nothing (the
+    /// upstream service checks the same again when it starts).
+    pub async fn check_link_start(
+        &self,
+        tenant: TenantId,
+        session: &BrowserSession,
+        binding: &SettingsBinding<'_>,
+    ) -> Result<(), AccountError> {
+        self.open(tenant, session, binding).await.map(|_| ())
+    }
+
+    /// Disconnects one of the user's linked identities (re-authentication within 15 minutes),
+    /// audited `identity_unlinked` (mode `account`).
+    ///
+    /// Refused with [`AccountFailure::LastSignInMethod`] when the account would be left without
+    /// a way to sign in: no password, no passkey, no other link, and the tenant offers neither
+    /// email codes nor magic links. Another user's link (or an unknown id) is
+    /// [`AccountFailure::LinkNotFound`]; it is never deleted.
+    pub async fn unlink(
+        &self,
+        tenant: &Tenant,
+        session: &BrowserSession,
+        binding: &SettingsBinding<'_>,
+        link: IdentityLinkId,
+        ctx: &RequestContext,
+    ) -> Result<(), AccountError> {
+        self.open(tenant.id, session, binding).await?;
+        let user = session.user_id;
+        let connections = self.storage.connections();
+        let links = connections.links_for_user(tenant.id, user).await?;
+        let Some(target) = links.iter().find(|l| l.id == link) else {
+            return Err(AccountFailure::LinkNotFound.into());
+        };
+        let credentials = self
+            .storage
+            .users()
+            .list_credentials(tenant.id, user)
+            .await?;
+        let methods = SignInMethods {
+            password: credentials
+                .iter()
+                .any(|c| c.kind == CredentialKind::Password),
+            passkeys: credentials
+                .iter()
+                .filter(|c| c.kind == CredentialKind::Webauthn)
+                .count(),
+            other_links: links.len() - 1,
+            email_sign_in: tenant.settings.email_otp || tenant.settings.magic_link,
+        };
+        if !methods.any() {
+            return Err(AccountFailure::LastSignInMethod.into());
+        }
+        let slug = connections
+            .get(tenant.id, target.connection_id)
+            .await?
+            .map(|c| c.slug)
+            .unwrap_or_default();
+        if !connections.delete_link(tenant.id, user, link).await? {
+            return Err(AccountFailure::LinkNotFound.into());
+        }
+        self.audit()
+            .record(
+                tenant.id,
+                AuditActor::user(user),
+                AuditAction::IdentityUnlinked,
+                Some(user.to_string()),
+                AuditOutcome::Success,
+                ctx,
+                AuditDetails::link(&slug, "account"),
+            )
+            .await?;
+        Ok(())
+    }
+}
+
+/// The ways a user can still sign in once one linked identity is gone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SignInMethods {
+    password: bool,
+    passkeys: usize,
+    other_links: usize,
+    /// The tenant offers sign-in with an email code or a magic link.
+    email_sign_in: bool,
+}
+
+impl SignInMethods {
+    fn any(self) -> bool {
+        self.password || self.passkeys > 0 || self.other_links > 0 || self.email_sign_in
+    }
+}
+
 /// AAD of the address sealed into an email-change link: tenant id bytes followed by the token
 /// hash.
 fn email_change_link_aad(tenant: TenantId, token_hash: &[u8; 32]) -> Vec<u8> {
@@ -1281,6 +1452,45 @@ mod tests {
         assert_eq!(
             AccountFailure::ReauthRequired.key(),
             "account.reauth_required"
+        );
+    }
+
+    #[test]
+    fn any_remaining_method_allows_unlinking() {
+        let none = SignInMethods {
+            password: false,
+            passkeys: 0,
+            other_links: 0,
+            email_sign_in: false,
+        };
+        assert!(!none.any());
+        assert!(
+            SignInMethods {
+                password: true,
+                ..none
+            }
+            .any()
+        );
+        assert!(
+            SignInMethods {
+                passkeys: 1,
+                ..none
+            }
+            .any()
+        );
+        assert!(
+            SignInMethods {
+                other_links: 1,
+                ..none
+            }
+            .any()
+        );
+        assert!(
+            SignInMethods {
+                email_sign_in: true,
+                ..none
+            }
+            .any()
         );
     }
 

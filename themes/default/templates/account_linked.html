@@ -1,0 +1,62 @@
+{#- Linked accounts page (plan 04-25). Variables (besides page/account_base/account_nav):
+      csrf_token, messages [{level, key, text}], recent_auth, login_url,
+      linked [{id, provider, email, created, created_iso, last_used, last_used_iso, unlink_url}],
+      available [{slug, name, connect_url}]
+    Selectors: table linked-list; rows linked-{id}; forms linked-unlink-{id} and
+    linked-connect-{slug}; submit buttons "{form id}-submit"; empty-state linked-none;
+    re-auth notice account-reauth with link link-reauth. No script. -#}
+{% extends "account_base.html" %}
+{% block account %}
+{% macro csrf() %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endmacro %}
+<div class="anvil-form-messages" id="account-messages" aria-live="polite">
+{% for m in messages %}
+<p class="anvil-message anvil-message-{{ m.level }}" id="account-msg-{{ loop.index }}" data-message-key="{{ m.key }}"{% if m.level == "error" %} role="alert"{% endif %}>{{ m.text }}</p>
+{% endfor %}
+</div>
+{% if not recent_auth %}
+<p class="anvil-message anvil-message-info" id="account-reauth">{{ t("linked.reauth_before") }} <a id="link-reauth" href="{{ login_url }}">{{ t("linked.reauth_link") }}</a> {{ t("linked.reauth_after") }}</p>
+{% endif %}
+
+<section class="anvil-account-section" id="linked" aria-labelledby="linked-heading">
+<h2 id="linked-heading">{{ t("linked.heading") }}</h2>
+{% if linked %}
+<table class="anvil-table" id="linked-list">
+<caption>{{ t("linked.caption") }}</caption>
+<thead><tr><th scope="col">{{ t("linked.col_provider") }}</th><th scope="col">{{ t("linked.col_email") }}</th><th scope="col">{{ t("linked.col_linked") }}</th><th scope="col">{{ t("linked.col_last_used") }}</th><th scope="col">{{ t("linked.col_action") }}</th></tr></thead>
+<tbody>
+{% for l in linked %}
+<tr id="linked-{{ l.id }}">
+<td data-label="{{ t("linked.col_provider") }}"><bdi>{{ l.provider }}</bdi></td>
+<td data-label="{{ t("linked.col_email") }}">{% if l.email %}<bdi>{{ l.email }}</bdi>{% else %}{{ t("linked.no_email") }}{% endif %}</td>
+<td data-label="{{ t("linked.col_linked") }}"><time datetime="{{ l.created_iso }}">{{ l.created }}</time></td>
+<td data-label="{{ t("linked.col_last_used") }}">{% if l.last_used %}<time datetime="{{ l.last_used_iso }}">{{ l.last_used }}</time>{% else %}{{ t("linked.never_used") }}{% endif %}</td>
+<td>
+<form id="linked-unlink-{{ l.id }}" method="post" action="{{ l.unlink_url }}">
+{{ csrf() }}
+<button type="submit" id="linked-unlink-{{ l.id }}-submit" aria-label="{{ t("linked.disconnect_provider", provider=l.provider) }}">{{ t("linked.disconnect") }}</button>
+</form>
+</td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+{% else %}
+<p id="linked-none">{{ t("linked.none") }}</p>
+{% endif %}
+</section>
+
+{% if available %}
+<section class="anvil-account-section" id="linked-available" aria-labelledby="linked-available-heading">
+<h2 id="linked-available-heading">{{ t("linked.available_heading") }}</h2>
+<p>{{ t("linked.available_help") }}</p>
+<div class="anvil-upstream" role="group" aria-labelledby="linked-available-heading">
+{% for c in available %}
+<form id="linked-connect-{{ c.slug }}" method="post" action="{{ c.connect_url }}">
+{{ csrf() }}
+<button type="submit" id="linked-connect-{{ c.slug }}-submit" class="anvil-secondary" data-connection="{{ c.slug }}">{{ t("linked.connect_provider", provider=c.name) }}</button>
+</form>
+{% endfor %}
+</div>
+</section>
+{% endif %}
+{% endblock %}
