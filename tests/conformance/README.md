@@ -1,36 +1,37 @@
 # OpenID conformance harness
 
 This harness runs the [OpenID Foundation conformance suite](https://gitlab.com/openid/conformance-suite)
-against a freshly started `anvilid` over TLS. It runs three plans:
+against a freshly started `anvilid` over TLS. It runs five plans:
 
 - `oidcc-basic-certification-test-plan[server_metadata=discovery][client_registration=static_client]` (Basic OP)
 - `oidcc-config-certification-test-plan` (Config OP)
 - `oidcc-formpost-basic-certification-test-plan[server_metadata=discovery][client_registration=static_client]`
   (Form Post OP: the Basic plan's module list, error cases included, with `response_mode=form_post`)
-
-Two logout plans have their own selections. They are not part of `all` yet; they join it in plan 04-23,
-once RP-initiated logout and back-channel delivery pass:
-
 - `oidcc-rp-initiated-logout-certification-test-plan[response_type=code][client_registration=static_client]`
   (RP-Initiated Logout OP; override with `LOGOUT_PLAN`)
 - `oidcc-backchannel-rp-initiated-logout-certification-test-plan[response_type=code][client_registration=static_client]`
   (Back-Channel Logout OP; override with `BACKCHANNEL_PLAN`)
 
-The variant strings have not been confirmed by a passing run yet, which is why they can be overridden.
+The logout plans (suite classes `OIDCCRpInitiatedLogoutTestPlan` and
+`OIDCCBackchannelRpInitiatedLogoutTestPlan`) fix `server_metadata=discovery`,
+`client_auth_type=client_secret_basic` and `response_mode=default` themselves. The two remaining
+variant parameters of their modules are `response_type` and `client_registration`, which is what the
+variant strings above select. This was checked in the suite source at `release-v5.3.5`; the overrides
+exist for other suite tags.
 
 Local runs and CI use the same script. Run it from the repository root:
 
 ```sh
-tests/conformance/run.sh all        # all three plans (default; also `just conformance`)
+tests/conformance/run.sh all        # all five plans (default; also `just conformance`)
 tests/conformance/run.sh basic      # Basic OP only
 tests/conformance/run.sh config     # Config OP only
 tests/conformance/run.sh formpost   # Form Post OP only
-tests/conformance/run.sh logout     # RP-Initiated Logout OP only (not in `all` yet)
-tests/conformance/run.sh backchannel  # Back-Channel Logout OP only (not in `all` yet)
+tests/conformance/run.sh logout     # RP-Initiated Logout OP only
+tests/conformance/run.sh backchannel  # Back-Channel Logout OP only
 ```
 
-Every selection starts its own suite and its own fresh `anvilid`; `all` runs the three plans against one
-suite instance and one `anvilid`. CI (`.github/workflows/conformance.yml`) runs `run.sh all` on pushes
+Every selection starts its own suite and its own fresh `anvilid`; `all` runs the five plans in the
+order above against one suite instance and one `anvilid`. CI (`.github/workflows/conformance.yml`) runs `run.sh all` on pushes
 to `main`, on manual dispatch and on pull requests that touch `crates/**` (this includes
 `crates/anvil-core/src/oauth/**`, the authorize/token/consent services and
 `crates/anvil-web/src/protocol/**`), `themes/**`, the harness or the workflow. Results and logs are
@@ -118,34 +119,47 @@ the paths from the suite's `nginx/Dockerfile`. Notes on the choices:
   `KEEP_SUITE=1` nginx keeps serving the certificate it has already loaded, but restarting the
   container fails because the files are gone.
 
-The static client's `post_logout_redirect_uris` and `backchannel_logout_uri` are added to `setup.sh` in
-04-23, together with the admin API fields they depend on.
+`setup.sh` registers `backchannel_logout_uri` on a dedicated client that only the Back-Channel plan
+uses (see the next section).
 
 ### Setup flow (`setup.sh`)
 
-`setup.sh <setup-url> <out-config>` provisions the instance through public interfaces only:
+`setup.sh <setup-url> <out-config> <out-backchannel-config>` provisions the instance through public
+interfaces only:
 
 1. `GET /setup?token=…` with a cookie jar (CSRF token and flow cookie), then `POST` an admin email and a
    random password. The result page exposes the management client credentials in `#mgmt-client-id` and
    `#mgmt-client-secret`. Plain curl passes the CSRF layer because it sends no Fetch-Metadata or Origin
    headers.
 2. `POST /t/system/token` (client credentials, HTTP Basic) for an admin access token.
-3. Three confidential clients in the `default` tenant through the admin API, matching the suite's
-   static client sections `client`, `client2` (both `client_secret_basic`) and `client_secret_post`.
-   Each has the exact suite callback `https://localhost.emobix.co.uk:8443/test/a/anvilid/callback`,
+3. Confidential clients in the `default` tenant through the admin API: three matching the suite's
+   static client sections `client`, `client2` (both `client_secret_basic`) and `client_secret_post`,
+   and a back-channel logout client (below). Each has the exact suite callback `https://localhost.emobix.co.uk:8443/test/a/anvilid/callback`,
    grant types `authorization_code` and `refresh_token`, scopes `openid profile email address phone`,
    and `require_pkce: false`, because the Basic OP plan sends no PKCE in most modules (decision C1:
    only confidential clients may opt out). They are created with `consent_mode: "skip_first_party"`
    because the scripted browser signs in but does not answer a consent screen (clients created
    through the admin API default to `consent_mode: "required"`), and with `token_format: "jwt"`
-   (the default, stated explicitly).
+   (the default, stated explicitly). `client` also has
+   `post_logout_redirect_uris: ["https://localhost.emobix.co.uk:8443/test/a/anvilid/post_logout_redirect"]`
+   for the RP-Initiated Logout plan.
+   A fourth client, "conformance back-channel logout client", has the same settings plus the same
+   `post_logout_redirect_uris`,
+   `backchannel_logout_uri: "https://localhost.emobix.co.uk:8443/test/a/anvilid/backchannel_logout"` and
+   `backchannel_logout_session_required: true`. It is a separate client on purpose: a suite module
+   reports any request it does not expect as a FAILURE, so if the RP-Initiated Logout plan's `client`
+   had a back-channel URI, every successful sign-out in that plan would POST a logout token into a
+   module that does not handle it.
 4. A user with `email_verified: true`, a random password and every standard claim (including `address`
    and `phone_number_verified`).
-5. It renders `config.template.json` into `conformance-results/tmp/anvilid-oidcc.json`. The path is
-   stable because the expected-skips and expected-failures files match on `configuration-filename`.
+5. It renders `config.template.json` twice: into `conformance-results/tmp/anvilid-oidcc.json` (every
+   plan except Back-Channel Logout) and into `conformance-results/tmp/anvilid-oidcc-backchannel.json`
+   (Back-Channel Logout plan; `client` is the back-channel client there). The paths are stable because
+   the expected-skips and expected-failures files match on `configuration-filename`; the back-channel
+   name does not match the reviewed skip's `*anvilid-oidcc.json` pattern.
 
-No secret is printed. The rendered config is the only place the secrets are written, and it is deleted
-on exit. `anvilid.log` contains the one-time setup URL, which is consumed during the run and belongs to
+No secret is printed. The two rendered configs are the only place the secrets are written, and they are
+deleted on exit. `anvilid.log` contains the one-time setup URL, which is consumed during the run and belongs to
 an instance that no longer exists.
 
 ### Browser automation
@@ -166,7 +180,9 @@ matches `/logout*`:
 
 - "Confirm sign-out" (optional): on a confirmation page under `/ui/logout*`, click
   `#logout-confirm-submit` (button text "Sign out").
-- "Verify Complete": wait for the suite's `*/test/*/post_logout_redirect*` page.
+- "Verify Complete": check that the browser is on the suite's `*/test/*/post_logout_redirect*` page.
+  This task has no commands, as in the suite's own logout configuration: the page the suite serves
+  there (`resultCaptured.html`) has no `submission_complete` element to wait for.
 
 Module overrides replace the whole browser list, so each one repeats the `/authorize*` block:
 
@@ -246,12 +262,13 @@ redirect URI error page, which the module accepts.
 
 The Config OP and the two logout plans have no skip. `run-test-plan.py` fails on skip entries no
 module used, so `run.sh config`, `run.sh logout` and `run.sh backchannel` check against an empty skip
-list generated in `conformance-results/tmp/`.
+list generated in `conformance-results/tmp/`. `run.sh all` uses `expected-skips.json`, whose entry is
+used by the Basic and Form Post plans.
 
 ## Running locally
 
 ```sh
-just conformance                          # build, run all three plans, tear down
+just conformance                          # build, run all five plans, tear down
 KEEP_SUITE=1 just conformance             # keep the suite UI at https://localhost.emobix.co.uk:8443/
 docker compose -p anvil-conformance down -v   # stop a kept suite
 ```
