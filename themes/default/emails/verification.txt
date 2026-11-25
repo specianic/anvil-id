@@ -1,0 +1,14 @@
+Confirm your email address for {{ tenant_name }}
+
+Hello,
+
+Please confirm that {{ email }} is your email address by opening the link below:
+
+{{ link }}
+
+The link expires in {{ expires_in }}. Opening it shows a page with a "Confirm email" button; your address is confirmed only after you select that button.
+
+If you did not create an account with {{ tenant_name }}, you can ignore this email.
+
+-- 
+{{ tenant_name }}

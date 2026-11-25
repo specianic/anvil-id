@@ -1,0 +1,14 @@
+Reset your {{ tenant_name }} password
+
+Hello,
+
+Someone asked to reset the password for {{ email }}. To choose a new password, open the link below:
+
+{{ link }}
+
+The link expires in {{ expires_in }} and can be used only once.
+
+If you did not ask to reset your password, you can ignore this email. Your password stays the same.
+
+-- 
+{{ tenant_name }}
