@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: verifying
-stopped_at: Completed 02-04-PLAN.md
-last_updated: "2026-11-25T01:52:00.000Z"
+stopped_at: Completed 02-02-PLAN.md
+last_updated: "2026-11-25T01:58:00.000Z"
 last_activity: "2026-11-25 — Completed 01-08 (phase gate: CI green on GitHub, spike verdicts, stack confirmed)"
 progress:
   total_phases: 7
@@ -61,6 +61,7 @@ Progress: [█████░░░░░] 53%
 | Phase 02 P03 | 10min | 2 tasks | 21 files |
 | Phase 02 P04 | 8min | 2 tasks | 12 files |
 | Phase 02 P01 | 16min | 3 tasks | 29 files |
+| Phase 02 P02 | 31min | 3 tasks | 50 files |
 
 ## Accumulated Context
 
@@ -94,6 +95,10 @@ Recent decisions affecting current work:
 - [Phase 02]: anvil-jose signs/verifies via jsonwebtoken::crypto::{sign,verify} (public in 12.0); headers, JWKs and thumbprints are built in-crate; RSA PKCS#8 loaded as PRIVATE KEY PEM
 - [Phase 02]: All Phase 2 deps declared up front (tower-http 0.6.x to match reqwest 0.13); deny.toml allows 0BSD for quoted_printable (lettre); ring absent
 - [Phase 02]: Client assertions: aud exactly the issuer (string or 1-element array), iss==sub==client_id, exp within 5 min, jti required (<=256 chars); future nbf/iat rejected; jti replay left to GrantRepo::record_jti
+- [Phase 02]: Storage ports use intent methods (create_code+family, rotate_refresh, record_jti, complete_recovery, complete_setup, install) instead of begin()/Tx; ARCHITECTURE §7.1 updated
+- [Phase 02]: CoreError single mapping: Validation->invalid_request/422, NotFound/Conflict/Forbidden->not_found/conflict/forbidden (404/409/403), Overloaded->temporarily_unavailable/503, Internal/Storage->server_error/500 with generic description
+- [Phase 02]: purge_expired keeps consumed-but-unexpired codes/refresh tokens so reuse detection survives purges; Page.next_cursor is Some iff more items follow
+- [Phase 02]: Backends run on TRANSITIONAL pending.rs (StorageError::Unsupported) until 02-05/02-06; contract suite (67 tests) compiles and fails with Unsupported until then
 
 ### Pending Todos
 
@@ -107,5 +112,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-11-25T01:24:20.336Z
-Stopped at: Completed 02-03-PLAN.md
+Stopped at: Completed 02-02-PLAN.md
 Resume file: None
