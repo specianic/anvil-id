@@ -65,7 +65,7 @@ Plans:
 **Plans**: 21 plans in 6 waves
 
 Plans:
-- [ ] 02-01-PLAN.md — Dependency foundation (all manifests, lockfile, recipes, workflows) + anvil-jose (keys, KEK, JWKS, signing, client assertions, PKCE) (wave 1)
+- [x] 02-01-PLAN.md — Dependency foundation (all manifests, lockfile, recipes, workflows) + anvil-jose (keys, KEK, JWKS, signing, client assertions, PKCE) (wave 1)
 - [ ] 02-02-PLAN.md — Domain model, storage/service ports, CoreError, FormDescription, core module skeleton, full contract suite, transitional backend shims (wave 1)
 - [x] 02-03-PLAN.md — Default theme: page + email templates, CSS, stable selector contract (wave 1)
 - [x] 02-04-PLAN.md — Sample RP (examples/node-rp, openid-client) + Playwright skeleton and helpers (wave 1)
@@ -156,7 +156,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundations and Spikes (M0) | 8/8 | Complete    | 2026-11-25 |
-| 2. Release 0.1 "First login" | 2/21 | In Progress | - |
+| 2. Release 0.1 "First login" | 3/21 | In Progress | - |
 | 3. Release 0.2 "Secure by default" | 0/TBD | Not started | - |
 | 4. Release 0.3 "Real-world logins" | 0/TBD | Not started | - |
 | 5. Release 0.4 "Operate it" | 0/TBD | Not started | - |

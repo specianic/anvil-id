@@ -4,7 +4,7 @@ milestone: v1.0
 milestone_name: milestone
 status: verifying
 stopped_at: Completed 02-04-PLAN.md
-last_updated: "2026-11-25T01:42:39.000Z"
+last_updated: "2026-11-25T01:52:00.000Z"
 last_activity: "2026-11-25 — Completed 01-08 (phase gate: CI green on GitHub, spike verdicts, stack confirmed)"
 progress:
   total_phases: 7
@@ -60,6 +60,7 @@ Progress: [█████░░░░░] 53%
 | Phase 01 P08 | 20min | 2 tasks | 4 files |
 | Phase 02 P03 | 10min | 2 tasks | 21 files |
 | Phase 02 P04 | 8min | 2 tasks | 12 files |
+| Phase 02 P01 | 16min | 3 tasks | 29 files |
 
 ## Accumulated Context
 
@@ -90,6 +91,9 @@ Recent decisions affecting current work:
 - [Phase 02]: Sample RP (examples/node-rp) uses client.ClientSecretBasic explicitly; openid-client 6 defaults to client_secret_post for a bare secret
 - [Phase 02]: Sample RP allows insecure http only for localhost/127.0.0.1 issuers and fails on a refresh response without a rotated refresh token
 - [Phase 02]: e2e helpers take all endpoints from ANVIL_URL/MAILPIT_URL/RP_URL; credentials are created at runtime via /setup
+- [Phase 02]: anvil-jose signs/verifies via jsonwebtoken::crypto::{sign,verify} (public in 12.0); headers, JWKs and thumbprints are built in-crate; RSA PKCS#8 loaded as PRIVATE KEY PEM
+- [Phase 02]: All Phase 2 deps declared up front (tower-http 0.6.x to match reqwest 0.13); deny.toml allows 0BSD for quoted_printable (lettre); ring absent
+- [Phase 02]: Client assertions: aud exactly the issuer (string or 1-element array), iss==sub==client_id, exp within 5 min, jti required (<=256 chars); future nbf/iat rejected; jti replay left to GrantRepo::record_jti
 
 ### Pending Todos
 
