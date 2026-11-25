@@ -219,9 +219,14 @@ impl SigningKey {
         let claims = serde_json::to_vec(&claims)
             .map_err(|_| JoseError::Malformed("claims serialisation failed"))?;
         let message = format!("{}.{}", b64url(&header), b64url(&claims));
-        let sig = jsonwebtoken::crypto::sign(message.as_bytes(), &self.key, self.alg.to_jwt())
-            .map_err(|_| JoseError::Crypto("signing failed"))?;
+        let sig = self.sign_message(&message)?;
         Ok(format!("{message}.{sig}"))
+    }
+
+    /// Base64url signature over an already-encoded `header.payload` signing input.
+    pub(crate) fn sign_message(&self, message: &str) -> Result<String, JoseError> {
+        jsonwebtoken::crypto::sign(message.as_bytes(), &self.key, self.alg.to_jwt())
+            .map_err(|_| JoseError::Crypto("signing failed"))
     }
 }
 

@@ -11,6 +11,7 @@ workspace = true
 
 # Pure domain crate: no I/O dependencies (allowlist enforced by scripts/check-deps.sh).
 [dependencies]
+anvil-jose.workspace = true
 async-trait.workspace = true
 secrecy.workspace = true
 serde.workspace = true
