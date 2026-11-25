@@ -174,7 +174,7 @@ impl From<TenantSettings> for CoreTenantSettings {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct TenantView {
     pub id: Uuid,
-    /// Immutable; the tenant's issuer is `{public_url}/t/{slug}`.
+    /// Immutable; path-based issuers are `{public_url}/t/{slug}`.
     pub slug: String,
     pub display_name: String,
     /// Custom host for host-based serving.
