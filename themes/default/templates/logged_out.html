@@ -1,0 +1,10 @@
+{#- Signed-out and sign-out error page (plan 04-13). Variables (besides page):
+      heading_key, message_key, message, error (bool)
+    Selector: logout-message with data-message-key (the key, e.g. logout.signed_out or one of the
+    logout.* error keys). The sentences are a stable contract (themes/default/README.md,
+    tests/conformance). Never served under /ui/logout. No JavaScript. -#}
+{% extends "base.html" %}
+{% block heading %}{{ t(heading_key) }}{% endblock %}
+{% block content %}
+<p class="{% if error %}anvil-error-text{% else %}anvil-lead{% endif %}" id="logout-message" data-message-key="{{ message_key }}"{% if error %} role="alert"{% endif %}>{{ message }}</p>
+{% endblock %}

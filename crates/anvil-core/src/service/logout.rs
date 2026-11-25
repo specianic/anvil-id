@@ -66,6 +66,41 @@ pub struct RawEndSession {
     pub ui_locales: Option<String>,
 }
 
+/// A parameter of the end-session request was sent more than once (OAuth 2.0 §3.1: request
+/// parameters must not be included more than once).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("repeated end-session parameter")]
+pub struct RepeatedParameter;
+
+impl RawEndSession {
+    /// The parameters from decoded query or form pairs. Unknown parameters are ignored; a known
+    /// parameter that appears twice is [`RepeatedParameter`].
+    pub fn from_pairs<K, V>(
+        pairs: impl IntoIterator<Item = (K, V)>,
+    ) -> Result<Self, RepeatedParameter>
+    where
+        K: AsRef<str>,
+        V: Into<String>,
+    {
+        let mut raw = Self::default();
+        for (k, v) in pairs {
+            let slot = match k.as_ref() {
+                "id_token_hint" => &mut raw.id_token_hint,
+                "client_id" => &mut raw.client_id,
+                "post_logout_redirect_uri" => &mut raw.post_logout_redirect_uri,
+                "state" => &mut raw.state,
+                "ui_locales" => &mut raw.ui_locales,
+                _ => continue,
+            };
+            if slot.is_some() {
+                return Err(RepeatedParameter);
+            }
+            *slot = Some(v.into());
+        }
+        Ok(raw)
+    }
+}
+
 /// What the end-session endpoint does.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LogoutOutcome {
@@ -409,5 +444,68 @@ impl LogoutService {
             redirect: state.redirect().map(|r| r.to_url()),
             revoked,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_pairs_reads_known_parameters_and_ignores_others() {
+        let raw = RawEndSession::from_pairs([
+            ("id_token_hint", "h"),
+            ("client_id", "rp"),
+            ("post_logout_redirect_uri", "https://rp.example/bye"),
+            ("state", "s"),
+            ("ui_locales", "de en"),
+            ("foo", "bar"),
+            ("foo", "baz"),
+        ])
+        .expect("valid");
+        assert_eq!(
+            raw,
+            RawEndSession {
+                id_token_hint: Some("h".into()),
+                client_id: Some("rp".into()),
+                post_logout_redirect_uri: Some("https://rp.example/bye".into()),
+                state: Some("s".into()),
+                ui_locales: Some("de en".into()),
+            }
+        );
+        assert_eq!(
+            RawEndSession::from_pairs(Vec::<(&str, &str)>::new()),
+            Ok(RawEndSession::default())
+        );
+    }
+
+    #[test]
+    fn from_pairs_rejects_every_repeated_known_parameter() {
+        for name in [
+            "id_token_hint",
+            "client_id",
+            "post_logout_redirect_uri",
+            "state",
+            "ui_locales",
+        ] {
+            assert_eq!(
+                RawEndSession::from_pairs([(name, "a"), (name, "b")]),
+                Err(RepeatedParameter),
+                "{name}"
+            );
+            // Also when the first value is empty.
+            assert_eq!(
+                RawEndSession::from_pairs([(name, ""), (name, "b")]),
+                Err(RepeatedParameter),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_values_count_as_absent() {
+        assert_eq!(non_empty(&Some(String::new())), None);
+        assert_eq!(non_empty(&None), None);
+        assert_eq!(non_empty(&Some("x".into())).as_deref(), Some("x"));
     }
 }

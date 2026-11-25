@@ -95,6 +95,8 @@ struct ProviderMetadata {
     jwks_uri: String,
     introspection_endpoint: String,
     revocation_endpoint: String,
+    /// RP-Initiated Logout 1.0 §2.1.
+    end_session_endpoint: String,
     scopes_supported: &'static [&'static str],
     response_types_supported: &'static [&'static str],
     response_modes_supported: &'static [&'static str],
@@ -117,6 +119,11 @@ struct ProviderMetadata {
     claims_supported: &'static [&'static str],
     /// The locales of the page catalogs ([`crate::i18n::Catalogs::available`]).
     ui_locales_supported: Vec<String>,
+    /// Back-Channel Logout 1.0 §2.1: logout tokens are sent to registered
+    /// `backchannel_logout_uri`s and always carry `sid`. Front-channel logout and session
+    /// management are not implemented and not advertised.
+    backchannel_logout_supported: bool,
+    backchannel_logout_session_supported: bool,
 }
 
 impl ProviderMetadata {
@@ -130,6 +137,7 @@ impl ProviderMetadata {
             jwks_uri: endpoint("/jwks"),
             introspection_endpoint: endpoint("/introspect"),
             revocation_endpoint: endpoint("/revoke"),
+            end_session_endpoint: endpoint("/logout"),
             issuer: issuer.to_owned(),
             scopes_supported: &["openid", "profile", "email", "address", "phone"],
             response_types_supported: &["code"],
@@ -152,6 +160,8 @@ impl ProviderMetadata {
             request_uri_parameter_supported: false,
             claims_supported: CLAIMS_SUPPORTED,
             ui_locales_supported: ui_locales,
+            backchannel_logout_supported: true,
+            backchannel_logout_session_supported: true,
         }
     }
 }
@@ -210,6 +220,9 @@ mod tests {
             "https://op.test/t/acme/introspect"
         );
         assert_eq!(m.revocation_endpoint, "https://op.test/t/acme/revoke");
+        assert_eq!(m.end_session_endpoint, "https://op.test/t/acme/logout");
+        assert!(m.backchannel_logout_supported);
+        assert!(m.backchannel_logout_session_supported);
     }
 
     #[test]

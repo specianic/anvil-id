@@ -1,0 +1,22 @@
+{#- Logout confirmation page (plan 04-13, RP-Initiated Logout 1.0 §2). Variables (besides page):
+      client_name (optional), csrf_token, action, cancel_url
+    Selectors: form logout-confirm-form, button logout-confirm-submit ("Sign out"), link
+    logout-cancel. Served under /ui/logout (a contract of tests/conformance). No JavaScript. -#}
+{% extends "base.html" %}
+{% block heading %}{{ t("logout.confirm_heading") }}{% endblock %}
+{% block content %}
+<form id="logout-confirm-form" method="post" action="{{ action }}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+{% if client_name %}
+<p class="anvil-lead" id="logout-confirm-text"><bdi id="logout-client">{{ client_name }}</bdi> {{ t("logout.confirm_text_client") }}</p>
+{% else %}
+<p class="anvil-lead" id="logout-confirm-text">{{ t("logout.confirm_text") }}</p>
+{% endif %}
+<div class="anvil-actions">
+<button type="submit" id="logout-confirm-submit">{{ t("logout.confirm_submit") }}</button>
+</div>
+</form>
+<nav class="anvil-links" aria-label="{{ t("nav.next_steps") }}">
+<a id="logout-cancel" href="{{ cancel_url }}">{{ t("logout.cancel") }}</a>
+</nav>
+{% endblock %}
