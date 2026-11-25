@@ -11,8 +11,7 @@ use crate::model::{ACR_MFA, ACR_PWD, AMR_MFA, MfaPolicy};
 /// (`required` > `optional` > `off`). A client without its own policy inherits the tenant's.
 /// Phase 6 adds the organization's policy as a third input to the same maximum.
 pub fn effective_policy(tenant: MfaPolicy, client: Option<MfaPolicy>) -> MfaPolicy {
-    let _ = client;
-    tenant
+    client.map_or(tenant, |c| tenant.max(c))
 }
 
 /// How strongly the RP asked for a multi-factor sign-in.
@@ -29,8 +28,14 @@ pub enum AcrRequest {
 /// Classifies the request: `claims_acr_essential` is `Some(values)` when the `claims` parameter
 /// asks for `acr` with `essential: true` (`value` or `values`), `None` otherwise.
 pub fn acr_request(acr_values: &[String], claims_acr_essential: Option<&[String]>) -> AcrRequest {
-    let _ = (acr_values, claims_acr_essential);
-    AcrRequest::None
+    let mfa = |values: &[String]| values.iter().any(|v| v == ACR_MFA);
+    if claims_acr_essential.is_some_and(mfa) {
+        AcrRequest::Essential
+    } else if mfa(acr_values) {
+        AcrRequest::Voluntary
+    } else {
+        AcrRequest::None
+    }
 }
 
 /// What the login flow must do about a second factor.
@@ -64,14 +69,29 @@ pub fn mfa_requirement(
     session_is_mfa: bool,
     user_has_factor: bool,
 ) -> MfaRequirement {
-    let _ = (policy, acr, session_is_mfa, user_has_factor);
-    MfaRequirement::None
+    if session_is_mfa {
+        return MfaRequirement::None;
+    }
+    if user_has_factor {
+        return match (policy, acr) {
+            (MfaPolicy::Off, AcrRequest::None) => MfaRequirement::None,
+            _ => MfaRequirement::SecondFactor,
+        };
+    }
+    match (policy, acr) {
+        (MfaPolicy::Required, _) => MfaRequirement::Enroll,
+        (_, AcrRequest::Essential) => MfaRequirement::Unmet,
+        _ => MfaRequirement::None,
+    }
 }
 
 /// The `acr` for a session's `amr`: [`ACR_MFA`] iff it contains `mfa`, else [`ACR_PWD`].
 pub fn acr_for(amr: &[String]) -> &'static str {
-    let _ = (amr, ACR_MFA, AMR_MFA);
-    ACR_PWD
+    if amr.iter().any(|a| a == AMR_MFA) {
+        ACR_MFA
+    } else {
+        ACR_PWD
+    }
 }
 
 #[cfg(test)]

@@ -13,7 +13,7 @@
 use serde_json::{Map, Value};
 use time::OffsetDateTime;
 
-use crate::model::{Client, DeliveryResult};
+use crate::model::{Client, DeliveryResult, LOGOUT_DELIVERY_TTL};
 
 /// The Back-Channel Logout 1.0 §2.4 event member name.
 pub const BACKCHANNEL_LOGOUT_EVENT: &str = "http://schemas.openid.net/event/backchannel-logout";
@@ -146,15 +146,95 @@ pub fn validate_end_session(
     client_by_id: Option<&Client>,
     current_session: Option<&CurrentSession>,
 ) -> EndSessionDecision {
-    let _ = (req, hint_client, client_by_id, current_session);
-    EndSessionDecision::LogoutNow { redirect: None }
+    let redirect_for = |client: &Client| -> Result<Option<PostLogoutRedirect>, LogoutError> {
+        match &req.post_logout_redirect_uri {
+            None => Ok(None),
+            Some(uri) if client.post_logout_redirect_uris.iter().any(|r| r == uri) => {
+                Ok(Some(PostLogoutRedirect {
+                    uri: uri.clone(),
+                    state: req.state.clone(),
+                }))
+            }
+            Some(_) => Err(LogoutError::RedirectUriNotRegistered),
+        }
+    };
+
+    match &req.id_token_hint {
+        HintCheck::Invalid => EndSessionDecision::Error(LogoutError::InvalidIdTokenHint),
+        HintCheck::Valid { sub, sid, aud } => {
+            // The hint must name a known client: the one the caller resolved, and it must be in
+            // the hint's audience (never trust the lookup alone).
+            let Some(client) = hint_client.filter(|c| aud.contains(&c.client_id)) else {
+                return EndSessionDecision::Error(LogoutError::InvalidIdTokenHint);
+            };
+            // RP-Initiated Logout 1.0 §2: `client_id` and the hint's `aud` must agree.
+            if let Some(client_id) = &req.client_id
+                && (*client_id != client.client_id || !aud.contains(client_id))
+            {
+                return EndSessionDecision::Error(LogoutError::ClientMismatch);
+            }
+            let redirect = match redirect_for(client) {
+                Ok(r) => r,
+                Err(e) => return EndSessionDecision::Error(e),
+            };
+            let belongs_to_session = current_session.is_none_or(|s| {
+                s.user_id == *sub && sid.as_ref().is_none_or(|sid| *sid == s.session_id)
+            });
+            if belongs_to_session {
+                EndSessionDecision::LogoutNow { redirect }
+            } else {
+                // A hint for another session or user: ask, and do not send that user's browser
+                // to the RP afterwards.
+                EndSessionDecision::Confirm {
+                    client_id: Some(client.client_id.clone()),
+                    redirect: None,
+                }
+            }
+        }
+        HintCheck::Absent => match &req.client_id {
+            Some(client_id) => {
+                let Some(client) = client_by_id.filter(|c| c.client_id == *client_id) else {
+                    return EndSessionDecision::Error(LogoutError::UnknownClient);
+                };
+                match redirect_for(client) {
+                    Ok(redirect) => EndSessionDecision::Confirm {
+                        client_id: Some(client.client_id.clone()),
+                        redirect,
+                    },
+                    Err(e) => EndSessionDecision::Error(e),
+                }
+            }
+            None if req.post_logout_redirect_uri.is_some() => {
+                EndSessionDecision::Error(LogoutError::IdTokenHintRequired)
+            }
+            None => EndSessionDecision::Confirm {
+                client_id: None,
+                redirect: None,
+            },
+        },
+    }
 }
 
 /// Appends `state` (form-encoded) to a registered post-logout URI, keeping the URI's own query
 /// and adding nothing else. The registered string is used verbatim, never re-serialised.
 pub fn build_post_logout_redirect(uri: &str, state: Option<&str>) -> String {
-    let _ = state;
-    uri.to_owned()
+    let Some(state) = state else {
+        return uri.to_owned();
+    };
+    let encoded: String = url::form_urlencoded::byte_serialize(state.as_bytes()).collect();
+    // A fragment (never registered in practice) stays last.
+    let (base, fragment) = match uri.find('#') {
+        Some(i) => uri.split_at(i),
+        None => (uri, ""),
+    };
+    let sep = if !base.contains('?') {
+        "?"
+    } else if base.ends_with('?') || base.ends_with('&') {
+        ""
+    } else {
+        "&"
+    };
+    format!("{base}{sep}state={encoded}{fragment}")
 }
 
 /// The claim set of a logout token (Back-Channel Logout 1.0 §2.4): exactly `iss`, `aud`, `iat`,
@@ -168,8 +248,23 @@ pub fn logout_token_claims(
     jti: &str,
     now: OffsetDateTime,
 ) -> Map<String, Value> {
-    let _ = (issuer, client_id, sub, sid, jti, now);
-    Map::new()
+    let iat = now.unix_timestamp();
+    let exp = (now + LOGOUT_TOKEN_TTL).unix_timestamp();
+    let mut events = Map::new();
+    events.insert(
+        BACKCHANNEL_LOGOUT_EVENT.to_owned(),
+        Value::Object(Map::new()),
+    );
+    let mut claims = Map::new();
+    claims.insert("iss".to_owned(), Value::from(issuer));
+    claims.insert("aud".to_owned(), Value::from(client_id));
+    claims.insert("iat".to_owned(), Value::from(iat));
+    claims.insert("exp".to_owned(), Value::from(exp));
+    claims.insert("jti".to_owned(), Value::from(jti));
+    claims.insert("sub".to_owned(), Value::from(sub));
+    claims.insert("sid".to_owned(), Value::from(sid));
+    claims.insert("events".to_owned(), Value::Object(events));
+    claims
 }
 
 /// Outcome of one POST of a logout token.
@@ -197,14 +292,37 @@ pub fn classify_delivery(
     created_at: OffsetDateTime,
     now: OffsetDateTime,
 ) -> DeliveryResult {
-    let _ = (outcome, attempts, created_at, now);
-    DeliveryResult::Delivered
+    let error = match outcome {
+        DeliveryOutcome::Status(200 | 204) => return DeliveryResult::Delivered,
+        DeliveryOutcome::Status(s @ 500..=599) => format!("status {s}"),
+        DeliveryOutcome::Status(s) => {
+            return DeliveryResult::GiveUp {
+                error: format!("status {s}"),
+            };
+        }
+        DeliveryOutcome::Blocked => {
+            return DeliveryResult::GiveUp {
+                error: "destination blocked by outbound policy".to_owned(),
+            };
+        }
+        DeliveryOutcome::Network => "network error".to_owned(),
+        DeliveryOutcome::Timeout => "timeout".to_owned(),
+    };
+    if now >= created_at + LOGOUT_DELIVERY_TTL {
+        return DeliveryResult::GiveUp { error };
+    }
+    DeliveryResult::Retry {
+        next_attempt_at: next_attempt(attempts, now),
+        error,
+    }
 }
 
 /// The next attempt time after `attempts` previous attempts: `now + min(10 s * 2^attempts, 1 h)`.
 pub fn next_attempt(attempts: u32, now: OffsetDateTime) -> OffsetDateTime {
-    let _ = attempts;
-    now
+    // 10 s * 2^9 already exceeds the cap; clamping the exponent avoids overflow.
+    let factor = 1_i32 << attempts.min(9);
+    let delay = DELIVERY_BASE_DELAY * factor;
+    now + delay.min(DELIVERY_MAX_DELAY)
 }
 
 #[cfg(test)]

@@ -20,22 +20,65 @@ pub const MAX_RESOURCE_LEN: usize = 2048;
 /// [`MAX_RESOURCE_LEN`] characters. Duplicates are removed preserving the first occurrence.
 /// The values are returned verbatim. Anything else is `invalid_target`.
 pub fn parse_resources(values: &[String]) -> Result<Vec<String>, CoreError> {
-    let _ = values;
-    Ok(Vec::new())
+    let mut out: Vec<String> = Vec::with_capacity(values.len());
+    for value in values {
+        check_resource(value)?;
+        if !out.contains(value) {
+            out.push(value.clone());
+        }
+    }
+    Ok(out)
+}
+
+fn check_resource(value: &str) -> Result<(), CoreError> {
+    let invalid = |why: &str| Err(CoreError::InvalidTarget(format!("resource {why}")));
+    if value.is_empty() {
+        return invalid("must not be empty");
+    }
+    if value.len() > MAX_RESOURCE_LEN {
+        return invalid("is too long");
+    }
+    // `Url::parse` silently strips surrounding whitespace and tabs/newlines; the value is used
+    // verbatim, so reject them instead.
+    if value.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return invalid("must not contain whitespace");
+    }
+    // RFC 8707 §2: MUST NOT include a fragment; SHOULD NOT include a query (rejected).
+    if value.contains('#') {
+        return invalid("must not contain a fragment");
+    }
+    if value.contains('?') {
+        return invalid("must not contain a query");
+    }
+    match url::Url::parse(value) {
+        Ok(_) => Ok(()),
+        Err(_) => invalid("must be an absolute URI"),
+    }
 }
 
 /// Every requested resource must be exactly one of the client's allowed resources
 /// (RFC 8707 §2: the AS decides which resources a client may ask for).
 pub fn validate_resources(requested: &[String], allowed: &[String]) -> Result<(), CoreError> {
-    let _ = (requested, allowed);
-    Ok(())
+    match requested.iter().find(|r| !allowed.contains(r)) {
+        Some(r) => Err(CoreError::InvalidTarget(format!(
+            "resource {r} is not allowed for this client"
+        ))),
+        None => Ok(()),
+    }
 }
 
 /// Resources for an access token issued from a grant (RFC 8707 §2.2): no `resource` in the token
 /// request means every granted resource; otherwise the request must be a subset of the grant.
 pub fn downscope(granted: &[String], requested: &[String]) -> Result<Vec<String>, CoreError> {
-    let _ = requested;
-    Ok(granted.to_vec())
+    if requested.is_empty() {
+        return Ok(granted.to_vec());
+    }
+    match requested.iter().find(|r| !granted.contains(r)) {
+        Some(r) => Err(CoreError::InvalidTarget(format!(
+            "resource {r} was not granted"
+        ))),
+        None => Ok(requested.to_vec()),
+    }
 }
 
 /// An access-token `aud` value: one string, or an array for several (RFC 7519 §4.1.3).
@@ -67,16 +110,19 @@ impl Audience {
 /// The access-token audience: the resources (one value as a string, several as an array), or
 /// `client_id` when none was requested (0.2 behaviour).
 pub fn audience(resources: &[String], client_id: &str) -> Audience {
-    let _ = resources;
-    Audience::One(client_id.to_owned())
+    match resources {
+        [] => Audience::One(client_id.to_owned()),
+        [one] => Audience::One(one.clone()),
+        many => Audience::Many(many.to_vec()),
+    }
 }
 
 /// The UserInfo audience rule: an access token is accepted at `/userinfo` only if its `aud`
 /// contains the requesting client's `client_id` or `{issuer}/userinfo`, so a token minted for an
 /// API cannot be replayed to UserInfo by that API.
 pub fn userinfo_audience_ok(aud: &[String], client_id: &str, issuer: &str) -> bool {
-    let _ = (aud, client_id, issuer);
-    true
+    let userinfo = format!("{issuer}/userinfo");
+    aud.iter().any(|a| a == client_id || *a == userinfo)
 }
 
 #[cfg(test)]
@@ -142,7 +188,10 @@ mod tests {
         let prefix = "https://a.example.test/";
         let ok = format!("{prefix}{}", "x".repeat(MAX_RESOURCE_LEN - prefix.len()));
         assert_eq!(ok.len(), MAX_RESOURCE_LEN);
-        assert_eq!(parse_resources(&[ok.clone()]).unwrap(), vec![ok]);
+        assert_eq!(
+            parse_resources(std::slice::from_ref(&ok)).unwrap(),
+            vec![ok]
+        );
     }
 
     #[test]
