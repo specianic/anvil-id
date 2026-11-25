@@ -1,11 +1,17 @@
 //! HTTP listeners: plain `axum::serve`, or the built-in TLS listener (rustls with the aws-lc-rs
 //! provider, ALPN h2 and http/1.1). Both shut down gracefully when the shutdown channel flips.
+//! Both give every request its TCP peer address as `ConnectInfo<SocketAddr>` (the client-IP
+//! extractor of anvil-web requires it).
 
+use std::net::SocketAddr;
 use std::sync::Arc;
+use std::task::{Context as TaskContext, Poll};
 use std::time::Duration;
 
 use anyhow::{Context, bail};
 use axum::Router;
+use axum::extract::ConnectInfo;
+use axum::http::Request;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto;
 use hyper_util::service::TowerToHyperService;
@@ -16,6 +22,7 @@ use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio::task::JoinSet;
 use tokio_rustls::TlsAcceptor;
+use tower::Service;
 
 use crate::config::TlsFiles;
 
@@ -59,11 +66,39 @@ pub async fn run(
     shutdown: watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
     match tls {
-        None => axum::serve(listener, app)
-            .with_graceful_shutdown(wait_for_shutdown(shutdown))
-            .await
-            .context("server error"),
+        None => axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(wait_for_shutdown(shutdown))
+        .await
+        .context("server error"),
         Some(config) => run_tls(listener, app, TlsAcceptor::from(config), shutdown).await,
+    }
+}
+
+/// The router of one connection: inserts the connection's peer address into every request.
+#[derive(Clone)]
+struct WithPeer {
+    app: Router,
+    peer: SocketAddr,
+}
+
+impl<B> Service<Request<B>> for WithPeer
+where
+    Router: Service<Request<B>>,
+{
+    type Response = <Router as Service<Request<B>>>::Response;
+    type Error = <Router as Service<Request<B>>>::Error;
+    type Future = <Router as Service<Request<B>>>::Future;
+
+    fn poll_ready(&mut self, cx: &mut TaskContext<'_>) -> Poll<Result<(), Self::Error>> {
+        Service::<Request<B>>::poll_ready(&mut self.app, cx)
+    }
+
+    fn call(&mut self, mut req: Request<B>) -> Self::Future {
+        req.extensions_mut().insert(ConnectInfo(self.peer));
+        self.app.call(req)
     }
 }
 
@@ -92,7 +127,10 @@ async fn run_tls(
         // Reap finished connection tasks so the set does not grow without bound.
         while connections.try_join_next().is_some() {}
         let acceptor = acceptor.clone();
-        let service = TowerToHyperService::new(app.clone());
+        let service = TowerToHyperService::new(WithPeer {
+            app: app.clone(),
+            peer,
+        });
         let conn_shutdown = shutdown.clone();
         connections.spawn(async move {
             let tls = match tokio::time::timeout(HANDSHAKE_TIMEOUT, acceptor.accept(stream)).await {
@@ -131,4 +169,56 @@ async fn run_tls(
         connections.abort_all();
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::routing::get;
+    use tower::ServiceExt as _;
+
+    async fn peer_of(ConnectInfo(peer): ConnectInfo<SocketAddr>) -> String {
+        peer.ip().to_string()
+    }
+
+    fn peer_router() -> Router {
+        Router::new().route("/peer", get(peer_of))
+    }
+
+    #[tokio::test]
+    async fn tls_connection_service_inserts_the_peer_address() {
+        let peer = SocketAddr::from(([198, 51, 100, 7], 4711));
+        let resp = WithPeer {
+            app: peer_router(),
+            peer,
+        }
+        .oneshot(Request::get("/peer").body(Body::empty()).expect("request"))
+        .await
+        .expect("infallible");
+        assert_eq!(resp.status(), 200);
+        let body = axum::body::to_bytes(resp.into_body(), 1024)
+            .await
+            .expect("body");
+        assert_eq!(&body[..], b"198.51.100.7");
+    }
+
+    #[tokio::test]
+    async fn plain_listener_provides_the_peer_address() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let (tx, rx) = watch::channel(false);
+        let server = tokio::spawn(run(listener, peer_router(), None, rx));
+        let body = reqwest::get(format!("http://{addr}/peer"))
+            .await
+            .expect("request")
+            .error_for_status()
+            .expect("handler got ConnectInfo")
+            .text()
+            .await
+            .expect("body");
+        assert_eq!(body, "127.0.0.1");
+        tx.send(true).expect("shutdown");
+        server.await.expect("join").expect("clean shutdown");
+    }
 }

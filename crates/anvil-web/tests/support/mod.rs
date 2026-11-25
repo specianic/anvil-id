@@ -5,6 +5,8 @@
 //! - [`TestClock`]: settable clock.
 //! - [`TestApp`]: the full `anvil_web::app` on that backend, installed with the `system` and
 //!   `default` tenants and one active RS256 key each, plus a cookie jar and HTTP helpers.
+//!   Requests carry the peer address [`DEFAULT_PEER`] (`ConnectInfo`) unless they set their own
+//!   ([`TestApp::send_from`]).
 //!
 //! Key installation duplicates the sealing done by the production bootstrap on purpose: the
 //! harness must not depend on core services written in parallel.
@@ -12,6 +14,7 @@
 #![allow(dead_code)]
 
 use std::collections::BTreeMap;
+use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -27,6 +30,7 @@ use anvil_web::adapters::hibp::{BreachCheckMode, breach_checker};
 use anvil_web::{AppConfig, AppDeps};
 use axum::Router;
 use axum::body::Body;
+use axum::extract::ConnectInfo;
 use axum::http::{HeaderMap, Method, Request, StatusCode, header};
 use http_body_util::BodyExt;
 use time::OffsetDateTime;
@@ -36,6 +40,11 @@ use tower::ServiceExt;
 pub const PROD_URL: &str = "https://op.test";
 /// Public URL of [`TestApp::dev`] (development mode).
 pub const DEV_URL: &str = "http://localhost:8080";
+/// Peer address of every request that does not set one (TEST-NET-3, untrusted by default).
+pub const DEFAULT_PEER: SocketAddr = SocketAddr::new(
+    std::net::IpAddr::V4(std::net::Ipv4Addr::new(203, 0, 113, 10)),
+    40000,
+);
 
 // ---------------------------------------------------------------------------------------------
 // Backend selection
@@ -324,12 +333,22 @@ impl TestApp {
         self.storage.as_ref()
     }
 
+    /// The storage handle as an `Arc`, for services under test that keep it.
+    pub fn storage_arc(&self) -> Arc<dyn Storage> {
+        Arc::clone(&self.storage)
+    }
+
     pub fn clock(&self) -> &TestClock {
         &self.clock
     }
 
     pub fn kek(&self) -> &Kek {
         &self.kek
+    }
+
+    /// The KEK the app was built with, as an `Arc` (services must share one KEK).
+    pub fn kek_arc(&self) -> Arc<Kek> {
+        Arc::clone(&self.kek)
     }
 
     /// The issuer of the root (`None`, the default tenant) or of a path tenant.
@@ -350,9 +369,19 @@ impl TestApp {
         self.jar.lock().expect("jar lock").clear();
     }
 
-    /// Sends a request: adds the public Host (unless set) and the jar's cookies, stores
-    /// `Set-Cookie` answers in the jar.
+    /// Sends a request from `peer` (overrides any `ConnectInfo` already set), like [`Self::send`].
+    pub async fn send_from(&self, peer: SocketAddr, mut req: Request<Body>) -> TestResponse {
+        req.extensions_mut().insert(ConnectInfo(peer));
+        self.send(req).await
+    }
+
+    /// Sends a request: adds the public Host (unless set), the peer address [`DEFAULT_PEER`]
+    /// (unless a `ConnectInfo` is set) and the jar's cookies, stores `Set-Cookie` answers in the
+    /// jar.
     pub async fn send(&self, mut req: Request<Body>) -> TestResponse {
+        if req.extensions().get::<ConnectInfo<SocketAddr>>().is_none() {
+            req.extensions_mut().insert(ConnectInfo(DEFAULT_PEER));
+        }
         if !req.headers().contains_key(header::HOST) {
             let host = self.config.public_url.host_port().to_owned();
             req.headers_mut()

@@ -94,12 +94,12 @@ pub async fn start(cfg: &Config) -> anyhow::Result<Started> {
         InstallResult::AlreadyInstalled => tracing::info!("installation found"),
     }
 
-    let app_config = AppConfig {
-        public_url: cfg.public_url.clone(),
-        theme_dir: cfg.theme_dir.clone(),
-        password_policy: policy,
-        insecure_http: cfg.insecure_http,
-    };
+    // `AppConfig::new` supplies defaults for the fields not set here (trusted proxies: loopback
+    // in development mode, none otherwise; mapped from operator config in 03-24).
+    let mut app_config = AppConfig::new(cfg.public_url.clone());
+    app_config.theme_dir = cfg.theme_dir.clone();
+    app_config.password_policy = policy;
+    app_config.insecure_http = cfg.insecure_http;
     let deps = AppDeps {
         storage: Arc::clone(&storage),
         clock: Arc::clone(&clock),

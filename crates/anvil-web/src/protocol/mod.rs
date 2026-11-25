@@ -2,7 +2,9 @@
 
 mod authorize;
 mod discovery;
+mod introspect;
 mod jwks;
+mod revoke;
 mod token;
 mod userinfo;
 
@@ -18,4 +20,6 @@ pub fn routes() -> Router<AppState> {
         .merge(authorize::routes())
         .merge(token::routes())
         .merge(userinfo::routes())
+        .merge(introspect::routes())
+        .merge(revoke::routes())
 }
