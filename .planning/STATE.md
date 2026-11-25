@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: verifying
-stopped_at: Completed 02-18-PLAN.md
-last_updated: "2026-11-25T03:09:50.054Z"
+stopped_at: Completed 02-20-PLAN.md
+last_updated: "2026-11-25T03:22:56.288Z"
 last_activity: "2026-11-25 — Completed 01-08 (phase gate: CI green on GitHub, spike verdicts, stack confirmed)"
 progress:
   total_phases: 7
   completed_phases: 1
-  total_plans: 39
-  completed_plans: 27
+  total_plans: 59
+  completed_plans: 28
   percent: 53
 ---
 
@@ -77,6 +77,7 @@ Progress: [█████░░░░░] 53%
 | Phase 02 P16 | 25min | 2 tasks | 11 files |
 | Phase 02 P15 | 16min | 2 tasks | 16 files |
 | Phase 02 P18 | 45min | 3 tasks | 18 files |
+| Phase 02 P20 | 25min | 3 tasks | 15 files |
 
 ## Accumulated Context
 
@@ -149,6 +150,8 @@ Recent decisions affecting current work:
 - [Phase 02]: Binary logs go to stderr; stdout carries command output; json mode also prints the plain Setup URL line on stdout
 - [Phase 02]: kek and smtp_url are env/file only (no CLI flags); config show redacts them and database passwords
 - [Phase 02]: serve.lock is taken before KEK generation; Postgres never generates a KEK or creates a data dir
+- [Phase 02]: Container image: distroless static-debian13:nonroot pinned by digest; 19.1 MB; /data via COPY --chown of an empty dir
+- [Phase 02]: QUAL-04 measured at 5 s (sqlite) / 8 s (postgres) vs 120 s limit; e2e suite runs with one worker sharing one setup via E2E_STATE_FILE
 
 ### Pending Todos
 
@@ -161,6 +164,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-25T03:09:50.052Z
-Stopped at: Completed 02-18-PLAN.md
+Last session: 2026-11-25T03:22:56.286Z
+Stopped at: Completed 02-20-PLAN.md
 Resume file: None
