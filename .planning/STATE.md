@@ -6,14 +6,14 @@ current_phase: 04
 current_phase_name: release 0 3 real world logins
 current_plan: Not started
 status: planning
-stopped_at: Completed 04-14-PLAN.md
-last_updated: "2026-11-25T20:09:12.440Z"
+stopped_at: Completed 04-11-PLAN.md
+last_updated: "2026-11-25T20:11:10.841Z"
 last_activity: 2026-11-25
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 98
-  completed_plans: 77
+  completed_plans: 78
   percent: 79
 ---
 
@@ -132,6 +132,7 @@ Phase 3 plans 03-01 through 03-34 are all complete (34/34 summaries); v0.2.0 is 
 | Phase 04 P05 | 75min | 3 tasks | 15 files |
 | Phase 04 P06 | 30min | 3 tasks | 60 files |
 | Phase 04 P14 | multi-session | 2 tasks | 8 files |
+| Phase 04 P11 | 100min | 2 tasks | 15 files |
 
 ## Accumulated Context
 
@@ -299,6 +300,7 @@ Recent decisions affecting current work:
 - [Phase 04]: 04-14: throttled forced JWKS refresh serves the cached set; no-store/no-cache count as 5 min TTL
 - [Phase 04]: 04-14: GitHub-style 200 token error is InvalidResponse; non-2xx is Status without echoing body
 - [Phase 04]: 04-14: OutboundError::InvalidUrl maps to UpstreamError::Blocked
+- [Phase 04]: 04-11: connections use admin:settings scopes (system tenant writes need admin:write); Microsoft email trust needs accept_email_trust_risk; email_otp/magic_link turn on only with installation or tenant SMTP
 
 ### Pending Todos
 
@@ -311,6 +313,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-25T20:09:12.438Z
-Stopped at: Completed 04-14-PLAN.md
+Last session: 2026-11-25T20:11:10.838Z
+Stopped at: Completed 04-11-PLAN.md
 Resume file: None
