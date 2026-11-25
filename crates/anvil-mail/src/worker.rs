@@ -9,6 +9,9 @@
 //!   opens each payload immediately before rendering. A payload that cannot be opened (wrong KEK,
 //!   tampered or unsealed row) is never sent: the attempt is recorded as failed with the generic
 //!   error [`PAYLOAD_DECRYPT_ERROR`].
+//! - A payload without an `email` variable gets the row's recipient as `email` (notices sealed
+//!   before the address is known, such as the `password_changed` notice of a recovery). A
+//!   payload-provided `email` is never replaced.
 //! - Logs and `last_error` contain the outbox id, template name and error kind only, never the
 //!   message body, the payload or links (they carry single-use tokens).
 //!
@@ -22,7 +25,7 @@
 //!   sender is the tenant's `from`. Otherwise the installation transport is used. With neither,
 //!   the attempt fails with [`NO_SMTP_ERROR`] and the normal backoff.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -187,6 +190,13 @@ impl From<MailError> for DeliveryError {
     }
 }
 
+/// Inserts `to` as the `email` template variable when (and only when) the payload has none.
+fn fill_recipient(payload: &mut BTreeMap<String, String>, to: &str) {
+    payload
+        .entry("email".to_owned())
+        .or_insert_with(|| to.to_owned());
+}
+
 /// Backoff after failed attempt `attempt` (1-based): `min(30 s * 2^(attempt-1), 1 h)`.
 pub fn backoff(attempt: u32) -> Duration {
     let exp = attempt.saturating_sub(1).min(16);
@@ -250,8 +260,9 @@ impl OutboxWorker {
         let (transport, from) = self.resolve_transport(row.tenant_id).await?;
         // The open error is deliberately dropped: it is generic and the stored value is never
         // logged.
-        let payload = open_payload(&self.kek, row.tenant_id, &row.payload)
+        let mut payload = open_payload(&self.kek, row.tenant_id, &row.payload)
             .map_err(|_| DeliveryError::Payload)?;
+        fill_recipient(&mut payload, &row.to);
         let (subject, text, html) = match EmailKind::parse(&row.template) {
             Some(kind) => {
                 let override_ = self
@@ -322,6 +333,19 @@ impl OutboxWorker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recipient_fills_a_missing_email_only() {
+        let mut absent = BTreeMap::from([("tenant_name".to_owned(), "Acme".to_owned())]);
+        fill_recipient(&mut absent, "alice@example.test");
+        assert_eq!(absent["email"], "alice@example.test");
+        assert_eq!(absent["tenant_name"], "Acme");
+
+        let mut present = BTreeMap::from([("email".to_owned(), "bob@example.test".to_owned())]);
+        fill_recipient(&mut present, "alice@example.test");
+        assert_eq!(present["email"], "bob@example.test");
+        assert_eq!(present.len(), 1);
+    }
 
     #[test]
     fn backoff_doubles_from_30s_and_caps_at_1h() {

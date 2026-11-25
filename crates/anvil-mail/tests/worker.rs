@@ -533,10 +533,7 @@ async fn missing_email_variable_is_filled_from_the_recipient() {
     let h = harness(CapturingTransport::default());
     // The password_changed notice of a recovery is sealed before the address is known, so its
     // payload has no `email`; the worker supplies the row's recipient.
-    let notice = std::collections::BTreeMap::from([(
-        "tenant_name".to_owned(),
-        "Acme".to_owned(),
-    )]);
+    let notice = std::collections::BTreeMap::from([("tenant_name".to_owned(), "Acme".to_owned())]);
     let e = email_with_payload(
         &h.kek,
         h.tenant,
@@ -551,7 +548,11 @@ async fn missing_email_variable_is_filled_from_the_recipient() {
     let sent = h.transport.sent();
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0].to, "alice@example.test");
-    assert!(sent[0].text.contains("The password for alice@example.test at Acme"));
+    assert!(
+        sent[0]
+            .text
+            .contains("The password for alice@example.test at Acme")
+    );
     assert!(sent[0].html.contains("alice@example.test"));
     assert!(h.outbox.row(e.id).sent_at.is_some());
 }

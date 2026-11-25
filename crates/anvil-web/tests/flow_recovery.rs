@@ -4,8 +4,15 @@
 mod support;
 mod ui_helpers;
 
-use anvil_core::model::{ActorKind, AuditAction, AuditOutcome, AuditQuery, SecretHash};
+use anvil_core::model::{
+    ActorKind, AuditAction, AuditOutcome, AuditQuery, SecretHash, SmtpSettings, TenantId,
+};
 use anvil_core::ports::Clock as _;
+use anvil_mail::worker::TransportFactory;
+use anvil_mail::{
+    EmailRenderer, MailError, MailTransport, OutboxWorker, OutgoingMail, StorageOutbox,
+};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use support::TestApp;
 use ui_helpers::*;
@@ -85,7 +92,8 @@ async fn recovery_resets_the_password_revokes_sessions_and_is_single_use() {
         resp.html()
     );
 
-    // The user was told about the change.
+    // The user was told about the change: exactly one notice although the token was used twice
+    // (once successfully, once refused), enqueued by the recovery transaction itself.
     let emails = take_emails(&app).await;
     let notices: Vec<_> = emails
         .iter()
@@ -93,12 +101,33 @@ async fn recovery_resets_the_password_revokes_sessions_and_is_single_use() {
         .collect();
     assert_eq!(notices.len(), 1, "{emails:?}");
     assert_eq!(notices[0].to, EMAIL);
-    // Sealed payload (take_emails opened it with the KEK) addressed to the token's email.
-    assert_eq!(notices[0].payload["email"], EMAIL);
+    // Sealed payload (take_emails opened it with the KEK). It was sealed before the token was
+    // consumed, so it carries no address; the row is addressed to the token's email.
+    assert!(!notices[0].payload.contains_key("email"));
     assert_eq!(
         notices[0].payload["tenant_name"],
         default_tenant(&app).display_name
     );
+
+    // Delivered by the real outbox worker once take_emails' claim lease has passed: the rendered
+    // body names the recipient (the worker fills `email` from the row).
+    app.clock().advance(Duration::from_secs(3601));
+    // (Every row claimed by take_emails is due again, so the earlier emails are re-sent too.)
+    let sent: Vec<_> = deliver_outbox(&app)
+        .await
+        .into_iter()
+        .filter(|m| m.subject.contains("password was changed"))
+        .collect();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0].to, EMAIL);
+    assert!(
+        sent[0]
+            .text
+            .contains(&format!("The password for {EMAIL} at")),
+        "{}",
+        sent[0].text
+    );
+    assert!(sent[0].html.contains(EMAIL));
 
     // The change is audited once, for the user.
     let changed: Vec<_> = audit(&app)
@@ -111,6 +140,59 @@ async fn recovery_resets_the_password_revokes_sessions_and_is_single_use() {
     assert_eq!(changed[0].actor.kind, ActorKind::User);
     assert_eq!(changed[0].target, changed[0].actor.id);
     assert_eq!(changed[0].ctx.ip, Some(support::DEFAULT_PEER.ip()));
+}
+
+/// Captures what the outbox worker sends.
+#[derive(Default)]
+struct Capture(Mutex<Vec<OutgoingMail>>);
+
+#[async_trait::async_trait]
+impl MailTransport for Capture {
+    async fn send(&self, mail: OutgoingMail) -> Result<(), MailError> {
+        self.0.lock().expect("capture lock").push(mail);
+        Ok(())
+    }
+}
+
+/// No tenant has SMTP settings in these tests; the installation transport is used.
+struct NoTenantSmtp;
+
+impl TransportFactory for NoTenantSmtp {
+    fn transport(
+        &self,
+        _: TenantId,
+        _: &SmtpSettings,
+    ) -> Result<Arc<dyn MailTransport>, MailError> {
+        Err(MailError::Config("no tenant SMTP in this test".into()))
+    }
+
+    fn evict(&self, _: TenantId) {}
+}
+
+/// The harness clock's current time, frozen (the worker only reads it).
+struct Frozen(time::OffsetDateTime);
+
+impl anvil_core::ports::Clock for Frozen {
+    fn now(&self) -> time::OffsetDateTime {
+        self.0
+    }
+}
+
+/// Runs one batch of the production outbox worker over the app's storage and KEK and returns
+/// the mails it sent.
+async fn deliver_outbox(app: &TestApp) -> Vec<OutgoingMail> {
+    let capture = Arc::new(Capture::default());
+    let worker = OutboxWorker {
+        source: Arc::new(StorageOutbox(app.storage_arc())),
+        transport: Some(capture.clone() as Arc<dyn MailTransport>),
+        transports: Arc::new(NoTenantSmtp),
+        renderer: EmailRenderer::embedded(),
+        clock: Arc::new(Frozen(app.clock().now())),
+        from: "AnvilID <noreply@example.test>".to_owned(),
+        kek: app.kek_arc(),
+    };
+    worker.run_once().await.expect("outbox batch");
+    std::mem::take(&mut *capture.0.lock().expect("capture lock"))
 }
 
 async fn audit(app: &TestApp) -> Vec<anvil_core::model::AuditEvent> {

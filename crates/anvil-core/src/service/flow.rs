@@ -64,9 +64,9 @@ use crate::flow::form::{FormDescription, FormMessage, MessageLevel};
 use crate::model::{
     ActorKind, AuditAction, AuditActor, AuditDetails, AuditOutcome, AuthRequestId, CounterOutcome,
     CredentialKind, Flow, FlowId, FlowKind, NewEmail, NewFlow, NewPasswordCredential,
-    NewSelfServiceToken, NewUser, OutboxId, PasskeyCredential, RecoveryCodeHash, RequestContext,
-    SecretHash, SelfServiceKind, SessionId, StandardClaims, TOTP_SEED_PURPOSE, Tenant, TenantId,
-    TotpCredential, User, UserId, UserStatus, credential_aad, seal_payload,
+    NewSelfServiceToken, NewUser, OutboxId, PasskeyCredential, RecoveryCodeHash, RecoveryNotice,
+    RequestContext, SecretHash, SelfServiceKind, SessionId, StandardClaims, TOTP_SEED_PURPOSE,
+    Tenant, TenantId, TotpCredential, User, UserId, UserStatus, credential_aad, seal_payload,
 };
 use crate::policy::PasswordPolicy;
 use crate::ports::{
@@ -939,18 +939,16 @@ impl FlowService {
                 };
                 let hash = SecretHash(secret_hash(token.expose_secret()));
                 let now = self.clock.now();
-                // The password_changed template contract includes `email`, which is only known
-                // once the token is consumed, so the notice is still enqueued right after the
-                // recovery transaction (a RecoveryNotice is built before it and cannot carry the
-                // address; see the 03-12 summary).
+                // The notice is enqueued in the recovery transaction, addressed to the consumed
+                // token's email. Its sealed payload has no `email` (the address is unknown until
+                // the token is consumed); the outbox worker fills it from the recipient.
+                let notice = password_changed_notice(&self.kek, cx, now)?;
                 let Some(user) = users
-                    .complete_recovery(tenant, &hash, &phc, now, None)
+                    .complete_recovery(tenant, &hash, &phc, now, Some(&notice))
                     .await?
                 else {
                     return Ok(Step::Fail(Failure::InvalidToken));
                 };
-                let notice = password_changed_email(&self.kek, cx, &user.email, now)?;
-                self.storage.outbox().enqueue(tenant, &notice).await?;
                 self.audit_user(
                     cx,
                     AuditAction::PasswordChanged,
@@ -1200,18 +1198,18 @@ fn self_service_email(
     Ok((record, mail))
 }
 
-fn password_changed_email(
+/// The `password_changed` notice of a recovery (payload `tenant_name`, sealed). It carries no
+/// `email`: the recipient is the consumed token's address, which the outbox worker supplies as
+/// the `email` template variable.
+fn password_changed_notice(
     kek: &Kek,
     cx: &FlowContext<'_>,
-    to: &str,
     now: OffsetDateTime,
-) -> Result<NewEmail, CoreError> {
+) -> Result<RecoveryNotice, CoreError> {
     let mut payload = BTreeMap::new();
     payload.insert("tenant_name".to_owned(), cx.tenant.display_name.clone());
-    payload.insert("email".to_owned(), to.to_owned());
-    Ok(NewEmail {
+    Ok(RecoveryNotice {
         id: OutboxId::new_v7(),
-        to: to.to_owned(),
         template: "password_changed".to_owned(),
         payload: seal_payload(kek, cx.tenant.id, &payload)?,
         created_at: now,
@@ -1476,16 +1474,20 @@ mod tests {
     }
 
     #[test]
-    fn password_changed_email_is_sealed() {
+    fn password_changed_notice_is_sealed_and_addressed_by_the_recovery() {
         let kek = Kek::generate();
         let tenant = acme();
-        let mail = password_changed_email(&kek, &cx(&tenant), "alice@example.com", NOW).unwrap();
-        assert_eq!(mail.template, "password_changed");
-        assert_eq!(mail.payload.len(), 1);
-        assert!(mail.payload.contains_key(SEALED_PAYLOAD_KEY));
-        let payload = open_payload(&kek, tenant.id, &mail.payload).unwrap();
-        assert_eq!(payload["email"], "alice@example.com");
+        let notice = password_changed_notice(&kek, &cx(&tenant), NOW).unwrap();
+        assert_eq!(notice.template, "password_changed");
+        assert_eq!(notice.payload.len(), 1);
+        assert!(notice.payload.contains_key(SEALED_PAYLOAD_KEY));
+        let payload = open_payload(&kek, tenant.id, &notice.payload).unwrap();
         assert_eq!(payload["tenant_name"], "Acme");
+        // The address is only known once the token is consumed; the worker fills `email`.
+        assert!(!payload.contains_key("email"));
+        let mail = notice.to_email("alice@example.com");
+        assert_eq!(mail.to, "alice@example.com");
+        assert_eq!(mail.payload, notice.payload);
     }
 
     #[test]
