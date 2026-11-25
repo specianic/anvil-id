@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, slug, display_name, created_at FROM tenant WHERE id = $1",
+  "query": "UPDATE tenant\n                SET display_name = COALESCE($2, display_name),\n                    host = CASE WHEN $3 THEN $4 ELSE host END,\n                    settings = COALESCE($5, settings)\n              WHERE id = $1\n          RETURNING id, slug, display_name, host, settings, created_at",
   "describe": {
     "columns": [
       {
@@ -38,6 +38,28 @@
       },
       {
         "ordinal": 3,
+        "name": "host",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tenant",
+            "name": "host"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "settings",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "tenant",
+            "name": "settings"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -50,15 +72,21 @@
     ],
     "parameters": {
       "Left": [
-        "Uuid"
+        "Uuid",
+        "Text",
+        "Bool",
+        "Text",
+        "Jsonb"
       ]
     },
     "nullable": [
       false,
       false,
       false,
+      true,
+      false,
       false
     ]
   },
-  "hash": "eb82ac4fb456f94738aadb28f2c8080ed9a4581b4fdff344152db13bc3638c48"
+  "hash": "718ec37a0106d17378516a27b52773f3f6c874f7bf4a31e2d1189018c5347e58"
 }

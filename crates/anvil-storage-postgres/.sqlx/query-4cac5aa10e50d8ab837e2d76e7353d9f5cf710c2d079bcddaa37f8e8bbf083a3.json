@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO \"user\"\n             (id, tenant_id, email, email_verified, username, claims, status, created_at,\n              updated_at)\n         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Bool",
+        "Text",
+        "Jsonb",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4cac5aa10e50d8ab837e2d76e7353d9f5cf710c2d079bcddaa37f8e8bbf083a3"
+}

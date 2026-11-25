@@ -1,12 +1,19 @@
 //! PostgreSQL implementation of the `anvil_core::ports` storage traits (via sqlx).
 //!
-//! Native column types: `uuid` ids, `bytea` hashes, `timestamptz` timestamps, `jsonb` settings.
-//! All repositories share one connection pool.
+//! Native column types: `uuid` ids, `bytea` hashes, `timestamptz` timestamps, `jsonb` documents,
+//! `text[]` lists. All repositories share one connection pool. Multi-row intent methods run in
+//! one transaction (READ COMMITTED); races are decided by row-level conditional
+//! `UPDATE … RETURNING` / `INSERT … ON CONFLICT`, never by check-then-act.
 
+mod clients;
 mod convert;
-// TRANSITIONAL (plan 02-02): tenants.rs and grants.rs stay on disk as reference for plan 02-06
-// but are not compiled; every repository is `pending::Pending` until 02-06 lands.
+mod keys;
+mod outbox;
+// TRANSITIONAL (plan 02-06 task 1): users, sessions, flows and grants are still `Pending`.
 mod pending;
+mod setup;
+mod tenants;
+mod users;
 
 use anvil_core::ports::{
     ClientRepo, FlowRepo, GrantRepo, KeyRepo, OutboxRepo, SessionRepo, SetupRepo, Storage,
@@ -15,13 +22,23 @@ use anvil_core::ports::{
 use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
 
+use crate::clients::PgClients;
 use crate::convert::map_err;
+use crate::keys::PgKeys;
+use crate::outbox::PgOutbox;
 use crate::pending::Pending;
+use crate::setup::PgSetup;
+use crate::tenants::PgTenants;
 
 /// Postgres storage backend.
 #[derive(Debug, Clone)]
 pub struct PostgresStorage {
     pool: PgPool,
+    tenants: PgTenants,
+    clients: PgClients,
+    keys: PgKeys,
+    setup: PgSetup,
+    outbox: PgOutbox,
 }
 
 impl PostgresStorage {
@@ -32,7 +49,18 @@ impl PostgresStorage {
             .connect(url)
             .await
             .map_err(map_err)?;
-        Ok(Self { pool })
+        Ok(Self::from_pool(pool))
+    }
+
+    fn from_pool(pool: PgPool) -> Self {
+        Self {
+            tenants: PgTenants { pool: pool.clone() },
+            clients: PgClients { pool: pool.clone() },
+            keys: PgKeys { pool: pool.clone() },
+            setup: PgSetup { pool: pool.clone() },
+            outbox: PgOutbox { pool: pool.clone() },
+            pool,
+        }
     }
 
     /// Runs embedded migrations.
@@ -47,16 +75,16 @@ impl PostgresStorage {
 #[async_trait::async_trait]
 impl Storage for PostgresStorage {
     fn tenants(&self) -> &dyn TenantRepo {
-        &Pending
+        &self.tenants
     }
     fn users(&self) -> &dyn UserRepo {
         &Pending
     }
     fn clients(&self) -> &dyn ClientRepo {
-        &Pending
+        &self.clients
     }
     fn keys(&self) -> &dyn KeyRepo {
-        &Pending
+        &self.keys
     }
     fn sessions(&self) -> &dyn SessionRepo {
         &Pending
@@ -68,15 +96,15 @@ impl Storage for PostgresStorage {
         &Pending
     }
     fn setup(&self) -> &dyn SetupRepo {
-        &Pending
+        &self.setup
     }
     fn outbox(&self) -> &dyn OutboxRepo {
-        &Pending
+        &self.outbox
     }
 
     async fn purge_expired(&self, _now: time::OffsetDateTime) -> Result<u64, StorageError> {
         Err(StorageError::Unsupported(
-            "postgres: Storage::purge_expired lands in plan 02-06",
+            "postgres: Storage::purge_expired lands in plan 02-06 task 2",
         ))
     }
 }

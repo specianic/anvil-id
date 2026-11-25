@@ -1,0 +1,149 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, tenant_id, kid, alg, state, private_key_enc, public_jwk, created_at,\n                    activated_at, retired_at, expires_at\n               FROM signing_key\n              WHERE tenant_id = $1 AND alg = $2 AND state = 'active'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "signing_key",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "tenant_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "signing_key",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "kid",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "signing_key",
+            "name": "kid"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "alg",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "signing_key",
+            "name": "alg"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "state",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "signing_key",
+            "name": "state"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "private_key_enc",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "signing_key",
+            "name": "private_key_enc"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "public_jwk",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "signing_key",
+            "name": "public_jwk"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "signing_key",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "activated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "signing_key",
+            "name": "activated_at"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "retired_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "signing_key",
+            "name": "retired_at"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "expires_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "signing_key",
+            "name": "expires_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "dd297a1a5f656675d5205109e713f5247ea9a794537609c623a4bd47ef8298a8"
+}

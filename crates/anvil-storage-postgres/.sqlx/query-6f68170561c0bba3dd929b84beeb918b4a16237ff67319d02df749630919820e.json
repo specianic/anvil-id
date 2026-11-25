@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE admin_setup_token SET used_at = $1\n              WHERE token_hash = $2 AND used_at IS NULL AND expires_at > $1\n          RETURNING token_hash",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "token_hash",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "admin_setup_token",
+            "name": "token_hash"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "6f68170561c0bba3dd929b84beeb918b4a16237ff67319d02df749630919820e"
+}

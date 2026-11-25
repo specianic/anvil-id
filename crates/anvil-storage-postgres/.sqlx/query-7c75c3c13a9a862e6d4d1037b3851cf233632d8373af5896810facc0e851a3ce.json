@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE token_family\n                SET revoked_at = date_trunc('milliseconds', now()), revoked_reason = $3\n              WHERE tenant_id = $1 AND client_id = $2 AND revoked_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7c75c3c13a9a862e6d4d1037b3851cf233632d8373af5896810facc0e851a3ce"
+}

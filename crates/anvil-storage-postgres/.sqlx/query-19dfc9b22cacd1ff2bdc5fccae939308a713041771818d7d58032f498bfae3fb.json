@@ -1,0 +1,198 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, tenant_id, client_id, name, client_type, application_type, auth_method,\n                    secret_hash, jwks, redirect_uris, grant_types, scopes, require_pkce,\n                    created_at, updated_at\n               FROM client\n              WHERE tenant_id = $1 AND ($2::uuid IS NULL OR id > $2)\n              ORDER BY id\n              LIMIT $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "tenant_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "client_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "client_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "client_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "client_type"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "application_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "application_type"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "auth_method",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "auth_method"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "secret_hash",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "secret_hash"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "jwks",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "jwks"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "redirect_uris",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "redirect_uris"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "grant_types",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "grant_types"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "scopes",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "scopes"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "require_pkce",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "require_pkce"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "19dfc9b22cacd1ff2bdc5fccae939308a713041771818d7d58032f498bfae3fb"
+}

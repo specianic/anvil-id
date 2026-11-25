@@ -1,17 +1,16 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO tenant (id, slug, display_name, created_at) VALUES ($1, $2, $3, $4)",
+  "query": "UPDATE email_outbox SET last_error = $2, next_attempt_at = $3 WHERE id = $1",
   "describe": {
     "columns": [],
     "parameters": {
       "Left": [
         "Uuid",
         "Text",
-        "Text",
         "Timestamptz"
       ]
     },
     "nullable": []
   },
-  "hash": "b5e664a754e49f18e03da30c7c704f1e81ee907e5b4c4bcf4c3cf77c538edc53"
+  "hash": "a7d36f73fbb12a57428f2ed88ca74de04b850b98f0d9f86ad468b561da81ef0d"
 }

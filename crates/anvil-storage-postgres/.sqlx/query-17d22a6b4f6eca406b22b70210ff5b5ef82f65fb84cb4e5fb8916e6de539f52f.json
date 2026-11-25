@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, slug, display_name, created_at FROM tenant WHERE slug = $1",
+  "query": "SELECT id, slug, display_name, host, settings, created_at FROM tenant WHERE host = $1",
   "describe": {
     "columns": [
       {
@@ -38,6 +38,28 @@
       },
       {
         "ordinal": 3,
+        "name": "host",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tenant",
+            "name": "host"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "settings",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "tenant",
+            "name": "settings"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -57,8 +79,10 @@
       false,
       false,
       false,
+      true,
+      false,
       false
     ]
   },
-  "hash": "b01b1a995e2fbc770fe8ca9c55f56f8fd07851172b12176ceabea9eeaa6f33b4"
+  "hash": "17d22a6b4f6eca406b22b70210ff5b5ef82f65fb84cb4e5fb8916e6de539f52f"
 }

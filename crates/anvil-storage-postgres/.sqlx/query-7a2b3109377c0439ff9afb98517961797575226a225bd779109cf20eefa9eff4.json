@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO email_outbox\n             (id, tenant_id, recipient, template, payload, attempts, next_attempt_at, created_at,\n              expires_at)\n         VALUES ($1, $2, $3, $4, $5, 0, $6, $6, $7)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Jsonb",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7a2b3109377c0439ff9afb98517961797575226a225bd779109cf20eefa9eff4"
+}
