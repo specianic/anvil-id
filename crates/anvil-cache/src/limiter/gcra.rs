@@ -105,7 +105,6 @@ impl Gcra {
 
     /// Consumes one request for `key` in `class`.
     pub(crate) fn check(&self, class: RouteClass, key: &LimitKey) -> Decision {
-        self.housekeeping();
         match self.bucket(class, key).check_key(key) {
             Ok(()) => Decision::Allow,
             Err(not_until) => {
