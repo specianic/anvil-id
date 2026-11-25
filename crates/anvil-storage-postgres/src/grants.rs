@@ -280,6 +280,7 @@ impl GrantRepo for PgGrants {
             tenant,
             code.session_id,
             &code.client_id,
+            &code.issuer,
             code.created_at,
         )
         .await?;

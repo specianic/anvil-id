@@ -674,6 +674,75 @@ async fn upgrade_from_0_2_keeps_every_row_and_widens_kinds() {
     conn.close().await.expect("close");
 }
 
+/// Last 0.3 schema version before the RP-session issuer (migration 0005).
+const LAST_PRE_ISSUER_VERSION: i64 = 4;
+
+/// 0.3 rows written before migration 0005: an RP session of the 0.2 fixture session and a
+/// queued back-channel logout delivery, in the 0004 shape (no issuer column).
+const V0_3_PRE_ISSUER_FIXTURE: &str = "
+UPDATE client SET backchannel_logout_uri = 'https://rp.example.test/bc' WHERE client_id = 'rp';
+INSERT INTO rp_session (tenant_id, session_id, client_id, created_at)
+     VALUES ('00000000-0000-7000-8000-000000020001', '00000000-0000-7000-8000-000000020030',
+             'rp', '2026-01-01T00:00:00Z');
+INSERT INTO logout_delivery (id, tenant_id, client_id, uri, sub, sid, attempts, next_attempt_at,
+                             give_up_at, created_at)
+     VALUES ('00000000-0000-7000-8000-000000020080', '00000000-0000-7000-8000-000000020001',
+             'rp', 'https://rp.example.test/bc', 'grace', 'session', 0, '2026-01-01T00:00:00Z',
+             '2100-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+";
+
+/// 0.2 → 0.3 before 0005 → latest: RP sessions and deliveries written before the issuer column
+/// survive with `issuer` NULL (the delivery worker then uses the canonical issuer).
+#[tokio::test]
+async fn upgrade_keeps_pre_issuer_rp_sessions_and_deliveries_with_null_issuer() {
+    let url = fresh_database().await;
+    let mut conn = connect(&url).await;
+    sqlx::migrate!()
+        .run_to(LAST_V0_2_VERSION, &mut conn)
+        .await
+        .expect("0.2 migrations apply");
+    sqlx::raw_sql(V0_2_FIXTURE)
+        .execute(&mut conn)
+        .await
+        .expect("0.2 fixtures load");
+    sqlx::migrate!()
+        .run_to(LAST_PRE_ISSUER_VERSION, &mut conn)
+        .await
+        .expect("0.3 migrations up to 0004 apply");
+    sqlx::raw_sql(V0_3_PRE_ISSUER_FIXTURE)
+        .execute(&mut conn)
+        .await
+        .expect("pre-issuer 0.3 fixtures load");
+    conn.close().await.expect("close");
+
+    let s = PostgresStorage::connect(&url, MAX_CONNECTIONS)
+        .await
+        .expect("connect");
+    s.migrate_with(MigrateOptions::default())
+        .await
+        .expect("0005 applies without the destructive flag");
+    let tenant = TenantId(V2_TENANT);
+    let rps = s
+        .logout()
+        .rp_sessions(tenant, SessionId(V2_SESSION))
+        .await
+        .expect("rp_sessions");
+    assert_eq!(rps.len(), 1, "the RP session survives");
+    assert_eq!(rps[0].client_id, "rp");
+    assert_eq!(rps[0].issuer, None, "pre-0005 RP sessions have no issuer");
+    let deliveries = s
+        .logout()
+        .deliveries_for_client(tenant, "rp")
+        .await
+        .expect("deliveries");
+    assert_eq!(deliveries.len(), 1, "the queued delivery survives");
+    assert_eq!(deliveries[0].sid, "session");
+    assert_eq!(
+        deliveries[0].issuer, None,
+        "pre-0005 deliveries have no issuer"
+    );
+}
+
 /// Contract-suite factory: a database built through the upgrade path. The 0.1 fixture tenants
 /// are deleted through the storage traits afterwards (cascading every fixture row through the
 /// upgraded foreign keys), because the contract tests start from an uninstalled database.

@@ -28,6 +28,7 @@ struct DeliveryRow {
     uri: String,
     sub: String,
     sid: String,
+    issuer: Option<String>,
     attempts: i32,
     next_attempt_at: OffsetDateTime,
     give_up_at: OffsetDateTime,
@@ -45,6 +46,7 @@ impl DeliveryRow {
             uri: self.uri,
             sub: self.sub,
             sid: self.sid,
+            issuer: self.issuer,
             attempts: to_u32("logout_delivery.attempts", self.attempts)?,
             next_attempt_at: self.next_attempt_at,
             give_up_at: self.give_up_at,
@@ -57,7 +59,8 @@ impl DeliveryRow {
 
 /// Enqueues, on the caller's transaction, one delivery per (session in `sessions` x RP session
 /// of it whose client has a `backchannel_logout_uri`): `uri` copied from the client, `sub` = the
-/// session's user id, `sid` = the session id, due `now`, given up at `now + 24h`.
+/// session's user id, `sid` = the session id, `issuer` copied from the RP session (the issuer of
+/// the RP's ID tokens), due `now`, given up at `now + 24h`.
 ///
 /// `sessions` must be exactly the sessions the calling intent revoked (the ids its revoking
 /// `UPDATE … RETURNING id` produced) and must still exist: call this before anything deletes
@@ -72,7 +75,8 @@ pub(crate) async fn enqueue_deliveries(
         return Ok(());
     }
     let targets = sqlx::query!(
-        r#"SELECT r.session_id, r.client_id, c.backchannel_logout_uri AS "uri!", s.user_id
+        r#"SELECT r.session_id, r.client_id, c.backchannel_logout_uri AS "uri!", s.user_id,
+                  r.issuer
              FROM rp_session r
              JOIN client c ON c.tenant_id = r.tenant_id AND c.client_id = r.client_id
              JOIN browser_session s ON s.tenant_id = r.tenant_id AND s.id = r.session_id
@@ -94,20 +98,22 @@ pub(crate) async fn enqueue_deliveries(
     let mut uris = Vec::with_capacity(targets.len());
     let mut subs = Vec::with_capacity(targets.len());
     let mut sids = Vec::with_capacity(targets.len());
+    let mut issuers: Vec<Option<String>> = Vec::with_capacity(targets.len());
     for t in targets {
         ids.push(LogoutDeliveryId::new_v7().0);
         clients.push(t.client_id);
         uris.push(t.uri);
         subs.push(t.user_id.to_string());
         sids.push(t.session_id.to_string());
+        issuers.push(t.issuer);
     }
     sqlx::query!(
         "INSERT INTO logout_delivery
-             (id, tenant_id, client_id, uri, sub, sid, attempts, next_attempt_at, give_up_at,
-              created_at)
-         SELECT d.id, $1, d.client_id, d.uri, d.sub, d.sid, 0, $7, $8, $7
-           FROM UNNEST($2::uuid[], $3::text[], $4::text[], $5::text[], $6::text[])
-                AS d(id, client_id, uri, sub, sid)",
+             (id, tenant_id, client_id, uri, sub, sid, issuer, attempts, next_attempt_at,
+              give_up_at, created_at)
+         SELECT d.id, $1, d.client_id, d.uri, d.sub, d.sid, d.issuer, 0, $7, $8, $7
+           FROM UNNEST($2::uuid[], $3::text[], $4::text[], $5::text[], $6::text[], $9::text[])
+                AS d(id, client_id, uri, sub, sid, issuer)",
         tenant.0,
         &ids,
         &clients,
@@ -116,6 +122,7 @@ pub(crate) async fn enqueue_deliveries(
         &sids,
         now,
         now + LOGOUT_DELIVERY_TTL,
+        &issuers as &[Option<String>],
     )
     .execute(&mut *conn)
     .await
@@ -123,23 +130,26 @@ pub(crate) async fn enqueue_deliveries(
     Ok(())
 }
 
-/// Records the RP session of (`session`, `client_id`) on the caller's transaction. Idempotent;
+/// Records the RP session of (`session`, `client_id`) with ID tokens from `issuer` on the
+/// caller's transaction. An existing row keeps its `created_at` and takes the latest issuer;
 /// only an existing session of `tenant` is recorded (same semantics as SQLite).
 pub(crate) async fn record_rp_session(
     conn: &mut sqlx::PgConnection,
     tenant: TenantId,
     session: SessionId,
     client_id: &str,
+    issuer: &str,
     now: OffsetDateTime,
 ) -> Result<(), StorageError> {
     sqlx::query!(
-        "INSERT INTO rp_session (tenant_id, session_id, client_id, created_at)
-         SELECT tenant_id, id, $3, $4 FROM browser_session WHERE tenant_id = $1 AND id = $2
-         ON CONFLICT (tenant_id, session_id, client_id) DO NOTHING",
+        "INSERT INTO rp_session (tenant_id, session_id, client_id, created_at, issuer)
+         SELECT tenant_id, id, $3, $4, $5 FROM browser_session WHERE tenant_id = $1 AND id = $2
+         ON CONFLICT (tenant_id, session_id, client_id) DO UPDATE SET issuer = EXCLUDED.issuer",
         tenant.0,
         session.0,
         client_id,
         now,
+        issuer,
     )
     .execute(&mut *conn)
     .await
@@ -155,7 +165,7 @@ impl LogoutRepo for PgLogout {
         session_id: SessionId,
     ) -> Result<Vec<RpSession>, StorageError> {
         let rows = sqlx::query!(
-            "SELECT tenant_id, session_id, client_id, created_at
+            "SELECT tenant_id, session_id, client_id, issuer, created_at
                FROM rp_session
               WHERE tenant_id = $1 AND session_id = $2
               ORDER BY client_id COLLATE \"C\"",
@@ -171,6 +181,7 @@ impl LogoutRepo for PgLogout {
                 tenant_id: TenantId(r.tenant_id),
                 session_id: SessionId(r.session_id),
                 client_id: r.client_id,
+                issuer: r.issuer,
                 created_at: r.created_at,
             })
             .collect())
@@ -194,7 +205,7 @@ impl LogoutRepo for PgLogout {
                             ORDER BY next_attempt_at, id
                             LIMIT $3
                               FOR UPDATE SKIP LOCKED)
-          RETURNING id, tenant_id, client_id, uri, sub, sid, attempts, next_attempt_at,
+          RETURNING id, tenant_id, client_id, uri, sub, sid, issuer, attempts, next_attempt_at,
                     give_up_at, created_at, delivered_at, last_error",
             owner_lease_until,
             now,
@@ -259,7 +270,7 @@ impl LogoutRepo for PgLogout {
     ) -> Result<Vec<LogoutDelivery>, StorageError> {
         sqlx::query_as!(
             DeliveryRow,
-            "SELECT id, tenant_id, client_id, uri, sub, sid, attempts, next_attempt_at,
+            "SELECT id, tenant_id, client_id, uri, sub, sid, issuer, attempts, next_attempt_at,
                     give_up_at, created_at, delivered_at, last_error
                FROM logout_delivery
               WHERE tenant_id = $1 AND client_id = $2

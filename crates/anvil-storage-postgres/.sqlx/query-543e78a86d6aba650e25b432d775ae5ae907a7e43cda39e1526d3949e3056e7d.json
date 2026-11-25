@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM branding_logo WHERE ctid IN\n                   (SELECT l.ctid FROM branding_logo l\n                     WHERE NOT EXISTS (SELECT 1 FROM branding b\n                                        WHERE b.tenant_id = l.tenant_id\n                                          AND b.logo_sha256 = l.sha256)\n                     LIMIT $1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "543e78a86d6aba650e25b432d775ae5ae907a7e43cda39e1526d3949e3056e7d"
+}

@@ -226,7 +226,59 @@ impl Storage for PostgresStorage {
             "DELETE FROM branding_draft WHERE ctid IN
                (SELECT ctid FROM branding_draft WHERE preview_expires_at <= $1 LIMIT $2)"
         );
+        // Families past their absolute lifetime can never issue tokens again; keep any that a
+        // still-valid code references. Their codes, refresh tokens and access tokens go by
+        // cascade (same rule as SQLite).
+        total += purge!(
+            "DELETE FROM token_family WHERE ctid IN
+               (SELECT ctid FROM token_family f
+                 WHERE f.absolute_expires_at <= $1
+                   AND NOT EXISTS (SELECT 1 FROM authorization_code c
+                                    WHERE c.token_family_id = f.id AND c.expires_at > $1)
+                 LIMIT $2)"
+        );
+        total += self.purge_unreferenced_logos().await?;
         Ok(total)
+    }
+}
+
+impl PostgresStorage {
+    /// Deletes, in batches, `branding_logo` rows that no `branding` row of the same tenant
+    /// references (replaced, cleared, or their scope or client deleted; drafts never reference
+    /// logos).
+    ///
+    /// A concurrent `BrandingRepo::put` can start referencing a logo between this statement's
+    /// `NOT EXISTS` check and its delete; the `branding -> branding_logo` foreign key then fails
+    /// the delete with `foreign_key_violation` (23503). That is not an error: the logo is in use
+    /// again, so the logo step stops for this run (the next purge picks up what is left). Any
+    /// other error fails the purge.
+    async fn purge_unreferenced_logos(&self) -> Result<u64, StorageError> {
+        let mut deleted = 0u64;
+        loop {
+            let result = sqlx::query!(
+                "DELETE FROM branding_logo WHERE ctid IN
+                   (SELECT l.ctid FROM branding_logo l
+                     WHERE NOT EXISTS (SELECT 1 FROM branding b
+                                        WHERE b.tenant_id = l.tenant_id
+                                          AND b.logo_sha256 = l.sha256)
+                     LIMIT $1)",
+                PURGE_BATCH,
+            )
+            .execute(&self.pool)
+            .await;
+            let n = match result {
+                Ok(done) => done.rows_affected(),
+                Err(sqlx::Error::Database(db)) if db.code().as_deref() == Some("23503") => {
+                    break;
+                }
+                Err(e) => return Err(map_err(e)),
+            };
+            deleted += n;
+            if n < PURGE_BATCH as u64 {
+                break;
+            }
+        }
+        Ok(deleted)
     }
 }
 

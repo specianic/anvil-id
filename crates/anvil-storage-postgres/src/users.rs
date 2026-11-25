@@ -125,7 +125,7 @@ where
 }
 
 /// Inserts a self-service token on any executor. `Conflict` on a duplicate hash.
-async fn insert_self_service_token<'e, E>(
+pub(crate) async fn insert_self_service_token<'e, E>(
     exec: E,
     tenant: TenantId,
     t: &NewSelfServiceToken,

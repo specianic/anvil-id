@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, tenant_id, client_id, uri, sub, sid, attempts, next_attempt_at,\n                    give_up_at, created_at, delivered_at, last_error\n               FROM logout_delivery\n              WHERE tenant_id = $1 AND client_id = $2\n              ORDER BY created_at, id",
+  "query": "SELECT id, tenant_id, client_id, uri, sub, sid, issuer, attempts, next_attempt_at,\n                    give_up_at, created_at, delivered_at, last_error\n               FROM logout_delivery\n              WHERE tenant_id = $1 AND client_id = $2\n              ORDER BY created_at, id",
   "describe": {
     "columns": [
       {
@@ -71,6 +71,17 @@
       },
       {
         "ordinal": 6,
+        "name": "issuer",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "logout_delivery",
+            "name": "issuer"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
         "name": "attempts",
         "type_info": "Int4",
         "origin": {
@@ -81,7 +92,7 @@
         }
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "next_attempt_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -92,7 +103,7 @@
         }
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "give_up_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -103,7 +114,7 @@
         }
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -114,7 +125,7 @@
         }
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "delivered_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -125,7 +136,7 @@
         }
       },
       {
-        "ordinal": 11,
+        "ordinal": 12,
         "name": "last_error",
         "type_info": "Text",
         "origin": {
@@ -149,6 +160,7 @@
       false,
       false,
       false,
+      true,
       false,
       false,
       false,
@@ -157,5 +169,5 @@
       true
     ]
   },
-  "hash": "ab22a5671d35e090867457926bd4f6ba043c7ddb9c68f384ffd8abee679ad650"
+  "hash": "39ec7bac13c022c6b2e42ecc7921235e154fc92a09aa2e387740740b0af23e68"
 }

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "UPDATE logout_delivery\n                SET next_attempt_at = $1\n              WHERE id IN (SELECT id FROM logout_delivery\n                            WHERE delivered_at IS NULL AND next_attempt_at <= $2\n                              AND give_up_at > $2\n                            ORDER BY next_attempt_at, id\n                            LIMIT $3\n                              FOR UPDATE SKIP LOCKED)\n          RETURNING id, tenant_id, client_id, uri, sub, sid, attempts, next_attempt_at,\n                    give_up_at, created_at, delivered_at, last_error",
+  "query": "UPDATE logout_delivery\n                SET next_attempt_at = $1\n              WHERE id IN (SELECT id FROM logout_delivery\n                            WHERE delivered_at IS NULL AND next_attempt_at <= $2\n                              AND give_up_at > $2\n                            ORDER BY next_attempt_at, id\n                            LIMIT $3\n                              FOR UPDATE SKIP LOCKED)\n          RETURNING id, tenant_id, client_id, uri, sub, sid, issuer, attempts, next_attempt_at,\n                    give_up_at, created_at, delivered_at, last_error",
   "describe": {
     "columns": [
       {
@@ -71,6 +71,17 @@
       },
       {
         "ordinal": 6,
+        "name": "issuer",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "logout_delivery",
+            "name": "issuer"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
         "name": "attempts",
         "type_info": "Int4",
         "origin": {
@@ -81,7 +92,7 @@
         }
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "next_attempt_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -92,7 +103,7 @@
         }
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "give_up_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -103,7 +114,7 @@
         }
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -114,7 +125,7 @@
         }
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "delivered_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -125,7 +136,7 @@
         }
       },
       {
-        "ordinal": 11,
+        "ordinal": 12,
         "name": "last_error",
         "type_info": "Text",
         "origin": {
@@ -150,6 +161,7 @@
       false,
       false,
       false,
+      true,
       false,
       false,
       false,
@@ -158,5 +170,5 @@
       true
     ]
   },
-  "hash": "6d6f69ed0701708b301ee5e1e8b9e8588e0d53a359709c8f0240c87dc859a3ab"
+  "hash": "289ecbde1ebde63a16a3519cf657451df666bc533257839ad5ccb5ec65cb944d"
 }

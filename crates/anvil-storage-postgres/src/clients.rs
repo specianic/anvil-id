@@ -1,9 +1,9 @@
 //! `ClientRepo` on Postgres.
 
 use anvil_core::model::{
-    ApplicationType, Client, ClientAuthMethod, ClientId, ClientType, ClientUpdate, ConsentMode,
-    GrantType, MfaPolicy, NewClient, Page, PageRequest, RevokeReason, SecretHash, TenantId,
-    TokenFormat,
+    ApplicationType, BrandingScope, Client, ClientAuthMethod, ClientId, ClientType, ClientUpdate,
+    ConsentMode, GrantType, MfaPolicy, NewClient, Page, PageRequest, RevokeReason, SecretHash,
+    TenantId, TokenFormat,
 };
 use anvil_core::ports::{ClientRepo, StorageError};
 use sqlx::PgPool;
@@ -383,6 +383,25 @@ impl ClientRepo for PgClients {
             tenant.0,
             client_id,
             RevokeReason::ClientDeleted.as_str(),
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(map_err)?;
+        // The client's branding and preview draft go with it. Its logo becomes unreferenced
+        // and is removed by the next `purge_expired`.
+        let scope_key = BrandingScope::Client(client_id.to_owned()).scope_key();
+        sqlx::query!(
+            "DELETE FROM branding WHERE tenant_id = $1 AND scope_key = $2",
+            tenant.0,
+            scope_key,
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(map_err)?;
+        sqlx::query!(
+            "DELETE FROM branding_draft WHERE tenant_id = $1 AND scope_key = $2",
+            tenant.0,
+            scope_key,
         )
         .execute(&mut *tx)
         .await

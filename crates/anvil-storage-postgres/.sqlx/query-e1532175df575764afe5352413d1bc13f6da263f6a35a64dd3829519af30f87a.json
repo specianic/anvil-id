@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT r.session_id, r.client_id, c.backchannel_logout_uri AS \"uri!\", s.user_id\n             FROM rp_session r\n             JOIN client c ON c.tenant_id = r.tenant_id AND c.client_id = r.client_id\n             JOIN browser_session s ON s.tenant_id = r.tenant_id AND s.id = r.session_id\n            WHERE r.tenant_id = $1 AND r.session_id = ANY($2)\n              AND c.backchannel_logout_uri IS NOT NULL\n            ORDER BY r.session_id, r.client_id",
+  "query": "SELECT r.session_id, r.client_id, c.backchannel_logout_uri AS \"uri!\", s.user_id,\n                  r.issuer\n             FROM rp_session r\n             JOIN client c ON c.tenant_id = r.tenant_id AND c.client_id = r.client_id\n             JOIN browser_session s ON s.tenant_id = r.tenant_id AND s.id = r.session_id\n            WHERE r.tenant_id = $1 AND r.session_id = ANY($2)\n              AND c.backchannel_logout_uri IS NOT NULL\n            ORDER BY r.session_id, r.client_id",
   "describe": {
     "columns": [
       {
@@ -46,6 +46,17 @@
             "name": "user_id"
           }
         }
+      },
+      {
+        "ordinal": 4,
+        "name": "issuer",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "rp_session",
+            "name": "issuer"
+          }
+        }
       }
     ],
     "parameters": {
@@ -58,8 +69,9 @@
       false,
       false,
       true,
-      false
+      false,
+      true
     ]
   },
-  "hash": "c6347261e8b062404a89443741d3200df0dbecc4a747b31300baf2f6c5a3b617"
+  "hash": "e1532175df575764afe5352413d1bc13f6da263f6a35a64dd3829519af30f87a"
 }

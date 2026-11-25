@@ -7,15 +7,17 @@
 
 use anvil_core::model::{
     Connection, ConnectionConfig, ConnectionId, ConnectionKind, ConnectionUpdate, IdentityLink,
-    IdentityLinkId, NewConnection, NewIdentityLink, NewUser, TenantId, User, UserId,
+    IdentityLinkId, NewConnection, NewEmail, NewIdentityLink, NewSelfServiceToken, NewUser,
+    TenantId, User, UserId,
 };
-use anvil_core::ports::{ConnectionRepo, StorageError};
+use anvil_core::ports::{ConnectionRepo, DeleteLinkOutcome, StorageError};
 use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::convert::{enum_from, from_json, map_err, to_json};
-use crate::users::{insert_user, user_from_new};
+use crate::outbox::enqueue_email;
+use crate::users::{insert_self_service_token, insert_user, user_from_new};
 
 #[derive(Debug, Clone)]
 pub(crate) struct PgConnections {
@@ -400,17 +402,65 @@ impl ConnectionRepo for PgConnections {
         tenant: TenantId,
         user: UserId,
         id: IdentityLinkId,
-    ) -> Result<bool, StorageError> {
+        email_sign_in: bool,
+    ) -> Result<DeleteLinkOutcome, StorageError> {
+        let mut tx = self.pool.begin().await.map_err(map_err)?;
+        // Serialise unlinks of the same user: a second call waits on this row lock until the
+        // first commits. READ COMMITTED takes a fresh snapshot per statement, so its guarded
+        // DELETE below then sees the first call's delete.
+        let locked = sqlx::query_scalar!(
+            r#"SELECT 1 AS "one!" FROM "user" WHERE tenant_id = $1 AND id = $2 FOR UPDATE"#,
+            tenant.0,
+            user.0,
+        )
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(map_err)?;
+        if locked.is_none() {
+            return Ok(DeleteLinkOutcome::NotFound);
+        }
+        // The guard: the user keeps a password, a passkey, another link, or a verified email the
+        // tenant lets them sign in with. TOTP is a second factor, never a sign-in method.
         let done = sqlx::query!(
-            "DELETE FROM identity_link WHERE tenant_id = $1 AND user_id = $2 AND id = $3",
+            r#"DELETE FROM identity_link
+                WHERE tenant_id = $1 AND user_id = $2 AND id = $3
+                  AND (EXISTS (SELECT 1 FROM credential c
+                                WHERE c.tenant_id = $1 AND c.user_id = $2
+                                  AND c.kind IN ('password', 'webauthn'))
+                       OR EXISTS (SELECT 1 FROM identity_link o
+                                   WHERE o.tenant_id = $1 AND o.user_id = $2 AND o.id <> $3)
+                       OR ($4 AND EXISTS (SELECT 1 FROM "user" u
+                                           WHERE u.tenant_id = $1 AND u.id = $2
+                                             AND u.email_verified)))"#,
+            tenant.0,
+            user.0,
+            id.0,
+            email_sign_in,
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(map_err)?;
+        if done.rows_affected() > 0 {
+            tx.commit().await.map_err(map_err)?;
+            return Ok(DeleteLinkOutcome::Deleted);
+        }
+        let exists = sqlx::query_scalar!(
+            r#"SELECT 1 AS "one!" FROM identity_link
+                WHERE tenant_id = $1 AND user_id = $2 AND id = $3"#,
             tenant.0,
             user.0,
             id.0,
         )
-        .execute(&self.pool)
+        .fetch_optional(&mut *tx)
         .await
-        .map_err(map_err)?;
-        Ok(done.rows_affected() > 0)
+        .map_err(map_err)?
+        .is_some();
+        tx.commit().await.map_err(map_err)?;
+        Ok(if exists {
+            DeleteLinkOutcome::LastSignInMethod
+        } else {
+            DeleteLinkOutcome::NotFound
+        })
     }
 
     async fn create_user_with_link(
@@ -418,16 +468,24 @@ impl ConnectionRepo for PgConnections {
         tenant: TenantId,
         user: &NewUser,
         link: &NewIdentityLink,
+        token: Option<&NewSelfServiceToken>,
+        email: Option<&NewEmail>,
     ) -> Result<User, StorageError> {
         if link.user_id != user.id {
             return Err(StorageError::Conflict(
                 "identity link user_id does not match the new user".to_owned(),
             ));
         }
-        // One transaction; any error drops `tx` and rolls both inserts back.
+        // One transaction; any error drops `tx` and rolls every insert back.
         let mut tx = self.pool.begin().await.map_err(map_err)?;
         insert_user(&mut *tx, tenant, user).await?;
         insert_link(&mut *tx, tenant, link).await?;
+        if let Some(t) = token {
+            insert_self_service_token(&mut *tx, tenant, t).await?;
+        }
+        if let Some(e) = email {
+            enqueue_email(&mut *tx, tenant, e).await?;
+        }
         tx.commit().await.map_err(map_err)?;
         Ok(user_from_new(tenant, user))
     }

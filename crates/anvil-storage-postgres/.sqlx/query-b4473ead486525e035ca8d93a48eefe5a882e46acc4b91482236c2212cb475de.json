@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM token_family WHERE ctid IN\n               (SELECT ctid FROM token_family f\n                 WHERE f.absolute_expires_at <= $1\n                   AND NOT EXISTS (SELECT 1 FROM authorization_code c\n                                    WHERE c.token_family_id = f.id AND c.expires_at > $1)\n                 LIMIT $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b4473ead486525e035ca8d93a48eefe5a882e46acc4b91482236c2212cb475de"
+}
