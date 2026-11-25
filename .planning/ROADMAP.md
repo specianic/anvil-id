@@ -20,7 +20,7 @@ headless flow API, user import/export, OpenID certification, external security r
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Foundations and Spikes (M0)** - Workspace, CI and the three stack spikes (dual storage, static binary, conformance in CI)
+- [x] **Phase 1: Foundations and Spikes (M0)** - Workspace, CI and the three stack spikes (dual storage, static binary, conformance in CI) (completed 2026-11-25)
 - [ ] **Phase 2: Release 0.1 "First login"** - Zero-config binary with spec-correct auth code + PKCE, refresh, client credentials, password login and bootstrap admin
 - [ ] **Phase 3: Release 0.2 "Secure by default"** - Passkeys, TOTP, consent, sessions, brute-force protection, audit log, introspection/revocation, key rotation, admin console v1
 - [ ] **Phase 4: Release 0.3 "Real-world logins"** - Social login, account linking, MFA policy, logout profiles, theming, i18n, account page, resource indicators
@@ -132,7 +132,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundations and Spikes (M0) | 8/8 | Complete | 2026-11-25 |
+| 1. Foundations and Spikes (M0) | 8/8 | Complete    | 2026-11-25 |
 | 2. Release 0.1 "First login" | 0/TBD | Not started | - |
 | 3. Release 0.2 "Secure by default" | 0/TBD | Not started | - |
 | 4. Release 0.3 "Real-world logins" | 0/TBD | Not started | - |
