@@ -12,6 +12,7 @@ use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
 use serde_json::json;
 
+use crate::i18n::{Locale, default_locale};
 use crate::render::PageContext;
 use crate::state::AppState;
 use crate::tenant::ResolvedTenant;
@@ -106,8 +107,10 @@ pub fn problem_json(err: &CoreError) -> Response {
     resp
 }
 
-/// The themed HTML error page. `error_key` selects the fixed sentence (themes/default/README.md);
-/// `detail` is optional extra text (empty = none). The page never redirects.
+/// The themed HTML error page in the tenant's default language (English without a tenant), for
+/// callers without the request's negotiated locale (layers). Browser pages that have it use
+/// [`error_page_in`]. `error_key` selects the fixed sentence (themes/default/README.md); `detail`
+/// is optional extra text (empty = none). The page never redirects.
 pub fn error_page(
     state: &AppState,
     tenant: Option<&ResolvedTenant>,
@@ -115,9 +118,22 @@ pub fn error_page(
     error_key: &str,
     detail: &str,
 ) -> Response {
+    let locale = default_locale(state.renderer().catalogs(), tenant);
+    error_page_in(state, tenant, &locale, status, error_key, detail)
+}
+
+/// The themed HTML error page in the negotiated `locale`.
+pub fn error_page_in(
+    state: &AppState,
+    tenant: Option<&ResolvedTenant>,
+    locale: &Locale,
+    status: StatusCode,
+    error_key: &str,
+    detail: &str,
+) -> Response {
     let page = match tenant {
-        Some(t) => PageContext::for_tenant(state, t, "Error"),
-        None => PageContext::installation(state, "Error"),
+        Some(t) => PageContext::for_tenant(state, t, locale, "title.error"),
+        None => PageContext::installation(state, locale, "title.error"),
     };
     let ctx = minijinja::context! {
         page => page.into_value(),
@@ -139,22 +155,37 @@ pub fn error_page(
     }
 }
 
-/// The error page for a domain failure: the key is derived from the error, the status from the
-/// single mapping.
+/// The error page key of a domain failure.
+fn error_key(err: &CoreError) -> &'static str {
+    match err {
+        CoreError::NotFound => "not_found",
+        CoreError::InvalidRequest(_)
+        | CoreError::Validation { .. }
+        | CoreError::InvalidTarget(_) => "invalid_request",
+        _ => "server_error",
+    }
+}
+
+/// The error page for a domain failure in the tenant's default language ([`error_page`]): the
+/// key is derived from the error, the status from the single mapping.
 pub fn core_error_page(
     state: &AppState,
     tenant: Option<&ResolvedTenant>,
     err: &CoreError,
 ) -> Response {
     log_if_internal(err);
-    let key = match err {
-        CoreError::NotFound => "not_found",
-        CoreError::InvalidRequest(_)
-        | CoreError::Validation { .. }
-        | CoreError::InvalidTarget(_) => "invalid_request",
-        _ => "server_error",
-    };
-    error_page(state, tenant, status_of(err), key, "")
+    error_page(state, tenant, status_of(err), error_key(err), "")
+}
+
+/// [`core_error_page`] in the negotiated `locale`.
+pub fn core_error_page_in(
+    state: &AppState,
+    tenant: Option<&ResolvedTenant>,
+    locale: &Locale,
+    err: &CoreError,
+) -> Response {
+    log_if_internal(err);
+    error_page_in(state, tenant, locale, status_of(err), error_key(err), "")
 }
 
 #[cfg(test)]

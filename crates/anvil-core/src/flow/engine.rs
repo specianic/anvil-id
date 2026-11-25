@@ -506,45 +506,6 @@ pub fn current_form(
     }
 }
 
-/// Display text for a message key. Unknown keys get a generic sentence.
-pub fn message_text(key: &str) -> &'static str {
-    match key {
-        "login.invalid_credentials" => "The email address or password is incorrect.",
-        "login.email_not_verified" => "Please confirm your email address before signing in.",
-        "login.second_factor_invalid" => "That code is not valid. Please try again.",
-        "login.passkey_failed" => {
-            "Signing in with a passkey did not work. Please try again or use your password."
-        }
-        "login.recovery_code_used" => {
-            "You signed in with a recovery code. Each code works only once; consider generating new codes."
-        }
-        "registration.disabled" => "Self-registration is not available.",
-        "registration.email_taken" => "An account with this email address already exists.",
-        "registration.check_email" => {
-            "Your account was created. Check your email to confirm your address, then sign in."
-        }
-        "email.invalid" => "Enter a valid email address.",
-        "password.too_short" => "The password is too short.",
-        "password.too_long" => "The password is too long.",
-        "password.breached" => {
-            "This password has appeared in a data breach. Please choose a different one."
-        }
-        "recovery.sent" => {
-            "If an account exists for that address, we have sent instructions to reset the password."
-        }
-        "recovery.invalid_token" => {
-            "This password reset link is invalid or has expired. Please request a new one."
-        }
-        "recovery.done" => "Your password has been changed. You can now sign in.",
-        "verification.invalid_token" => "This confirmation link is invalid or has expired.",
-        "verification.done" => "Your email address is confirmed.",
-        "flow.expired" => "This sign-in attempt expired. Please start again.",
-        "flow.invalid_input" => "This form submission could not be processed. Please try again.",
-        "service.overloaded" => "The service is busy. Please try again in a moment.",
-        _ => "Something went wrong.",
-    }
-}
-
 // ---- form helpers shared by the flow modules ----
 
 pub(super) fn error(key: &str) -> FormMessage {
@@ -552,17 +513,13 @@ pub(super) fn error(key: &str) -> FormMessage {
 }
 
 pub(super) fn message(level: MessageLevel, key: &str) -> FormMessage {
-    FormMessage {
-        level,
-        key: key.to_owned(),
-        text: message_text(key).to_owned(),
-    }
+    FormMessage::new(level, key)
 }
 
 pub(super) fn field(
     name: &str,
     kind: FieldKind,
-    label: &str,
+    label_key: &str,
     value: Option<String>,
     required: bool,
     autocomplete: Option<&str>,
@@ -571,7 +528,8 @@ pub(super) fn field(
     FormField {
         name: name.to_owned(),
         kind,
-        label: label.to_owned(),
+        label_key: label_key.to_owned(),
+        label: String::new(),
         // Password values are never echoed.
         value: if kind == FieldKind::Password {
             None
@@ -588,7 +546,7 @@ pub(super) fn password_field(autocomplete: &str, messages: Vec<FormMessage>) -> 
     field(
         "password",
         FieldKind::Password,
-        "Password",
+        "field.password",
         None,
         true,
         Some(autocomplete),
@@ -845,26 +803,21 @@ mod tests {
     }
 
     #[test]
-    fn every_listed_key_has_text() {
-        for key in [
-            "login.invalid_credentials",
-            "login.second_factor_invalid",
-            "login.passkey_failed",
-            "login.recovery_code_used",
-            "registration.disabled",
-            "registration.email_taken",
-            "password.too_short",
-            "password.too_long",
-            "password.breached",
-            "recovery.sent",
-            "recovery.invalid_token",
-            "verification.invalid_token",
-            "verification.done",
-            "flow.expired",
-            "service.overloaded",
-        ] {
-            assert_ne!(message_text(key), message_text("unknown.key"), "{key}");
-        }
+    fn core_messages_and_fields_carry_keys_not_text() {
+        let m = error("login.invalid_credentials");
+        assert_eq!(m.key, "login.invalid_credentials");
+        assert_eq!(m.level, MessageLevel::Error);
+        assert!(
+            m.text.is_empty(),
+            "text is filled by the presentation layer"
+        );
+        assert!(m.args.is_empty());
+        let f = password_field("current-password", Vec::new());
+        assert_eq!(f.label_key, "field.password");
+        assert!(
+            f.label.is_empty(),
+            "labels are filled by the presentation layer"
+        );
     }
 
     #[test]

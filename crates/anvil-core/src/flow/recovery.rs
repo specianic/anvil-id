@@ -153,7 +153,7 @@ fn request_form(
         vec![field(
             "email",
             FieldKind::Email,
-            "Email",
+            "field.email",
             state.email.clone(),
             true,
             Some("email"),
@@ -175,7 +175,7 @@ fn reset_form(
             field(
                 "token",
                 FieldKind::Hidden,
-                "Token",
+                "field.token",
                 token,
                 true,
                 None,

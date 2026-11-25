@@ -101,16 +101,6 @@ pub const MSG_SESSION_REVOKED: &str = "sessions.revoked";
 pub const MSG_OTHERS_REVOKED: &str = "sessions.revoked_others";
 pub const MSG_SESSION_NOT_FOUND: &str = "sessions.not_found";
 
-/// The English text of a sessions page message key.
-pub fn message_text(key: &str) -> &'static str {
-    match key {
-        MSG_SESSION_REVOKED => "The session was signed out.",
-        MSG_OTHERS_REVOKED => "All other sessions were signed out.",
-        MSG_SESSION_NOT_FOUND => "That session is no longer active.",
-        _ => "Something went wrong.",
-    }
-}
-
 /// `(expires_at, idle_expires_at)` of a session created at `now`.
 pub fn session_expiry(now: OffsetDateTime) -> (OffsetDateTime, OffsetDateTime) {
     let expires_at = now + SESSION_ABSOLUTE_LIFETIME;
@@ -531,16 +521,14 @@ mod tests {
     }
 
     #[test]
-    fn message_keys_have_text() {
+    fn message_keys_are_namespaced() {
         for k in [
             MSG_SESSION_REVOKED,
             MSG_OTHERS_REVOKED,
             MSG_SESSION_NOT_FOUND,
         ] {
             assert!(k.starts_with("sessions."));
-            assert_ne!(message_text(k), "Something went wrong.");
         }
-        assert_eq!(message_text("nope"), "Something went wrong.");
     }
 
     #[test]

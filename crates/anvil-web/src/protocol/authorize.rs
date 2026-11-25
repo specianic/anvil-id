@@ -31,6 +31,7 @@ use axum::routing::get;
 use axum_extra::extract::cookie::CookieJar;
 
 use crate::errors::{core_error_page, error_page};
+use crate::i18n::default_locale;
 use crate::render::PageContext;
 use crate::state::AppState;
 use crate::tenant::ResolvedTenant;
@@ -127,7 +128,13 @@ fn form_post(state: &AppState, tenant: &ResolvedTenant, r: &AuthorizationRespons
         return server_error();
     };
     let ctx = minijinja::context! {
-        page => PageContext::for_tenant(state, tenant, "Continuing").into_value(),
+        page => PageContext::for_tenant(
+            state,
+            tenant,
+            &default_locale(state.renderer().catalogs(), Some(tenant)),
+            "title.form_post",
+        )
+        .into_value(),
         action => &r.redirect_uri,
         fields => &r.params,
     };

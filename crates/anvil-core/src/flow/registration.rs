@@ -141,7 +141,7 @@ pub(super) fn form(
             field(
                 "email",
                 FieldKind::Email,
-                "Email",
+                "field.email",
                 state.email.clone(),
                 true,
                 Some("email"),
@@ -150,7 +150,7 @@ pub(super) fn form(
             field(
                 "name",
                 FieldKind::Text,
-                "Name",
+                "field.name",
                 state.name.clone(),
                 false,
                 Some("name"),

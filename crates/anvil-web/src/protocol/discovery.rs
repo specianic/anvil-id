@@ -19,6 +19,7 @@ use anvil_core::model::{ACR_PWD, Tenant};
 use anvil_core::oauth::response_mode;
 use anvil_core::service::key_rotation::enabled_algs;
 use axum::Router;
+use axum::extract::State;
 use axum::http::{HeaderValue, header};
 use axum::response::{IntoResponse, Response};
 
@@ -114,11 +115,13 @@ struct ProviderMetadata {
     request_parameter_supported: bool,
     request_uri_parameter_supported: bool,
     claims_supported: &'static [&'static str],
+    /// The locales of the page catalogs ([`crate::i18n::Catalogs::available`]).
+    ui_locales_supported: Vec<String>,
 }
 
 impl ProviderMetadata {
     /// The document for `issuer`; `id_token_algs` are the tenant's enabled ID token algorithms.
-    fn for_issuer(issuer: &str, id_token_algs: Vec<&'static str>) -> Self {
+    fn for_issuer(issuer: &str, id_token_algs: Vec<&'static str>, ui_locales: Vec<String>) -> Self {
         let endpoint = |path: &str| format!("{issuer}{path}");
         Self {
             authorization_endpoint: endpoint("/authorize"),
@@ -148,6 +151,7 @@ impl ProviderMetadata {
             request_parameter_supported: false,
             request_uri_parameter_supported: false,
             claims_supported: CLAIMS_SUPPORTED,
+            ui_locales_supported: ui_locales,
         }
     }
 }
@@ -160,12 +164,17 @@ fn id_token_algs(tenant: &Tenant) -> Result<Vec<&'static str>, anvil_core::error
         .collect())
 }
 
-async fn metadata(tenant: ResolvedTenant) -> Response {
+async fn metadata(State(state): State<AppState>, tenant: ResolvedTenant) -> Response {
     let algs = match id_token_algs(&tenant.tenant) {
         Ok(a) => a,
         Err(e) => return oauth_json(&e),
     };
-    let mut resp = axum::Json(ProviderMetadata::for_issuer(&tenant.issuer, algs)).into_response();
+    let mut resp = axum::Json(ProviderMetadata::for_issuer(
+        &tenant.issuer,
+        algs,
+        state.renderer().catalogs().available(),
+    ))
+    .into_response();
     resp.headers_mut().insert(
         header::CACHE_CONTROL,
         HeaderValue::from_static("public, max-age=300"),
@@ -186,7 +195,11 @@ mod tests {
 
     #[test]
     fn endpoints_derive_from_the_issuer() {
-        let m = ProviderMetadata::for_issuer("https://op.test/t/acme", vec!["RS256"]);
+        let m = ProviderMetadata::for_issuer(
+            "https://op.test/t/acme",
+            vec!["RS256"],
+            vec!["en".into()],
+        );
         assert_eq!(m.issuer, "https://op.test/t/acme");
         assert_eq!(m.authorization_endpoint, "https://op.test/t/acme/authorize");
         assert_eq!(m.token_endpoint, "https://op.test/t/acme/token");

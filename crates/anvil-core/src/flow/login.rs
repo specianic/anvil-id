@@ -229,7 +229,7 @@ pub(super) fn form(state: &LoginState, messages: Vec<FormMessage>) -> FormDescri
             field(
                 "identifier",
                 FieldKind::Email,
-                "Email",
+                "field.email",
                 state.identifier.clone(),
                 true,
                 Some("username"),
@@ -253,7 +253,7 @@ pub(super) fn second_factor_form(
         fields.push(field(
             "code",
             FieldKind::Text,
-            "Authentication code",
+            "field.code",
             None,
             false,
             Some("one-time-code"),
@@ -264,7 +264,7 @@ pub(super) fn second_factor_form(
         fields.push(field(
             "recovery_code",
             FieldKind::Text,
-            "Recovery code",
+            "field.recovery_code",
             None,
             false,
             Some("off"),

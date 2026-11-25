@@ -55,7 +55,7 @@ pub(super) fn form(token: Option<String>, messages: Vec<FormMessage>) -> FormDes
         vec![field(
             "token",
             FieldKind::Hidden,
-            "Token",
+            "field.token",
             token,
             true,
             None,

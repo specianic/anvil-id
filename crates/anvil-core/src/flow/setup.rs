@@ -62,7 +62,7 @@ pub(super) fn form(
             field(
                 "email",
                 FieldKind::Email,
-                "Admin email",
+                "field.admin_email",
                 state.email.clone(),
                 true,
                 Some("email"),

@@ -26,15 +26,16 @@ use anvil_core::service::consent::{
 use axum::Router;
 use axum::extract::rejection::FormRejection;
 use axum::extract::{Form, Query, State};
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum_extra::extract::cookie::CookieJar;
 use secrecy::ExposeSecret as _;
 use serde::{Deserialize, Serialize};
 
-use super::login::{UiQuery, bad_form, csrf_page};
-use crate::errors::{core_error_page, error_page};
+use super::login::{UiQuery, bad_form, csrf_page, page_locale};
+use crate::errors::{core_error_page_in, error_page_in};
+use crate::i18n::{Locale, RequestLocale, carry_ui_locales, locale_for_user};
 use crate::render::PageContext;
 use crate::request_context::AuditContext;
 use crate::state::AppState;
@@ -67,12 +68,13 @@ struct ConsentForm {
     decision: Option<String>,
 }
 
-/// A message on a consent or connected-apps page (`data-message-key` like the form messages).
+/// A message on the consent and account pages (`data-message-key` like the form messages).
+/// `text` is filled for the page's locale by [`localized`] just before rendering.
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct PageMessage {
     pub(super) level: &'static str,
     pub(super) key: &'static str,
-    pub(super) text: &'static str,
+    pub(super) text: String,
 }
 
 impl PageMessage {
@@ -80,7 +82,7 @@ impl PageMessage {
         Self {
             level: "error",
             key,
-            text: message_text(key),
+            text: String::new(),
         }
     }
 
@@ -88,37 +90,69 @@ impl PageMessage {
         Self {
             level: "info",
             key,
-            text: message_text(key),
+            text: String::new(),
         }
+    }
+
+    /// The message with its text in `loc`.
+    pub(super) fn localized(mut self, state: &AppState, loc: &Locale) -> Self {
+        self.text = state.renderer().text(loc, self.key);
+        self
     }
 }
 
-/// Text of a consent or connected-apps message key.
-fn message_text(key: &str) -> &'static str {
-    match key {
-        EXPIRED => "This page expired. Please review the request again.",
-        "apps.revoked" => "Access removed. The app can no longer use your account.",
-        "apps.not_found" => "That app no longer has access to your account.",
-        "apps.expired" => "This page expired. Please try again.",
-        _ => "Something went wrong.",
-    }
+/// `messages` with their texts in `loc`.
+pub(super) fn localized(
+    state: &AppState,
+    loc: &Locale,
+    messages: Vec<PageMessage>,
+) -> Vec<PageMessage> {
+    messages
+        .into_iter()
+        .map(|m| m.localized(state, loc))
+        .collect()
 }
 
 /// A requested scope as shown on the page: its plain-language description, or its name.
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct ScopeView {
     pub(super) name: String,
-    pub(super) description: Option<&'static str>,
+    pub(super) description: Option<String>,
 }
 
-pub(super) fn scope_views(scopes: &[String]) -> Vec<ScopeView> {
+/// The scopes with the description of each well-known scope (`scope.{name}`) in `loc`.
+pub(super) fn scope_views(state: &AppState, loc: &Locale, scopes: &[String]) -> Vec<ScopeView> {
     scopes
         .iter()
         .map(|s| ScopeView {
             name: s.clone(),
-            description: scope_description(s),
+            description: scope_description(s)
+                .map(|_| state.renderer().text(loc, &format!("scope.{s}"))),
         })
         .collect()
+}
+
+/// The locale of an account page: an explicit `ui_locales`, then the user's `locale` claim,
+/// then `Accept-Language` and the tenant default ([`locale_for_user`]).
+pub(super) async fn account_locale(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    request: &RequestLocale,
+    session: &BrowserSession,
+) -> Locale {
+    let claim = match state
+        .storage()
+        .users()
+        .get(tenant.tenant.id, session.user_id)
+        .await
+    {
+        Ok(user) => user.and_then(|u| u.claims.locale),
+        Err(e) => {
+            tracing::warn!(error = %e, "loading the user for the page locale failed");
+            None
+        }
+    };
+    locale_for_user(state, tenant, request, claim.as_deref())
 }
 
 /// Sets `Cache-Control: no-store` (the pages are per user and carry a CSRF token).
@@ -156,10 +190,11 @@ fn to_login(tenant: &ResolvedTenant, request: AuthRequestId) -> Response {
     see_other(&tenant.ui_url(&format!("/ui/login?request={request}")))
 }
 
-fn flow_expired(state: &AppState, tenant: &ResolvedTenant) -> Response {
-    error_page(
+fn flow_expired(state: &AppState, tenant: &ResolvedTenant, loc: &Locale) -> Response {
+    error_page_in(
         state,
         Some(tenant),
+        loc,
         StatusCode::BAD_REQUEST,
         "flow_expired",
         "",
@@ -170,12 +205,13 @@ fn flow_expired(state: &AppState, tenant: &ResolvedTenant) -> Response {
 fn request_id(
     state: &AppState,
     tenant: &ResolvedTenant,
+    loc: &Locale,
     q: &UiQuery,
 ) -> Result<AuthRequestId, Box<Response>> {
     match q.auth_request() {
         Ok(Some(id)) => Ok(id),
-        Ok(None) => Err(Box::new(bad_form(state, tenant))),
-        Err(bad) => Err(Box::new(bad.into_response(state, Some(tenant)))),
+        Ok(None) => Err(Box::new(bad_form(state, tenant, loc))),
+        Err(bad) => Err(Box::new(bad.into_response(state, Some(tenant), loc))),
     }
 }
 
@@ -183,6 +219,7 @@ fn request_id(
 async fn consent_page(
     state: &AppState,
     tenant: &ResolvedTenant,
+    loc: &Locale,
     session: &BrowserSession,
     request: AuthRequestId,
     messages: Vec<PageMessage>,
@@ -194,29 +231,38 @@ async fn consent_page(
         .await
     {
         Ok(ConsentStart::Started { flow, page }) => (flow, page),
-        Ok(ConsentStart::RequestExpired) => return flow_expired(state, tenant),
-        Err(e) => return core_error_page(state, Some(tenant), &e),
+        Ok(ConsentStart::RequestExpired) => return flow_expired(state, tenant, loc),
+        Err(e) => return core_error_page_in(state, Some(tenant), loc, &e),
     };
     let jar = CookieJar::new().add(
         state
             .cookies()
             .flow_cookie(&tenant.tenant, flow.cookie_token.expose_secret()),
     );
-    let scopes = scope_views(&page.scopes);
+    let scopes = scope_views(state, loc, &page.scopes);
+    let messages = localized(state, loc, messages);
     let ctx = minijinja::context! {
-        page => PageContext::for_tenant(state, tenant, "Allow access").into_value(),
+        page => PageContext::for_tenant(state, tenant, loc, "title.consent").into_value(),
         client_name => &page.client_name,
         client_id => &page.client_id,
         scopes => minijinja::Value::from(minijinja::value::Serde(&scopes)),
         messages => minijinja::Value::from(minijinja::value::Serde(&messages)),
         csrf_token => flow.csrf_token.expose_secret(),
-        action => tenant.ui_url(&format!("{PAGE}?flow={}&request={request}", flow.flow_id)),
+        action => carry_ui_locales(
+            &tenant.ui_url(&format!("{PAGE}?flow={}&request={request}", flow.flow_id)),
+            loc,
+        ),
     };
     match state.renderer().page("consent.html", ctx) {
         Ok(html) => no_store((status, jar, html).into_response()),
         Err(e) => {
             tracing::error!(error = %e, "rendering the consent page failed");
-            core_error_page(state, Some(tenant), &CoreError::Internal("render".into()))
+            core_error_page_in(
+                state,
+                Some(tenant),
+                loc,
+                &CoreError::Internal("render".into()),
+            )
         }
     }
 }
@@ -224,48 +270,69 @@ async fn consent_page(
 async fn show(
     State(state): State<AppState>,
     tenant: ResolvedTenant,
+    locale: RequestLocale,
+    headers: HeaderMap,
     jar: CookieJar,
     Query(q): Query<UiQuery>,
 ) -> Response {
-    let request = match request_id(&state, &tenant, &q) {
+    let request = match request_id(&state, &tenant, &locale.0, &q) {
         Ok(r) => r,
         Err(resp) => return *resp,
     };
+    let loc = page_locale(&state, &tenant, locale, &headers, Some(request)).await;
     match current_session(&state, &tenant, &jar).await {
-        Ok(Some(s)) => consent_page(&state, &tenant, &s, request, Vec::new(), StatusCode::OK).await,
+        Ok(Some(s)) => {
+            consent_page(
+                &state,
+                &tenant,
+                &loc,
+                &s,
+                request,
+                Vec::new(),
+                StatusCode::OK,
+            )
+            .await
+        }
         Ok(None) => to_login(&tenant, request),
-        Err(e) => core_error_page(&state, Some(&tenant), &e),
+        Err(e) => core_error_page_in(&state, Some(&tenant), &loc, &e),
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "axum handler: one argument per extractor"
+)]
 async fn submit(
     State(state): State<AppState>,
     tenant: ResolvedTenant,
+    locale: RequestLocale,
+    headers: HeaderMap,
     jar: CookieJar,
     AuditContext(ctx): AuditContext,
     Query(q): Query<UiQuery>,
     form: Result<Form<ConsentForm>, FormRejection>,
 ) -> Response {
     let Ok(Form(form)) = form else {
-        return bad_form(&state, &tenant);
+        return bad_form(&state, &tenant, &locale.0);
     };
     let approved = match form.decision.as_deref() {
         Some("allow") => true,
         Some("deny") => false,
-        _ => return bad_form(&state, &tenant),
+        _ => return bad_form(&state, &tenant, &locale.0),
     };
-    let request = match request_id(&state, &tenant, &q) {
+    let request = match request_id(&state, &tenant, &locale.0, &q) {
         Ok(r) => r,
         Err(resp) => return *resp,
     };
+    let loc = page_locale(&state, &tenant, locale, &headers, Some(request)).await;
     let session = match current_session(&state, &tenant, &jar).await {
         Ok(Some(s)) => s,
         Ok(None) => return to_login(&tenant, request),
-        Err(e) => return core_error_page(&state, Some(&tenant), &e),
+        Err(e) => return core_error_page_in(&state, Some(&tenant), &loc, &e),
     };
     let (Some(flow_id), Some(csrf)) = (q.flow_id(), form.csrf_token.filter(|c| !c.is_empty()))
     else {
-        return csrf_page(&state, Some(&tenant));
+        return csrf_page(&state, Some(&tenant), &loc);
     };
     let cookie = jar
         .get(&state.cookies().flow_name(&tenant.tenant))
@@ -297,13 +364,14 @@ async fn submit(
                 .await
             {
                 Ok(outcome) => no_store(state.authorize_response(&tenant, outcome)),
-                Err(e) => core_error_page(&state, Some(&tenant), &e),
+                Err(e) => core_error_page_in(&state, Some(&tenant), &loc, &e),
             }
         }
         Ok(ConsentSubmission::Expired) => {
             consent_page(
                 &state,
                 &tenant,
+                &loc,
                 &session,
                 request,
                 vec![PageMessage::error(EXPIRED)],
@@ -311,7 +379,7 @@ async fn submit(
             )
             .await
         }
-        Err(CoreError::Forbidden) => csrf_page(&state, Some(&tenant)),
-        Err(e) => core_error_page(&state, Some(&tenant), &e),
+        Err(CoreError::Forbidden) => csrf_page(&state, Some(&tenant), &loc),
+        Err(e) => core_error_page_in(&state, Some(&tenant), &loc, &e),
     }
 }

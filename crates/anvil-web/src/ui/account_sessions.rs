@@ -17,7 +17,7 @@ use anvil_core::error::CoreError;
 use anvil_core::model::{BrowserSession, FlowId, SessionId};
 use anvil_core::service::account::{AccountError, SettingsBinding};
 use anvil_core::service::session::{
-    MSG_OTHERS_REVOKED, MSG_SESSION_NOT_FOUND, MSG_SESSION_REVOKED, SessionInfo, message_text,
+    MSG_OTHERS_REVOKED, MSG_SESSION_NOT_FOUND, MSG_SESSION_REVOKED, SessionInfo,
 };
 use axum::Router;
 use axum::extract::rejection::FormRejection;
@@ -29,9 +29,11 @@ use axum_extra::extract::cookie::CookieJar;
 use secrecy::ExposeSecret as _;
 use serde::{Deserialize, Serialize};
 
+use super::consent::{PageMessage, account_locale, localized};
 use super::format::{human, iso};
 use super::login::{UiQuery, bad_form, csrf_page};
-use crate::errors::core_error_page;
+use crate::errors::core_error_page_in;
+use crate::i18n::{Locale, RequestLocale};
 use crate::render::PageContext;
 use crate::request_context::AuditContext;
 use crate::state::AppState;
@@ -54,39 +56,10 @@ struct SessionsForm {
     csrf_token: Option<String>,
 }
 
-/// A message shown on the page (`data-message-key` like the other account pages).
-#[derive(Debug, Clone, Serialize)]
-struct PageMessage {
-    level: &'static str,
-    key: &'static str,
-    text: &'static str,
-}
-
-impl PageMessage {
-    fn error(key: &'static str) -> Self {
-        let text = match key {
-            k if k.starts_with("account.") => anvil_core::service::account::message_text(k),
-            k => message_text(k),
-        };
-        Self {
-            level: "error",
-            key,
-            text,
-        }
-    }
-
-    fn info(key: &'static str) -> Self {
-        Self {
-            level: "info",
-            key,
-            text: message_text(key),
-        }
-    }
-}
-
-/// A submission resolved to its session and settings flow binding.
+/// A submission resolved to its session, page locale and settings flow binding.
 struct Submission {
     session: BrowserSession,
+    locale: Locale,
     flow_id: FlowId,
     cookie: Option<String>,
     csrf: String,
@@ -132,28 +105,36 @@ fn to_login(tenant: &ResolvedTenant, jar: CookieJar) -> Response {
 }
 
 /// The user agent as shown: trimmed, at most [`DEVICE_MAX_CHARS`] characters (then `…`), or
-/// "Unknown device". Escaping is left to the template engine.
-fn device_label(user_agent: Option<&str>) -> String {
+/// `None` when there is none (the page says "Unknown device"). Escaping is left to the template
+/// engine.
+fn device_label(user_agent: Option<&str>) -> Option<String> {
     let ua = user_agent.map(str::trim).unwrap_or_default();
     if ua.is_empty() {
-        return "Unknown device".to_owned();
+        return None;
     }
     if ua.chars().count() <= DEVICE_MAX_CHARS {
-        return ua.to_owned();
+        return Some(ua.to_owned());
     }
     let mut short: String = ua.chars().take(DEVICE_MAX_CHARS - 1).collect();
     short.push('…');
-    short
+    Some(short)
 }
 
 fn flow_url(tenant: &ResolvedTenant, path: &str, flow: FlowId) -> String {
     tenant.ui_url(&format!("{path}?flow={flow}"))
 }
 
-fn row(tenant: &ResolvedTenant, flow: FlowId, s: &SessionInfo) -> SessionRow {
+fn row(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    loc: &Locale,
+    flow: FlowId,
+    s: &SessionInfo,
+) -> SessionRow {
     SessionRow {
         id: s.id.to_string(),
-        device: device_label(s.user_agent.as_deref()),
+        device: device_label(s.user_agent.as_deref())
+            .unwrap_or_else(|| state.renderer().text(loc, "sessions.unknown_device")),
         ip: s.ip.clone(),
         created: human(s.created_at),
         created_iso: iso(s.created_at),
@@ -187,6 +168,7 @@ async fn session(
 async fn submission(
     state: &AppState,
     tenant: &ResolvedTenant,
+    locale: &RequestLocale,
     jar: &CookieJar,
     query: &UiQuery,
     csrf: Option<String>,
@@ -194,16 +176,25 @@ async fn submission(
     let session = match session(state, tenant, jar).await {
         Ok(Some(s)) => s,
         Ok(None) => return Err(Box::new(to_login(tenant, CookieJar::new()))),
-        Err(e) => return Err(Box::new(core_error_page(state, Some(tenant), &e))),
+        Err(e) => {
+            return Err(Box::new(core_error_page_in(
+                state,
+                Some(tenant),
+                &locale.0,
+                &e,
+            )));
+        }
     };
+    let loc = account_locale(state, tenant, locale, &session).await;
     let (Some(flow_id), Some(csrf)) = (query.flow_id(), csrf.filter(|c| !c.is_empty())) else {
-        return Err(Box::new(csrf_page(state, Some(tenant))));
+        return Err(Box::new(csrf_page(state, Some(tenant), &loc)));
     };
     let cookie = jar
         .get(&state.cookies().flow_name(&tenant.tenant))
         .map(|c| c.value().to_owned());
     Ok(Submission {
         session,
+        locale: loc,
         flow_id,
         cookie,
         csrf,
@@ -218,6 +209,7 @@ async fn submission(
 async fn render_list(
     state: &AppState,
     tenant: &ResolvedTenant,
+    loc: &Locale,
     session: &BrowserSession,
     flow: FlowId,
     csrf: &str,
@@ -231,12 +223,16 @@ async fn render_list(
         .await
     {
         Ok(s) => s,
-        Err(e) => return core_error_page(state, Some(tenant), &e),
+        Err(e) => return core_error_page_in(state, Some(tenant), loc, &e),
     };
-    let rows: Vec<SessionRow> = sessions.iter().map(|s| row(tenant, flow, s)).collect();
+    let rows: Vec<SessionRow> = sessions
+        .iter()
+        .map(|s| row(state, tenant, loc, flow, s))
+        .collect();
     let others = rows.iter().filter(|r| !r.current).count();
+    let messages = localized(state, loc, messages);
     let ctx = minijinja::context! {
-        page => PageContext::for_tenant(state, tenant, "Sessions").into_value(),
+        page => PageContext::for_tenant(state, tenant, loc, "title.account_sessions").into_value(),
         account_base => tenant.base_path(),
         account_nav => "sessions",
         csrf_token => csrf,
@@ -249,7 +245,12 @@ async fn render_list(
         Ok(html) => with_headers((status, jar, html).into_response()),
         Err(e) => {
             tracing::error!(error = %e, "rendering the sessions page failed");
-            core_error_page(state, Some(tenant), &CoreError::Internal("render".into()))
+            core_error_page_in(
+                state,
+                Some(tenant),
+                loc,
+                &CoreError::Internal("render".into()),
+            )
         }
     }
 }
@@ -258,6 +259,7 @@ async fn render_list(
 async fn fresh_list(
     state: &AppState,
     tenant: &ResolvedTenant,
+    loc: &Locale,
     session: &BrowserSession,
     messages: Vec<PageMessage>,
     status: StatusCode,
@@ -268,7 +270,7 @@ async fn fresh_list(
         .await
     {
         Ok(s) => s,
-        Err(e) => return core_error_page(state, Some(tenant), &e),
+        Err(e) => return core_error_page_in(state, Some(tenant), loc, &e),
     };
     let jar = CookieJar::new().add(
         state
@@ -278,6 +280,7 @@ async fn fresh_list(
     render_list(
         state,
         tenant,
+        loc,
         session,
         started.flow_id,
         started.csrf_token.expose_secret(),
@@ -301,13 +304,19 @@ async fn check_binding(
     {
         Ok(()) => Ok(()),
         Err(AccountError::Core(CoreError::Forbidden)) => {
-            Err(Box::new(csrf_page(state, Some(tenant))))
+            Err(Box::new(csrf_page(state, Some(tenant), &sub.locale)))
         }
-        Err(AccountError::Core(e)) => Err(Box::new(core_error_page(state, Some(tenant), &e))),
+        Err(AccountError::Core(e)) => Err(Box::new(core_error_page_in(
+            state,
+            Some(tenant),
+            &sub.locale,
+            &e,
+        ))),
         Err(AccountError::Failure(f)) => Err(Box::new(
             fresh_list(
                 state,
                 tenant,
+                &sub.locale,
                 &sub.session,
                 vec![PageMessage::error(f.key())],
                 StatusCode::BAD_REQUEST,
@@ -328,6 +337,7 @@ async fn same_flow(
     render_list(
         state,
         tenant,
+        &sub.locale,
         &sub.session,
         sub.flow_id,
         &sub.csrf,
@@ -342,17 +352,30 @@ async fn same_flow(
 // Handlers
 // ---------------------------------------------------------------------------------------------
 
-async fn show(State(state): State<AppState>, tenant: ResolvedTenant, jar: CookieJar) -> Response {
+async fn show(
+    State(state): State<AppState>,
+    tenant: ResolvedTenant,
+    locale: RequestLocale,
+    jar: CookieJar,
+) -> Response {
     match session(&state, &tenant, &jar).await {
-        Ok(Some(s)) => fresh_list(&state, &tenant, &s, Vec::new(), StatusCode::OK).await,
+        Ok(Some(s)) => {
+            let loc = account_locale(&state, &tenant, &locale, &s).await;
+            fresh_list(&state, &tenant, &loc, &s, Vec::new(), StatusCode::OK).await
+        }
         Ok(None) => to_login(&tenant, CookieJar::new()),
-        Err(e) => core_error_page(&state, Some(&tenant), &e),
+        Err(e) => core_error_page_in(&state, Some(&tenant), &locale.0, &e),
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "axum handler: one argument per extractor"
+)]
 async fn revoke_one(
     State(state): State<AppState>,
     tenant: ResolvedTenant,
+    locale: RequestLocale,
     jar: CookieJar,
     AuditContext(ctx): AuditContext,
     Path(id): Path<String>,
@@ -360,9 +383,9 @@ async fn revoke_one(
     form: Result<Form<SessionsForm>, FormRejection>,
 ) -> Response {
     let Ok(Form(form)) = form else {
-        return bad_form(&state, &tenant);
+        return bad_form(&state, &tenant, &locale.0);
     };
-    let sub = match submission(&state, &tenant, &jar, &q, form.csrf_token).await {
+    let sub = match submission(&state, &tenant, &locale, &jar, &q, form.csrf_token).await {
         Ok(s) => s,
         Err(resp) => return *resp,
     };
@@ -398,22 +421,23 @@ async fn revoke_one(
         Err(CoreError::NotFound) => {
             same_flow(&state, &tenant, &sub, not_found(), StatusCode::BAD_REQUEST).await
         }
-        Err(e) => core_error_page(&state, Some(&tenant), &e),
+        Err(e) => core_error_page_in(&state, Some(&tenant), &sub.locale, &e),
     }
 }
 
 async fn revoke_others(
     State(state): State<AppState>,
     tenant: ResolvedTenant,
+    locale: RequestLocale,
     jar: CookieJar,
     AuditContext(ctx): AuditContext,
     Query(q): Query<UiQuery>,
     form: Result<Form<SessionsForm>, FormRejection>,
 ) -> Response {
     let Ok(Form(form)) = form else {
-        return bad_form(&state, &tenant);
+        return bad_form(&state, &tenant, &locale.0);
     };
-    let sub = match submission(&state, &tenant, &jar, &q, form.csrf_token).await {
+    let sub = match submission(&state, &tenant, &locale, &jar, &q, form.csrf_token).await {
         Ok(s) => s,
         Err(resp) => return *resp,
     };
@@ -435,7 +459,7 @@ async fn revoke_others(
             )
             .await
         }
-        Err(e) => core_error_page(&state, Some(&tenant), &e),
+        Err(e) => core_error_page_in(&state, Some(&tenant), &sub.locale, &e),
     }
 }
 
@@ -446,26 +470,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn device_label_truncates_long_and_names_missing_agents() {
-        assert_eq!(device_label(None), "Unknown device");
-        assert_eq!(device_label(Some("  ")), "Unknown device");
-        assert_eq!(device_label(Some("Firefox")), "Firefox");
+    fn device_label_truncates_long_and_flags_missing_agents() {
+        assert_eq!(device_label(None), None);
+        assert_eq!(device_label(Some("  ")), None);
+        assert_eq!(device_label(Some("Firefox")).as_deref(), Some("Firefox"));
         let long = "x".repeat(200);
-        let label = device_label(Some(&long));
+        let label = device_label(Some(&long)).expect("label");
         assert_eq!(label.chars().count(), DEVICE_MAX_CHARS);
         assert!(label.ends_with('…'));
         // Multi-byte characters are never split.
         let wide = "é".repeat(100);
-        assert_eq!(device_label(Some(&wide)).chars().count(), DEVICE_MAX_CHARS);
+        assert_eq!(
+            device_label(Some(&wide)).expect("label").chars().count(),
+            DEVICE_MAX_CHARS
+        );
     }
 
     #[test]
-    fn flow_expired_has_page_text() {
-        let m = PageMessage::error(AccountFailure::FlowExpired.key());
-        assert_ne!(m.text, "Something went wrong.");
-        assert_ne!(
-            PageMessage::info(MSG_SESSION_REVOKED).text,
-            "Something went wrong."
-        );
+    fn page_message_keys_have_english_text() {
+        let catalogs = crate::i18n::Catalogs::load(None).expect("catalogs");
+        let en = Locale::fallback();
+        for key in [
+            AccountFailure::FlowExpired.key(),
+            MSG_SESSION_REVOKED,
+            MSG_OTHERS_REVOKED,
+            MSG_SESSION_NOT_FOUND,
+            "sessions.unknown_device",
+        ] {
+            assert_ne!(catalogs.text(&en, key, &[]), key, "{key}");
+        }
+        assert!(PageMessage::error(MSG_SESSION_NOT_FOUND).text.is_empty());
     }
 }

@@ -1,14 +1,21 @@
 //! Template rendering: a minijinja environment that loads the operator's theme directory first and
 //! falls back to the embedded default theme (`themes/default/templates/`). `.html` templates are
 //! auto-escaped.
+//!
+//! Every template can call `t(key, **kwargs)` ([`crate::i18n`]): it translates in the page's
+//! `page.lang` (set by [`PageContext`] from the negotiated [`Locale`]), English when absent.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use anvil_core::flow::form::FormDescription;
 
 use axum::response::Html;
 use minijinja::{Environment, ErrorKind, Value};
 use serde::Serialize;
 
 use crate::errors::WebError;
+use crate::i18n::{self, Catalogs, Locale};
 use crate::state::AppState;
 use crate::tenant::ResolvedTenant;
 
@@ -16,9 +23,10 @@ use crate::tenant::ResolvedTenant;
 #[folder = "../../themes/default/templates/"]
 struct EmbeddedTemplates;
 
-/// Renders page templates.
+/// Renders page templates and owns the message catalogs.
 pub struct Renderer {
     env: Environment<'static>,
+    catalogs: Arc<Catalogs>,
 }
 
 impl std::fmt::Debug for Renderer {
@@ -58,8 +66,9 @@ fn load(override_dir: Option<&Path>, name: &str) -> Result<Option<String>, minij
 
 impl Renderer {
     /// Builds the environment. `theme_dir` is the operator theme root (its `templates/`
-    /// subdirectory overrides individual templates). Every page template is compiled once here, so
-    /// a broken override fails at startup rather than on the first request.
+    /// subdirectory overrides individual templates, its `locales/` subdirectory individual
+    /// messages). Every page template and catalog is loaded once here, so a broken override fails
+    /// at startup rather than on the first request.
     pub fn new(theme_dir: Option<&Path>) -> Result<Self, WebError> {
         let override_dir: Option<PathBuf> = match theme_dir {
             Some(dir) if !dir.is_dir() => {
@@ -71,17 +80,34 @@ impl Renderer {
             Some(dir) => Some(dir.join("templates")),
             None => None,
         };
+        let catalogs = Arc::new(Catalogs::load(theme_dir)?);
         let mut env = Environment::new();
         env.set_loader(move |name| load(override_dir.as_deref(), name));
+        env.add_function("t", i18n::template_function(Arc::clone(&catalogs)));
         for name in EmbeddedTemplates::iter() {
             env.get_template(&name)?;
         }
-        Ok(Self { env })
+        Ok(Self { env, catalogs })
     }
 
-    /// Renders a page template with the given context.
+    /// Renders a page template with the given context. `t()` translates in `page.lang`.
     pub fn page(&self, template: &str, ctx: Value) -> Result<Html<String>, WebError> {
         Ok(Html(self.env.get_template(template)?.render(ctx)?))
+    }
+
+    /// The message catalogs.
+    pub fn catalogs(&self) -> &Catalogs {
+        &self.catalogs
+    }
+
+    /// The text of `key` in `locale` (English fallback, else the key).
+    pub fn text(&self, locale: &Locale, key: &str) -> String {
+        self.catalogs.text(locale, key, &[])
+    }
+
+    /// Fills the labels and message texts of `form` in `locale` ([`i18n::localize_form`]).
+    pub fn localize_form(&self, locale: &Locale, form: &mut FormDescription) {
+        i18n::localize_form(&self.catalogs, locale, form);
     }
 }
 
@@ -96,6 +122,10 @@ pub struct PageLinks {
 /// The `page` object every template receives (themes/default/README.md).
 #[derive(Debug, Clone, Serialize)]
 pub struct PageContext {
+    /// Negotiated language tag (`<html lang>`, and the language of `t()`).
+    pub lang: String,
+    /// `ltr` or `rtl` (`<html dir>`).
+    pub dir: &'static str,
     pub title: String,
     pub tenant_name: Option<String>,
     pub dev_mode: bool,
@@ -104,10 +134,18 @@ pub struct PageContext {
 }
 
 impl PageContext {
-    /// Page context for a tenant page. Asset URLs live below the tenant base path.
-    pub fn for_tenant(state: &AppState, tenant: &ResolvedTenant, title: &str) -> Self {
+    /// Page context for a tenant page in `locale`; `title_key` is the message key of the title.
+    /// Asset URLs live below the tenant base path.
+    pub fn for_tenant(
+        state: &AppState,
+        tenant: &ResolvedTenant,
+        locale: &Locale,
+        title_key: &str,
+    ) -> Self {
         Self {
-            title: title.to_owned(),
+            lang: locale.tag.clone(),
+            dir: locale.dir,
+            title: state.renderer().text(locale, title_key),
             tenant_name: Some(tenant.tenant.display_name.clone()),
             dev_mode: state.config().dev_mode(),
             asset_base: format!("{}/assets", tenant.base_path()),
@@ -116,9 +154,11 @@ impl PageContext {
     }
 
     /// Page context for installation-level pages (setup, errors before a tenant is known).
-    pub fn installation(state: &AppState, title: &str) -> Self {
+    pub fn installation(state: &AppState, locale: &Locale, title_key: &str) -> Self {
         Self {
-            title: title.to_owned(),
+            lang: locale.tag.clone(),
+            dir: locale.dir,
+            title: state.renderer().text(locale, title_key),
             tenant_name: None,
             dev_mode: state.config().dev_mode(),
             asset_base: "/assets".to_owned(),
@@ -129,11 +169,6 @@ impl PageContext {
     pub fn into_value(self) -> Value {
         Value::from(minijinja::value::Serde(self))
     }
-}
-
-/// The `page` object for a tenant page, without links.
-pub fn page_context(state: &AppState, tenant: &ResolvedTenant, title: &str) -> Value {
-    PageContext::for_tenant(state, tenant, title).into_value()
 }
 
 #[cfg(test)]

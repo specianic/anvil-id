@@ -26,9 +26,12 @@ use secrecy::ExposeSecret as _;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use super::consent::{PageMessage, ScopeView, current_session, no_store, scope_views};
+use super::consent::{
+    PageMessage, ScopeView, account_locale, current_session, localized, no_store, scope_views,
+};
 use super::login::{UiQuery, bad_form, csrf_page};
-use crate::errors::core_error_page;
+use crate::errors::core_error_page_in;
+use crate::i18n::{Locale, RequestLocale};
 use crate::render::PageContext;
 use crate::request_context::AuditContext;
 use crate::state::AppState;
@@ -93,6 +96,7 @@ fn to_login(tenant: &ResolvedTenant) -> Response {
 async fn apps_page(
     state: &AppState,
     tenant: &ResolvedTenant,
+    loc: &Locale,
     session: &BrowserSession,
     messages: Vec<PageMessage>,
     status: StatusCode,
@@ -100,11 +104,11 @@ async fn apps_page(
     let consent = state.ui_consent_service();
     let flow = match consent.start_apps(tenant.tenant.id, session).await {
         Ok(f) => f,
-        Err(e) => return core_error_page(state, Some(tenant), &e),
+        Err(e) => return core_error_page_in(state, Some(tenant), loc, &e),
     };
     let apps = match consent.list(tenant.tenant.id, session.user_id).await {
         Ok(a) => a,
-        Err(e) => return core_error_page(state, Some(tenant), &e),
+        Err(e) => return core_error_page_in(state, Some(tenant), loc, &e),
     };
     let rows: Vec<AppRow> = apps
         .into_iter()
@@ -116,7 +120,7 @@ async fn apps_page(
                     path_segment(&a.client_id),
                     flow.flow_id
                 )),
-                scopes: scope_views(&a.scopes),
+                scopes: scope_views(state, loc, &a.scopes),
                 client_id: a.client_id,
                 client_name: a.client_name,
                 granted,
@@ -129,8 +133,9 @@ async fn apps_page(
             .cookies()
             .flow_cookie(&tenant.tenant, flow.cookie_token.expose_secret()),
     );
+    let messages = localized(state, loc, messages);
     let ctx = minijinja::context! {
-        page => PageContext::for_tenant(state, tenant, "Connected apps").into_value(),
+        page => PageContext::for_tenant(state, tenant, loc, "title.account_apps").into_value(),
         account_base => tenant.base_path(),
         account_nav => "apps",
         csrf_token => flow.csrf_token.expose_secret(),
@@ -141,22 +146,40 @@ async fn apps_page(
         Ok(html) => no_store((status, jar, html).into_response()),
         Err(e) => {
             tracing::error!(error = %e, "rendering the connected apps page failed");
-            core_error_page(state, Some(tenant), &CoreError::Internal("render".into()))
+            core_error_page_in(
+                state,
+                Some(tenant),
+                loc,
+                &CoreError::Internal("render".into()),
+            )
         }
     }
 }
 
-async fn show(State(state): State<AppState>, tenant: ResolvedTenant, jar: CookieJar) -> Response {
+async fn show(
+    State(state): State<AppState>,
+    tenant: ResolvedTenant,
+    locale: RequestLocale,
+    jar: CookieJar,
+) -> Response {
     match current_session(&state, &tenant, &jar).await {
-        Ok(Some(s)) => apps_page(&state, &tenant, &s, Vec::new(), StatusCode::OK).await,
+        Ok(Some(s)) => {
+            let loc = account_locale(&state, &tenant, &locale, &s).await;
+            apps_page(&state, &tenant, &loc, &s, Vec::new(), StatusCode::OK).await
+        }
         Ok(None) => to_login(&tenant),
-        Err(e) => core_error_page(&state, Some(&tenant), &e),
+        Err(e) => core_error_page_in(&state, Some(&tenant), &locale.0, &e),
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "axum handler: one argument per extractor"
+)]
 async fn revoke(
     State(state): State<AppState>,
     tenant: ResolvedTenant,
+    locale: RequestLocale,
     jar: CookieJar,
     AuditContext(ctx): AuditContext,
     Path(client_id): Path<String>,
@@ -164,16 +187,17 @@ async fn revoke(
     form: Result<Form<RevokeForm>, FormRejection>,
 ) -> Response {
     let Ok(Form(form)) = form else {
-        return bad_form(&state, &tenant);
+        return bad_form(&state, &tenant, &locale.0);
     };
     let session = match current_session(&state, &tenant, &jar).await {
         Ok(Some(s)) => s,
         Ok(None) => return to_login(&tenant),
-        Err(e) => return core_error_page(&state, Some(&tenant), &e),
+        Err(e) => return core_error_page_in(&state, Some(&tenant), &locale.0, &e),
     };
+    let loc = account_locale(&state, &tenant, &locale, &session).await;
     let (Some(flow_id), Some(csrf)) = (q.flow_id(), form.csrf_token.filter(|c| !c.is_empty()))
     else {
-        return csrf_page(&state, Some(&tenant));
+        return csrf_page(&state, Some(&tenant), &loc);
     };
     let cookie = jar
         .get(&state.cookies().flow_name(&tenant.tenant))
@@ -196,10 +220,10 @@ async fn revoke(
         Ok(RevokeResult::FlowExpired) => {
             (PageMessage::error("apps.expired"), StatusCode::BAD_REQUEST)
         }
-        Err(CoreError::Forbidden) => return csrf_page(&state, Some(&tenant)),
-        Err(e) => return core_error_page(&state, Some(&tenant), &e),
+        Err(CoreError::Forbidden) => return csrf_page(&state, Some(&tenant), &loc),
+        Err(e) => return core_error_page_in(&state, Some(&tenant), &loc, &e),
     };
-    apps_page(&state, &tenant, &session, vec![message], status).await
+    apps_page(&state, &tenant, &loc, &session, vec![message], status).await
 }
 
 #[cfg(test)]

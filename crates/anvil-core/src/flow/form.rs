@@ -2,6 +2,13 @@
 //!
 //! Templates render `id = name = field.name` for every field and `id = "{form.id}-submit"` for
 //! the submit button.
+//!
+//! Core produces no display text: fields carry a `label_key` and messages a `key` (plus `args`
+//! for interpolated values). `label` and `text` are left empty by core and filled by the
+//! presentation layer for the negotiated locale (anvil-web `i18n::localize_form`); headless API
+//! clients may translate the keys themselves.
+
+use std::collections::BTreeMap;
 
 use serde::Serialize;
 
@@ -24,6 +31,9 @@ pub struct FormDescription {
 pub struct FormField {
     pub name: String,
     pub kind: FieldKind,
+    /// Stable message key of the label, e.g. `field.email`.
+    pub label_key: String,
+    /// Display label: empty from core, filled by the presentation layer.
     pub label: String,
     /// Prefill value. Never set for [`FieldKind::Password`].
     pub value: Option<String>,
@@ -49,8 +59,34 @@ pub struct FormMessage {
     pub level: MessageLevel,
     /// Stable id, e.g. `login.invalid_credentials`.
     pub key: String,
-    /// Display text.
+    /// Values interpolated into the text (e.g. `seconds` of a lock), by argument name.
+    pub args: BTreeMap<String, String>,
+    /// Display text: empty from core, filled by the presentation layer.
     pub text: String,
+}
+
+impl FormMessage {
+    /// A message without arguments.
+    pub fn new(level: MessageLevel, key: &str) -> Self {
+        Self {
+            level,
+            key: key.to_owned(),
+            args: BTreeMap::new(),
+            text: String::new(),
+        }
+    }
+
+    /// An error message without arguments.
+    pub fn error(key: &str) -> Self {
+        Self::new(MessageLevel::Error, key)
+    }
+
+    /// Adds an interpolated argument.
+    #[must_use]
+    pub fn with_arg(mut self, name: &str, value: impl ToString) -> Self {
+        self.args.insert(name.to_owned(), value.to_string());
+        self
+    }
 }
 
 /// Message severity.

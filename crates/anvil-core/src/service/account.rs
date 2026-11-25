@@ -111,35 +111,6 @@ impl AccountFailure {
     }
 }
 
-/// Text of an account message key (failures and confirmations). Unknown keys get a generic text.
-pub fn message_text(key: &str) -> &'static str {
-    match key {
-        "account.reauth_required" => {
-            "For your security, sign in again before changing how you sign in."
-        }
-        "account.flow_expired" => "This page expired. Please try again.",
-        "account.invalid_label" => "Use a name of at most 64 characters.",
-        "account.passkey_failed" => "The passkey could not be registered. Please try again.",
-        "account.passkey_exists" => "This passkey is already registered.",
-        "account.totp_exists" => "An authenticator app is already set up.",
-        "account.totp_not_pending" => "Start the authenticator app setup again.",
-        "account.totp_invalid_code" => {
-            "That code is not valid. Check the time on your device and try again."
-        }
-        "account.totp_required" => "Set up an authenticator app first.",
-        "account.credential_not_found" => "That sign-in method no longer exists.",
-        "account.try_again" => "Another change happened at the same time. Please try again.",
-        "account.passkey_registered" => "Passkey added.",
-        "account.passkey_removed" => "Passkey removed.",
-        "account.totp_removed" => "Authenticator app removed. Your recovery codes were deleted.",
-        "account.totp_enrolled" => "Authenticator app set up.",
-        "account.recovery_codes_regenerated" => {
-            "New recovery codes created. The old codes no longer work."
-        }
-        _ => "Something went wrong.",
-    }
-}
-
 /// Error of a self-service change: a refusal shown on the page, or a core error (`Forbidden`
 /// for a broken binding, storage and internal failures).
 #[derive(Debug, thiserror::Error)]
@@ -742,18 +713,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn failure_keys_are_unique_and_have_text() {
+    fn failure_keys_are_unique_and_namespaced() {
         let keys: HashSet<&str> = AccountFailure::ALL.iter().map(|f| f.key()).collect();
         assert_eq!(keys.len(), AccountFailure::ALL.len());
         for f in AccountFailure::ALL {
-            assert!(f.key().starts_with("account."));
-            assert_ne!(message_text(f.key()), "Something went wrong.", "{f:?}");
+            assert!(f.key().starts_with("account."), "{f:?}");
         }
         assert_eq!(
             AccountFailure::ReauthRequired.key(),
             "account.reauth_required"
         );
-        assert_eq!(message_text("nope"), "Something went wrong.");
     }
 
     #[test]

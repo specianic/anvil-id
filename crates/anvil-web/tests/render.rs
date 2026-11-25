@@ -33,6 +33,7 @@ fn field(name: &str, kind: FieldKind, label: &str, value: Option<&str>) -> FormF
     FormField {
         name: name.into(),
         kind,
+        label_key: String::new(),
         label: label.into(),
         value: value.map(str::to_owned),
         required: kind != FieldKind::Hidden,
@@ -110,6 +111,7 @@ fn login_form() -> FormDescription {
     f.messages.push(FormMessage {
         level: MessageLevel::Error,
         key: "login.invalid_credentials".into(),
+        args: Default::default(),
         text: "The email or password is incorrect.".into(),
     });
     f
@@ -134,6 +136,7 @@ fn registration() {
     pw.messages.push(FormMessage {
         level: MessageLevel::Error,
         key: "password.too_short".into(),
+        args: Default::default(),
         text: "must be at least 8 characters".into(),
     });
     let f = form(

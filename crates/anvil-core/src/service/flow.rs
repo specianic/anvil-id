@@ -57,8 +57,8 @@ use super::audit::AuditService;
 use super::session::{NewSessionCookie, SessionService};
 use crate::error::CoreError;
 use crate::flow::engine::{
-    Effect, EmailKind, Failure, FlowEnv, FlowInput, FlowState, SecondFactorMethods, message_text,
-    on_failure, second_factor_required, session_acr_amr, transition,
+    Effect, EmailKind, Failure, FlowEnv, FlowInput, FlowState, SecondFactorMethods, on_failure,
+    second_factor_required, session_acr_amr, transition,
 };
 use crate::flow::form::{FormDescription, FormMessage, MessageLevel};
 use crate::model::{
@@ -453,14 +453,8 @@ impl FlowService {
         auth_request: Option<AuthRequestId>,
     ) -> Result<FlowOutcome, CoreError> {
         let (state, mut form) = FlowState::initial(kind, None, &self.env(cx))?;
-        form.messages.insert(
-            0,
-            FormMessage {
-                level: MessageLevel::Error,
-                key: "flow.expired".to_owned(),
-                text: message_text("flow.expired").to_owned(),
-            },
-        );
+        form.messages
+            .insert(0, FormMessage::new(MessageLevel::Error, "flow.expired"));
         let started = self.create_flow(cx, &state, form, auth_request).await?;
         Ok(FlowOutcome::Restarted(started))
     }

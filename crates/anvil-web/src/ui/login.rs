@@ -54,7 +54,7 @@ use anvil_core::service::session::SessionService;
 use axum::Router;
 use axum::extract::rejection::FormRejection;
 use axum::extract::{Form, Query, State};
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum_extra::extract::cookie::CookieJar;
@@ -69,7 +69,8 @@ use crate::adapters::captcha::{
 };
 use crate::adapters::passkey::{WebauthnPasskeys, relying_party};
 use crate::client_ip::ClientIp;
-use crate::errors::{core_error_page, error_page};
+use crate::errors::{core_error_page_in, error_page_in};
+use crate::i18n::{Locale, RequestLocale, carry_ui_locales, locale_for_request};
 use crate::layers::ratelimit::{attempt_keys, guard_attempt, record_attempt};
 use crate::render::{PageContext, PageLinks};
 use crate::request_context::AuditContext;
@@ -113,19 +114,58 @@ pub(super) fn routes() -> Router<AppState> {
 async fn show(
     State(state): State<AppState>,
     tenant: ResolvedTenant,
+    locale: RequestLocale,
+    headers: HeaderMap,
     Query(q): Query<UiQuery>,
 ) -> Response {
     let request = match q.auth_request() {
         Ok(r) => r,
-        Err(resp) => return resp.into_response(&state, Some(&tenant)),
+        Err(resp) => return resp.into_response(&state, Some(&tenant), &locale.0),
     };
-    start_page(&state, &tenant, FlowKind::Login, request, None).await
+    let loc = page_locale(&state, &tenant, locale, &headers, request).await;
+    start_page(&state, &tenant, &loc, FlowKind::Login, request, None).await
+}
+
+/// The locale of a page that may continue an authorization request: an explicit `ui_locales`
+/// query parameter wins; otherwise the request's stored `ui_locales`, then `Accept-Language`
+/// and the tenant default ([`locale_for_request`]). An unknown or expired request is no input.
+pub(super) async fn page_locale(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    locale: RequestLocale,
+    headers: &HeaderMap,
+    request: Option<AuthRequestId>,
+) -> Locale {
+    if locale.0.ui_locales.is_some() {
+        return locale.0;
+    }
+    let Some(id) = request else {
+        return locale.0;
+    };
+    match state
+        .storage()
+        .grants()
+        .get_authorization_request(tenant.tenant.id, id, state.clock().now())
+        .await
+    {
+        Ok(Some(r)) => locale_for_request(state, tenant, headers, Some(&r.params)),
+        Ok(None) => locale.0,
+        Err(e) => {
+            tracing::warn!(error = %e, "loading the authorization request for its ui_locales failed");
+            locale.0
+        }
+    }
 }
 
 /// `POST /ui/login?flow=`: email and password, behind the brute-force gate (module docs).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "axum handler: one argument per extractor"
+)]
 async fn submit(
     State(state): State<AppState>,
     tenant: ResolvedTenant,
+    RequestLocale(loc, _): RequestLocale,
     ClientIp(ip): ClientIp,
     AuditContext(ctx): AuditContext,
     jar: CookieJar,
@@ -133,10 +173,10 @@ async fn submit(
     form: Result<Form<UiForm>, FormRejection>,
 ) -> Response {
     let Ok(Form(form)) = form else {
-        return bad_form(&state, &tenant);
+        return bad_form(&state, &tenant, &loc);
     };
     let (Some(flow_id), Some(csrf)) = (q.flow_id(), form.csrf_token.as_deref()) else {
-        return csrf_page(&state, Some(&tenant));
+        return csrf_page(&state, Some(&tenant), &loc);
     };
     let identifier = form.identifier.clone().unwrap_or_default();
     let posted = Posted {
@@ -150,8 +190,8 @@ async fn submit(
     match guard_attempt(&state, &strict, &loose, captcha.is_some()).await {
         Decision::Deny { retry_after } => {
             return match posted_login_form(&state, &tenant, &posted) {
-                Ok(form) => locked_page(&state, &tenant, form, retry_after, None),
-                Err(e) => core_error_page(&state, Some(&tenant), &e),
+                Ok(form) => locked_page(&state, &tenant, &loc, form, retry_after, None),
+                Err(e) => core_error_page_in(&state, Some(&tenant), &loc, &e),
             };
         }
         Decision::RequireCaptcha => {
@@ -160,7 +200,7 @@ async fn submit(
             {
                 return match posted_login_form(&state, &tenant, &posted) {
                     Ok(mut form) => {
-                        form.messages = vec![error_message(key, captcha_text(key))];
+                        form.messages = vec![FormMessage::error(key)];
                         let extras = Extras {
                             captcha: Some(settings),
                             ..Extras::default()
@@ -168,6 +208,7 @@ async fn submit(
                         render_tenant_form_with(
                             &state,
                             &tenant,
+                            &loc,
                             &form,
                             None,
                             StatusCode::BAD_REQUEST,
@@ -175,7 +216,7 @@ async fn submit(
                             &extras,
                         )
                     }
-                    Err(e) => core_error_page(&state, Some(&tenant), &e),
+                    Err(e) => core_error_page_in(&state, Some(&tenant), &loc, &e),
                 };
             }
         }
@@ -186,7 +227,7 @@ async fn submit(
         identifier: identifier.clone(),
         password: form.password.clone().unwrap_or_default(),
     };
-    let result = match submit_flow(&state, &tenant, &ctx, &jar, flow_id, csrf, input).await {
+    let result = match submit_flow(&state, &tenant, &loc, &ctx, &jar, flow_id, csrf, input).await {
         Ok(r) => r,
         Err(resp) => return *resp,
     };
@@ -198,7 +239,7 @@ async fn submit(
             match guard_attempt(&state, &strict, &loose, captcha.is_some()).await {
                 Decision::Deny { retry_after } => {
                     if let FlowOutcome::Render(form) = result.outcome {
-                        return locked_page(&state, &tenant, form, retry_after, None);
+                        return locked_page(&state, &tenant, &loc, form, retry_after, None);
                     }
                 }
                 Decision::RequireCaptcha => extras.captcha = captcha,
@@ -211,7 +252,7 @@ async fn submit(
         }
         _ => {}
     }
-    outcome_response_with(&state, &tenant, result.outcome, &extras)
+    outcome_response_with(&state, &tenant, &loc, result.outcome, &extras)
 }
 
 /// The binding fields of a password POST, for pages rendered without running the flow (lock,
@@ -264,15 +305,10 @@ pub(super) fn whole_seconds(d: Duration) -> u64 {
     (d.as_secs() + u64::from(d.subsec_nanos() > 0)).max(1)
 }
 
-/// "Too many attempts. Try again in N seconds." for a lock of `retry_after`.
+/// "Too many attempts. Try again in N seconds." for a lock of `retry_after` (argument
+/// `seconds`, a Fluent plural).
 pub(super) fn too_many_attempts(retry_after: Duration) -> FormMessage {
-    let n = whole_seconds(retry_after);
-    let unit = if n == 1 { "second" } else { "seconds" };
-    FormMessage {
-        level: MessageLevel::Error,
-        key: TOO_MANY_ATTEMPTS.to_owned(),
-        text: format!("Too many attempts. Try again in {n} {unit}."),
-    }
+    FormMessage::error(TOO_MANY_ATTEMPTS).with_arg("seconds", whole_seconds(retry_after))
 }
 
 /// A form page answering a locked attempt: 429 with `Retry-After`, `Cache-Control: no-store`
@@ -281,6 +317,7 @@ pub(super) fn too_many_attempts(retry_after: Duration) -> FormMessage {
 pub(super) fn locked_page(
     state: &AppState,
     tenant: &ResolvedTenant,
+    loc: &Locale,
     mut form: FormDescription,
     retry_after: Duration,
     factor_token: Option<String>,
@@ -293,6 +330,7 @@ pub(super) fn locked_page(
     let mut resp = render_tenant_form_with(
         state,
         tenant,
+        loc,
         &form,
         None,
         StatusCode::TOO_MANY_REQUESTS,
@@ -308,25 +346,9 @@ pub(super) fn locked_page(
     resp
 }
 
-fn error_message(key: &str, text: &str) -> FormMessage {
-    FormMessage {
-        level: MessageLevel::Error,
-        key: key.to_owned(),
-        text: text.to_owned(),
-    }
-}
-
 /// CAPTCHA message keys.
 const CAPTCHA_REQUIRED: &str = "login.captcha_required";
 const CAPTCHA_FAILED: &str = "login.captcha_failed";
-
-fn captcha_text(key: &str) -> &'static str {
-    if key == CAPTCHA_FAILED {
-        "The security check did not succeed. Please complete it again, then sign in."
-    } else {
-        "Please complete the security check, then sign in."
-    }
-}
 
 /// Verifies the CAPTCHA response of a password POST server-side (fail closed). `Err` carries the
 /// message key: no response submitted, or a response the provider did not accept (or could not
@@ -469,9 +491,14 @@ async fn passkey_options(
 /// `POST /ui/login/passkey?flow=`: the assertion from webauthn.js (`response`). Every failure is
 /// the sign-in form with `login.passkey_failed` (400). Failures are counted per client IP only
 /// (a passkey names no identifier before it is verified).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "axum handler: one argument per extractor"
+)]
 async fn passkey_submit(
     State(state): State<AppState>,
     tenant: ResolvedTenant,
+    RequestLocale(loc, _): RequestLocale,
     ClientIp(ip): ClientIp,
     AuditContext(ctx): AuditContext,
     jar: CookieJar,
@@ -479,10 +506,10 @@ async fn passkey_submit(
     form: Result<Form<UiForm>, FormRejection>,
 ) -> Response {
     let Ok(Form(form)) = form else {
-        return bad_form(&state, &tenant);
+        return bad_form(&state, &tenant, &loc);
     };
     let (Some(flow_id), Some(csrf)) = (q.flow_id(), form.csrf_token.as_deref()) else {
-        return csrf_page(&state, Some(&tenant));
+        return csrf_page(&state, Some(&tenant), &loc);
     };
     let key = anvil_cache::limiter::LimitKey::Ip(ip);
     if let Decision::Deny { retry_after } = guard_attempt(&state, &key, &key, false).await {
@@ -492,14 +519,14 @@ async fn passkey_submit(
             identifier: "",
         };
         return match posted_login_form(&state, &tenant, &posted) {
-            Ok(form) => locked_page(&state, &tenant, form, retry_after, None),
-            Err(e) => core_error_page(&state, Some(&tenant), &e),
+            Ok(form) => locked_page(&state, &tenant, &loc, form, retry_after, None),
+            Err(e) => core_error_page_in(&state, Some(&tenant), &loc, &e),
         };
     }
     let input = FlowInput::PasskeyAssertion {
         response_json: form.response.clone().unwrap_or_default(),
     };
-    let result = match submit_flow(&state, &tenant, &ctx, &jar, flow_id, csrf, input).await {
+    let result = match submit_flow(&state, &tenant, &loc, &ctx, &jar, flow_id, csrf, input).await {
         Ok(r) => r,
         Err(resp) => return *resp,
     };
@@ -517,7 +544,7 @@ async fn passkey_submit(
                 guard_attempt(&state, &key, &key, false).await,
                 &result.outcome,
             ) {
-                return locked_page(&state, &tenant, form.clone(), retry_after, None);
+                return locked_page(&state, &tenant, &loc, form.clone(), retry_after, None);
             }
         }
         Some(AuthAttempt::PasskeySucceeded { .. }) => {
@@ -532,7 +559,7 @@ async fn passkey_submit(
         }
         _ => {}
     }
-    outcome_response(&state, &tenant, result.outcome)
+    outcome_response(&state, &tenant, &loc, result.outcome)
 }
 
 fn no_store(mut resp: Response) -> Response {
@@ -564,10 +591,12 @@ impl BadQuery {
         self,
         state: &AppState,
         tenant: Option<&ResolvedTenant>,
+        loc: &Locale,
     ) -> Response {
-        error_page(
+        error_page_in(
             state,
             tenant,
+            loc,
             StatusCode::BAD_REQUEST,
             "invalid_request",
             "",
@@ -628,10 +657,11 @@ pub(super) struct UiForm {
 }
 
 /// An unparseable form body.
-pub(super) fn bad_form(state: &AppState, tenant: &ResolvedTenant) -> Response {
-    error_page(
+pub(super) fn bad_form(state: &AppState, tenant: &ResolvedTenant, loc: &Locale) -> Response {
+    error_page_in(
         state,
         Some(tenant),
+        loc,
         StatusCode::BAD_REQUEST,
         "invalid_request",
         "",
@@ -639,8 +669,12 @@ pub(super) fn bad_form(state: &AppState, tenant: &ResolvedTenant) -> Response {
 }
 
 /// The CSRF rejection page (missing or wrong token, missing flow cookie, unbound submission).
-pub(super) fn csrf_page(state: &AppState, tenant: Option<&ResolvedTenant>) -> Response {
-    error_page(state, tenant, StatusCode::FORBIDDEN, "csrf", "")
+pub(super) fn csrf_page(
+    state: &AppState,
+    tenant: Option<&ResolvedTenant>,
+    loc: &Locale,
+) -> Response {
+    error_page_in(state, tenant, loc, StatusCode::FORBIDDEN, "csrf", "")
 }
 
 /// `{issuer}/ui`: base of the self-service pages and the emailed links.
@@ -665,16 +699,16 @@ pub(super) fn form_status(form: &FormDescription) -> StatusCode {
     }
 }
 
-/// Template and title of a form, by form id (themes/default/README.md).
+/// Template and title message key of a form, by form id (themes/default/README.md).
 pub(super) fn form_template(form_id: &str) -> (&'static str, &'static str) {
     match form_id {
-        "login" => ("login.html", "Sign in"),
-        SECOND_FACTOR_FORM_ID => ("second_factor.html", "Two-step verification"),
-        "registration" => ("registration.html", "Create an account"),
-        "verification" => ("verification.html", "Confirm your email address"),
-        "recovery" => ("recovery.html", "Reset your password"),
-        "recovery-reset" => ("recovery_reset.html", "Choose a new password"),
-        _ => ("setup.html", "Set up AnvilID"),
+        "login" => ("login.html", "title.login"),
+        SECOND_FACTOR_FORM_ID => ("second_factor.html", "title.second_factor"),
+        "registration" => ("registration.html", "title.registration"),
+        "verification" => ("verification.html", "title.verification"),
+        "recovery" => ("recovery.html", "title.recovery"),
+        "recovery-reset" => ("recovery_reset.html", "title.recovery_reset"),
+        _ => ("setup.html", "title.setup"),
     }
 }
 
@@ -683,19 +717,23 @@ pub(super) fn form_template(form_id: &str) -> (&'static str, &'static str) {
 /// without losing the authorization request.
 pub(super) fn links_for(
     tenant: &ResolvedTenant,
+    loc: &Locale,
     form_id: &str,
     request: Option<AuthRequestId>,
 ) -> PageLinks {
-    let with_request = |path: &str| match request {
-        Some(r) => tenant.ui_url(&format!("{path}?request={r}")),
-        None => tenant.ui_url(path),
+    let with_request = |path: &str| {
+        let url = match request {
+            Some(r) => tenant.ui_url(&format!("{path}?request={r}")),
+            None => tenant.ui_url(path),
+        };
+        carry_ui_locales(&url, loc)
     };
     match form_id {
         "login" => PageLinks {
             login: None,
             registration: (tenant.tenant.settings.registration == RegistrationMode::Open)
                 .then(|| with_request("/ui/registration")),
-            recovery: Some(tenant.ui_url("/ui/recovery")),
+            recovery: Some(carry_ui_locales(&tenant.ui_url("/ui/recovery"), loc)),
         },
         _ => PageLinks {
             login: Some(with_request("/ui/login")),
@@ -705,26 +743,31 @@ pub(super) fn links_for(
     }
 }
 
-/// Renders a form page with the given page context.
+/// Renders a form page with the given page context; the form is localized in `loc`.
 pub(super) fn render_form(
     state: &AppState,
     tenant: Option<&ResolvedTenant>,
+    loc: &Locale,
     page: PageContext,
     form: &FormDescription,
     status: StatusCode,
     jar: CookieJar,
 ) -> Response {
     let (template, _) = form_template(&form.id);
+    let mut form = form.clone();
+    state.renderer().localize_form(loc, &mut form);
+    form.action = carry_ui_locales(&form.action, loc);
     let ctx = minijinja::context! {
         page => page.into_value(),
-        form => Value::from(Serde(form)),
+        form => Value::from(Serde(&form)),
     };
-    render_page(state, tenant, template, ctx, status, jar)
+    render_page(state, tenant, loc, template, ctx, status, jar)
 }
 
 fn render_page(
     state: &AppState,
     tenant: Option<&ResolvedTenant>,
+    loc: &Locale,
     template: &str,
     ctx: Value,
     status: StatusCode,
@@ -734,7 +777,7 @@ fn render_page(
         Ok(html) => (status, jar, html).into_response(),
         Err(e) => {
             tracing::error!(error = %e, template, "rendering a form page failed");
-            core_error_page(state, tenant, &CoreError::Internal("render".into()))
+            core_error_page_in(state, tenant, loc, &CoreError::Internal("render".into()))
         }
     }
 }
@@ -762,9 +805,10 @@ struct CaptchaView {
     site_key: String,
 }
 
-/// The flow id of a bound form (`…?flow={id}` action).
+/// The flow id of a bound form (`…?flow={id}` action, possibly followed by more parameters).
 fn flow_of(form: &FormDescription) -> Option<FlowId> {
-    let (_, id) = form.action.rsplit_once("?flow=")?;
+    let (_, rest) = form.action.rsplit_once("?flow=")?;
+    let id = rest.split('&').next().unwrap_or_default();
     uuid::Uuid::parse_str(id).ok().map(FlowId)
 }
 
@@ -772,6 +816,7 @@ fn flow_of(form: &FormDescription) -> Option<FlowId> {
 fn render_tenant_form(
     state: &AppState,
     tenant: &ResolvedTenant,
+    loc: &Locale,
     form: &FormDescription,
     request: Option<AuthRequestId>,
     status: StatusCode,
@@ -780,6 +825,7 @@ fn render_tenant_form(
     render_tenant_form_with(
         state,
         tenant,
+        loc,
         form,
         request,
         status,
@@ -790,10 +836,16 @@ fn render_tenant_form(
 
 /// Renders a tenant form page with sign-in extras. The sign-in form gets the passkey form (when
 /// the issuer can be a WebAuthn relying party) and the CAPTCHA widget when asked for; the
-/// second-factor form posts to `/ui/login/second-factor` and carries the binding token.
+/// second-factor form posts to `/ui/login/second-factor` and carries the binding token. Labels
+/// and messages are localized in `loc`; an explicit `ui_locales` is carried on the actions.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "page renderer threads the request's locale and binding"
+)]
 pub(super) fn render_tenant_form_with(
     state: &AppState,
     tenant: &ResolvedTenant,
+    loc: &Locale,
     form: &FormDescription,
     request: Option<AuthRequestId>,
     status: StatusCode,
@@ -801,10 +853,11 @@ pub(super) fn render_tenant_form_with(
     extras: &Extras<'_>,
 ) -> Response {
     let (template, title) = form_template(&form.id);
-    let mut page = PageContext::for_tenant(state, tenant, title);
-    page.links = links_for(tenant, &form.id, request);
+    let mut page = PageContext::for_tenant(state, tenant, loc, title);
+    page.links = links_for(tenant, loc, &form.id, request);
     let base = ui_base(tenant);
     let mut form = form.clone();
+    state.renderer().localize_form(loc, &mut form);
     let mut passkey = None;
     let mut captcha = None;
     let mut factor_token = None;
@@ -813,7 +866,7 @@ pub(super) fn render_tenant_form_with(
             if tenant_relying_party(tenant).is_ok() {
                 passkey = Some(PasskeyView {
                     options_url: format!("{base}/login/passkey/options?flow={flow}"),
-                    action: format!("{base}/login/passkey?flow={flow}"),
+                    action: carry_ui_locales(&format!("{base}/login/passkey?flow={flow}"), loc),
                 });
             }
             captcha = extras.captcha;
@@ -824,6 +877,7 @@ pub(super) fn render_tenant_form_with(
         }
         _ => {}
     }
+    form.action = carry_ui_locales(&form.action, loc);
     let ctx = minijinja::context! {
         page => page.into_value(),
         form => Value::from(Serde(&form)),
@@ -834,7 +888,7 @@ pub(super) fn render_tenant_form_with(
         }))),
         factor_token => factor_token,
     };
-    let mut resp = render_page(state, Some(tenant), template, ctx, status, jar);
+    let mut resp = render_page(state, Some(tenant), loc, template, ctx, status, jar);
     let csp = match (captcha, &passkey) {
         (Some(c), _) => HeaderValue::from_str(&captcha_csp(c.provider).header_value()).ok(),
         (None, Some(_)) => Some(HeaderValue::from_static(LOGIN_CSP)),
@@ -847,15 +901,15 @@ pub(super) fn render_tenant_form_with(
     resp
 }
 
-/// Heading of a message page, by message key.
+/// Message key of the heading of a message page, by body message key.
 fn message_heading(key: &str) -> &'static str {
     match key {
-        "recovery.sent" | "registration.check_email" => "Check your email",
-        "recovery.done" => "Password changed",
-        "verification.done" => "Email address confirmed",
-        "registration.disabled" => "Registration unavailable",
-        SIGNED_IN => "Signed in",
-        _ => "Done",
+        "recovery.sent" | "registration.check_email" => "heading.check_email",
+        "recovery.done" => "heading.password_changed",
+        "verification.done" => "heading.email_confirmed",
+        "registration.disabled" => "heading.registration_unavailable",
+        SIGNED_IN => "heading.signed_in",
+        _ => "heading.done",
     }
 }
 
@@ -863,35 +917,38 @@ fn message_heading(key: &str) -> &'static str {
 /// (there is no account page in release 0.1).
 pub(super) const SIGNED_IN: &str = "login.signed_in";
 
-fn message_body(key: &str) -> &'static str {
-    match key {
-        SIGNED_IN => "You are signed in.",
-        other => anvil_core::flow::engine::message_text(other),
-    }
-}
-
 /// Renders `message.html` (200) with a link to the tenant's sign-in page.
 pub(super) fn message_page(
     state: &AppState,
     tenant: &ResolvedTenant,
+    loc: &Locale,
     key: &str,
     jar: CookieJar,
 ) -> Response {
-    let mut page = PageContext::for_tenant(state, tenant, message_heading(key));
-    if key != SIGNED_IN {
-        page.links.login = Some(tenant.ui_url("/ui/login"));
-    }
+    let page = {
+        let mut page = PageContext::for_tenant(state, tenant, loc, message_heading(key));
+        if key != SIGNED_IN {
+            page.links.login = Some(carry_ui_locales(&tenant.ui_url("/ui/login"), loc));
+        }
+        page
+    };
+    let heading = page.title.clone();
     let ctx = minijinja::context! {
         page => page.into_value(),
-        heading => message_heading(key),
+        heading => heading,
         body_key => key,
-        body => message_body(key),
+        body => state.renderer().text(loc, key),
     };
     match state.renderer().page("message.html", ctx) {
         Ok(html) => (StatusCode::OK, jar, html).into_response(),
         Err(e) => {
             tracing::error!(error = %e, "rendering the message page failed");
-            core_error_page(state, Some(tenant), &CoreError::Internal("render".into()))
+            core_error_page_in(
+                state,
+                Some(tenant),
+                loc,
+                &CoreError::Internal("render".into()),
+            )
         }
     }
 }
@@ -900,6 +957,7 @@ pub(super) fn message_page(
 fn started_response(
     state: &AppState,
     tenant: &ResolvedTenant,
+    loc: &Locale,
     started: &StartedFlow,
     request: Option<AuthRequestId>,
     status: StatusCode,
@@ -909,13 +967,14 @@ fn started_response(
             .cookies()
             .flow_cookie(&tenant.tenant, started.cookie_token.expose_secret()),
     );
-    render_tenant_form(state, tenant, &started.form, request, status, jar)
+    render_tenant_form(state, tenant, loc, &started.form, request, status, jar)
 }
 
 /// `GET` of a self-service page: starts a flow of `kind` and renders its form.
 pub(super) async fn start_page(
     state: &AppState,
     tenant: &ResolvedTenant,
+    loc: &Locale,
     kind: FlowKind,
     request: Option<AuthRequestId>,
     token: Option<String>,
@@ -936,14 +995,18 @@ pub(super) async fn start_page(
         .start(&cx, kind, request, token)
         .await
     {
-        Ok(started) => started_response(state, tenant, &started, request, StatusCode::OK),
-        Err(e) => core_error_page(state, Some(tenant), &e),
+        Ok(started) => started_response(state, tenant, loc, &started, request, StatusCode::OK),
+        Err(e) => core_error_page_in(state, Some(tenant), loc, &e),
     }
 }
 
 /// A new sign-in flow with the `flow.expired` message (400): the answer to a submission that
 /// cannot continue its flow (for example a second-factor POST without a valid binding token).
-pub(super) async fn restart_login(state: &AppState, tenant: &ResolvedTenant) -> Response {
+pub(super) async fn restart_login(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    loc: &Locale,
+) -> Response {
     let base = ui_base(tenant);
     let rp = tenant_relying_party(tenant);
     let ctx = RequestContext::default();
@@ -960,16 +1023,13 @@ pub(super) async fn restart_login(state: &AppState, tenant: &ResolvedTenant) -> 
         .await
     {
         Ok(mut started) => {
-            started.form.messages.insert(
-                0,
-                error_message(
-                    "flow.expired",
-                    anvil_core::flow::engine::message_text("flow.expired"),
-                ),
-            );
-            started_response(state, tenant, &started, None, StatusCode::BAD_REQUEST)
+            started
+                .form
+                .messages
+                .insert(0, FormMessage::error("flow.expired"));
+            started_response(state, tenant, loc, &started, None, StatusCode::BAD_REQUEST)
         }
-        Err(e) => core_error_page(state, Some(tenant), &e),
+        Err(e) => core_error_page_in(state, Some(tenant), loc, &e),
     }
 }
 
@@ -996,9 +1056,14 @@ pub(super) fn tenant_relying_party(tenant: &ResolvedTenant) -> Result<RelyingPar
 
 /// `POST` of a self-service page: binds the submission to its flow, runs it and maps the
 /// outcome to a response.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "threads the request's locale, context and binding"
+)]
 pub(super) async fn submit_page(
     state: &AppState,
     tenant: &ResolvedTenant,
+    loc: &Locale,
     ctx: &RequestContext,
     jar: &CookieJar,
     query: &UiQuery,
@@ -1006,19 +1071,24 @@ pub(super) async fn submit_page(
     input: FlowInput,
 ) -> Response {
     let (Some(flow_id), Some(csrf)) = (query.flow_id(), form.csrf_token.as_deref()) else {
-        return csrf_page(state, Some(tenant));
+        return csrf_page(state, Some(tenant), loc);
     };
-    match submit_flow(state, tenant, ctx, jar, flow_id, csrf, input).await {
-        Ok(result) => outcome_response(state, tenant, result.outcome),
+    match submit_flow(state, tenant, loc, ctx, jar, flow_id, csrf, input).await {
+        Ok(result) => outcome_response(state, tenant, loc, result.outcome),
         Err(resp) => *resp,
     }
 }
 
 /// Runs a bound submission through the flow service. `Err` is the finished error response
 /// (`csrf` page for a binding failure, the error page otherwise).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "threads the request's locale, context and binding"
+)]
 pub(super) async fn submit_flow(
     state: &AppState,
     tenant: &ResolvedTenant,
+    loc: &Locale,
     ctx: &RequestContext,
     jar: &CookieJar,
     flow_id: FlowId,
@@ -1029,7 +1099,7 @@ pub(super) async fn submit_flow(
     let cookie = jar.get(&cookie_name).map(|c| c.value().to_owned());
     let session = current_session(state, tenant, jar)
         .await
-        .map_err(|e| Box::new(core_error_page(state, Some(tenant), &e)))?;
+        .map_err(|e| Box::new(core_error_page_in(state, Some(tenant), loc, &e)))?;
     let base = ui_base(tenant);
     let rp = tenant_relying_party(tenant);
     let cx = FlowContext {
@@ -1045,20 +1115,26 @@ pub(super) async fn submit_flow(
         .await
     {
         Ok(result) => Ok(result),
-        Err(CoreError::Forbidden) => Err(Box::new(csrf_page(state, Some(tenant)))),
-        Err(e) => Err(Box::new(core_error_page(state, Some(tenant), &e))),
+        Err(CoreError::Forbidden) => Err(Box::new(csrf_page(state, Some(tenant), loc))),
+        Err(e) => Err(Box::new(core_error_page_in(state, Some(tenant), loc, &e))),
     }
 }
 
 /// Maps a flow outcome of a tenant self-service page to a response.
-fn outcome_response(state: &AppState, tenant: &ResolvedTenant, outcome: FlowOutcome) -> Response {
-    outcome_response_with(state, tenant, outcome, &Extras::default())
+fn outcome_response(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    loc: &Locale,
+    outcome: FlowOutcome,
+) -> Response {
+    outcome_response_with(state, tenant, loc, outcome, &Extras::default())
 }
 
 /// [`outcome_response`] with sign-in page extras for a rendered form.
 pub(super) fn outcome_response_with(
     state: &AppState,
     tenant: &ResolvedTenant,
+    loc: &Locale,
     outcome: FlowOutcome,
     extras: &Extras<'_>,
 ) -> Response {
@@ -1067,6 +1143,7 @@ pub(super) fn outcome_response_with(
         FlowOutcome::Render(form) => render_tenant_form_with(
             state,
             tenant,
+            loc,
             &form,
             None,
             form_status(&form),
@@ -1075,11 +1152,11 @@ pub(super) fn outcome_response_with(
         ),
         FlowOutcome::Restarted(started) => {
             let status = form_status(&started.form);
-            started_response(state, tenant, &started, None, status)
+            started_response(state, tenant, loc, &started, None, status)
         }
         FlowOutcome::Message { key } => {
             let jar = CookieJar::new().add(cookies.clear_flow(&tenant.tenant));
-            message_page(state, tenant, key, jar)
+            message_page(state, tenant, loc, key, jar)
         }
         FlowOutcome::SignedIn {
             cookie,
@@ -1094,12 +1171,13 @@ pub(super) fn outcome_response_with(
                         format!("{}/authorize/continue?request={request}", tenant.issuer);
                     (StatusCode::SEE_OTHER, jar, [(header::LOCATION, location)]).into_response()
                 }
-                None => message_page(state, tenant, SIGNED_IN, jar),
+                None => message_page(state, tenant, loc, SIGNED_IN, jar),
             }
         }
-        FlowOutcome::SetupSubmitted { .. } => core_error_page(
+        FlowOutcome::SetupSubmitted { .. } => core_error_page_in(
             state,
             Some(tenant),
+            loc,
             &CoreError::Internal("setup outcome on a tenant page".into()),
         ),
     }

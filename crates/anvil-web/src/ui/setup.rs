@@ -27,7 +27,8 @@ use secrecy::ExposeSecret as _;
 
 use super::login::{UiForm, UiQuery, csrf_page, form_status, render_form};
 use crate::adapters::passkey::relying_party;
-use crate::errors::{core_error_page, error_page};
+use crate::errors::{core_error_page_in, error_page_in};
+use crate::i18n::{Locale, RequestLocale};
 use crate::render::PageContext;
 use crate::request_context::AuditContext;
 use crate::state::AppState;
@@ -56,12 +57,19 @@ fn at_root(tenant: Option<&ResolvedTenant>) -> bool {
     tenant.is_none_or(|t| matches!(t.base, TenantBase::Root))
 }
 
-fn invalid_token(state: &AppState) -> Response {
-    error_page(state, None, StatusCode::FORBIDDEN, "invalid_request", "")
+fn invalid_token(state: &AppState, loc: &Locale) -> Response {
+    error_page_in(
+        state,
+        None,
+        loc,
+        StatusCode::FORBIDDEN,
+        "invalid_request",
+        "",
+    )
 }
 
-fn not_found(state: &AppState, tenant: Option<&ResolvedTenant>) -> Response {
-    error_page(state, tenant, StatusCode::NOT_FOUND, "not_found", "")
+fn not_found(state: &AppState, tenant: Option<&ResolvedTenant>, loc: &Locale) -> Response {
+    error_page_in(state, tenant, loc, StatusCode::NOT_FOUND, "not_found", "")
 }
 
 fn no_store(mut resp: Response) -> Response {
@@ -93,6 +101,7 @@ fn with_token(mut form: FormDescription, token: &str) -> FormDescription {
     form.fields.push(FormField {
         name: "token".to_owned(),
         kind: FieldKind::Hidden,
+        label_key: String::new(),
         label: String::new(),
         value: Some(token.to_owned()),
         required: false,
@@ -104,35 +113,37 @@ fn with_token(mut form: FormDescription, token: &str) -> FormDescription {
 
 fn render_setup(
     state: &AppState,
+    loc: &Locale,
     form: &FormDescription,
     status: StatusCode,
     jar: CookieJar,
 ) -> Response {
-    let page = PageContext::installation(state, "Set up AnvilID");
-    no_store(render_form(state, None, page, form, status, jar))
+    let page = PageContext::installation(state, loc, "title.setup");
+    no_store(render_form(state, None, loc, page, form, status, jar))
 }
 
 async fn show(
     State(state): State<AppState>,
     tenant: Option<ResolvedTenant>,
+    RequestLocale(loc, _): RequestLocale,
     Query(q): Query<UiQuery>,
 ) -> Response {
     if !at_root(tenant.as_ref()) {
-        return not_found(&state, tenant.as_ref());
+        return not_found(&state, tenant.as_ref(), &loc);
     }
     let token = q.token();
     match token_usable(&state, token.as_deref()).await {
         Ok(true) => {}
-        Ok(false) => return invalid_token(&state),
-        Err(e) => return core_error_page(&state, None, &e),
+        Ok(false) => return invalid_token(&state, &loc),
+        Err(e) => return core_error_page_in(&state, None, &loc, &e),
     }
     let Some(token) = token else {
-        return invalid_token(&state);
+        return invalid_token(&state, &loc);
     };
     let system = match system_tenant(&state).await {
         Ok(Some(t)) => t,
-        Ok(None) => return invalid_token(&state),
-        Err(e) => return core_error_page(&state, None, &e),
+        Ok(None) => return invalid_token(&state, &loc),
+        Err(e) => return core_error_page_in(&state, None, &loc, &e),
     };
     let iss = issuer(
         &state.config().public_url,
@@ -163,43 +174,52 @@ async fn show(
             );
             render_setup(
                 &state,
+                &loc,
                 &with_token(started.form, &token),
                 StatusCode::OK,
                 jar,
             )
         }
-        Err(e) => core_error_page(&state, None, &e),
+        Err(e) => core_error_page_in(&state, None, &loc, &e),
     }
 }
 
 async fn submit(
     State(state): State<AppState>,
     tenant: Option<ResolvedTenant>,
+    RequestLocale(loc, _): RequestLocale,
     AuditContext(ctx): AuditContext,
     jar: CookieJar,
     Query(q): Query<UiQuery>,
     form: Result<Form<UiForm>, FormRejection>,
 ) -> Response {
     if !at_root(tenant.as_ref()) {
-        return not_found(&state, tenant.as_ref());
+        return not_found(&state, tenant.as_ref(), &loc);
     }
     let Ok(Form(form)) = form else {
-        return error_page(&state, None, StatusCode::BAD_REQUEST, "invalid_request", "");
+        return error_page_in(
+            &state,
+            None,
+            &loc,
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "",
+        );
     };
     // An unusable token is refused before any flow work or password hashing.
     match token_usable(&state, form.token.as_deref()).await {
         Ok(true) => {}
-        Ok(false) => return invalid_token(&state),
-        Err(e) => return core_error_page(&state, None, &e),
+        Ok(false) => return invalid_token(&state, &loc),
+        Err(e) => return core_error_page_in(&state, None, &loc, &e),
     }
     let token = form.token.clone().unwrap_or_default();
     let (Some(flow_id), Some(csrf)) = (q.flow_id(), form.csrf_token.as_deref()) else {
-        return csrf_page(&state, None);
+        return csrf_page(&state, None, &loc);
     };
     let system = match system_tenant(&state).await {
         Ok(Some(t)) => t,
-        Ok(None) => return invalid_token(&state),
-        Err(e) => return core_error_page(&state, None, &e),
+        Ok(None) => return invalid_token(&state, &loc),
+        Err(e) => return core_error_page_in(&state, None, &loc, &e),
     };
     let cookie = jar
         .get(&state.cookies().flow_name(&system))
@@ -227,11 +247,17 @@ async fn submit(
         .await;
     match outcome.map(|r| r.outcome) {
         Ok(FlowOutcome::SetupSubmitted { email, password }) => {
-            complete(&state, &system, &token, &email, &password, &ctx).await
+            complete(&state, &loc, &system, &token, &email, &password, &ctx).await
         }
         Ok(FlowOutcome::Render(f)) => {
             let status = form_status(&f);
-            render_setup(&state, &with_token(f, &token), status, CookieJar::new())
+            render_setup(
+                &state,
+                &loc,
+                &with_token(f, &token),
+                status,
+                CookieJar::new(),
+            )
         }
         Ok(FlowOutcome::Restarted(started)) => {
             let status = form_status(&started.form);
@@ -240,20 +266,22 @@ async fn submit(
                     .cookies()
                     .flow_cookie(&system, started.cookie_token.expose_secret()),
             );
-            render_setup(&state, &with_token(started.form, &token), status, jar)
+            render_setup(&state, &loc, &with_token(started.form, &token), status, jar)
         }
-        Ok(FlowOutcome::Message { .. } | FlowOutcome::SignedIn { .. }) => core_error_page(
+        Ok(FlowOutcome::Message { .. } | FlowOutcome::SignedIn { .. }) => core_error_page_in(
             &state,
             None,
+            &loc,
             &CoreError::Internal("unexpected setup flow outcome".into()),
         ),
-        Err(CoreError::Forbidden) => csrf_page(&state, None),
-        Err(e) => core_error_page(&state, None, &e),
+        Err(CoreError::Forbidden) => csrf_page(&state, None, &loc),
+        Err(e) => core_error_page_in(&state, None, &loc, &e),
     }
 }
 
 async fn complete(
     state: &AppState,
+    loc: &Locale,
     system: &Tenant,
     token: &str,
     email: &str,
@@ -272,7 +300,7 @@ async fn complete(
             }
             let public = state.config().public_url.as_str();
             let ctx = minijinja::context! {
-                page => PageContext::installation(state, "Setup complete").into_value(),
+                page => PageContext::installation(state, loc, "title.setup_done").into_value(),
                 admin_email => result.admin.email,
                 mgmt_client_id => result.mgmt_client_id,
                 mgmt_client_secret => result.mgmt_client_secret.expose_secret(),
@@ -284,11 +312,11 @@ async fn complete(
                 Ok(html) => no_store((StatusCode::OK, jar, html).into_response()),
                 Err(e) => {
                     tracing::error!(error = %e, "rendering the setup result failed");
-                    core_error_page(state, None, &CoreError::Internal("render".into()))
+                    core_error_page_in(state, None, loc, &CoreError::Internal("render".into()))
                 }
             }
         }
-        Err(CoreError::Forbidden) => invalid_token(state),
-        Err(e) => core_error_page(state, None, &e),
+        Err(CoreError::Forbidden) => invalid_token(state, loc),
+        Err(e) => core_error_page_in(state, None, loc, &e),
     }
 }

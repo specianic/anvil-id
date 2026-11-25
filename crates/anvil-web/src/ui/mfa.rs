@@ -36,6 +36,7 @@ use super::login::{
     Extras, UiForm, UiQuery, bad_form, csrf_page, locked_page, outcome_response_with,
     restart_login, submit_flow,
 };
+use crate::i18n::{Locale, RequestLocale};
 use crate::layers::ratelimit::{Surface, guard_attempt, record_attempt, too_many_requests};
 use crate::request_context::AuditContext;
 use crate::state::AppState;
@@ -93,16 +94,17 @@ async fn show(tenant: ResolvedTenant) -> Response {
 async fn submit(
     State(state): State<AppState>,
     tenant: ResolvedTenant,
+    RequestLocale(loc, _): RequestLocale,
     AuditContext(ctx): AuditContext,
     jar: CookieJar,
     Query(q): Query<UiQuery>,
     form: Result<Form<UiForm>, FormRejection>,
 ) -> Response {
     let Ok(Form(form)) = form else {
-        return bad_form(&state, &tenant);
+        return bad_form(&state, &tenant, &loc);
     };
     let (Some(flow_id), Some(csrf)) = (q.flow_id(), form.csrf_token.as_deref()) else {
-        return csrf_page(&state, Some(&tenant));
+        return csrf_page(&state, Some(&tenant), &loc);
     };
     let tenant_id = tenant.tenant.id;
     let Some(user) = form
@@ -110,7 +112,7 @@ async fn submit(
         .as_deref()
         .and_then(|t| open_factor_token(state.kek(), tenant_id, flow_id, t))
     else {
-        return restart_login(&state, &tenant).await;
+        return restart_login(&state, &tenant, &loc).await;
     };
     let key = LimitKey::User {
         tenant: tenant_id,
@@ -127,7 +129,7 @@ async fn submit(
             code: form.code.clone().unwrap_or_default(),
         },
     };
-    let result = match submit_flow(&state, &tenant, &ctx, &jar, flow_id, csrf, input).await {
+    let result = match submit_flow(&state, &tenant, &loc, &ctx, &jar, flow_id, csrf, input).await {
         Ok(r) => r,
         Err(resp) => return *resp,
     };
@@ -145,6 +147,7 @@ async fn submit(
                 return locked_second_factor(
                     &state,
                     &tenant,
+                    &loc,
                     form.clone(),
                     flow_id,
                     user,
@@ -165,20 +168,21 @@ async fn submit(
         factor_token: seal_factor_token(state.kek(), tenant_id, flow_id, user).ok(),
         ..Extras::default()
     };
-    outcome_response_with(&state, &tenant, result.outcome, &extras)
+    outcome_response_with(&state, &tenant, &loc, result.outcome, &extras)
 }
 
 /// The second-factor form answering a lock (429, `Retry-After`), still carrying its token.
 fn locked_second_factor(
     state: &AppState,
     tenant: &ResolvedTenant,
+    loc: &Locale,
     form: FormDescription,
     flow: FlowId,
     user: UserId,
     retry_after: std::time::Duration,
 ) -> Response {
     let token = seal_factor_token(state.kek(), tenant.tenant.id, flow, user).ok();
-    locked_page(state, tenant, form, retry_after, token)
+    locked_page(state, tenant, loc, form, retry_after, token)
 }
 
 #[cfg(test)]

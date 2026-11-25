@@ -26,7 +26,7 @@ use std::sync::Arc;
 use anvil_core::error::CoreError;
 use anvil_core::model::{BrowserSession, CredentialId, CredentialSummary, FlowId};
 use anvil_core::service::account::{
-    AccountError, AccountFailure, AccountService, SettingsBinding, TotpEnrolment, message_text,
+    AccountError, AccountFailure, AccountService, SettingsBinding, TotpEnrolment,
 };
 use axum::Router;
 use axum::extract::rejection::FormRejection;
@@ -38,10 +38,12 @@ use axum_extra::extract::cookie::CookieJar;
 use secrecy::ExposeSecret as _;
 use serde::{Deserialize, Serialize};
 
+use super::consent::{PageMessage, account_locale, localized};
 use super::format::{human, iso};
 use super::login::{UiQuery, bad_form, csrf_page};
 use crate::adapters::passkey::{WebauthnPasskeys, relying_party};
-use crate::errors::core_error_page;
+use crate::errors::core_error_page_in;
+use crate::i18n::{Locale, RequestLocale};
 use crate::render::PageContext;
 use crate::request_context::AuditContext;
 use crate::state::AppState;
@@ -92,35 +94,10 @@ struct SecurityForm {
     code: Option<String>,
 }
 
-/// A message shown on an account page (`data-message-key` like the form messages).
-#[derive(Debug, Clone, Serialize)]
-struct PageMessage {
-    level: &'static str,
-    key: &'static str,
-    text: &'static str,
-}
-
-impl PageMessage {
-    fn error(key: &'static str) -> Self {
-        Self {
-            level: "error",
-            key,
-            text: message_text(key),
-        }
-    }
-
-    fn info(key: &'static str) -> Self {
-        Self {
-            level: "info",
-            key,
-            text: message_text(key),
-        }
-    }
-}
-
-/// A submission resolved to its session and settings flow binding.
+/// A submission resolved to its session, page locale and settings flow binding.
 struct Submission {
     session: BrowserSession,
+    locale: Locale,
     flow_id: FlowId,
     cookie: Option<String>,
     csrf: String,
@@ -175,6 +152,7 @@ async fn session(
 async fn submission(
     state: &AppState,
     tenant: &ResolvedTenant,
+    locale: &RequestLocale,
     jar: &CookieJar,
     query: &UiQuery,
     csrf: Option<String>,
@@ -182,16 +160,25 @@ async fn submission(
     let session = match session(state, tenant, jar).await {
         Ok(Some(s)) => s,
         Ok(None) => return Err(Box::new(to_login(tenant))),
-        Err(e) => return Err(Box::new(core_error_page(state, Some(tenant), &e))),
+        Err(e) => {
+            return Err(Box::new(core_error_page_in(
+                state,
+                Some(tenant),
+                &locale.0,
+                &e,
+            )));
+        }
     };
+    let loc = account_locale(state, tenant, locale, &session).await;
     let (Some(flow_id), Some(csrf)) = (query.flow_id(), csrf.filter(|c| !c.is_empty())) else {
-        return Err(Box::new(csrf_page(state, Some(tenant))));
+        return Err(Box::new(csrf_page(state, Some(tenant), &loc)));
     };
     let cookie = jar
         .get(&state.cookies().flow_name(&tenant.tenant))
         .map(|c| c.value().to_owned());
     Ok(Submission {
         session,
+        locale: loc,
         flow_id,
         cookie,
         csrf,
@@ -231,13 +218,19 @@ fn row(tenant: &ResolvedTenant, flow: FlowId, c: &CredentialSummary) -> Credenti
     }
 }
 
-fn account_page(state: &AppState, tenant: &ResolvedTenant, title: &str) -> minijinja::Value {
-    PageContext::for_tenant(state, tenant, title).into_value()
+fn account_page(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    loc: &Locale,
+    title_key: &str,
+) -> minijinja::Value {
+    PageContext::for_tenant(state, tenant, loc, title_key).into_value()
 }
 
 fn render(
     state: &AppState,
     tenant: &ResolvedTenant,
+    loc: &Locale,
     template: &str,
     ctx: minijinja::Value,
     status: StatusCode,
@@ -247,7 +240,12 @@ fn render(
         Ok(html) => with_headers((status, jar, html).into_response()),
         Err(e) => {
             tracing::error!(error = %e, template, "rendering an account page failed");
-            core_error_page(state, Some(tenant), &CoreError::Internal("render".into()))
+            core_error_page_in(
+                state,
+                Some(tenant),
+                loc,
+                &CoreError::Internal("render".into()),
+            )
         }
     }
 }
@@ -260,6 +258,7 @@ fn render(
 async fn render_overview(
     state: &AppState,
     tenant: &ResolvedTenant,
+    loc: &Locale,
     session: &BrowserSession,
     flow: FlowId,
     csrf: &str,
@@ -273,7 +272,7 @@ async fn render_overview(
         .await
     {
         Ok(o) => o,
-        Err(e) => return core_error_page(state, Some(tenant), &e),
+        Err(e) => return core_error_page_in(state, Some(tenant), loc, &e),
     };
     let passkeys: Vec<CredentialRow> = overview
         .passkeys
@@ -281,8 +280,9 @@ async fn render_overview(
         .map(|c| row(tenant, flow, c))
         .collect();
     let totp = overview.totp.as_ref().map(|c| row(tenant, flow, c));
+    let messages = localized(state, loc, messages);
     let ctx = minijinja::context! {
-        page => account_page(state, tenant, "Security"),
+        page => account_page(state, tenant, loc, "title.account_security"),
         account_base => tenant.base_path(),
         account_nav => "security",
         csrf_token => csrf,
@@ -297,13 +297,22 @@ async fn render_overview(
         totp_url => flow_url(tenant, "/ui/account/security/totp", flow),
         recovery_codes_url => flow_url(tenant, "/ui/account/security/recovery-codes", flow),
     };
-    render(state, tenant, "account_security.html", ctx, status, jar)
+    render(
+        state,
+        tenant,
+        loc,
+        "account_security.html",
+        ctx,
+        status,
+        jar,
+    )
 }
 
 /// Starts a fresh settings flow (sets its cookie) and renders the overview with `messages`.
 async fn fresh_overview(
     state: &AppState,
     tenant: &ResolvedTenant,
+    loc: &Locale,
     session: &BrowserSession,
     messages: Vec<PageMessage>,
     status: StatusCode,
@@ -314,7 +323,7 @@ async fn fresh_overview(
         .await
     {
         Ok(s) => s,
-        Err(e) => return core_error_page(state, Some(tenant), &e),
+        Err(e) => return core_error_page_in(state, Some(tenant), loc, &e),
     };
     let jar = CookieJar::new().add(
         state
@@ -324,6 +333,7 @@ async fn fresh_overview(
     render_overview(
         state,
         tenant,
+        loc,
         session,
         started.flow_id,
         started.csrf_token.expose_secret(),
@@ -342,12 +352,13 @@ async fn refused(
     err: AccountError,
 ) -> Response {
     match err {
-        AccountError::Core(CoreError::Forbidden) => csrf_page(state, Some(tenant)),
-        AccountError::Core(e) => core_error_page(state, Some(tenant), &e),
+        AccountError::Core(CoreError::Forbidden) => csrf_page(state, Some(tenant), &sub.locale),
+        AccountError::Core(e) => core_error_page_in(state, Some(tenant), &sub.locale, &e),
         AccountError::Failure(AccountFailure::FlowExpired) => {
             fresh_overview(
                 state,
                 tenant,
+                &sub.locale,
                 &sub.session,
                 vec![PageMessage::error(AccountFailure::FlowExpired.key())],
                 StatusCode::BAD_REQUEST,
@@ -358,6 +369,7 @@ async fn refused(
             render_overview(
                 state,
                 tenant,
+                &sub.locale,
                 &sub.session,
                 sub.flow_id,
                 &sub.csrf,
@@ -391,17 +403,19 @@ fn render_enrolment(
     enrolment: &TotpEnrolment,
     error: Option<PageMessage>,
 ) -> Response {
+    let loc = &sub.locale;
     let svg = match crate::adapters::qr::qr_svg(enrolment.otpauth_uri.expose_secret()) {
         Ok(svg) => svg,
-        Err(e) => return core_error_page(state, Some(tenant), &e),
+        Err(e) => return core_error_page_in(state, Some(tenant), loc, &e),
     };
+    let error = error.map(|m| m.localized(state, loc));
     let status = if error.is_some() {
         StatusCode::BAD_REQUEST
     } else {
         StatusCode::OK
     };
     let ctx = minijinja::context! {
-        page => account_page(state, tenant, "Set up an authenticator app"),
+        page => account_page(state, tenant, loc, "title.totp_enroll"),
         account_base => tenant.base_path(),
         account_nav => "security",
         csrf_token => &sub.csrf,
@@ -414,6 +428,7 @@ fn render_enrolment(
     render(
         state,
         tenant,
+        loc,
         "totp_enroll.html",
         ctx,
         status,
@@ -424,13 +439,15 @@ fn render_enrolment(
 fn render_codes(
     state: &AppState,
     tenant: &ResolvedTenant,
+    loc: &Locale,
     codes: &[secrecy::SecretString],
     message: PageMessage,
 ) -> Response {
+    let message = message.localized(state, loc);
     let codes: Vec<String> = codes.iter().map(|c| c.expose_secret().to_owned()).collect();
     let codes_text = codes.join("\n");
     let ctx = minijinja::context! {
-        page => account_page(state, tenant, "Recovery codes"),
+        page => account_page(state, tenant, loc, "title.recovery_codes"),
         account_base => tenant.base_path(),
         account_nav => "security",
         message => minijinja::Value::from(minijinja::value::Serde(&message)),
@@ -441,6 +458,7 @@ fn render_codes(
     render(
         state,
         tenant,
+        loc,
         "recovery_codes.html",
         ctx,
         StatusCode::OK,
@@ -452,17 +470,26 @@ fn render_codes(
 // Handlers
 // ---------------------------------------------------------------------------------------------
 
-async fn show(State(state): State<AppState>, tenant: ResolvedTenant, jar: CookieJar) -> Response {
+async fn show(
+    State(state): State<AppState>,
+    tenant: ResolvedTenant,
+    locale: RequestLocale,
+    jar: CookieJar,
+) -> Response {
     match session(&state, &tenant, &jar).await {
-        Ok(Some(s)) => fresh_overview(&state, &tenant, &s, Vec::new(), StatusCode::OK).await,
+        Ok(Some(s)) => {
+            let loc = account_locale(&state, &tenant, &locale, &s).await;
+            fresh_overview(&state, &tenant, &loc, &s, Vec::new(), StatusCode::OK).await
+        }
         Ok(None) => to_login(&tenant),
-        Err(e) => core_error_page(&state, Some(&tenant), &e),
+        Err(e) => core_error_page_in(&state, Some(&tenant), &locale.0, &e),
     }
 }
 
 async fn passkey_options(
     State(state): State<AppState>,
     tenant: ResolvedTenant,
+    locale: RequestLocale,
     jar: CookieJar,
     headers: HeaderMap,
     Query(q): Query<UiQuery>,
@@ -476,15 +503,24 @@ async fn passkey_options(
     match session(&state, &tenant, &jar).await {
         Ok(Some(_)) => {}
         Ok(None) => return json_error(StatusCode::UNAUTHORIZED, "login_required"),
-        Err(e) => return core_error_page(&state, Some(&tenant), &e),
+        Err(e) => return core_error_page_in(&state, Some(&tenant), &locale.0, &e),
     }
-    let sub = match submission(&state, &tenant, &jar, &q, form_csrf.or(header_csrf)).await {
+    let sub = match submission(
+        &state,
+        &tenant,
+        &locale,
+        &jar,
+        &q,
+        form_csrf.or(header_csrf),
+    )
+    .await
+    {
         Ok(s) => s,
         Err(resp) => return *resp,
     };
     let rp = match relying_party(&tenant.tenant, &tenant.issuer) {
         Ok(rp) => rp,
-        Err(e) => return core_error_page(&state, Some(&tenant), &e),
+        Err(e) => return core_error_page_in(&state, Some(&tenant), &sub.locale, &e),
     };
     match state
         .ui_account_service()
@@ -499,8 +535,10 @@ async fn passkey_options(
             )
                 .into_response(),
         ),
-        Err(AccountError::Core(CoreError::Forbidden)) => csrf_page(&state, Some(&tenant)),
-        Err(AccountError::Core(e)) => core_error_page(&state, Some(&tenant), &e),
+        Err(AccountError::Core(CoreError::Forbidden)) => {
+            csrf_page(&state, Some(&tenant), &sub.locale)
+        }
+        Err(AccountError::Core(e)) => core_error_page_in(&state, Some(&tenant), &sub.locale, &e),
         Err(AccountError::Failure(f)) => json_error(StatusCode::BAD_REQUEST, f.key()),
     }
 }
@@ -508,21 +546,22 @@ async fn passkey_options(
 async fn passkey_finish(
     State(state): State<AppState>,
     tenant: ResolvedTenant,
+    locale: RequestLocale,
     jar: CookieJar,
     AuditContext(ctx): AuditContext,
     Query(q): Query<UiQuery>,
     form: Result<Form<SecurityForm>, FormRejection>,
 ) -> Response {
     let Ok(Form(form)) = form else {
-        return bad_form(&state, &tenant);
+        return bad_form(&state, &tenant, &locale.0);
     };
-    let sub = match submission(&state, &tenant, &jar, &q, form.csrf_token.clone()).await {
+    let sub = match submission(&state, &tenant, &locale, &jar, &q, form.csrf_token.clone()).await {
         Ok(s) => s,
         Err(resp) => return *resp,
     };
     let rp = match relying_party(&tenant.tenant, &tenant.issuer) {
         Ok(rp) => rp,
-        Err(e) => return core_error_page(&state, Some(&tenant), &e),
+        Err(e) => return core_error_page_in(&state, Some(&tenant), &sub.locale, &e),
     };
     let result = state
         .ui_account_service()
@@ -541,6 +580,7 @@ async fn passkey_finish(
             render_overview(
                 &state,
                 &tenant,
+                &sub.locale,
                 &sub.session,
                 sub.flow_id,
                 &sub.csrf,
@@ -557,14 +597,15 @@ async fn passkey_finish(
 async fn totp_begin(
     State(state): State<AppState>,
     tenant: ResolvedTenant,
+    locale: RequestLocale,
     jar: CookieJar,
     Query(q): Query<UiQuery>,
     form: Result<Form<SecurityForm>, FormRejection>,
 ) -> Response {
     let Ok(Form(form)) = form else {
-        return bad_form(&state, &tenant);
+        return bad_form(&state, &tenant, &locale.0);
     };
-    let sub = match submission(&state, &tenant, &jar, &q, form.csrf_token).await {
+    let sub = match submission(&state, &tenant, &locale, &jar, &q, form.csrf_token).await {
         Ok(s) => s,
         Err(resp) => return *resp,
     };
@@ -581,15 +622,16 @@ async fn totp_begin(
 async fn totp_confirm(
     State(state): State<AppState>,
     tenant: ResolvedTenant,
+    locale: RequestLocale,
     jar: CookieJar,
     AuditContext(ctx): AuditContext,
     Query(q): Query<UiQuery>,
     form: Result<Form<SecurityForm>, FormRejection>,
 ) -> Response {
     let Ok(Form(form)) = form else {
-        return bad_form(&state, &tenant);
+        return bad_form(&state, &tenant, &locale.0);
     };
-    let sub = match submission(&state, &tenant, &jar, &q, form.csrf_token.clone()).await {
+    let sub = match submission(&state, &tenant, &locale, &jar, &q, form.csrf_token.clone()).await {
         Ok(s) => s,
         Err(resp) => return *resp,
     };
@@ -607,6 +649,7 @@ async fn totp_confirm(
         Ok(codes) => render_codes(
             &state,
             &tenant,
+            &sub.locale,
             &codes,
             PageMessage::info("account.totp_enrolled"),
         ),
@@ -633,15 +676,16 @@ async fn totp_confirm(
 async fn recovery_codes(
     State(state): State<AppState>,
     tenant: ResolvedTenant,
+    locale: RequestLocale,
     jar: CookieJar,
     AuditContext(ctx): AuditContext,
     Query(q): Query<UiQuery>,
     form: Result<Form<SecurityForm>, FormRejection>,
 ) -> Response {
     let Ok(Form(form)) = form else {
-        return bad_form(&state, &tenant);
+        return bad_form(&state, &tenant, &locale.0);
     };
-    let sub = match submission(&state, &tenant, &jar, &q, form.csrf_token).await {
+    let sub = match submission(&state, &tenant, &locale, &jar, &q, form.csrf_token).await {
         Ok(s) => s,
         Err(resp) => return *resp,
     };
@@ -653,6 +697,7 @@ async fn recovery_codes(
         Ok(codes) => render_codes(
             &state,
             &tenant,
+            &sub.locale,
             &codes,
             PageMessage::info("account.recovery_codes_regenerated"),
         ),
@@ -660,9 +705,14 @@ async fn recovery_codes(
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "axum handler: one argument per extractor"
+)]
 async fn remove_credential(
     State(state): State<AppState>,
     tenant: ResolvedTenant,
+    locale: RequestLocale,
     jar: CookieJar,
     AuditContext(ctx): AuditContext,
     Path(id): Path<String>,
@@ -670,9 +720,9 @@ async fn remove_credential(
     form: Result<Form<SecurityForm>, FormRejection>,
 ) -> Response {
     let Ok(Form(form)) = form else {
-        return bad_form(&state, &tenant);
+        return bad_form(&state, &tenant, &locale.0);
     };
-    let sub = match submission(&state, &tenant, &jar, &q, form.csrf_token).await {
+    let sub = match submission(&state, &tenant, &locale, &jar, &q, form.csrf_token).await {
         Ok(s) => s,
         Err(resp) => return *resp,
     };
@@ -698,6 +748,7 @@ async fn remove_credential(
             render_overview(
                 &state,
                 &tenant,
+                &sub.locale,
                 &sub.session,
                 sub.flow_id,
                 &sub.csrf,
