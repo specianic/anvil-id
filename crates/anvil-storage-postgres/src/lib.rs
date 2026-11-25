@@ -423,4 +423,139 @@ mod tests {
         );
         conn.close().await.expect("close");
     }
+
+    /// Tenant isolation is enforced by the schema, like SQLite: every user-owned row carries a
+    /// composite foreign key `(tenant_id, user_id) → "user"(tenant_id, id)`, so a row written
+    /// under tenant A for a user of tenant B is rejected by the database itself (raw SQL, no
+    /// repository pre-check involved).
+    #[tokio::test]
+    async fn composite_tenant_foreign_keys_reject_cross_tenant_rows() {
+        let container = Postgres::default()
+            .with_tag("18-alpine")
+            .start()
+            .await
+            .expect("docker must be running for Postgres migration tests");
+        let host = container.get_host().await.expect("host");
+        let port = container.get_host_port_ipv4(5432).await.expect("port");
+        // Default credentials of the throwaway testcontainers image, not a secret.
+        let url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
+        let mut conn = connect(&url).await;
+        migrator_up_to(i64::MAX)
+            .run(&mut conn)
+            .await
+            .expect("all migrations must apply");
+
+        let (a, b, user_b) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+        exec(
+            &mut conn,
+            &format!(
+                "INSERT INTO tenant (id, slug, display_name, created_at)
+                      VALUES ('{a}', 'a', 'A', now()), ('{b}', 'b', 'B', now());
+                 INSERT INTO \"user\" (id, tenant_id, email, email_verified, status, created_at,
+                                       updated_at)
+                      VALUES ('{user_b}', '{b}', 'b@example.test', true, 'active', now(), now());"
+            ),
+        )
+        .await
+        .expect("seeding two tenants");
+
+        // One insert per user-owned table; `{t}` is the tenant written on the row.
+        let rows: [(&str, Box<dyn Fn(Uuid) -> String>); 5] = [
+            (
+                "credential",
+                Box::new(move |t| {
+                    format!(
+                        "INSERT INTO credential (id, tenant_id, user_id, kind, data, created_at,
+                                                 updated_at)
+                              VALUES ('{}', '{t}', '{user_b}', 'totp', 'x', now(), now())",
+                        Uuid::now_v7()
+                    )
+                }),
+            ),
+            (
+                "recovery_code",
+                Box::new(move |t| {
+                    format!(
+                        "INSERT INTO recovery_code (tenant_id, user_id, code_hash, created_at)
+                              VALUES ('{t}', '{user_b}', decode(repeat('ab', 32), 'hex'), now())"
+                    )
+                }),
+            ),
+            (
+                "consent_grant",
+                Box::new(move |t| {
+                    format!(
+                        "INSERT INTO consent_grant (id, tenant_id, user_id, client_id, scopes,
+                                                    created_at, updated_at)
+                              VALUES ('{}', '{t}', '{user_b}', 'web', '[]', now(), now())",
+                        Uuid::now_v7()
+                    )
+                }),
+            ),
+            (
+                "self_service_token",
+                Box::new(move |t| {
+                    format!(
+                        "INSERT INTO self_service_token (token_hash, tenant_id, kind, user_id,
+                                                         email, created_at, expires_at)
+                              VALUES (decode(md5(random()::text) || md5(random()::text), 'hex'),
+                                      '{t}', 'verification', '{user_b}', 'b@example.test', now(),
+                                      now() + interval '1 hour')"
+                    )
+                }),
+            ),
+            (
+                "browser_session",
+                Box::new(move |t| {
+                    format!(
+                        "INSERT INTO browser_session (id, tenant_id, user_id, token_hash,
+                                                      auth_time, acr, amr, created_at,
+                                                      last_seen_at, expires_at, idle_expires_at)
+                              VALUES ('{}', '{t}', '{user_b}',
+                                      decode(md5(random()::text) || md5(random()::text), 'hex'),
+                                      now(), 'urn:anvilid:acr:pwd', ARRAY['pwd'], now(), now(),
+                                      now() + interval '1 day', now() + interval '1 hour')",
+                        Uuid::now_v7()
+                    )
+                }),
+            ),
+        ];
+
+        for (table, insert) in &rows {
+            let err = exec(&mut conn, &insert(a)).await.expect_err(&format!(
+                "{table}: a row for another tenant's user is rejected"
+            ));
+            let code = err
+                .as_database_error()
+                .and_then(|d| d.code())
+                .map(|c| c.into_owned());
+            assert_eq!(
+                code.as_deref(),
+                Some("23503"),
+                "{table}: rejected by a foreign key, got {err}"
+            );
+            exec(&mut conn, &insert(b))
+                .await
+                .unwrap_or_else(|e| panic!("{table}: a row in the user's own tenant: {e}"));
+        }
+
+        // Deleting the user still cascades to every user-owned row.
+        exec(
+            &mut conn,
+            &format!("DELETE FROM \"user\" WHERE id = '{user_b}'"),
+        )
+        .await
+        .expect("delete user");
+        for (table, _) in &rows {
+            let left: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+                "SELECT count(*) FROM {table} WHERE user_id = $1"
+            )))
+            .bind(user_b)
+            .fetch_one(&mut conn)
+            .await
+            .expect("count");
+            assert_eq!(left, 0, "{table}: rows cascade with the user");
+        }
+        conn.close().await.expect("close");
+    }
 }
