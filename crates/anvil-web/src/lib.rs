@@ -12,7 +12,7 @@ pub mod cookies;
 pub mod errors;
 mod health;
 mod http_cache;
-pub(crate) mod i18n;
+pub mod i18n;
 pub mod layers;
 pub mod protocol;
 pub mod render;
