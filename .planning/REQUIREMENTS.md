@@ -263,6 +263,15 @@ Which phases cover which requirements. Updated during roadmap creation.
 - OIDC-01 wording was amended in Phase 2 (C1): PKCE is required by default; only confidential
   clients may opt out, and such clients may omit `nonce`.
 
+**Scope notes (Phase 4, release 0.3):**
+- UI-04 covers the pages only: every page string goes through the Fluent catalogs and the language
+  comes from `ui_locales`, the account owner's `locale` claim (account pages), `Accept-Language` or
+  the tenant default. Localized email templates are deferred to a later phase; emails are rendered
+  from one template per kind whatever the user's language.
+- AUTH-07: CI tests every provider adapter against local mock IdPs (no provider secrets in CI).
+  Real-provider verification is the manual pre-release checklist `docs/social-login-checklist.md`,
+  run by the owner before tagging v0.3.0 (04-33 release gate).
+
 **Coverage:**
 - v1 requirements: 84 total
 - Mapped to phases: 84

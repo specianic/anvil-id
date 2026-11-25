@@ -187,6 +187,11 @@ phase, **P1** is expected in the phase, **P2** is opportunistic.
 | AUTH-14 | Custom user attributes defined per tenant with JSON Schema (type, required, validation, which attributes the user can edit, which are emitted as claims) | 0.4 | P1 |
 | AUTH-13 | Account page: profile, email change with re-verification, password, passkeys, MFA, sessions, connected apps | 0.3 | P0 |
 
+Note on AUTH-7 (0.3): CI tests every provider adapter against local mock identity providers; no
+provider credentials are used in CI. Sign-in against the real Google, Apple, Microsoft and GitHub
+services is verified by hand before each release with the owner's own app registrations, following
+[social-login-checklist.md](social-login-checklist.md).
+
 ### 8.3 Login UI and branding (`UI`)
 
 | ID | Requirement | Phase | Pri |
@@ -199,6 +204,10 @@ phase, **P1** is expected in the phase, **P2** is opportunistic.
 | UI-8 | Delegated login and consent: a tenant can point login and consent to an external app it hosts, which accepts or rejects the request through the management API (for teams that need full control) | 2.0 | P2 |
 | UI-6 | Embeddable web components for login and account management | 2.0 | P2 |
 | UI-7 | Email templates editable per tenant; SMTP configuration with a test-send | 0.2 | P0 |
+
+Note on UI-4 (0.3): release 0.3 translates the pages only. Emails are still rendered from one
+template per kind (the English default or the tenant's override), whatever the user's language;
+localized email templates are a later item.
 
 ### 8.4 Tenants, organizations and roles (`ORG`)
 
