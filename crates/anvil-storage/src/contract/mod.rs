@@ -115,16 +115,26 @@ pub async fn tenant_create_and_get(s: &TestStorage) {
     assert_eq!(created.created_at, new.created_at);
 
     let by_id = repo.get(new.id).await.expect("get must succeed");
-    assert_eq!(by_id.as_ref(), Some(&created), "get(id) must return the created tenant");
+    assert_eq!(
+        by_id.as_ref(),
+        Some(&created),
+        "get(id) must return the created tenant"
+    );
 
     let by_slug = repo
         .get_by_slug(&new.slug)
         .await
         .expect("get_by_slug must succeed");
-    assert_eq!(by_slug.as_ref(), Some(&created), "get_by_slug must return the created tenant");
+    assert_eq!(
+        by_slug.as_ref(),
+        Some(&created),
+        "get_by_slug must return the created tenant"
+    );
 
     assert_eq!(
-        repo.get(TenantId::new_v7()).await.expect("get must succeed"),
+        repo.get(TenantId::new_v7())
+            .await
+            .expect("get must succeed"),
         None,
         "unknown id must return None"
     );
@@ -140,7 +150,9 @@ pub async fn tenant_create_and_get(s: &TestStorage) {
 pub async fn tenant_slug_conflict(s: &TestStorage) {
     let repo = s.storage.tenants();
     let first = new_tenant();
-    repo.create(&first).await.expect("first create must succeed");
+    repo.create(&first)
+        .await
+        .expect("first create must succeed");
 
     let mut dup = new_tenant();
     dup.slug = first.slug.clone();
