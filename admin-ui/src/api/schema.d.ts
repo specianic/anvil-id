@@ -37,8 +37,30 @@ export interface paths {
         delete: operations["deleteTenant"];
         options?: never;
         head?: never;
-        /** Update a tenant (the slug is immutable). */
+        /**
+         * Update a tenant (the slug is immutable). Settings are merged with the current ones; the
+         *     CAPTCHA secret is write-only. Enabling a signing algorithm creates its key at once; disabling
+         *     one that a client still uses for its ID tokens is refused (409, the problem lists the
+         *     clients).
+         */
         patch: operations["updateTenant"];
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/audit-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Query the audit log of a tenant. */
+        get: operations["listAuditEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/admin/v1/tenants/{slug}/clients": {
@@ -74,7 +96,10 @@ export interface paths {
         delete: operations["deleteClient"];
         options?: never;
         head?: never;
-        /** Update a client. The merged registration is validated again. */
+        /**
+         * Update a client. The merged registration (including the ID-token algorithm against the
+         *     tenant's enabled algorithms) is validated again.
+         */
         patch: operations["updateClient"];
         trace?: never;
     };
@@ -89,6 +114,121 @@ export interface paths {
         put?: never;
         /** Rotate the client secret. The new secret is returned once; the old one stops working. */
         post: operations["rotateClientSecret"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/email-templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List every email template of a tenant (overrides and defaults). */
+        get: operations["listEmailTemplates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/email-templates/{kind}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get one email template: the tenant override, or the theme default (`customized: false`). */
+        get: operations["getEmailTemplate"];
+        /**
+         * Save a tenant override of an email template. The template is compiled, checked for
+         *     unknown variables and test-rendered first.
+         */
+        put: operations["putEmailTemplate"];
+        post?: never;
+        /** Remove the tenant override (back to the theme default). Idempotent. */
+        delete: operations["resetEmailTemplate"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the active sessions of a tenant. */
+        get: operations["listSessions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/sessions/{session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke one session (and the tokens issued under it). */
+        delete: operations["revokeSession"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/smtp": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the tenant's SMTP settings (never the password). 404 when the tenant uses the
+         *     installation SMTP server.
+         */
+        get: operations["getSmtpSettings"];
+        /** Set the tenant's SMTP settings. An absent or empty password keeps the stored one. */
+        put: operations["putSmtpSettings"];
+        post?: never;
+        /** Remove the tenant's SMTP settings (back to the installation SMTP server). Idempotent. */
+        delete: operations["deleteSmtpSettings"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/smtp/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send a test email with the stored SMTP settings (synchronous, bounded by a 10 s timeout).
+         *     An SMTP failure is reported in the body (`delivered: false`), not as an error status.
+         */
+        post: operations["testSmtpSettings"];
         delete?: never;
         options?: never;
         head?: never;
@@ -132,10 +272,70 @@ export interface paths {
         patch: operations["updateUser"];
         trace?: never;
     };
+    "/api/admin/v1/tenants/{slug}/users/{user_id}/credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List a user's credentials (password, passkeys, TOTP). No secret material is returned. */
+        get: operations["listUserCredentials"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/users/{user_id}/credentials/{credential_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a passkey or the TOTP factor (with its recovery codes) of a user. Passwords cannot
+         *     be removed here.
+         */
+        delete: operations["deleteUserCredential"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/users/{user_id}/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List a user's active sessions, newest first. */
+        get: operations["listUserSessions"];
+        put?: never;
+        post?: never;
+        /** Revoke every session of a user (and the tokens issued under them). */
+        delete: operations["revokeUserSessions"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * @description Who performed an audited action.
+         * @enum {string}
+         */
+        ActorKind: "user" | "client" | "admin" | "system";
         /** @description OIDC Core §5.1.1 address claim. */
         Address: {
             /** @default null */
@@ -156,6 +356,71 @@ export interface components {
          * @enum {string}
          */
         ApplicationType: "web" | "native";
+        /**
+         * @description An audited action.
+         * @enum {string}
+         */
+        AuditAction: "login_succeeded" | "login_failed" | "second_factor_failed" | "passkey_registered" | "passkey_removed" | "passkey_clone_suspected" | "totp_enrolled" | "totp_removed" | "recovery_code_used" | "recovery_codes_regenerated" | "password_changed" | "user_registered" | "email_verified" | "consent_granted" | "consent_revoked" | "session_revoked" | "sessions_revoked_all" | "token_revoked" | "refresh_reuse_detected" | "code_reuse_detected" | "key_generated" | "key_activated" | "key_retired" | "key_rotation_requested" | "rate_limit_lockout" | "captcha_failed" | "user_created" | "user_updated" | "user_deleted" | "client_created" | "client_updated" | "client_deleted" | "client_secret_rotated" | "tenant_created" | "tenant_updated" | "tenant_deleted" | "email_template_updated" | "email_template_reset" | "smtp_settings_updated" | "smtp_test_sent" | "admin_setup_completed";
+        /** @description Who performed an audited action. */
+        AuditActorView: {
+            id?: string | null;
+            kind: components["schemas"]["ActorKind"];
+        };
+        /** @description One page of audit events. */
+        AuditEventList: {
+            items: components["schemas"]["AuditEventView"][];
+            /**
+             * Format: uuid
+             * @description Pass as `cursor` for the next (older) page; present if and only if more items follow.
+             */
+            next_cursor?: string | null;
+        };
+        /** @description One audit event. */
+        AuditEventView: {
+            action: components["schemas"]["AuditAction"];
+            actor: components["schemas"]["AuditActorView"];
+            /** Format: date-time */
+            at: string;
+            /** @description Typed details (identifiers, enum names, counts; never secrets). */
+            details: Record<string, never>;
+            /** Format: uuid */
+            id: string;
+            ip?: string | null;
+            outcome: components["schemas"]["AuditOutcome"];
+            target?: string | null;
+            trace_id?: string | null;
+            user_agent?: string | null;
+        };
+        /**
+         * @description Whether an audited action succeeded.
+         * @enum {string}
+         */
+        AuditOutcome: "success" | "failure";
+        /**
+         * @description CAPTCHA configuration as written by an administrator. The secret is sealed before it is
+         *     stored and is never returned.
+         */
+        CaptchaInput: {
+            provider: components["schemas"]["CaptchaProvider"];
+            /**
+             * Format: password
+             * @description The provider's secret key (write-only).
+             */
+            secret: string;
+            site_key: string;
+        };
+        /**
+         * @description CAPTCHA provider.
+         * @enum {string}
+         */
+        CaptchaProvider: "turnstile" | "hcaptcha";
+        /** @description A tenant's CAPTCHA configuration (the secret is write-only). */
+        CaptchaView: {
+            /** @description Always `true`: a secret is stored (sealed); it cannot be read back. */
+            configured: boolean;
+            provider: components["schemas"]["CaptchaProvider"];
+            site_key: string;
+        };
         /**
          * @description Token endpoint authentication method.
          * @enum {string}
@@ -190,30 +455,47 @@ export interface components {
         ClientView: {
             application_type: components["schemas"]["ApplicationType"];
             auth_method: components["schemas"]["ClientAuthMethod"];
+            /** @description May introspect any token of the tenant (confidential clients only). */
+            can_introspect: boolean;
             client_id: string;
             /** @description Returned once, on create (secret-based auth methods only). */
             client_secret?: string | null;
             client_type: components["schemas"]["ClientType"];
+            consent_mode: components["schemas"]["ConsentMode"];
             /** Format: date-time */
             created_at: string;
             grant_types: components["schemas"]["GrantType"][];
+            /** @description ID-token signing algorithm (one of the tenant's `signing_algs`). */
+            id_token_signed_response_alg: string;
             /** @description Inline public JWK Set (`private_key_jwt` only). */
             jwks?: Record<string, never> | null;
             name: string;
             redirect_uris: string[];
             require_pkce: boolean;
             scopes: string[];
+            token_format: components["schemas"]["TokenFormat"];
             /** Format: date-time */
             updated_at: string;
         };
+        /**
+         * @description When the consent screen is shown: `required` asks for every scope not granted yet;
+         *     `skip_first_party` never asks (first-party clients only).
+         * @enum {string}
+         */
+        ConsentMode: "required" | "skip_first_party";
         /** @description Body of `POST /tenants/{slug}/clients`. */
         CreateClient: {
             /** @description Default `web`. */
             application_type?: components["schemas"]["ApplicationType"];
             auth_method?: components["schemas"]["ClientAuthMethod"] | null;
+            /** @description Default `false`; confidential clients only. */
+            can_introspect?: boolean | null;
             client_type: components["schemas"]["ClientType"];
+            consent_mode?: components["schemas"]["ConsentMode"] | null;
             /** @description Default `["authorization_code"]`. */
             grant_types?: components["schemas"]["GrantType"][];
+            /** @description Default `RS256`; must be enabled in the tenant's `signing_algs`. */
+            id_token_signed_response_alg?: string | null;
             /** @description Inline public JWK Set, required for `private_key_jwt`. */
             jwks?: Record<string, never> | null;
             /** @description Not supported in this release (rejected with 422). */
@@ -223,12 +505,13 @@ export interface components {
             /** @description Default `true`. Only confidential clients may set `false`. */
             require_pkce?: boolean | null;
             scopes?: string[];
+            token_format?: components["schemas"]["TokenFormat"] | null;
         };
         /** @description Body of `POST /tenants`. */
         CreateTenant: {
             display_name: string;
             host?: string | null;
-            settings?: components["schemas"]["TenantSettings"];
+            settings?: components["schemas"]["NewTenantSettings"];
             /** @description 2-63 characters of a-z, 0-9 and '-'; `system` and `default` are reserved. */
             slug: string;
         };
@@ -245,9 +528,62 @@ export interface components {
             password?: string | null;
             username?: string | null;
         };
+        /**
+         * @description Kind of a user credential.
+         * @enum {string}
+         */
+        CredentialKind: "password" | "webauthn" | "totp";
+        /** @description A user's credentials. */
+        CredentialList: {
+            items: components["schemas"]["CredentialView"][];
+        };
+        /**
+         * @description A user credential (password, passkey or TOTP). Secrets, public keys and seeds are never
+         *     returned.
+         */
+        CredentialView: {
+            /** Format: date-time */
+            created_at: string;
+            /** Format: uuid */
+            id: string;
+            kind: components["schemas"]["CredentialKind"];
+            label: string;
+            /** Format: date-time */
+            last_used_at?: string | null;
+        };
+        /**
+         * @description Kind of a transactional email.
+         * @enum {string}
+         */
+        EmailKind: "verification" | "recovery" | "invitation" | "password_changed" | "recovery_code_used";
+        /** @description Every email template of a tenant. */
+        EmailTemplateList: {
+            items: components["schemas"]["EmailTemplateView"][];
+        };
+        /** @description An email template: the tenant override (`customized: true`) or the theme default. */
+        EmailTemplateView: {
+            body_html: string;
+            body_text: string;
+            /** @description Whether the tenant overrides the theme default. */
+            customized: boolean;
+            kind: components["schemas"]["EmailKind"];
+            subject: string;
+            /**
+             * Format: date-time
+             * @description When the override was saved (`null` for the default).
+             */
+            updated_at?: string | null;
+            /** @description Variables the template may use. */
+            variables: string[];
+        };
         /** @description One validation failure. */
         FieldError: {
             field: string;
+            /**
+             * Format: int32
+             * @description Line of the failing template part (email template validation only).
+             */
+            line?: number | null;
             message: string;
         };
         /**
@@ -255,6 +591,23 @@ export interface components {
          * @enum {string}
          */
         GrantType: "authorization_code" | "refresh_token" | "client_credentials";
+        /**
+         * @description Settings of a new tenant. Absent fields take their defaults; CAPTCHA is configured with
+         *     `PATCH` once the tenant exists.
+         */
+        NewTenantSettings: {
+            /** @default open */
+            registration: components["schemas"]["RegistrationMode"];
+            /** @default false */
+            require_verified_email: boolean;
+            /**
+             * @description Signing algorithms to enable besides RS256 (`ES256`, `Ed25519`).
+             * @default [
+             *       "RS256"
+             *     ]
+             */
+            signing_algs: string[];
+        };
         /** @description RFC 9457 problem details (`application/problem+json`). */
         Problem: {
             detail: string;
@@ -266,11 +619,109 @@ export interface components {
             /** @description `urn:anvilid:problem:{code}`. */
             type: string;
         };
+        /** @description Body of `PUT …/email-templates/{kind}` (minijinja syntax; `.html` is autoescaped). */
+        PutEmailTemplate: {
+            body_html: string;
+            body_text: string;
+            /** @description One line. */
+            subject: string;
+        };
+        /** @description Body of `PUT …/smtp`. An absent or empty `password` keeps the stored one. */
+        PutSmtpSettings: {
+            /** @description `addr` or `Name <addr>`. */
+            from: string;
+            host: string;
+            /**
+             * Format: password
+             * @description Write-only.
+             */
+            password?: string | null;
+            /** Format: int32 */
+            port: number;
+            /** @description Default `starttls`. */
+            tls?: components["schemas"]["SmtpTls"];
+            username?: string | null;
+        };
         /**
          * @description Who may self-register in a tenant.
          * @enum {string}
          */
         RegistrationMode: "open" | "invite_only" | "disabled";
+        /** @description Result of revoking all sessions of a user. */
+        RevokedSessions: {
+            /**
+             * Format: int64
+             * @description Number of sessions revoked.
+             */
+            revoked: number;
+        };
+        /** @description A list of sessions (tenant lists are paged; a user's sessions come in one page). */
+        SessionList: {
+            items: components["schemas"]["SessionView"][];
+            /**
+             * Format: uuid
+             * @description Present if and only if more items follow.
+             */
+            next_cursor?: string | null;
+        };
+        /** @description An active browser session. The session token is never returned. */
+        SessionView: {
+            acr: string;
+            amr: string[];
+            /** Format: date-time */
+            auth_time: string;
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description Absolute expiry.
+             */
+            expires_at: string;
+            /** Format: uuid */
+            id: string;
+            /**
+             * Format: date-time
+             * @description Expiry if the session stays idle (refreshed by activity).
+             */
+            idle_expires_at: string;
+            /** @description Client IP at sign-in. */
+            ip?: string | null;
+            /** Format: date-time */
+            last_seen_at: string;
+            /** @description User agent at sign-in. */
+            user_agent?: string | null;
+            /** Format: uuid */
+            user_id: string;
+        };
+        /** @description A tenant's SMTP settings. The password is never returned. */
+        SmtpSettingsView: {
+            from: string;
+            host: string;
+            /** @description Whether a password is stored. */
+            password_set: boolean;
+            /** Format: int32 */
+            port: number;
+            tls: components["schemas"]["SmtpTls"];
+            /** Format: date-time */
+            updated_at: string;
+            username?: string | null;
+        };
+        /** @description Body of `POST …/smtp/test`. */
+        SmtpTestRequest: {
+            /** @description Recipient of the test email. */
+            to: string;
+        };
+        /** @description Outcome of a test send. The call succeeds even when delivery fails. */
+        SmtpTestResult: {
+            delivered: boolean;
+            /** @description The SMTP error (credentials redacted) when delivery failed. */
+            error?: string | null;
+        };
+        /**
+         * @description SMTP transport security.
+         * @enum {string}
+         */
+        SmtpTls: "starttls" | "implicit" | "none";
         /** @description OIDC Core §5.1 standard claims other than `sub`, `email` and `email_verified`. */
         StandardClaims: {
             /** @default null */
@@ -315,15 +766,28 @@ export interface components {
              */
             next_cursor?: string | null;
         };
-        /** @description Per-tenant settings. */
+        /** @description Per-tenant settings as returned by the API. The CAPTCHA secret is never returned. */
         TenantSettings: {
-            /** @default open */
+            captcha?: components["schemas"]["CaptchaView"] | null;
             registration: components["schemas"]["RegistrationMode"];
-            /**
-             * @description Users must verify their email address before they can sign in.
-             * @default false
-             */
+            /** @description Users must verify their email address before they can sign in. */
             require_verified_email: boolean;
+            /** @description Enabled ID-token signing algorithms (`RS256`, `ES256`, `Ed25519`); RS256 is always first. */
+            signing_algs: string[];
+        };
+        /**
+         * @description Partial settings update: absent fields keep their current value. `captcha: null` disables
+         *     CAPTCHA; an object enables or replaces it.
+         */
+        TenantSettingsPatch: {
+            captcha?: components["schemas"]["CaptchaInput"] | null;
+            registration?: components["schemas"]["RegistrationMode"] | null;
+            require_verified_email?: boolean | null;
+            /**
+             * @description The complete list of enabled algorithms (RS256 is always kept). Disabling an algorithm
+             *     that a client uses for its ID tokens is refused with 409.
+             */
+            signing_algs?: string[] | null;
         };
         /** @description A tenant. */
         TenantView: {
@@ -339,22 +803,35 @@ export interface components {
             slug: string;
         };
         /**
+         * @description Format of the access tokens issued to a client.
+         * @enum {string}
+         */
+        TokenFormat: "jwt" | "opaque";
+        /**
          * @description Body of `PATCH …/clients/{client_id}`. Client type, application type and auth method are
          *     fixed at creation. `jwks: null` clears the JWK Set.
          */
         UpdateClient: {
+            can_introspect?: boolean | null;
+            consent_mode?: components["schemas"]["ConsentMode"] | null;
             grant_types?: components["schemas"]["GrantType"][] | null;
+            /** @description `null` resets to RS256. */
+            id_token_signed_response_alg?: string | null;
             jwks?: Record<string, never> | null;
             name?: string | null;
             redirect_uris?: string[] | null;
             require_pkce?: boolean | null;
             scopes?: string[] | null;
+            token_format?: components["schemas"]["TokenFormat"] | null;
         };
-        /** @description Body of `PATCH /tenants/{slug}`. Absent fields stay unchanged; `host: null` clears the host. */
+        /**
+         * @description Body of `PATCH /tenants/{slug}`. Absent fields stay unchanged; `host: null` clears the host.
+         *     `settings` is merged with the current settings field by field.
+         */
         UpdateTenant: {
             display_name?: string | null;
             host?: string | null;
-            settings?: components["schemas"]["TenantSettings"] | null;
+            settings?: components["schemas"]["TenantSettingsPatch"] | null;
         };
         /**
          * @description Body of `PATCH …/users/{user_id}`. `username: null` clears the username; `status: blocked`
@@ -670,7 +1147,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Host already in use */
+            /** @description Host already in use, or a disabled signing algorithm is still used by clients */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -680,6 +1157,82 @@ export interface operations {
                 };
             };
             /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listAuditEvents: {
+        parameters: {
+            query?: {
+                /** @description Inclusive lower bound on the event time (RFC 3339). */
+                from?: string;
+                /** @description Exclusive upper bound on the event time (RFC 3339). */
+                to?: string;
+                /** @description Actor id (user id, client id or admin subject). */
+                actor?: string;
+                /** @description Action name, e.g. `login_failed`. */
+                action?: components["schemas"]["AuditAction"];
+                /** @description `success` or `failure`. */
+                outcome?: components["schemas"]["AuditOutcome"];
+                /** @description Target (user id, client id, session id, ...). */
+                target?: string;
+                /** @description Return events older than this event id (the previous page's `next_cursor`). */
+                cursor?: string;
+                /** @description Page size, 1 to 200 (default 50). */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of events, newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditEventList"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid query */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -1047,6 +1600,570 @@ export interface operations {
             };
         };
     };
+    listEmailTemplates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One entry per email kind */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmailTemplateList"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getEmailTemplate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Email kind */
+                kind: components["schemas"]["EmailKind"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The template */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmailTemplateView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or kind */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    putEmailTemplate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Email kind */
+                kind: components["schemas"]["EmailKind"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutEmailTemplate"];
+            };
+        };
+        responses: {
+            /** @description The saved override */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmailTemplateView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or kind */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid template (errors carry field and line) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    resetEmailTemplate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Email kind */
+                kind: components["schemas"]["EmailKind"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The theme default is used */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or kind */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listSessions: {
+        parameters: {
+            query?: {
+                /** @description Return items after this id (the previous page's `next_cursor`). */
+                after?: string;
+                /** @description Page size, 1 to 200 (default 50). */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of active sessions */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionList"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid query */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    revokeSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Session id */
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revoked */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant, or no such active session */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getSmtpSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The tenant's SMTP settings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SmtpSettingsView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant, or no tenant SMTP settings */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    putSmtpSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutSmtpSettings"];
+            };
+        };
+        responses: {
+            /** @description The stored settings (without the password) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SmtpSettingsView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    deleteSmtpSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    testSmtpSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SmtpTestRequest"];
+            };
+        };
+        responses: {
+            /** @description The SMTP outcome */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SmtpTestResult"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid recipient, or no tenant SMTP settings */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Rate limited */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     listUsers: {
         parameters: {
             query?: {
@@ -1352,6 +2469,214 @@ export interface operations {
             };
             /** @description Validation failed */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listUserCredentials: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description User id */
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The user's credentials */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialList"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or user */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    deleteUserCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description User id */
+                user_id: string;
+                /** @description Credential id */
+                credential_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant, user or credential (or a password) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listUserSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description User id */
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The user's active sessions (one page) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionList"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or user */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    revokeUserSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description User id */
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Number of revoked sessions */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevokedSessions"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or user */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

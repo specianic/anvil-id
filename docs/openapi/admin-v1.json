@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "AnvilID Management API",
-    "description": "Installation-level management of tenants, OAuth clients and users. Requests carry a Bearer access token issued by the system tenant. Lists use cursor pagination (`after`, `limit`); errors are RFC 9457 problem details.",
+    "description": "Installation-level management of tenants, OAuth clients, users, sessions, the audit log and tenant email settings. Requests carry a Bearer access token issued by the system tenant. Lists use cursor pagination (`after`, `limit`); errors are RFC 9457 problem details.",
     "version": "v1"
   },
   "paths": {
@@ -344,7 +344,7 @@
         "tags": [
           "tenants"
         ],
-        "summary": "Update a tenant (the slug is immutable).",
+        "summary": "Update a tenant (the slug is immutable). Settings are merged with the current ones; the\nCAPTCHA secret is write-only. Enabling a signing algorithm creates its key at once; disabling\none that a client still uses for its ID tokens is refused (409, the problem lists the\nclients).",
         "operationId": "updateTenant",
         "parameters": [
           {
@@ -409,7 +409,7 @@
             }
           },
           "409": {
-            "description": "Host already in use",
+            "description": "Host already in use, or a disabled signing algorithm is still used by clients",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -433,6 +433,178 @@
           {
             "oauth2": [
               "admin:tenants:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/audit-events": {
+      "get": {
+        "tags": [
+          "audit"
+        ],
+        "summary": "Query the audit log of a tenant.",
+        "operationId": "listAuditEvents",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Inclusive lower bound on the event time (RFC 3339).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Exclusive upper bound on the event time (RFC 3339).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "actor",
+            "in": "query",
+            "description": "Actor id (user id, client id or admin subject).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "description": "Action name, e.g. `login_failed`.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/AuditAction"
+            }
+          },
+          {
+            "name": "outcome",
+            "in": "query",
+            "description": "`success` or `failure`.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/AuditOutcome"
+            }
+          },
+          {
+            "name": "target",
+            "in": "query",
+            "description": "Target (user id, client id, session id, ...).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Return events older than this event id (the previous page's `next_cursor`).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size, 1 to 200 (default 50).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 200,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of events, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditEventList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid query",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:audit:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:audit:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:read"
             ]
           },
           {
@@ -829,7 +1001,7 @@
         "tags": [
           "clients"
         ],
-        "summary": "Update a client. The merged registration is validated again.",
+        "summary": "Update a client. The merged registration (including the ID-token algorithm against the\ntenant's enabled algorithms) is validated again.",
         "operationId": "updateClient",
         "parameters": [
           {
@@ -1010,6 +1182,896 @@
           {
             "oauth2": [
               "admin:clients:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/email-templates": {
+      "get": {
+        "tags": [
+          "email"
+        ],
+        "summary": "List every email template of a tenant (overrides and defaults).",
+        "operationId": "listEmailTemplates",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One entry per email kind",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailTemplateList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:settings:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:settings:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/email-templates/{kind}": {
+      "get": {
+        "tags": [
+          "email"
+        ],
+        "summary": "Get one email template: the tenant override, or the theme default (`customized: false`).",
+        "operationId": "getEmailTemplate",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "path",
+            "description": "Email kind",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/EmailKind"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The template",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailTemplateView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or kind",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:settings:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:settings:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "email"
+        ],
+        "summary": "Save a tenant override of an email template. The template is compiled, checked for\nunknown variables and test-rendered first.",
+        "operationId": "putEmailTemplate",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "path",
+            "description": "Email kind",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/EmailKind"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutEmailTemplate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The saved override",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailTemplateView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or kind",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid template (errors carry field and line)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:settings:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "email"
+        ],
+        "summary": "Remove the tenant override (back to the theme default). Idempotent.",
+        "operationId": "resetEmailTemplate",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "path",
+            "description": "Email kind",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/EmailKind"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The theme default is used"
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or kind",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:settings:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/sessions": {
+      "get": {
+        "tags": [
+          "sessions"
+        ],
+        "summary": "List the active sessions of a tenant.",
+        "operationId": "listSessions",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Return items after this id (the previous page's `next_cursor`).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size, 1 to 200 (default 50).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 200,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of active sessions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid query",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:sessions:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:sessions:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/sessions/{session_id}": {
+      "delete": {
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Revoke one session (and the tokens issued under it).",
+        "operationId": "revokeSession",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "session_id",
+            "in": "path",
+            "description": "Session id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked"
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant, or no such active session",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:sessions:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/smtp": {
+      "get": {
+        "tags": [
+          "email"
+        ],
+        "summary": "Get the tenant's SMTP settings (never the password). 404 when the tenant uses the\ninstallation SMTP server.",
+        "operationId": "getSmtpSettings",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tenant's SMTP settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SmtpSettingsView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant, or no tenant SMTP settings",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:settings:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:settings:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "email"
+        ],
+        "summary": "Set the tenant's SMTP settings. An absent or empty password keeps the stored one.",
+        "operationId": "putSmtpSettings",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutSmtpSettings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The stored settings (without the password)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SmtpSettingsView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:settings:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "email"
+        ],
+        "summary": "Remove the tenant's SMTP settings (back to the installation SMTP server). Idempotent.",
+        "operationId": "deleteSmtpSettings",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:settings:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/smtp/test": {
+      "post": {
+        "tags": [
+          "email"
+        ],
+        "summary": "Send a test email with the stored SMTP settings (synchronous, bounded by a 10 s timeout).\nAn SMTP failure is reported in the body (`delivered: false`), not as an error status.",
+        "operationId": "testSmtpSettings",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SmtpTestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The SMTP outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SmtpTestResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid recipient, or no tenant SMTP settings",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:settings:write"
             ]
           },
           {
@@ -1526,10 +2588,377 @@
           }
         ]
       }
+    },
+    "/api/admin/v1/tenants/{slug}/users/{user_id}/credentials": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "List a user's credentials (password, passkeys, TOTP). No secret material is returned.",
+        "operationId": "listUserCredentials",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "User id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The user's credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CredentialList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or user",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:users:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:users:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/users/{user_id}/credentials/{credential_id}": {
+      "delete": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Remove a passkey or the TOTP factor (with its recovery codes) of a user. Passwords cannot\nbe removed here.",
+        "operationId": "deleteUserCredential",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "User id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "credential_id",
+            "in": "path",
+            "description": "Credential id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant, user or credential (or a password)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:users:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/users/{user_id}/sessions": {
+      "get": {
+        "tags": [
+          "sessions"
+        ],
+        "summary": "List a user's active sessions, newest first.",
+        "operationId": "listUserSessions",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "User id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The user's active sessions (one page)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or user",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:sessions:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:sessions:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Revoke every session of a user (and the tokens issued under them).",
+        "operationId": "revokeUserSessions",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "User id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Number of revoked sessions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevokedSessions"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or user",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:sessions:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
     }
   },
   "components": {
     "schemas": {
+      "ActorKind": {
+        "type": "string",
+        "description": "Who performed an audited action.",
+        "enum": [
+          "user",
+          "client",
+          "admin",
+          "system"
+        ]
+      },
       "Address": {
         "type": "object",
         "description": "OIDC Core §5.1.1 address claim.",
@@ -1586,6 +3015,213 @@
           "web",
           "native"
         ]
+      },
+      "AuditAction": {
+        "type": "string",
+        "description": "An audited action.",
+        "enum": [
+          "login_succeeded",
+          "login_failed",
+          "second_factor_failed",
+          "passkey_registered",
+          "passkey_removed",
+          "passkey_clone_suspected",
+          "totp_enrolled",
+          "totp_removed",
+          "recovery_code_used",
+          "recovery_codes_regenerated",
+          "password_changed",
+          "user_registered",
+          "email_verified",
+          "consent_granted",
+          "consent_revoked",
+          "session_revoked",
+          "sessions_revoked_all",
+          "token_revoked",
+          "refresh_reuse_detected",
+          "code_reuse_detected",
+          "key_generated",
+          "key_activated",
+          "key_retired",
+          "key_rotation_requested",
+          "rate_limit_lockout",
+          "captcha_failed",
+          "user_created",
+          "user_updated",
+          "user_deleted",
+          "client_created",
+          "client_updated",
+          "client_deleted",
+          "client_secret_rotated",
+          "tenant_created",
+          "tenant_updated",
+          "tenant_deleted",
+          "email_template_updated",
+          "email_template_reset",
+          "smtp_settings_updated",
+          "smtp_test_sent",
+          "admin_setup_completed"
+        ]
+      },
+      "AuditActorView": {
+        "type": "object",
+        "description": "Who performed an audited action.",
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ActorKind"
+          }
+        }
+      },
+      "AuditEventList": {
+        "type": "object",
+        "description": "One page of audit events.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuditEventView"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Pass as `cursor` for the next (older) page; present if and only if more items follow."
+          }
+        }
+      },
+      "AuditEventView": {
+        "type": "object",
+        "description": "One audit event.",
+        "required": [
+          "id",
+          "at",
+          "actor",
+          "action",
+          "outcome",
+          "details"
+        ],
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/AuditAction"
+          },
+          "actor": {
+            "$ref": "#/components/schemas/AuditActorView"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "details": {
+            "type": "object",
+            "description": "Typed details (identifiers, enum names, counts; never secrets)."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "ip": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/AuditOutcome"
+          },
+          "target": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "trace_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "user_agent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "AuditOutcome": {
+        "type": "string",
+        "description": "Whether an audited action succeeded.",
+        "enum": [
+          "success",
+          "failure"
+        ]
+      },
+      "CaptchaInput": {
+        "type": "object",
+        "description": "CAPTCHA configuration as written by an administrator. The secret is sealed before it is\nstored and is never returned.",
+        "required": [
+          "provider",
+          "site_key",
+          "secret"
+        ],
+        "properties": {
+          "provider": {
+            "$ref": "#/components/schemas/CaptchaProvider"
+          },
+          "secret": {
+            "type": "string",
+            "format": "password",
+            "description": "The provider's secret key (write-only)."
+          },
+          "site_key": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CaptchaProvider": {
+        "type": "string",
+        "description": "CAPTCHA provider.",
+        "enum": [
+          "turnstile",
+          "hcaptcha"
+        ]
+      },
+      "CaptchaView": {
+        "type": "object",
+        "description": "A tenant's CAPTCHA configuration (the secret is write-only).",
+        "required": [
+          "provider",
+          "site_key",
+          "configured"
+        ],
+        "properties": {
+          "configured": {
+            "type": "boolean",
+            "description": "Always `true`: a secret is stored (sealed); it cannot be read back."
+          },
+          "provider": {
+            "$ref": "#/components/schemas/CaptchaProvider"
+          },
+          "site_key": {
+            "type": "string"
+          }
+        }
       },
       "ClientAuthMethod": {
         "type": "string",
@@ -1657,6 +3293,10 @@
           "grant_types",
           "scopes",
           "require_pkce",
+          "token_format",
+          "consent_mode",
+          "id_token_signed_response_alg",
+          "can_introspect",
           "created_at",
           "updated_at"
         ],
@@ -1666,6 +3306,10 @@
           },
           "auth_method": {
             "$ref": "#/components/schemas/ClientAuthMethod"
+          },
+          "can_introspect": {
+            "type": "boolean",
+            "description": "May introspect any token of the tenant (confidential clients only)."
           },
           "client_id": {
             "type": "string"
@@ -1680,6 +3324,9 @@
           "client_type": {
             "$ref": "#/components/schemas/ClientType"
           },
+          "consent_mode": {
+            "$ref": "#/components/schemas/ConsentMode"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time"
@@ -1689,6 +3336,10 @@
             "items": {
               "$ref": "#/components/schemas/GrantType"
             }
+          },
+          "id_token_signed_response_alg": {
+            "type": "string",
+            "description": "ID-token signing algorithm (one of the tenant's `signing_algs`)."
           },
           "jwks": {
             "type": [
@@ -1715,11 +3366,22 @@
               "type": "string"
             }
           },
+          "token_format": {
+            "$ref": "#/components/schemas/TokenFormat"
+          },
           "updated_at": {
             "type": "string",
             "format": "date-time"
           }
         }
+      },
+      "ConsentMode": {
+        "type": "string",
+        "description": "When the consent screen is shown: `required` asks for every scope not granted yet;\n`skip_first_party` never asks (first-party clients only).",
+        "enum": [
+          "required",
+          "skip_first_party"
+        ]
       },
       "CreateClient": {
         "type": "object",
@@ -1744,8 +3406,26 @@
               }
             ]
           },
+          "can_introspect": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Default `false`; confidential clients only."
+          },
           "client_type": {
             "$ref": "#/components/schemas/ClientType"
+          },
+          "consent_mode": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ConsentMode",
+                "description": "Default `required`."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "grant_types": {
             "type": "array",
@@ -1753,6 +3433,13 @@
               "$ref": "#/components/schemas/GrantType"
             },
             "description": "Default `[\"authorization_code\"]`."
+          },
+          "id_token_signed_response_alg": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Default `RS256`; must be enabled in the tenant's `signing_algs`."
           },
           "jwks": {
             "type": [
@@ -1789,6 +3476,17 @@
             "items": {
               "type": "string"
             }
+          },
+          "token_format": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TokenFormat",
+                "description": "Default `jwt`."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false
@@ -1811,7 +3509,7 @@
             ]
           },
           "settings": {
-            "$ref": "#/components/schemas/TenantSettings"
+            "$ref": "#/components/schemas/NewTenantSettings"
           },
           "slug": {
             "type": "string",
@@ -1855,6 +3553,134 @@
         },
         "additionalProperties": false
       },
+      "CredentialKind": {
+        "type": "string",
+        "description": "Kind of a user credential.",
+        "enum": [
+          "password",
+          "webauthn",
+          "totp"
+        ]
+      },
+      "CredentialList": {
+        "type": "object",
+        "description": "A user's credentials.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CredentialView"
+            }
+          }
+        }
+      },
+      "CredentialView": {
+        "type": "object",
+        "description": "A user credential (password, passkey or TOTP). Secrets, public keys and seeds are never\nreturned.",
+        "required": [
+          "id",
+          "kind",
+          "label",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/CredentialKind"
+          },
+          "label": {
+            "type": "string"
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "EmailKind": {
+        "type": "string",
+        "description": "Kind of a transactional email.",
+        "enum": [
+          "verification",
+          "recovery",
+          "invitation",
+          "password_changed",
+          "recovery_code_used"
+        ]
+      },
+      "EmailTemplateList": {
+        "type": "object",
+        "description": "Every email template of a tenant.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EmailTemplateView"
+            }
+          }
+        }
+      },
+      "EmailTemplateView": {
+        "type": "object",
+        "description": "An email template: the tenant override (`customized: true`) or the theme default.",
+        "required": [
+          "kind",
+          "customized",
+          "subject",
+          "body_html",
+          "body_text",
+          "variables"
+        ],
+        "properties": {
+          "body_html": {
+            "type": "string"
+          },
+          "body_text": {
+            "type": "string"
+          },
+          "customized": {
+            "type": "boolean",
+            "description": "Whether the tenant overrides the theme default."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/EmailKind"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the override was saved (`null` for the default)."
+          },
+          "variables": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Variables the template may use."
+          }
+        }
+      },
       "FieldError": {
         "type": "object",
         "description": "One validation failure.",
@@ -1865,6 +3691,15 @@
         "properties": {
           "field": {
             "type": "string"
+          },
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Line of the failing template part (email template validation only).",
+            "minimum": 0
           },
           "message": {
             "type": "string"
@@ -1879,6 +3714,31 @@
           "refresh_token",
           "client_credentials"
         ]
+      },
+      "NewTenantSettings": {
+        "type": "object",
+        "description": "Settings of a new tenant. Absent fields take their defaults; CAPTCHA is configured with\n`PATCH` once the tenant exists.",
+        "properties": {
+          "registration": {
+            "$ref": "#/components/schemas/RegistrationMode",
+            "default": "open"
+          },
+          "require_verified_email": {
+            "type": "boolean",
+            "default": false
+          },
+          "signing_algs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Signing algorithms to enable besides RS256 (`ES256`, `Ed25519`).",
+            "default": [
+              "RS256"
+            ]
+          }
+        },
+        "additionalProperties": false
       },
       "Problem": {
         "type": "object",
@@ -1915,6 +3775,70 @@
           }
         }
       },
+      "PutEmailTemplate": {
+        "type": "object",
+        "description": "Body of `PUT …/email-templates/{kind}` (minijinja syntax; `.html` is autoescaped).",
+        "required": [
+          "subject",
+          "body_html",
+          "body_text"
+        ],
+        "properties": {
+          "body_html": {
+            "type": "string"
+          },
+          "body_text": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string",
+            "description": "One line."
+          }
+        },
+        "additionalProperties": false
+      },
+      "PutSmtpSettings": {
+        "type": "object",
+        "description": "Body of `PUT …/smtp`. An absent or empty `password` keeps the stored one.",
+        "required": [
+          "host",
+          "port",
+          "from"
+        ],
+        "properties": {
+          "from": {
+            "type": "string",
+            "description": "`addr` or `Name <addr>`."
+          },
+          "host": {
+            "type": "string"
+          },
+          "password": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "password",
+            "description": "Write-only."
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "tls": {
+            "$ref": "#/components/schemas/SmtpTls",
+            "description": "Default `starttls`."
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "RegistrationMode": {
         "type": "string",
         "description": "Who may self-register in a tenant.",
@@ -1922,6 +3846,198 @@
           "open",
           "invite_only",
           "disabled"
+        ]
+      },
+      "RevokedSessions": {
+        "type": "object",
+        "description": "Result of revoking all sessions of a user.",
+        "required": [
+          "revoked"
+        ],
+        "properties": {
+          "revoked": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of sessions revoked.",
+            "minimum": 0
+          }
+        }
+      },
+      "SessionList": {
+        "type": "object",
+        "description": "A list of sessions (tenant lists are paged; a user's sessions come in one page).",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionView"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Present if and only if more items follow."
+          }
+        }
+      },
+      "SessionView": {
+        "type": "object",
+        "description": "An active browser session. The session token is never returned.",
+        "required": [
+          "id",
+          "user_id",
+          "created_at",
+          "last_seen_at",
+          "auth_time",
+          "expires_at",
+          "idle_expires_at",
+          "acr",
+          "amr"
+        ],
+        "properties": {
+          "acr": {
+            "type": "string"
+          },
+          "amr": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "auth_time": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Absolute expiry."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "idle_expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Expiry if the session stays idle (refreshed by activity)."
+          },
+          "ip": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Client IP at sign-in."
+          },
+          "last_seen_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "user_agent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "User agent at sign-in."
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "SmtpSettingsView": {
+        "type": "object",
+        "description": "A tenant's SMTP settings. The password is never returned.",
+        "required": [
+          "host",
+          "port",
+          "password_set",
+          "from",
+          "tls",
+          "updated_at"
+        ],
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "password_set": {
+            "type": "boolean",
+            "description": "Whether a password is stored."
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "tls": {
+            "$ref": "#/components/schemas/SmtpTls"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "SmtpTestRequest": {
+        "type": "object",
+        "description": "Body of `POST …/smtp/test`.",
+        "required": [
+          "to"
+        ],
+        "properties": {
+          "to": {
+            "type": "string",
+            "description": "Recipient of the test email."
+          }
+        },
+        "additionalProperties": false
+      },
+      "SmtpTestResult": {
+        "type": "object",
+        "description": "Outcome of a test send. The call succeeds even when delivery fails.",
+        "required": [
+          "delivered"
+        ],
+        "properties": {
+          "delivered": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The SMTP error (credentials redacted) when delivery failed."
+          }
+        }
+      },
+      "SmtpTls": {
+        "type": "string",
+        "description": "SMTP transport security.",
+        "enum": [
+          "starttls",
+          "implicit",
+          "none"
         ]
       },
       "StandardClaims": {
@@ -2069,16 +4185,79 @@
       },
       "TenantSettings": {
         "type": "object",
-        "description": "Per-tenant settings.",
+        "description": "Per-tenant settings as returned by the API. The CAPTCHA secret is never returned.",
+        "required": [
+          "registration",
+          "require_verified_email",
+          "signing_algs"
+        ],
         "properties": {
+          "captcha": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CaptchaView",
+                "description": "CAPTCHA on registration and after repeated failed sign-ins; `null` = disabled."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "registration": {
-            "$ref": "#/components/schemas/RegistrationMode",
-            "default": "open"
+            "$ref": "#/components/schemas/RegistrationMode"
           },
           "require_verified_email": {
             "type": "boolean",
-            "description": "Users must verify their email address before they can sign in.",
-            "default": false
+            "description": "Users must verify their email address before they can sign in."
+          },
+          "signing_algs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Enabled ID-token signing algorithms (`RS256`, `ES256`, `Ed25519`); RS256 is always first."
+          }
+        }
+      },
+      "TenantSettingsPatch": {
+        "type": "object",
+        "description": "Partial settings update: absent fields keep their current value. `captcha: null` disables\nCAPTCHA; an object enables or replaces it.",
+        "properties": {
+          "captcha": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CaptchaInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "registration": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RegistrationMode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "require_verified_email": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "signing_algs": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "The complete list of enabled algorithms (RS256 is always kept). Disabling an algorithm\nthat a client uses for its ID tokens is refused with 409."
           }
         },
         "additionalProperties": false
@@ -2121,10 +4300,34 @@
           }
         }
       },
+      "TokenFormat": {
+        "type": "string",
+        "description": "Format of the access tokens issued to a client.",
+        "enum": [
+          "jwt",
+          "opaque"
+        ]
+      },
       "UpdateClient": {
         "type": "object",
         "description": "Body of `PATCH …/clients/{client_id}`. Client type, application type and auth method are\nfixed at creation. `jwks: null` clears the JWK Set.",
         "properties": {
+          "can_introspect": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "consent_mode": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ConsentMode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "grant_types": {
             "type": [
               "array",
@@ -2133,6 +4336,13 @@
             "items": {
               "$ref": "#/components/schemas/GrantType"
             }
+          },
+          "id_token_signed_response_alg": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`null` resets to RS256."
           },
           "jwks": {
             "type": [
@@ -2169,13 +4379,23 @@
             "items": {
               "type": "string"
             }
+          },
+          "token_format": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TokenFormat"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false
       },
       "UpdateTenant": {
         "type": "object",
-        "description": "Body of `PATCH /tenants/{slug}`. Absent fields stay unchanged; `host: null` clears the host.",
+        "description": "Body of `PATCH /tenants/{slug}`. Absent fields stay unchanged; `host: null` clears the host.\n`settings` is merged with the current settings field by field.",
         "properties": {
           "display_name": {
             "type": [
@@ -2192,7 +4412,7 @@
           "settings": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/TenantSettings"
+                "$ref": "#/components/schemas/TenantSettingsPatch"
               },
               {
                 "type": "null"
@@ -2342,7 +4562,7 @@
               "admin:audit:write": "Read and write audit",
               "admin:clients:read": "Read clients",
               "admin:clients:write": "Read and write clients",
-              "admin:read": "Read tenants, clients and users",
+              "admin:read": "Read everything: tenants and their settings, clients, users and their credentials, sessions, the audit log, email templates and SMTP settings",
               "admin:sessions:read": "Read sessions",
               "admin:sessions:write": "Read and write sessions",
               "admin:settings:read": "Read settings",
@@ -2351,7 +4571,7 @@
               "admin:tenants:write": "Read and write tenants",
               "admin:users:read": "Read users",
               "admin:users:write": "Read and write users",
-              "admin:write": "Full administration (read and write everything)"
+              "admin:write": "Full administration: read and write everything (tenants and their settings, clients, users and their credentials, sessions, email templates, SMTP settings and test sends)"
             }
           }
         },
@@ -2370,7 +4590,19 @@
     },
     {
       "name": "users",
-      "description": "Users of a tenant"
+      "description": "Users of a tenant and their credentials"
+    },
+    {
+      "name": "sessions",
+      "description": "Browser sessions of a tenant's users"
+    },
+    {
+      "name": "audit",
+      "description": "Audit log of a tenant"
+    },
+    {
+      "name": "email",
+      "description": "Email templates and SMTP settings of a tenant"
     }
   ]
 }
