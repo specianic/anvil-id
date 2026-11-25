@@ -17,7 +17,8 @@
 # 2. `docker build` from the prebuilt binary (Dockerfile, distroless static nonroot).
 # 3. Fails if the image is 50 MB (52428800 bytes) or larger. Prints the size and appends it to
 #    $GITHUB_STEP_SUMMARY when set.
-# 4. Smoke test: zero-config `docker run`, wait for /health/live, assert the setup URL is logged.
+# 4. Checks the binary inside the image is built for the image platform.
+# 5. Smoke test: zero-config `docker run`, wait for /health/live, assert the setup URL is logged.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -80,6 +81,24 @@ if [[ "$user" != "nonroot" ]]; then
     echo "error: image $TAG runs as '$user', expected nonroot" >&2
     exit 1
 fi
+
+# The binary in the image must be the one for $PLATFORM (a wrong-arch static x86_64 binary would
+# still pass the smoke test on an x86_64 host).
+case "$PLATFORM" in
+    linux/amd64) want_arch='x86-64' ;;
+    linux/arm64) want_arch='ARM aarch64' ;;
+esac
+probe=$(docker create --platform "$PLATFORM" "$TAG")
+probe_dir=$(mktemp -d)
+docker cp "$probe:/usr/local/bin/anvilid" "$probe_dir/anvilid" >/dev/null
+docker rm "$probe" >/dev/null
+bin_desc=$(file "$probe_dir/anvilid")
+rm -rf "$probe_dir"
+if ! grep -q "$want_arch" <<<"$bin_desc"; then
+    echo "error: image $TAG ($PLATFORM) contains a binary for the wrong architecture: $bin_desc" >&2
+    exit 1
+fi
+echo "image binary: ${bin_desc#*: }"
 
 # --- Smoke test: zero configuration, setup URL in the logs. ---
 cid=$(docker run -d --platform "$PLATFORM" -p "127.0.0.1:$SMOKE_PORT:8080" "$TAG")
