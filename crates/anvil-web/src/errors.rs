@@ -130,7 +130,10 @@ pub fn error_page(
         Ok(html) => (status, html).into_response(),
         Err(e) => {
             tracing::error!(error = %e, "rendering the error page failed");
-            (status, Html("<!DOCTYPE html><title>Error</title><p>Something went wrong.</p>"))
+            (
+                status,
+                Html("<!DOCTYPE html><title>Error</title><p>Something went wrong.</p>"),
+            )
                 .into_response()
         }
     }
@@ -159,12 +162,7 @@ mod tests {
     use http_body_util::BodyExt;
 
     async fn body_json(resp: Response) -> serde_json::Value {
-        let bytes = resp
-            .into_body()
-            .collect()
-            .await
-            .expect("body")
-            .to_bytes();
+        let bytes = resp.into_body().collect().await.expect("body").to_bytes();
         serde_json::from_slice(&bytes).expect("json")
     }
 

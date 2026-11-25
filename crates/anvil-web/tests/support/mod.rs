@@ -17,8 +17,8 @@ use std::time::Duration;
 
 use anvil_core::model::{
     DEFAULT_TENANT_SLUG, InstallPlan, KeyState, NewSetupToken, NewSigningKey, NewTenant, PublicUrl,
-    SIGNING_KEY_PURPOSE, SYSTEM_TENANT_SLUG, SecretHash, SigningKeyId, Tenant, TenantBase, TenantId,
-    TenantSettings, issuer, signing_key_aad, truncate_to_ms,
+    SIGNING_KEY_PURPOSE, SYSTEM_TENANT_SLUG, SecretHash, SigningKeyId, Tenant, TenantBase,
+    TenantId, TenantSettings, issuer, signing_key_aad, truncate_to_ms,
 };
 use anvil_core::ports::{Clock, InstallOutcome, Storage};
 use anvil_jose::kek::Kek;
@@ -351,8 +351,10 @@ impl TestApp {
                 .join("; ")
         };
         if !cookie_header.is_empty() && !req.headers().contains_key(header::COOKIE) {
-            req.headers_mut()
-                .insert(header::COOKIE, cookie_header.parse().expect("cookie header"));
+            req.headers_mut().insert(
+                header::COOKIE,
+                cookie_header.parse().expect("cookie header"),
+            );
         }
         let resp = self
             .router
@@ -442,7 +444,10 @@ async fn install_tenants(
     let mut tenants = Vec::new();
     let mut keys = Vec::new();
     let mut meta = Vec::new();
-    for (slug, name) in [(SYSTEM_TENANT_SLUG, "System"), (DEFAULT_TENANT_SLUG, "Default")] {
+    for (slug, name) in [
+        (SYSTEM_TENANT_SLUG, "System"),
+        (DEFAULT_TENANT_SLUG, "Default"),
+    ] {
         let id = TenantId::new_v7();
         tenants.push(NewTenant {
             id,
@@ -455,7 +460,11 @@ async fn install_tenants(
         let generated = anvil_jose::keys::generate_rs256().expect("RS256 key generation");
         let key_id = SigningKeyId::new_v7();
         let sealed = kek
-            .seal(SIGNING_KEY_PURPOSE, &signing_key_aad(key_id), &generated.pkcs8)
+            .seal(
+                SIGNING_KEY_PURPOSE,
+                &signing_key_aad(key_id),
+                &generated.pkcs8,
+            )
             .expect("seal the private key");
         keys.push((
             id,
@@ -489,7 +498,10 @@ async fn install_tenants(
         .install(&plan)
         .await
         .expect("SetupRepo::install succeeds");
-    assert!(matches!(outcome, InstallOutcome::Installed), "fresh database installs");
+    assert!(
+        matches!(outcome, InstallOutcome::Installed),
+        "fresh database installs"
+    );
 
     let mut installed = Vec::new();
     for (slug, key_id, kid) in meta {

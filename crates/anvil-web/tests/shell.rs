@@ -13,7 +13,10 @@ fn assert_security_headers(resp: &support::TestResponse, hsts: bool) {
     assert_eq!(resp.header("x-content-type-options"), Some("nosniff"));
     assert_eq!(resp.header("cache-control"), Some("no-store"));
     assert_eq!(resp.header("strict-transport-security").is_some(), hsts);
-    assert!(resp.header("x-request-id").is_some(), "request id propagated");
+    assert!(
+        resp.header("x-request-id").is_some(),
+        "request id propagated"
+    );
 }
 
 #[tokio::test]
@@ -103,7 +106,10 @@ async fn path_tenant_is_resolved_before_routing() {
     let resp = app.get("/t/default/no-such-page").await;
     assert_eq!(resp.status, 404);
     let html = resp.html();
-    assert!(html.contains("<p class=\"anvil-tenant\">Default</p>"), "{html}");
+    assert!(
+        html.contains("<p class=\"anvil-tenant\">Default</p>"),
+        "{html}"
+    );
     assert!(html.contains("/t/default/assets/anvil.css"));
     assert_security_headers(&resp, true);
 
@@ -117,7 +123,10 @@ async fn path_tenant_is_resolved_before_routing() {
 async fn root_resolves_the_default_tenant() {
     let app = TestApp::new().await;
     let html = app.get("/no-such-page").await.html();
-    assert!(html.contains("<p class=\"anvil-tenant\">Default</p>"), "{html}");
+    assert!(
+        html.contains("<p class=\"anvil-tenant\">Default</p>"),
+        "{html}"
+    );
     assert!(html.contains("href=\"/assets/anvil.css\""));
 }
 
@@ -139,7 +148,10 @@ async fn unregistered_host_falls_back_to_the_default_tenant() {
         .body(axum::body::Body::empty())
         .expect("request");
     let html = app.send(req).await.html();
-    assert!(html.contains("<p class=\"anvil-tenant\">Default</p>"), "{html}");
+    assert!(
+        html.contains("<p class=\"anvil-tenant\">Default</p>"),
+        "{html}"
+    );
 }
 
 #[tokio::test]
@@ -162,6 +174,9 @@ async fn registered_host_resolves_its_tenant() {
         .body(axum::body::Body::empty())
         .expect("request");
     let html = app.send(req).await.html();
-    assert!(html.contains("<p class=\"anvil-tenant\">Acme</p>"), "{html}");
+    assert!(
+        html.contains("<p class=\"anvil-tenant\">Acme</p>"),
+        "{html}"
+    );
     assert!(html.contains("href=\"/assets/anvil.css\""));
 }

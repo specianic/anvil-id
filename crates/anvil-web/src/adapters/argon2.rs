@@ -115,7 +115,11 @@ impl Argon2Pool {
                     || p.t_cost() != self.params.t_cost()
                     || p.p_cost() != self.params.p_cost()
                     || phc.hash.as_ref().map(|h| h.len())
-                        != Some(self.params.output_len().unwrap_or(Params::DEFAULT_OUTPUT_LEN))
+                        != Some(
+                            self.params
+                                .output_len()
+                                .unwrap_or(Params::DEFAULT_OUTPUT_LEN),
+                        )
             }
             Err(_) => true,
         }
@@ -187,7 +191,10 @@ mod tests {
         let pool = Argon2Pool::new(low(), 2).expect("pool");
         let phc = pool.hash("correct horse").await.expect("hash");
         assert!(phc.starts_with("$argon2id$v=19$m=256,t=1,p=1$"), "{phc}");
-        let ok = pool.verify(Some(&phc), "correct horse").await.expect("verify");
+        let ok = pool
+            .verify(Some(&phc), "correct horse")
+            .await
+            .expect("verify");
         assert!(ok.valid);
         assert!(!ok.needs_rehash);
         let bad = pool.verify(Some(&phc), "wrong").await.expect("verify");
@@ -201,7 +208,11 @@ mod tests {
         let before = pool.verifications();
         let check = pool.verify(None, "anything").await.expect("verify");
         assert!(!check.valid);
-        assert_eq!(pool.verifications(), before + 1, "a real Argon2 verification ran");
+        assert_eq!(
+            pool.verifications(),
+            before + 1,
+            "a real Argon2 verification ran"
+        );
         // The dummy hash's own password is random, so even guessing cannot make it valid.
         assert!(!pool.verify(None, "").await.expect("verify").valid);
     }
@@ -229,7 +240,13 @@ mod tests {
         assert!(check.valid);
         assert!(check.needs_rehash);
         // Wrong password: never asks for a rehash.
-        assert!(!pool.verify(Some(&phc), "x").await.expect("verify").needs_rehash);
+        assert!(
+            !pool
+                .verify(Some(&phc), "x")
+                .await
+                .expect("verify")
+                .needs_rehash
+        );
     }
 
     #[tokio::test]

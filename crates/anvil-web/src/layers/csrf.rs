@@ -56,9 +56,11 @@ pub(crate) fn allowed(method: &Method, headers: &HeaderMap, origins: &[String]) 
         return matches!(site.to_str(), Ok("same-origin" | "none"));
     }
     if let Some(origin) = headers.get(header::ORIGIN) {
-        return origin
-            .to_str()
-            .is_ok_and(|o| origins.iter().any(|allowed| allowed.eq_ignore_ascii_case(o)));
+        return origin.to_str().is_ok_and(|o| {
+            origins
+                .iter()
+                .any(|allowed| allowed.eq_ignore_ascii_case(o))
+        });
     }
     true
 }
@@ -159,7 +161,10 @@ mod tests {
         assert_eq!(
             status(
                 Method::POST,
-                &[("sec-fetch-site", "cross-site"), ("origin", "https://op.test")]
+                &[
+                    ("sec-fetch-site", "cross-site"),
+                    ("origin", "https://op.test")
+                ]
             )
             .await,
             StatusCode::FORBIDDEN

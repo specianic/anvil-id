@@ -4,8 +4,8 @@
 
 use anvil_core::flow::form::{FieldKind, FormDescription, FormField, FormMessage, MessageLevel};
 use anvil_web::render::Renderer;
-use minijinja::value::{Serde, Value};
 use minijinja::context;
+use minijinja::value::{Serde, Value};
 
 fn renderer() -> Renderer {
     Renderer::new(None).expect("embedded theme compiles")
@@ -54,7 +54,10 @@ fn form(id: &str, fields: Vec<FormField>) -> FormDescription {
 
 fn render_form(template: &str, title: &str, f: &FormDescription) -> String {
     let html = renderer()
-        .page(template, context! { page => page(title), form => Value::from(Serde(f)) })
+        .page(
+            template,
+            context! { page => page(title), form => Value::from(Serde(f)) },
+        )
         .unwrap_or_else(|e| panic!("{template} renders: {e}"))
         .0;
     assert!(
@@ -81,7 +84,9 @@ fn assert_no_external(template: &str, html: &str, allowed: &[&str]) {
     for a in allowed {
         scrubbed = scrubbed.replace(a, "");
     }
-    for needle in ["http://", "https://", "//cdn", "<script", " style=", "onclick="] {
+    for needle in [
+        "http://", "https://", "//cdn", "<script", " style=", "onclick=",
+    ] {
         assert!(
             !scrubbed.contains(needle),
             "{template} contains {needle:?}:\n{html}"
@@ -93,7 +98,12 @@ fn login_form() -> FormDescription {
     let mut f = form(
         "login",
         vec![
-            field("identifier", FieldKind::Email, "Email", Some("ada@example.test")),
+            field(
+                "identifier",
+                FieldKind::Email,
+                "Email",
+                Some("ada@example.test"),
+            ),
             field("password", FieldKind::Password, "Password", None),
         ],
     );
@@ -115,7 +125,12 @@ fn login() {
 
 #[test]
 fn registration() {
-    let mut pw = field("password", FieldKind::Password, "Password", Some("never-echoed"));
+    let mut pw = field(
+        "password",
+        FieldKind::Password,
+        "Password",
+        Some("never-echoed"),
+    );
     pw.messages.push(FormMessage {
         level: MessageLevel::Error,
         key: "password.too_short".into(),
@@ -130,7 +145,10 @@ fn registration() {
         ],
     );
     let html = render_form("registration.html", "Create an account", &f);
-    assert!(!html.contains("never-echoed"), "password values are never written back");
+    assert!(
+        !html.contains("never-echoed"),
+        "password values are never written back"
+    );
     assert!(html.contains("aria-invalid=\"true\""));
     insta::assert_snapshot!("registration", html);
 }
@@ -152,7 +170,10 @@ fn recovery() {
         "recovery",
         vec![field("email", FieldKind::Email, "Email", None)],
     );
-    insta::assert_snapshot!("recovery", render_form("recovery.html", "Reset your password", &f));
+    insta::assert_snapshot!(
+        "recovery",
+        render_form("recovery.html", "Reset your password", &f)
+    );
 }
 
 #[test]
@@ -263,7 +284,12 @@ fn error() {
 fn values_are_auto_escaped() {
     let f = form(
         "login",
-        vec![field("identifier", FieldKind::Email, "Email", Some("<script>alert(1)</script>"))],
+        vec![field(
+            "identifier",
+            FieldKind::Email,
+            "Email",
+            Some("<script>alert(1)</script>"),
+        )],
     );
     let html = render_form("login.html", "Sign in", &f);
     assert!(!html.contains("<script>"));
@@ -277,7 +303,10 @@ fn dev_banner_only_in_dev_mode() {
     assert!(!prod.contains("dev-mode-banner"));
     let dev_page = page_with("Sign in", true);
     let dev = renderer()
-        .page("login.html", context! { page => dev_page, form => Value::from(Serde(&f)) })
+        .page(
+            "login.html",
+            context! { page => dev_page, form => Value::from(Serde(&f)) },
+        )
         .expect("renders")
         .0;
     assert!(dev.contains("id=\"dev-mode-banner\""));
@@ -295,7 +324,10 @@ fn theme_dir_override_wins_and_falls_back() {
     let r = Renderer::new(Some(dir.path())).expect("renderer with override");
     let f = login_form();
     let html = r
-        .page("login.html", context! { page => page("Sign in"), form => Value::from(Serde(&f)) })
+        .page(
+            "login.html",
+            context! { page => page("Sign in"), form => Value::from(Serde(&f)) },
+        )
         .expect("renders")
         .0;
     assert!(html.contains("<p id=\"custom-login\">login</p>"), "{html}");

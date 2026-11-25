@@ -33,7 +33,9 @@ pub enum BreachCheckMode {
 pub fn breach_checker(mode: BreachCheckMode) -> Arc<dyn BreachChecker> {
     match mode {
         BreachCheckMode::Off => Arc::new(Disabled),
-        BreachCheckMode::Hibp { base_url } => Arc::new(HibpChecker::new(&base_url, DEFAULT_TIMEOUT)),
+        BreachCheckMode::Hibp { base_url } => {
+            Arc::new(HibpChecker::new(&base_url, DEFAULT_TIMEOUT))
+        }
     }
 }
 

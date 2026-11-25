@@ -122,7 +122,10 @@ mod tests {
         assert_eq!(f.path(), Some("/"));
         assert_eq!(f.same_site(), Some(SameSite::Strict));
         let header = f.to_string();
-        assert!(header.contains("Secure") && header.contains("HttpOnly"), "{header}");
+        assert!(
+            header.contains("Secure") && header.contains("HttpOnly"),
+            "{header}"
+        );
     }
 
     #[test]

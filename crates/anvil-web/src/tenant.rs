@@ -72,7 +72,10 @@ pub(crate) fn classify(path: &str, host_tenant: Option<&str>) -> (Target, String
     if let Some(host) = host_tenant {
         return (Target::Host(host.to_owned()), path.to_owned());
     }
-    if let Some(rest) = path.strip_prefix(RFC8414).and_then(|r| r.strip_prefix("/t/")) {
+    if let Some(rest) = path
+        .strip_prefix(RFC8414)
+        .and_then(|r| r.strip_prefix("/t/"))
+    {
         return if valid_slug(rest) {
             (Target::Path(rest.to_owned()), RFC8414.to_owned())
         } else {
@@ -138,11 +141,16 @@ fn not_found(state: &AppState) -> Response {
 }
 
 /// The tenant layer (used with `axum::middleware::from_fn_with_state` around the inner router).
-pub(crate) async fn resolve(State(state): State<AppState>, mut req: Request, next: Next) -> Response {
+pub(crate) async fn resolve(
+    State(state): State<AppState>,
+    mut req: Request,
+    next: Next,
+) -> Response {
     req.extensions_mut().insert(state.clone());
     let public_origin = state.config().public_origin();
     if is_tenantless(req.uri().path()) {
-        req.extensions_mut().insert(AllowedOrigins(vec![public_origin]));
+        req.extensions_mut()
+            .insert(AllowedOrigins(vec![public_origin]));
         return next.run(req).await;
     }
 
@@ -240,7 +248,10 @@ mod tests {
 
     #[test]
     fn path_tenants_are_rewritten() {
-        assert_eq!(classify("/t/acme/token", None), (path("acme"), "/token".into()));
+        assert_eq!(
+            classify("/t/acme/token", None),
+            (path("acme"), "/token".into())
+        );
         assert_eq!(
             classify("/t/acme/.well-known/openid-configuration", None),
             (path("acme"), "/.well-known/openid-configuration".into())
@@ -273,7 +284,10 @@ mod tests {
     fn host_tenants_win_and_keep_the_path() {
         assert_eq!(
             classify("/t/acme/token", Some("login.acme.com")),
-            (Target::Host("login.acme.com".into()), "/t/acme/token".into())
+            (
+                Target::Host("login.acme.com".into()),
+                "/t/acme/token".into()
+            )
         );
         assert_eq!(
             classify("/token", Some("login.acme.com")),
@@ -294,7 +308,9 @@ mod tests {
 
     #[test]
     fn rewrite_keeps_the_query() {
-        let uri: Uri = "/t/acme/authorize?client_id=x&state=y".parse().expect("uri");
+        let uri: Uri = "/t/acme/authorize?client_id=x&state=y"
+            .parse()
+            .expect("uri");
         let out = rewrite(&uri, "/authorize").expect("rewritten");
         assert_eq!(out.path(), "/authorize");
         assert_eq!(out.query(), Some("client_id=x&state=y"));
