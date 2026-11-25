@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 01-05-PLAN.md
-last_updated: "2026-11-25T01:01:22.354Z"
-last_activity: 2026-11-25 — Completed 01-05 (Postgres backend, offline metadata, duplication cost)
+stopped_at: Completed 01-07-PLAN.md
+last_updated: "2026-11-25T01:12:09.377Z"
+last_activity: 2026-11-25 — Completed 01-07 (storage wiring, static musl build, release-build CI)
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 8
-  completed_plans: 6
-  percent: 75
+  completed_plans: 7
+  percent: 88
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 ## Current Position
 
 Phase: 1 of 7 (Foundations and Spikes (M0))
-Plan: 6 of 8 in current phase (01-01, 01-02, 01-03, 01-04, 01-05, 01-06 complete)
+Plan: 7 of 8 in current phase (01-01 through 01-07 complete)
 Status: In progress
-Last activity: 2026-11-25 — Completed 01-05 (Postgres backend, offline metadata, duplication cost)
+Last activity: 2026-11-25 — Completed 01-07 (storage wiring, static musl build + idle measurement, release-build CI)
 
-Progress: [████████░░] 75%
+Progress: [█████████░] 88%
 
 ## Performance Metrics
 
@@ -56,6 +56,7 @@ Progress: [████████░░] 75%
 | Phase 01 P02 | 15min | 3 tasks | 3 files |
 | Phase 01 P06 | 9min | 2 tasks | 6 files |
 | Phase 01 P05 | 4min | 2 tasks | 10 files |
+| Phase 01 P07 | 10min | 3 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -78,6 +79,8 @@ Recent decisions affecting current work:
 - [Phase 01]: Conformance: INTERRUPTED module counts as complete in run-test-plan.py, so the M0 ratchet passes over plain http (no TLS fallback needed for M0)
 - [Phase 01]: M0 discovery advertises only ES256 but ARCHITECTURE makes RS256 default and certification requires it: Phase 2 must advertise RS256 (raised as doc/code divergence)
 - [Phase 01]: Postgres backend passes the shared contract (incl. 32-way consume) with one PgPool and zero query overrides; two sqlx backends judged manageable (§2.1 condition 3 met)
+- [Phase 01]: anvilid serve requires --database-url (no implicit default DB); unknown schemes rejected without echoing the URL; Postgres pool 10
+- [Phase 01]: Spike B local x86_64 static-pie musl: 9.44 MiB, 18.3 MB idle RSS (vs probe 3.5 MB/9.1 MB, now with sqlx SQLite+Postgres + aws-lc-rs linked); arm64 proven in CI (plan 08)
 
 ### Pending Todos
 
@@ -91,6 +94,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-25T01:01:22.353Z
-Stopped at: Completed 01-05-PLAN.md
+Last session: 2026-11-25T01:12:09.375Z
+Stopped at: Completed 01-07-PLAN.md
 Resume file: None
