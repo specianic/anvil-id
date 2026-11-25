@@ -49,6 +49,9 @@ pub struct TokenRequest {
     pub refresh_token: Option<String>,
     pub scope: Option<String>,
     pub auth: ClientAuthInput,
+    /// Request context (client IP, user agent, request id) recorded with the audit events this
+    /// request can raise (code and refresh-token reuse detection).
+    pub context: RequestContext,
 }
 
 impl std::fmt::Debug for TokenRequest {
@@ -62,6 +65,7 @@ impl std::fmt::Debug for TokenRequest {
             .field("refresh_token", &redact(&self.refresh_token))
             .field("scope", &self.scope)
             .field("auth", &self.auth)
+            .field("context", &self.context)
             .finish()
     }
 }
@@ -377,15 +381,15 @@ impl TokenService {
         }
     }
 
-    /// Audits a detected code or refresh-token replay. The token endpoint carries no request
-    /// context into the core, so the event has none; the actor is the authenticated client and
-    /// the target the revoked family (never the token).
+    /// Audits a detected code or refresh-token replay with the request's context; the actor is
+    /// the authenticated client and the target the revoked family (never the token).
     async fn audit_reuse(
         &self,
         tenant: TenantId,
         client: &Client,
         action: AuditAction,
         family_id: Option<TokenFamilyId>,
+        ctx: &RequestContext,
     ) -> Result<(), CoreError> {
         AuditService {
             storage: self.storage.clone(),
@@ -397,7 +401,7 @@ impl TokenService {
             action,
             family_id.map(|f| f.to_string()),
             AuditOutcome::Failure,
-            &RequestContext::system(),
+            ctx,
             AuditDetails::empty(),
         )
         .await
@@ -481,8 +485,14 @@ impl TokenService {
                         .revoke_family(tenant.id, fid, RevokeReason::CodeReuse, now)
                         .await?;
                 }
-                self.audit_reuse(tenant.id, client, AuditAction::CodeReuseDetected, family_id)
-                    .await?;
+                self.audit_reuse(
+                    tenant.id,
+                    client,
+                    AuditAction::CodeReuseDetected,
+                    family_id,
+                    &req.context,
+                )
+                .await?;
                 return Err(invalid_grant());
             }
             ConsumeOutcome::NotFound => return Err(invalid_grant()),
@@ -584,6 +594,7 @@ impl TokenService {
                     client,
                     AuditAction::RefreshReuseDetected,
                     Some(family_id),
+                    &req.context,
                 )
                 .await?;
                 return Err(invalid_grant());

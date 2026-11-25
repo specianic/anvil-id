@@ -7,7 +7,9 @@ mod ui_helpers;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anvil_core::model::{DEFAULT_TENANT_SLUG, PageRequest, SYSTEM_TENANT_SLUG, TenantBase, issuer};
+use anvil_core::model::{
+    DEFAULT_TENANT_SLUG, PageRequest, RequestContext, SYSTEM_TENANT_SLUG, TenantBase, issuer,
+};
 use anvil_core::ports::Clock as _;
 use anvil_core::service::client_auth::ClientAuthInput;
 use anvil_core::service::token::{TokenRequest, TokenService};
@@ -149,6 +151,7 @@ async fn setup_creates_the_admin_and_a_working_management_client_once() {
             client_assertion_type: None,
             client_assertion: None,
         },
+        context: RequestContext::system(),
     };
     let ok = tokens
         .token(&system, &iss, request(&secret))

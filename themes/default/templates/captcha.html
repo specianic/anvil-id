@@ -5,7 +5,7 @@
     page keeps the strict default CSP. Prefer Turnstile's managed (non-interactive) mode: interactive
     challenges conflict with WCAG 3.3.8 (accessible authentication). -#}
 {% if captcha and captcha.provider == "turnstile" %}
-<div class="anvil-captcha cf-turnstile" id="captcha-widget" data-sitekey="{{ captcha.site_key }}"></div>
+<div class="anvil-captcha cf-turnstile" id="captcha-widget" data-sitekey="{{ captcha.site_key }}" data-size="flexible"></div>
 <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
 {% elif captcha and captcha.provider == "hcaptcha" %}
 <div class="anvil-captcha h-captcha" id="captcha-widget" data-sitekey="{{ captcha.site_key }}"></div>

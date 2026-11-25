@@ -14,7 +14,7 @@ use anvil_core::model::{
 use axum::body::Body;
 use axum::http::{Request, header};
 use serde_json::Value;
-use support::{TestApp, TestResponse, json};
+use support::{DEFAULT_PEER, TestApp, TestResponse, json};
 use token_support::*;
 
 const SCOPE: &str = "openid email";
@@ -588,6 +588,8 @@ async fn refresh_and_code_reuse_are_audited() {
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].target.as_deref(), Some(fid.as_str()));
     assert_eq!(events[0].actor.id.as_deref(), Some(flow.rp.id()));
+    // The event carries the real request context of the replaying /token call.
+    assert_eq!(events[0].ctx.ip, Some(DEFAULT_PEER.ip()));
 
     // Refresh replay (on a fresh family).
     let rp = register(
@@ -605,4 +607,5 @@ async fn refresh_and_code_reuse_are_audited() {
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].target.as_deref(), Some(fid.as_str()));
     assert_eq!(events[0].action, AuditAction::RefreshReuseDetected);
+    assert_eq!(events[0].ctx.ip, Some(DEFAULT_PEER.ip()));
 }

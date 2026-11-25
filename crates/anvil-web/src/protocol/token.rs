@@ -9,6 +9,7 @@ use std::collections::HashMap;
 
 use anvil_cache::limiter::{Decision, LimitKey, RouteClass};
 use anvil_core::error::CoreError;
+use anvil_core::model::RequestContext;
 use anvil_core::service::client_auth::{ClientAuthInput, parse_basic};
 use anvil_core::service::token::{TokenRequest, TokenService};
 use axum::Router;
@@ -21,6 +22,7 @@ use axum::routing::post;
 use crate::errors::oauth_json;
 use crate::layers::cors::public_cors;
 use crate::layers::ratelimit::{Surface, too_many_requests};
+use crate::request_context::AuditContext;
 use crate::state::AppState;
 use crate::tenant::ResolvedTenant;
 
@@ -73,7 +75,11 @@ pub(crate) fn parse_form(body: &[u8]) -> Result<HashMap<String, String>, CoreErr
     Ok(out)
 }
 
-fn token_request(headers: &HeaderMap, body: &[u8]) -> Result<TokenRequest, CoreError> {
+fn token_request(
+    headers: &HeaderMap,
+    body: &[u8],
+    context: RequestContext,
+) -> Result<TokenRequest, CoreError> {
     if !is_form(headers) {
         return Err(CoreError::InvalidRequest(
             "the token request must be application/x-www-form-urlencoded".to_owned(),
@@ -105,6 +111,7 @@ fn token_request(headers: &HeaderMap, body: &[u8]) -> Result<TokenRequest, CoreE
             client_assertion_type: form.remove("client_assertion_type"),
             client_assertion: form.remove("client_assertion"),
         },
+        context,
     })
 }
 
@@ -139,10 +146,11 @@ fn claimed_client_id(auth: &ClientAuthInput) -> Option<String> {
 async fn token(
     State(state): State<AppState>,
     tenant: ResolvedTenant,
+    AuditContext(ctx): AuditContext,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let req = match token_request(&headers, &body) {
+    let req = match token_request(&headers, &body, ctx) {
         Ok(r) => r,
         Err(e) => return oauth_json(&e),
     };
@@ -205,11 +213,12 @@ mod tests {
             header::CONTENT_TYPE,
             HeaderValue::from_static("application/json"),
         );
-        let err = token_request(&h, b"{}").expect_err("json body");
+        let err = token_request(&h, b"{}", RequestContext::system()).expect_err("json body");
         assert_eq!(err.oauth_error(), "invalid_request");
-        let err = token_request(&HeaderMap::new(), b"grant_type=x").expect_err("no type");
+        let err = token_request(&HeaderMap::new(), b"grant_type=x", RequestContext::system())
+            .expect_err("no type");
         assert_eq!(err.oauth_error(), "invalid_request");
-        assert!(token_request(&form_headers(), b"grant_type=x").is_ok());
+        assert!(token_request(&form_headers(), b"grant_type=x", RequestContext::system()).is_ok());
     }
 
     #[test]
@@ -237,7 +246,12 @@ mod tests {
             header::AUTHORIZATION,
             HeaderValue::from_static("Basic YTpi"),
         );
-        let req = token_request(&h, b"grant_type=client_credentials&client_id=a").expect("req");
+        let req = token_request(
+            &h,
+            b"grant_type=client_credentials&client_id=a",
+            RequestContext::system(),
+        )
+        .expect("req");
         assert_eq!(req.auth.basic.as_deref(), Some("Basic YTpi"));
         assert_eq!(req.auth.client_id.as_deref(), Some("a"));
     }

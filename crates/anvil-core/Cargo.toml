@@ -23,4 +23,6 @@ uuid.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
+# Async test runtime for core service tests (dev-only; check-deps ignores dev edges).
+tokio = { workspace = true, features = ["rt", "macros"] }
 time = { workspace = true, features = ["macros"] }
