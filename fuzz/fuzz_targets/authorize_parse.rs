@@ -13,7 +13,8 @@
 use std::sync::OnceLock;
 
 use anvil_core::model::{
-    ApplicationType, Client, ClientAuthMethod, ClientId, ClientType, GrantType, TenantId,
+    ApplicationType, Client, ClientAuthMethod, ClientId, ClientType, ConsentMode, GrantType,
+    TenantId, TokenFormat,
 };
 use anvil_core::oauth::authorize_request::{AuthorizeError, parse_raw, validate};
 use anvil_core::oauth::redirect::redirect_matches;
@@ -48,6 +49,10 @@ fn client(
         grant_types: vec![GrantType::AuthorizationCode, GrantType::RefreshToken],
         scopes: vec!["openid".into(), "profile".into(), "email".into()],
         require_pkce,
+        token_format: TokenFormat::Jwt,
+        consent_mode: ConsentMode::Required,
+        id_token_signed_response_alg: None,
+        can_introspect: false,
         created_at: at,
         updated_at: at,
     }
