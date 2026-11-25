@@ -1,0 +1,43 @@
+{#- Account email page and email-change confirmation (plan 04-15). Variables (besides
+    page/account_base/account_nav): messages [{level, key, text}], mode.
+      mode "change":  csrf_token, action, email, email_verified, recent_auth, login_url
+      mode "confirm": confirm_action, token (the link token, carried in a hidden field)
+      mode "done":    nothing else
+    Selectors: form email-change (input new_email, submit email-change-submit), form email-confirm
+    (submit email-confirm-submit), current address current-email, re-auth notice account-reauth
+    with link link-reauth. -#}
+{% extends "account_base.html" %}
+{% block account %}
+<div class="anvil-form-messages" id="account-messages" aria-live="polite">
+{% for m in messages %}
+<p class="anvil-message anvil-message-{{ m.level }}" id="account-msg-{{ loop.index }}" data-message-key="{{ m.key }}"{% if m.level == "error" %} role="alert"{% endif %}>{{ m.text }}</p>
+{% endfor %}
+</div>
+{% if mode == "change" %}
+{% if not recent_auth %}
+<p class="anvil-message anvil-message-info" id="account-reauth">{{ t("email_change.reauth_before") }} <a id="link-reauth" href="{{ login_url }}">{{ t("email_change.reauth_link") }}</a> {{ t("email_change.reauth_after") }}</p>
+{% endif %}
+<section class="anvil-account-section" id="email" aria-labelledby="email-heading">
+<h2 id="email-heading">{{ t("email_change.heading") }}</h2>
+<p>{{ t("email_change.current") }} <strong id="current-email"><bdi>{{ email }}</bdi></strong> {% if email_verified %}<span id="email-verified">{{ t("email_change.verified") }}</span>{% else %}<span id="email-unverified">{{ t("email_change.unverified") }}</span>{% endif %}</p>
+<form id="email-change" method="post" action="{{ action }}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+<div class="anvil-field">
+<label for="new_email">{{ t("email_change.new_email") }}</label>
+<input id="new_email" name="new_email" type="email" maxlength="254" autocomplete="email" spellcheck="false" required aria-describedby="new-email-help">
+<p class="anvil-muted" id="new-email-help">{{ t("email_change.help") }}</p>
+</div>
+<button type="submit" id="email-change-submit">{{ t("email_change.submit") }}</button>
+</form>
+</section>
+{% elif mode == "confirm" %}
+<section class="anvil-account-section" id="email-confirm-section" aria-labelledby="email-confirm-heading">
+<h2 id="email-confirm-heading">{{ t("email_confirm.heading") }}</h2>
+<p>{{ t("email_confirm.explain") }}</p>
+<form id="email-confirm" method="post" action="{{ confirm_action }}">
+<input type="hidden" id="token" name="token" value="{{ token }}">
+<button type="submit" id="email-confirm-submit">{{ t("email_confirm.submit") }}</button>
+</form>
+</section>
+{% endif %}
+{% endblock %}

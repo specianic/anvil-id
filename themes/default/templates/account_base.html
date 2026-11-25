@@ -1,7 +1,8 @@
-{#- Base of the account pages (Security, Sessions, Connected apps).
+{#- Base of the account pages (Profile, Email, Password, Security, Sessions, Connected apps).
     Variables:
       account_base  tenant base path ("" or "/t/{slug}") prefixed to the navigation links
-      account_nav   the current section: "security", "sessions" or "apps" (sets aria-current)
+      account_nav   the current section: "profile", "email", "password", "security", "sessions"
+                    or "apps" (sets aria-current)
     Child templates fill {% block account %}. -#}
 {% extends "base.html" %}
 {% block content %}
@@ -9,6 +10,9 @@
 {% set current = account_nav | default("") %}
 <nav class="anvil-account-nav" id="account-nav" aria-label="{{ t("account_nav.label") }}">
 <ul>
+<li><a id="account-nav-profile" href="{{ base }}/ui/account/profile"{% if current == "profile" %} aria-current="page"{% endif %}>{{ t("account_nav.profile") }}</a></li>
+<li><a id="account-nav-email" href="{{ base }}/ui/account/email"{% if current == "email" %} aria-current="page"{% endif %}>{{ t("account_nav.email") }}</a></li>
+<li><a id="account-nav-password" href="{{ base }}/ui/account/password"{% if current == "password" %} aria-current="page"{% endif %}>{{ t("account_nav.password") }}</a></li>
 <li><a id="account-nav-security" href="{{ base }}/ui/account/security"{% if current == "security" %} aria-current="page"{% endif %}>{{ t("account_nav.security") }}</a></li>
 <li><a id="account-nav-sessions" href="{{ base }}/ui/account/sessions"{% if current == "sessions" %} aria-current="page"{% endif %}>{{ t("account_nav.sessions") }}</a></li>
 <li><a id="account-nav-apps" href="{{ base }}/ui/account/apps"{% if current == "apps" %} aria-current="page"{% endif %}>{{ t("account_nav.apps") }}</a></li>

@@ -1,0 +1,37 @@
+{#- Account profile page (plan 04-15). Variables (besides page/account_base/account_nav):
+      csrf_token, messages [{level, key, text}], action,
+      profile {name, given_name, family_name, locale} (the stored or the submitted values)
+    Selectors: form profile-form with inputs name, given_name, family_name, locale; submit button
+    profile-form-submit. -#}
+{% extends "account_base.html" %}
+{% block account %}
+<div class="anvil-form-messages" id="account-messages" aria-live="polite">
+{% for m in messages %}
+<p class="anvil-message anvil-message-{{ m.level }}" id="account-msg-{{ loop.index }}" data-message-key="{{ m.key }}"{% if m.level == "error" %} role="alert"{% endif %}>{{ m.text }}</p>
+{% endfor %}
+</div>
+<section class="anvil-account-section" id="profile" aria-labelledby="profile-heading">
+<h2 id="profile-heading">{{ t("profile.heading") }}</h2>
+<form id="profile-form" method="post" action="{{ action }}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+<div class="anvil-field">
+<label for="name">{{ t("profile.name") }} <span class="anvil-optional">{{ t("form.optional") }}</span></label>
+<input id="name" name="name" type="text" maxlength="200" autocomplete="name" value="{{ profile.name }}">
+</div>
+<div class="anvil-field">
+<label for="given_name">{{ t("profile.given_name") }} <span class="anvil-optional">{{ t("form.optional") }}</span></label>
+<input id="given_name" name="given_name" type="text" maxlength="200" autocomplete="given-name" value="{{ profile.given_name }}">
+</div>
+<div class="anvil-field">
+<label for="family_name">{{ t("profile.family_name") }} <span class="anvil-optional">{{ t("form.optional") }}</span></label>
+<input id="family_name" name="family_name" type="text" maxlength="200" autocomplete="family-name" value="{{ profile.family_name }}">
+</div>
+<div class="anvil-field">
+<label for="locale">{{ t("profile.locale") }} <span class="anvil-optional">{{ t("form.optional") }}</span></label>
+<input id="locale" name="locale" type="text" maxlength="35" autocomplete="language" spellcheck="false" aria-describedby="locale-help" value="{{ profile.locale }}">
+<p class="anvil-muted" id="locale-help">{{ t("profile.locale_help") }}</p>
+</div>
+<button type="submit" id="profile-form-submit">{{ t("profile.save") }}</button>
+</form>
+</section>
+{% endblock %}

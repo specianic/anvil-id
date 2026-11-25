@@ -1,6 +1,7 @@
 //! Account self-service for credentials (AUTH-04, AUTH-05, ADM-04): passkey registration, TOTP
 //! enrolment with recovery codes, recovery-code regeneration and credential removal, plus the
-//! administrator's list/remove used by the management API.
+//! administrator's list/remove used by the management API. Profile editing, email change with
+//! re-verification and password change/set (AUTH-13) use the same settings-flow binding.
 //!
 //! # Binding and re-authentication
 //!
@@ -23,6 +24,7 @@
 //! sealed again under the credential's AAD. Recovery codes are HMAC'd with the KEK-derived pepper
 //! and their plaintext is returned exactly once.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anvil_jose::Kek;
@@ -31,21 +33,27 @@ use anvil_jose::otp::{TotpSecret, check_code, otpauth_uri};
 use anvil_jose::recovery_code::{
     generate_recovery_codes, normalize_recovery_code, recovery_code_hash,
 };
-use secrecy::SecretString;
+use secrecy::{ExposeSecret as _, SecretString};
+use time::Duration;
 
 use super::audit::AuditService;
-use super::flow::{BindingError, FLOW_LIFETIME, check_binding};
+use super::flow::{BindingError, FLOW_LIFETIME, NOTICE_EMAIL_TTL, check_binding};
 use crate::error::CoreError;
 use crate::flow::settings::{
     SETTINGS_TOTP_PURPOSE, SettingsState, is_recent_auth, normalize_label, settings_totp_aad,
 };
 use crate::model::{
     AuditAction, AuditActor, AuditDetails, AuditOutcome, BrowserSession, CredentialId,
-    CredentialKind, CredentialSummary, Flow, FlowId, FlowKind, NewFlow, NewPasskey, NewTotp,
-    RecoveryCodeHash, RequestContext, SecretHash, TOTP_SEED_PURPOSE, Tenant, TenantId, User,
-    UserId, credential_aad,
+    CredentialKind, CredentialSummary, EmailKind, Flow, FlowId, FlowKind, NewEmail, NewFlow,
+    NewPasskey, NewSelfServiceToken, NewTotp, OutboxId, RecoveryCodeHash, RecoveryNotice,
+    RequestContext, SecretHash, SelfServiceKind, TOTP_SEED_PURPOSE, Tenant, TenantId, User, UserId,
+    UserUpdate, credential_aad, normalize_email, seal_payload,
 };
-use crate::ports::{Clock, PasskeyCeremonies, PasskeyUser, RelyingParty, Storage, StorageError};
+use crate::policy::{PasswordPolicy, check_password};
+use crate::ports::{
+    BreachChecker, Clock, PasskeyCeremonies, PasskeyUser, PasswordHasher, RelyingParty, Storage,
+    StorageError,
+};
 
 /// Number of recovery codes in a set.
 pub const RECOVERY_CODE_COUNT: usize = 10;
@@ -75,6 +83,26 @@ pub enum AccountFailure {
     CredentialNotFound,
     /// A concurrent change of the same flow won.
     Concurrent,
+    /// A name field is longer than [`PROFILE_FIELD_MAX`] characters or has control characters.
+    InvalidName,
+    /// The locale is not a language tag like `en` or `pt-BR`.
+    InvalidLocale,
+    /// The new email address is malformed.
+    InvalidEmail,
+    /// The new email address is the current one.
+    EmailUnchanged,
+    /// Another account holds the new address (at confirmation; the token stays usable).
+    EmailTaken,
+    /// The email-change link is unknown, used, expired or malformed.
+    EmailTokenInvalid,
+    /// The new password is shorter than the policy minimum.
+    PasswordTooShort,
+    /// The new password is longer than the policy maximum.
+    PasswordTooLong,
+    /// The new password appears in the breach corpus.
+    PasswordBreached,
+    /// Hashing or the breach check is overloaded: try again shortly.
+    Overloaded,
 }
 
 impl AccountFailure {
@@ -91,6 +119,16 @@ impl AccountFailure {
         Self::TotpRequired,
         Self::CredentialNotFound,
         Self::Concurrent,
+        Self::InvalidName,
+        Self::InvalidLocale,
+        Self::InvalidEmail,
+        Self::EmailUnchanged,
+        Self::EmailTaken,
+        Self::EmailTokenInvalid,
+        Self::PasswordTooShort,
+        Self::PasswordTooLong,
+        Self::PasswordBreached,
+        Self::Overloaded,
     ];
 
     /// The stable message key.
@@ -107,6 +145,16 @@ impl AccountFailure {
             Self::TotpRequired => "account.totp_required",
             Self::CredentialNotFound => "account.credential_not_found",
             Self::Concurrent => "account.try_again",
+            Self::InvalidName => "account.invalid_name",
+            Self::InvalidLocale => "account.invalid_locale",
+            Self::InvalidEmail => "account.invalid_email",
+            Self::EmailUnchanged => "account.email_unchanged",
+            Self::EmailTaken => "account.email_taken",
+            Self::EmailTokenInvalid => "account.email_token_invalid",
+            Self::PasswordTooShort => "account.password_too_short",
+            Self::PasswordTooLong => "account.password_too_long",
+            Self::PasswordBreached => "account.password_breached",
+            Self::Overloaded => "account.overloaded",
         }
     }
 }
@@ -248,6 +296,18 @@ impl AccountService {
         session: &BrowserSession,
         binding: &SettingsBinding<'_>,
     ) -> Result<Opened, AccountError> {
+        self.open_with(tenant, session, binding, true).await
+    }
+
+    /// [`Self::open`], with the recent-authentication check only when `reauth` is set (profile
+    /// edits need the binding but not a fresh sign-in).
+    async fn open_with(
+        &self,
+        tenant: TenantId,
+        session: &BrowserSession,
+        binding: &SettingsBinding<'_>,
+        reauth: bool,
+    ) -> Result<Opened, AccountError> {
         let now = self.clock.now();
         let Some(flow) = self
             .storage
@@ -270,7 +330,7 @@ impl AccountService {
         if state.user != session.user_id || session.tenant_id != tenant {
             return Err(CoreError::Forbidden.into());
         }
-        if !is_recent_auth(session.auth_time, now) {
+        if reauth && !is_recent_auth(session.auth_time, now) {
             return Err(AccountFailure::ReauthRequired.into());
         }
         Ok(Opened { flow, state })
@@ -668,6 +728,435 @@ impl AccountService {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// Profile, email change and password change (AUTH-13)
+// ---------------------------------------------------------------------------------------------
+
+/// Maximum length (characters) of `name`, `given_name` and `family_name`.
+pub const PROFILE_FIELD_MAX: usize = 200;
+
+/// Lifetime of an email-change link.
+pub const EMAIL_CHANGE_TOKEN_TTL: Duration = Duration::hours(24);
+
+/// KEK purpose of the new address sealed into an email-change link (see
+/// [`AccountService::request_email_change`]).
+pub const EMAIL_CHANGE_LINK_PURPOSE: &str = "anvilid/email-change-link/v1";
+
+/// The editable profile claims as submitted. Surrounding whitespace is trimmed; an empty value
+/// clears the claim.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ProfileInput<'a> {
+    pub name: &'a str,
+    pub given_name: &'a str,
+    pub family_name: &'a str,
+    pub locale: &'a str,
+}
+
+/// What a password change needs besides storage: the hasher, the breach corpus and the policy
+/// (the same ones the sign-up and recovery flows use).
+#[derive(Clone, Copy)]
+pub struct PasswordDeps<'a> {
+    pub hasher: &'a dyn PasswordHasher,
+    pub breach: &'a dyn BreachChecker,
+    pub policy: PasswordPolicy,
+}
+
+/// The account profile page data. No secret material.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountProfile {
+    pub email: String,
+    pub email_verified: bool,
+    pub name: Option<String>,
+    pub given_name: Option<String>,
+    pub family_name: Option<String>,
+    pub locale: Option<String>,
+    /// The user has a password (social-only users can set one).
+    pub has_password: bool,
+    /// The session may change email or password now.
+    pub recent_auth: bool,
+}
+
+impl AccountService {
+    /// The profile of the session's user.
+    pub async fn profile(
+        &self,
+        tenant: TenantId,
+        session: &BrowserSession,
+    ) -> Result<AccountProfile, CoreError> {
+        let user = self.user(tenant, session.user_id).await?;
+        let has_password = self
+            .storage
+            .users()
+            .password(tenant, user.id)
+            .await?
+            .is_some();
+        Ok(AccountProfile {
+            email: user.email,
+            email_verified: user.email_verified,
+            name: user.claims.name,
+            given_name: user.claims.given_name,
+            family_name: user.claims.family_name,
+            locale: user.claims.locale,
+            has_password,
+            recent_auth: is_recent_auth(session.auth_time, self.clock.now()),
+        })
+    }
+
+    /// Updates `name`, `given_name`, `family_name` and `locale` of the session's user (settings
+    /// flow binding; no recent sign-in needed). Audited `profile_updated` with the names of the
+    /// changed fields; a submission that changes nothing is not audited.
+    pub async fn update_profile(
+        &self,
+        tenant: TenantId,
+        session: &BrowserSession,
+        binding: &SettingsBinding<'_>,
+        input: &ProfileInput<'_>,
+        ctx: &RequestContext,
+    ) -> Result<User, AccountError> {
+        self.open_with(tenant, session, binding, false).await?;
+        let name = profile_field(input.name)?;
+        let given_name = profile_field(input.given_name)?;
+        let family_name = profile_field(input.family_name)?;
+        let locale = locale_field(input.locale)?;
+        let user = self.user(tenant, session.user_id).await?;
+        let mut claims = user.claims.clone();
+        let mut changed: Vec<&'static str> = Vec::new();
+        for (field, slot, value) in [
+            ("name", &mut claims.name, name),
+            ("given_name", &mut claims.given_name, given_name),
+            ("family_name", &mut claims.family_name, family_name),
+            ("locale", &mut claims.locale, locale),
+        ] {
+            if *slot != value {
+                *slot = value;
+                changed.push(field);
+            }
+        }
+        if changed.is_empty() {
+            return Ok(user);
+        }
+        let update = UserUpdate {
+            claims: Some(claims),
+            ..UserUpdate::default()
+        };
+        let updated = self
+            .storage
+            .users()
+            .update(tenant, user.id, &update, self.clock.now())
+            .await?
+            .ok_or(CoreError::Forbidden)?;
+        self.audit()
+            .record(
+                tenant,
+                AuditActor::user(user.id),
+                AuditAction::ProfileUpdated,
+                Some(user.id.to_string()),
+                AuditOutcome::Success,
+                ctx,
+                AuditDetails::fields(&changed),
+            )
+            .await?;
+        Ok(updated)
+    }
+
+    /// Starts an email change (recent sign-in required): issues an `EmailChange` token for the
+    /// normalised `new_email` (TTL [`EMAIL_CHANGE_TOKEN_TTL`], 256-bit, SHA-256 at rest) and, in
+    /// the same storage call, the sealed `email_change` email to the new address with the link
+    /// `{confirm_url}?token=…`.
+    ///
+    /// The link token is `{token}.{sealed}`: `sealed` is the new address sealed with the KEK
+    /// (purpose [`EMAIL_CHANGE_LINK_PURPOSE`], AAD = tenant id + token hash), so the confirmation
+    /// can address the `email_changed` notice (which names the new address) before the token
+    /// is consumed. Only `token` is hashed and stored.
+    ///
+    /// An address that another account of the tenant already uses gets the same `Ok(())` as a
+    /// free one, so the page does not reveal which addresses are registered; nothing is sent
+    /// and the attempt is audited as a failure (`email_taken`).
+    pub async fn request_email_change(
+        &self,
+        tenant: &Tenant,
+        session: &BrowserSession,
+        binding: &SettingsBinding<'_>,
+        new_email: &str,
+        confirm_url: &str,
+        ctx: &RequestContext,
+    ) -> Result<(), AccountError> {
+        self.open(tenant.id, session, binding).await?;
+        let new_email = normalize_email(new_email).map_err(|_| AccountFailure::InvalidEmail)?;
+        let user = self.user(tenant.id, session.user_id).await?;
+        if new_email == user.email {
+            return Err(AccountFailure::EmailUnchanged.into());
+        }
+        let users = self.storage.users();
+        if users.get_by_email(tenant.id, &new_email).await?.is_some() {
+            self.audit()
+                .record(
+                    tenant.id,
+                    AuditActor::user(user.id),
+                    AuditAction::EmailChangeRequested,
+                    Some(user.id.to_string()),
+                    AuditOutcome::Failure,
+                    ctx,
+                    AuditDetails::reason("email_taken"),
+                )
+                .await?;
+            return Ok(());
+        }
+        let now = self.clock.now();
+        let token = random_token();
+        let hash = secret_hash(&token);
+        let sealed = self
+            .kek
+            .seal(
+                EMAIL_CHANGE_LINK_PURPOSE,
+                &email_change_link_aad(tenant.id, &hash),
+                new_email.as_bytes(),
+            )
+            .map_err(|_| CoreError::Internal("sealing the email-change address failed".into()))?;
+        let expires_at = now + EMAIL_CHANGE_TOKEN_TTL;
+        let record = NewSelfServiceToken {
+            token_hash: SecretHash(hash),
+            kind: SelfServiceKind::EmailChange,
+            user_id: user.id,
+            email: new_email.clone(),
+            created_at: now,
+            expires_at,
+        };
+        let mut payload = BTreeMap::new();
+        payload.insert("tenant_name".to_owned(), tenant.display_name.clone());
+        payload.insert(
+            "link".to_owned(),
+            format!("{confirm_url}?token={token}.{}", b64url(&sealed)),
+        );
+        payload.insert("new_email".to_owned(), new_email.clone());
+        payload.insert(
+            "expires_minutes".to_owned(),
+            EMAIL_CHANGE_TOKEN_TTL.whole_minutes().to_string(),
+        );
+        let mail = NewEmail {
+            id: OutboxId::new_v7(),
+            to: new_email,
+            template: EmailKind::EmailChange.as_str().to_owned(),
+            payload: seal_payload(&self.kek, tenant.id, &payload)?,
+            created_at: now,
+            expires_at,
+        };
+        users
+            .issue_self_service_token(tenant.id, &record, Some(&mail))
+            .await?;
+        self.audit()
+            .record(
+                tenant.id,
+                AuditActor::user(user.id),
+                AuditAction::EmailChangeRequested,
+                Some(user.id.to_string()),
+                AuditOutcome::Success,
+                ctx,
+                AuditDetails::empty(),
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Completes an email change from the link token (POST only; no session needed: the token
+    /// proves control of the new address and was issued to a recently signed-in user).
+    /// Atomically consumes the token, switches the email (verified) and enqueues the
+    /// `email_changed` notice to the old address (`UserRepo::complete_email_change`). Another
+    /// account holding the address meanwhile is [`AccountFailure::EmailTaken`] and leaves the
+    /// token usable. Audited `email_changed`.
+    pub async fn complete_email_change(
+        &self,
+        tenant: &Tenant,
+        link_token: &str,
+        ctx: &RequestContext,
+    ) -> Result<User, AccountError> {
+        let invalid = || AccountError::from(AccountFailure::EmailTokenInvalid);
+        let (token, sealed) = link_token.trim().split_once('.').ok_or_else(invalid)?;
+        if token.is_empty() || token.len() > 128 || sealed.len() > 2048 {
+            return Err(invalid());
+        }
+        let hash = secret_hash(token);
+        let sealed = b64url_decode(sealed).map_err(|_| invalid())?;
+        let new_email = self
+            .kek
+            .open(
+                EMAIL_CHANGE_LINK_PURPOSE,
+                &email_change_link_aad(tenant.id, &hash),
+                &sealed,
+            )
+            .ok()
+            .and_then(|raw| String::from_utf8(raw.to_vec()).ok())
+            .ok_or_else(invalid)?;
+        let now = self.clock.now();
+        let mut payload = BTreeMap::new();
+        payload.insert("tenant_name".to_owned(), tenant.display_name.clone());
+        payload.insert("new_email".to_owned(), new_email);
+        let notice = RecoveryNotice {
+            id: OutboxId::new_v7(),
+            template: EmailKind::EmailChanged.as_str().to_owned(),
+            payload: seal_payload(&self.kek, tenant.id, &payload)?,
+            created_at: now,
+            expires_at: now + NOTICE_EMAIL_TTL,
+        };
+        let user = match self
+            .storage
+            .users()
+            .complete_email_change(tenant.id, &SecretHash(hash), now, Some(&notice))
+            .await
+        {
+            Ok(Some(user)) => user,
+            Ok(None) => return Err(invalid()),
+            Err(StorageError::Conflict(_)) => return Err(AccountFailure::EmailTaken.into()),
+            Err(e) => return Err(e.into()),
+        };
+        self.audit()
+            .record(
+                tenant.id,
+                AuditActor::user(user.id),
+                AuditAction::EmailChanged,
+                Some(user.id.to_string()),
+                AuditOutcome::Success,
+                ctx,
+                AuditDetails::empty(),
+            )
+            .await?;
+        Ok(user)
+    }
+
+    /// Sets a new password for the session's user (recent sign-in required; users without a
+    /// password set their first one this way). Enforces the policy and the breach check,
+    /// stores the hash, revokes every other session when `revoke_others` (through
+    /// `SessionRepo::revoke_all_for_user`, which enqueues their back-channel logout deliveries;
+    /// the current session stays), enqueues the `password_changed` notice and audits
+    /// `password_changed`. Returns the number of sessions revoked.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one call per submission; every argument is part of it"
+    )]
+    pub async fn change_password(
+        &self,
+        tenant: &Tenant,
+        session: &BrowserSession,
+        binding: &SettingsBinding<'_>,
+        new_password: &SecretString,
+        revoke_others: bool,
+        deps: &PasswordDeps<'_>,
+        ctx: &RequestContext,
+    ) -> Result<u64, AccountError> {
+        self.open(tenant.id, session, binding).await?;
+        let password = new_password.expose_secret();
+        if check_password(&deps.policy, password).is_err() {
+            let short = password.chars().count() < deps.policy.min_len;
+            return Err(if short {
+                AccountFailure::PasswordTooShort
+            } else {
+                AccountFailure::PasswordTooLong
+            }
+            .into());
+        }
+        match deps.breach.is_breached(password).await {
+            Ok(false) => {}
+            Ok(true) => return Err(AccountFailure::PasswordBreached.into()),
+            Err(CoreError::Overloaded) => return Err(AccountFailure::Overloaded.into()),
+            Err(e) => return Err(e.into()),
+        }
+        let phc = match deps.hasher.hash(password).await {
+            Ok(phc) => phc,
+            Err(CoreError::Overloaded) => return Err(AccountFailure::Overloaded.into()),
+            Err(e) => return Err(e.into()),
+        };
+        let user = self.user(tenant.id, session.user_id).await?;
+        let users = self.storage.users();
+        let had_password = users.password(tenant.id, user.id).await?.is_some();
+        let now = self.clock.now();
+        if !users.set_password(tenant.id, user.id, &phc, now).await? {
+            return Err(CoreError::Forbidden.into());
+        }
+        let revoked = if revoke_others {
+            self.storage
+                .sessions()
+                .revoke_all_for_user(tenant.id, user.id, Some(session.id), now)
+                .await?
+        } else {
+            0
+        };
+        let mut payload = BTreeMap::new();
+        payload.insert("tenant_name".to_owned(), tenant.display_name.clone());
+        payload.insert("email".to_owned(), user.email.clone());
+        let notice = NewEmail {
+            id: OutboxId::new_v7(),
+            to: user.email.clone(),
+            template: EmailKind::PasswordChanged.as_str().to_owned(),
+            payload: seal_payload(&self.kek, tenant.id, &payload)?,
+            created_at: now,
+            expires_at: now + NOTICE_EMAIL_TTL,
+        };
+        self.storage.outbox().enqueue(tenant.id, &notice).await?;
+        let reason = if had_password {
+            "account_change"
+        } else {
+            "account_set"
+        };
+        self.audit()
+            .record(
+                tenant.id,
+                AuditActor::user(user.id),
+                AuditAction::PasswordChanged,
+                Some(user.id.to_string()),
+                AuditOutcome::Success,
+                ctx,
+                AuditDetails::reason(reason).with(AuditDetails::count("sessions_revoked", revoked)),
+            )
+            .await?;
+        Ok(revoked)
+    }
+}
+
+/// AAD of the address sealed into an email-change link: tenant id bytes followed by the token
+/// hash.
+fn email_change_link_aad(tenant: TenantId, token_hash: &[u8; 32]) -> Vec<u8> {
+    let mut aad = tenant.0.as_bytes().to_vec();
+    aad.extend_from_slice(token_hash);
+    aad
+}
+
+/// A trimmed name claim: `None` when empty; at most [`PROFILE_FIELD_MAX`] characters and no
+/// control characters.
+fn profile_field(raw: &str) -> Result<Option<String>, AccountFailure> {
+    let value = raw.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if value.chars().count() > PROFILE_FIELD_MAX || value.chars().any(char::is_control) {
+        return Err(AccountFailure::InvalidName);
+    }
+    Ok(Some(value.to_owned()))
+}
+
+/// A trimmed locale claim: `None` when empty, otherwise `^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$`
+/// (at most [`PROFILE_FIELD_MAX`] characters).
+fn locale_field(raw: &str) -> Result<Option<String>, AccountFailure> {
+    let value = raw.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if value.len() > PROFILE_FIELD_MAX || !is_locale_tag(value) {
+        return Err(AccountFailure::InvalidLocale);
+    }
+    Ok(Some(value.to_owned()))
+}
+
+/// `^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$`.
+fn is_locale_tag(value: &str) -> bool {
+    let mut parts = value.split('-');
+    let Some(language) = parts.next() else {
+        return false;
+    };
+    (2..=3).contains(&language.len())
+        && language.bytes().all(|b| b.is_ascii_alphabetic())
+        && parts.all(|p| (2..=8).contains(&p.len()) && p.bytes().all(|b| b.is_ascii_alphanumeric()))
+}
+
 /// Display data of a TOTP secret: issuer = tenant display name, account = user email.
 fn enrolment(
     tenant: &Tenant,
@@ -708,8 +1197,6 @@ pub fn new_recovery_codes(
 mod tests {
     use std::collections::HashSet;
 
-    use secrecy::ExposeSecret as _;
-
     use super::*;
 
     #[test]
@@ -722,6 +1209,95 @@ mod tests {
         assert_eq!(
             AccountFailure::ReauthRequired.key(),
             "account.reauth_required"
+        );
+    }
+
+    #[test]
+    fn locale_tags_follow_the_pattern() {
+        for ok in [
+            "en",
+            "de",
+            "pt-BR",
+            "zh-Hant-TW",
+            "sr-Latn",
+            "es-419",
+            "fil",
+        ] {
+            assert_eq!(locale_field(ok).unwrap().as_deref(), Some(ok), "{ok}");
+        }
+        assert_eq!(locale_field("  ").unwrap(), None);
+        assert_eq!(locale_field(" en ").unwrap().as_deref(), Some("en"));
+        for bad in [
+            "e",
+            "engl",
+            "en_US",
+            "en-",
+            "-en",
+            "en-x",
+            "en-abcdefghi",
+            "12",
+            "en US",
+            "en-<b>",
+            "énglish",
+        ] {
+            assert_eq!(
+                locale_field(bad),
+                Err(AccountFailure::InvalidLocale),
+                "{bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn profile_fields_are_trimmed_bounded_and_printable() {
+        assert_eq!(profile_field("  Ada  ").unwrap().as_deref(), Some("Ada"));
+        assert_eq!(profile_field("").unwrap(), None);
+        let max = "é".repeat(PROFILE_FIELD_MAX);
+        assert_eq!(profile_field(&max).unwrap().as_deref(), Some(max.as_str()));
+        let long = "a".repeat(PROFILE_FIELD_MAX + 1);
+        assert_eq!(profile_field(&long), Err(AccountFailure::InvalidName));
+        assert_eq!(profile_field("a\u{0}b"), Err(AccountFailure::InvalidName));
+        assert_eq!(profile_field("a\nb"), Err(AccountFailure::InvalidName));
+    }
+
+    #[test]
+    fn email_change_link_aad_binds_tenant_and_token() {
+        let kek = Kek::generate();
+        let t = TenantId::new_v7();
+        let h = secret_hash("token");
+        let sealed = kek
+            .seal(
+                EMAIL_CHANGE_LINK_PURPOSE,
+                &email_change_link_aad(t, &h),
+                b"new@example.com",
+            )
+            .unwrap();
+        let other_hash = secret_hash("other");
+        assert!(
+            kek.open(
+                EMAIL_CHANGE_LINK_PURPOSE,
+                &email_change_link_aad(t, &other_hash),
+                &sealed
+            )
+            .is_err()
+        );
+        assert!(
+            kek.open(
+                EMAIL_CHANGE_LINK_PURPOSE,
+                &email_change_link_aad(TenantId::new_v7(), &h),
+                &sealed
+            )
+            .is_err()
+        );
+        assert_eq!(
+            kek.open(
+                EMAIL_CHANGE_LINK_PURPOSE,
+                &email_change_link_aad(t, &h),
+                &sealed
+            )
+            .unwrap()
+            .as_slice(),
+            b"new@example.com"
         );
     }
 
