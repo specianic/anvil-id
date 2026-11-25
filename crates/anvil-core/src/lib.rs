@@ -1,7 +1,16 @@
-//! Domain model and ports; no I/O.
+//! Domain model, ports and protocol logic; no I/O.
 //!
 //! - [`model`]: identifiers and domain records.
-//! - [`ports`]: storage traits implemented by the `anvil-storage-*` crates.
+//! - [`ports`]: storage and service traits implemented outside the core.
+//! - [`error`]: [`error::CoreError`] and its single OAuth mapping.
+//! - [`clock`], [`policy`]: time source and password policy.
+//! - [`oauth`], [`service`], [`flow`]: protocol logic, services and self-service flows.
 
+pub mod clock;
+pub mod error;
+pub mod flow;
 pub mod model;
+pub mod oauth;
+pub mod policy;
 pub mod ports;
+pub mod service;

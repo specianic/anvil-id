@@ -6,6 +6,8 @@
 
 use time::OffsetDateTime;
 
+pub use crate::clock::{Clock, SystemClock};
+
 use crate::model::{
     AuthorizationCode, CodeHash, NewAuthorizationCode, NewTenant, Tenant, TenantId, TokenFamilyId,
 };
@@ -78,6 +80,9 @@ pub enum StorageError {
     /// Any other backend failure (connection, I/O, driver error).
     #[error("storage backend error: {0}")]
     Backend(#[source] Box<dyn std::error::Error + Send + Sync>),
+    /// The backend does not implement this operation (yet). Never a success.
+    #[error("unsupported storage operation: {0}")]
+    Unsupported(&'static str),
 }
 
 #[cfg(test)]
