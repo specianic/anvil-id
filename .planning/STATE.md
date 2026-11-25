@@ -6,15 +6,15 @@ current_phase: 04
 current_phase_name: release 0 3 real world logins
 current_plan: Not started
 status: planning
-stopped_at: Completed 04-22-PLAN.md
-last_updated: "2026-11-25T22:13:11.473Z"
+stopped_at: Completed 04-23-PLAN.md
+last_updated: "2026-11-25T22:16:33.210Z"
 last_activity: 2026-11-25
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 98
-  completed_plans: 85
-  percent: 87
+  completed_plans: 86
+  percent: 88
 ---
 
 # Project State
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 **Status:** Ready to plan
 **Last Activity:** 2026-11-25
 **Last Activity Description:** Phase 3 complete, transitioned to Phase 04
-**Progress:** [█████████░] 87%
+**Progress:** [█████████░] 88%
 
 Phase 3 plans 03-01 through 03-34 are all complete (34/34 summaries); v0.2.0 is published. 03-34 closed the verification gap (base64). Next: Phase 3 re-verification, then Phase 4.
 
@@ -140,6 +140,7 @@ Phase 3 plans 03-01 through 03-34 are all complete (34/34 summaries); v0.2.0 is 
 | Phase 04 P16 | 150min | 2 tasks | 15 files |
 | Phase 04 P17 | 2h | 2 tasks | 8 files |
 | Phase 04 P22 | 40min | 1 tasks | 7 files |
+| Phase 04 P23 | 30min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -316,6 +317,9 @@ Recent decisions affecting current work:
 - [Phase 04]: 04-17: a back-channel retry that would land at/after the 24 h deadline is given up (and audited) immediately
 - [Phase 04]: 04-17: logout tokens use the tenant's canonical issuer and the client's current backchannel_logout_uri
 - [Phase 04]: 04-22: console logo changes apply immediately (draft has no logo); Publish enabled only when the current draft's preview succeeded
+- [Phase 04]: 04-23: backchannel_logout_uri on a dedicated conformance client with its own rendered config (a stray logout token is a suite FAILURE in other modules)
+- [Phase 04]: 04-23: logout plan variants [response_type=code][client_registration=static_client], confirmed in suite source at release-v5.3.5
+- [Phase 04]: 04-23: post_logout_redirect Verify Complete checks the URL only (suite resultCaptured.html has no submission_complete)
 
 ### Pending Todos
 
@@ -328,6 +332,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-25T22:13:11.470Z
-Stopped at: Completed 04-22-PLAN.md
+Last session: 2026-11-25T22:16:33.208Z
+Stopped at: Completed 04-23-PLAN.md
 Resume file: None
