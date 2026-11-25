@@ -125,7 +125,7 @@ Plans:
 - [ ] 03-19-PLAN.md — Sessions: idle/absolute timeouts, throttled touch, list/revoke (wave 4)
 - [ ] 03-20-PLAN.md — Login UI: passkey button, second-factor page, brute-force protection + CAPTCHA escalation (wave 4)
 - [ ] 03-21-PLAN.md — Core management: admin audit, new client/tenant settings, console client reconciliation (wave 4)
-- [ ] 03-22-PLAN.md — Console embedding at /console/* (pre-compressed negotiation, caching, SPA fallback, placeholder) (wave 4)
+- [x] 03-22-PLAN.md — Console embedding at /console/* (pre-compressed negotiation, caching, SPA fallback, placeholder) (wave 4)
 - [ ] 03-23-PLAN.md — Management API 0.2: sessions, credentials, audit query, email templates/SMTP, new fields, OpenAPI (wave 5)
 - [ ] 03-24-PLAN.md — Binary wiring: proxy/rate-limit/rotation/retention config, leased jobs, `keys rotate`, audit JSON to stdout (wave 5)
 - [ ] 03-25-PLAN.md — Console pages (sessions, audit, email/SMTP, user tabs, client editing) + console e2e with axe (wave 6)
