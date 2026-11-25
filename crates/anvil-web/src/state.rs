@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use anvil_cache::limiter::{InProcessLimiter, RateLimiter};
 use anvil_core::ports::{BreachChecker, Clock, PasswordHasher, Storage};
 use anvil_jose::kek::Kek;
 
@@ -29,6 +30,7 @@ struct Inner {
     kek: Arc<Kek>,
     renderer: Renderer,
     cookies: CookiePolicy,
+    limiter: Arc<dyn RateLimiter>,
 }
 
 /// Cheaply clonable handle to the application state.
@@ -47,8 +49,9 @@ impl std::fmt::Debug for AppState {
 }
 
 impl AppState {
-    /// Builds the state: compiles the templates (theme override first) and derives the cookie
-    /// policy from the public URL.
+    /// Builds the state: compiles the templates (theme override first), derives the cookie
+    /// policy from the public URL and builds the single rate limiter from
+    /// [`AppConfig::rate_limits`], driven by the app clock.
     pub fn new(config: AppConfig, deps: AppDeps) -> Result<Self, WebError> {
         let renderer = Renderer::new(config.theme_dir.as_deref())?;
         let cookies = CookiePolicy::new(config.is_https());
@@ -58,6 +61,10 @@ impl AppState {
                 "development mode: cookies are not Secure and pages show a development banner"
             );
         }
+        let limiter: Arc<dyn RateLimiter> = Arc::new(InProcessLimiter::new(
+            config.rate_limits.clone(),
+            Arc::clone(&deps.clock),
+        ));
         Ok(Self(Arc::new(Inner {
             config,
             storage: deps.storage,
@@ -67,6 +74,7 @@ impl AppState {
             kek: deps.kek,
             renderer,
             cookies,
+            limiter,
         })))
     }
 
@@ -121,5 +129,11 @@ impl AppState {
 
     pub fn cookies(&self) -> &CookiePolicy {
         &self.0.cookies
+    }
+
+    /// The single rate limiter (ARCHITECTURE §11). UI handlers use it only through
+    /// [`crate::layers::ratelimit::guard_attempt`] and [`crate::layers::ratelimit::record_attempt`].
+    pub fn limiter(&self) -> &dyn RateLimiter {
+        self.0.limiter.as_ref()
     }
 }

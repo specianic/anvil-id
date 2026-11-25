@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+use anvil_cache::limiter::LimiterConfig;
 use anvil_core::model::PublicUrl;
 use anvil_core::policy::PasswordPolicy;
 
@@ -22,6 +23,9 @@ pub struct AppConfig {
     /// Reverse proxies whose forwarding header is believed for the client IP (OPS-06). Default:
     /// loopback in development mode (public URL on a loopback host), nobody otherwise.
     pub trusted_proxies: TrustedProxies,
+    /// Rate limits (SEC-05): on by default with the documented quotas of
+    /// [`LimiterConfig::default`]. `enabled = false` is the operator switch that turns limiting off.
+    pub rate_limits: LimiterConfig,
 }
 
 impl AppConfig {
@@ -38,6 +42,7 @@ impl AppConfig {
             theme_dir: None,
             password_policy: PasswordPolicy::default(),
             insecure_http: false,
+            rate_limits: LimiterConfig::default(),
         }
     }
 
@@ -89,5 +94,12 @@ mod tests {
         assert!(prod.trusted_proxies.cidrs.is_empty());
         let dev = AppConfig::new(PublicUrl::parse("http://localhost:8080").expect("url"));
         assert_eq!(dev.trusted_proxies, TrustedProxies::loopback());
+    }
+
+    #[test]
+    fn rate_limits_are_on_by_default() {
+        let cfg = AppConfig::new(PublicUrl::parse("https://op.test").expect("url"));
+        assert!(cfg.rate_limits.enabled);
+        assert_eq!(cfg.rate_limits, LimiterConfig::default());
     }
 }

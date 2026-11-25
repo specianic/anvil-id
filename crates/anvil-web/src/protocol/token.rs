@@ -7,8 +7,9 @@
 
 use std::collections::HashMap;
 
+use anvil_cache::limiter::{Decision, LimitKey, RouteClass};
 use anvil_core::error::CoreError;
-use anvil_core::service::client_auth::ClientAuthInput;
+use anvil_core::service::client_auth::{ClientAuthInput, parse_basic};
 use anvil_core::service::token::{TokenRequest, TokenService};
 use axum::Router;
 use axum::body::Bytes;
@@ -19,6 +20,7 @@ use axum::routing::post;
 
 use crate::errors::oauth_json;
 use crate::layers::cors::public_cors;
+use crate::layers::ratelimit::{Surface, too_many_requests};
 use crate::state::AppState;
 use crate::tenant::ResolvedTenant;
 
@@ -114,6 +116,26 @@ pub(crate) fn no_store(mut resp: Response) -> Response {
     resp
 }
 
+/// Longest claimed `client_id` that is limited per client. Longer values cannot be registered
+/// clients; they are still bounded by the per-IP token limit.
+const MAX_LIMITED_CLIENT_ID: usize = 256;
+
+/// The `client_id` the request claims (HTTP Basic user name, else the `client_id` parameter),
+/// before authentication. Used for the per-client token limit (SEC-05).
+///
+/// Trade-off: the key is the *claimed* id, so a caller can spend another client's per-client
+/// quota by naming it. That spend is itself bounded by the caller's per-IP token limit (checked
+/// first, in the rate-limit layer), and keying on the authenticated client instead would let
+/// unauthenticated floods through to client authentication. A `private_key_jwt` request that
+/// carries no `client_id` is limited per IP only.
+fn claimed_client_id(auth: &ClientAuthInput) -> Option<String> {
+    let id = match auth.basic.as_deref() {
+        Some(basic) => parse_basic(basic).ok().map(|(id, _)| id),
+        None => auth.client_id.clone(),
+    }?;
+    (!id.is_empty() && id.len() <= MAX_LIMITED_CLIENT_ID).then_some(id)
+}
+
 async fn token(
     State(state): State<AppState>,
     tenant: ResolvedTenant,
@@ -124,6 +146,17 @@ async fn token(
         Ok(r) => r,
         Err(e) => return oauth_json(&e),
     };
+    if let Some(client_id) = claimed_client_id(&req.auth) {
+        let key = LimitKey::Client {
+            tenant: tenant.tenant.id,
+            client_id,
+        };
+        if let Decision::Deny { retry_after } = state.limiter().check(RouteClass::Token, &key).await
+        {
+            tracing::info!(tenant = %tenant.tenant.id, "token endpoint rate limited per client");
+            return too_many_requests(&state, Some(&tenant), Surface::Protocol, retry_after);
+        }
+    }
     match state
         .token_service()
         .token(&tenant.tenant, &tenant.issuer, req)
@@ -177,6 +210,24 @@ mod tests {
         let err = token_request(&HeaderMap::new(), b"grant_type=x").expect_err("no type");
         assert_eq!(err.oauth_error(), "invalid_request");
         assert!(token_request(&form_headers(), b"grant_type=x").is_ok());
+    }
+
+    #[test]
+    fn claimed_client_id_prefers_basic() {
+        let mut auth = ClientAuthInput {
+            basic: Some("Basic YTpi".into()),
+            client_id: Some("other".into()),
+            client_secret: None,
+            client_assertion_type: None,
+            client_assertion: None,
+        };
+        assert_eq!(claimed_client_id(&auth).as_deref(), Some("a"));
+        auth.basic = None;
+        assert_eq!(claimed_client_id(&auth).as_deref(), Some("other"));
+        auth.client_id = Some("x".repeat(MAX_LIMITED_CLIENT_ID + 1));
+        assert_eq!(claimed_client_id(&auth), None);
+        auth.client_id = None;
+        assert_eq!(claimed_client_id(&auth), None);
     }
 
     #[test]

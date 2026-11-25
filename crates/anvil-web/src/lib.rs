@@ -56,6 +56,11 @@ pub fn app(config: AppConfig, deps: AppDeps) -> Result<Router, WebError> {
             state.clone(),
             tenant::resolve,
         ))
+        // After tenant resolution: paths are tenant-relative and `ResolvedTenant` is set.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            layers::ratelimit::layer,
+        ))
         .service(inner);
     let headers = layers::security_headers::SecurityHeaders {
         hsts: state.config().is_https(),
