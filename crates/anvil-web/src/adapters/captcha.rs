@@ -19,7 +19,6 @@ use std::time::Duration;
 
 use anvil_core::model::{CAPTCHA_SECRET_PURPOSE, CaptchaProvider, CaptchaSettings, TenantId};
 use anvil_jose::kek::Kek;
-use base64::Engine as _;
 use secrecy::{ExposeSecret as _, SecretString};
 use serde::Deserialize;
 
@@ -106,8 +105,7 @@ pub fn open_secret(
     tenant: TenantId,
     settings: &CaptchaSettings,
 ) -> Result<SecretString, CaptchaError> {
-    let sealed = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(settings.secret_sealed.trim_end_matches('='))
+    let sealed = anvil_jose::encoding::b64url_decode(&settings.secret_sealed)
         .map_err(|_| CaptchaError::Config("sealed CAPTCHA secret is not base64url".to_owned()))?;
     let plain = kek
         .open(CAPTCHA_SECRET_PURPOSE, tenant.0.as_bytes(), &sealed)
@@ -353,10 +351,21 @@ mod tests {
         let settings = CaptchaSettings {
             provider: CaptchaProvider::Turnstile,
             site_key: "site".into(),
-            secret_sealed: base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sealed),
+            secret_sealed: anvil_jose::encoding::b64url(&sealed),
         };
         let secret = open_secret(&kek, tenant, &settings).expect("opens");
         assert_eq!(secret.expose_secret(), "0x-secret");
         assert!(open_secret(&kek, TenantId::new_v7(), &settings).is_err());
+        let padded = CaptchaSettings {
+            secret_sealed: format!("{}=", settings.secret_sealed),
+            ..settings
+        };
+        assert!(
+            matches!(
+                open_secret(&kek, tenant, &padded),
+                Err(CaptchaError::Config(_))
+            ),
+            "non-canonical base64url is rejected"
+        );
     }
 }

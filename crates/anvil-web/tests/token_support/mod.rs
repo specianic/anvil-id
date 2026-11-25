@@ -26,7 +26,6 @@ use anvil_jose::jwk::Jwks;
 use anvil_jose::keys::{Alg, SigningKey};
 use axum::body::Body;
 use axum::http::{Method, Request, header};
-use base64::Engine;
 use secrecy::ExposeSecret;
 use serde_json::Value;
 
@@ -307,10 +306,7 @@ pub async fn issue_code(
 pub fn basic(id: &str, secret: &str) -> String {
     let enc = |s: &str| url::form_urlencoded::byte_serialize(s.as_bytes()).collect::<String>();
     let raw = format!("{}:{}", enc(id), enc(secret));
-    format!(
-        "Basic {}",
-        base64::engine::general_purpose::STANDARD.encode(raw)
-    )
+    format!("Basic {}", anvil_jose::encoding::b64std(raw.as_bytes()))
 }
 
 /// A form POST without browser headers (as an RP back channel sends it).

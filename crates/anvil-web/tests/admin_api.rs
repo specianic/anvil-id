@@ -664,8 +664,7 @@ async fn cc_token(
     client_id: &str,
     secret: &str,
 ) -> support::TestResponse {
-    use base64::Engine as _;
-    let basic = base64::engine::general_purpose::STANDARD.encode(format!("{client_id}:{secret}"));
+    let basic = anvil_jose::encoding::b64std(format!("{client_id}:{secret}").as_bytes());
     let body = "grant_type=client_credentials";
     let req = axum::http::Request::post(format!("{prefix}/token"))
         .header("authorization", format!("Basic {basic}"))

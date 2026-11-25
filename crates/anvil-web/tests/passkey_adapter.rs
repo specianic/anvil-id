@@ -12,8 +12,6 @@ use anvil_web::adapters::{WebauthnPasskeys, relying_party};
 use aws_lc_rs::digest::{SHA256, digest};
 use aws_lc_rs::rand::SystemRandom;
 use aws_lc_rs::signature::{ECDSA_P256_SHA256_ASN1_SIGNING, EcdsaKeyPair, KeyPair as _};
-use base64::Engine as _;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 use serde_json::{Value, json};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -47,7 +45,7 @@ fn user() -> PasskeyUser {
 }
 
 fn b64(bytes: &[u8]) -> String {
-    B64.encode(bytes)
+    anvil_jose::encoding::b64url(bytes)
 }
 
 fn options(json: &str) -> Value {
@@ -294,7 +292,7 @@ fn registration_options_request_discoverable_uv_required_credentials() {
     assert_eq!(sel["requireResidentKey"], true);
     assert_eq!(sel["userVerification"], "required");
 
-    let user_id = B64.decode(pk["user"]["id"].as_str().unwrap()).unwrap();
+    let user_id = anvil_jose::encoding::b64url_decode(pk["user"]["id"].as_str().unwrap()).unwrap();
     assert_eq!(user_id, user.id.0.as_bytes());
     assert_eq!(pk["user"]["name"], "alice@example.com");
     assert_eq!(pk["user"]["displayName"], "Alice");
@@ -306,7 +304,7 @@ fn registration_options_request_discoverable_uv_required_credentials() {
         .as_array()
         .unwrap()
         .iter()
-        .map(|d| B64.decode(d["id"].as_str().unwrap()).unwrap())
+        .map(|d| anvil_jose::encoding::b64url_decode(d["id"].as_str().unwrap()).unwrap())
         .collect();
     assert_eq!(ids, excluded);
 

@@ -252,7 +252,6 @@ dependencies = [
  "aws-lc-rs",
  "axum",
  "axum-extra",
- "base64 0.23.1",
  "http-body-util",
  "insta",
  "ipnet",

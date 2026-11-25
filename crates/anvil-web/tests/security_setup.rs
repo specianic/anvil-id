@@ -13,7 +13,6 @@ use anvil_core::model::{
 use anvil_core::ports::Clock as _;
 use anvil_core::service::client_auth::ClientAuthInput;
 use anvil_core::service::token::{TokenRequest, TokenService};
-use base64::Engine as _;
 use support::TestApp;
 use ui_helpers::*;
 
@@ -134,7 +133,7 @@ async fn setup_creates_the_admin_and_a_working_management_client_once() {
     let basic = |secret: &str| {
         format!(
             "Basic {}",
-            base64::engine::general_purpose::STANDARD.encode(format!("{client_id}:{secret}"))
+            anvil_jose::encoding::b64std(format!("{client_id}:{secret}").as_bytes())
         )
     };
     let request = |secret: &str| TokenRequest {

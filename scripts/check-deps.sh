@@ -2,8 +2,14 @@
 # scripts/check-deps.sh: FND-02 crate dependency rules (ARCHITECTURE.md §4).
 #
 #   scripts/check-deps.sh              check the workspace, exit non-zero on any violation
-#   scripts/check-deps.sh --self-test  prove the checker rejects forbidden NORMAL dependencies
-#                                      and accepts dev-dependencies
+#   scripts/check-deps.sh --self-test  prove the checker rejects forbidden NORMAL dependencies,
+#                                      accepts dev-dependencies and rejects base64 outside
+#                                      anvil-jose
+#
+# Also enforces "one implementation per concern" for base64 (CLAUDE.md): only anvil-jose may
+# depend on the base64 crate (any dependency kind), and no Rust source under crates/ outside
+# crates/anvil-jose/src may call `base64::` or carry a hand-rolled base64 alphabet. Everything
+# else uses anvil_jose::encoding::{b64url, b64url_decode, b64std, b64std_decode}.
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -76,10 +82,35 @@ check() {
     forbid "$c" "${store_impls[@]}" sqlx sqlx-core
   done
 
+  check_base64
+
   if ((fail == 0)); then
     echo "dependency rules OK"
   fi
   return "$fail"
+}
+
+# One base64 implementation: anvil_jose::encoding.
+check_base64() {
+  local manifest hits
+  # Any dependency kind (normal, dev, build, target-specific) on the base64 crate.
+  for manifest in "$ROOT"/crates/*/Cargo.toml; do
+    [[ $manifest == "$ROOT/crates/anvil-jose/Cargo.toml" ]] && continue
+    if grep -Eq '^[[:space:]]*base64[[:space:]]*(=|\.)' "$manifest"; then
+      echo "RULE VIOLATION: ${manifest#"$ROOT/"} depends on base64 (use anvil_jose::encoding)"
+      fail=1
+    fi
+  done
+  # Direct calls into the crate or a hand-rolled alphabet table (standard or URL-safe).
+  hits=$(cd "$ROOT" && grep -rnE --include='*.rs' \
+    -e 'base64::' -e 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789' \
+    crates | grep -v '^crates/anvil-jose/src/' || true)
+  if [[ -n $hits ]]; then
+    while IFS= read -r line; do
+      echo "RULE VIOLATION: base64 outside anvil-jose (use anvil_jose::encoding): $line"
+    done <<<"$hits"
+    fail=1
+  fi
 }
 
 # --- self-test -------------------------------------------------------------------------------
@@ -103,12 +134,20 @@ self_test() {
 
   local failures=0
   # case <name> <expected: pass|fail> <cargo add args...>
+  # or   <name> <expected> --append <file> <text>  (appends a line of source to <file>)
   run_case() {
     local name=$1 expected=$2
     shift 2
     rm -rf "$tmp/ws"
     cp -a "$tmp/pristine" "$tmp/ws"
-    if (($# > 0)) && ! (cd "$tmp/ws" && cargo add --offline -q "$@") >"$tmp/add.log" 2>&1; then
+    if [[ ${1:-} == --append ]]; then
+      if [[ ! -f "$tmp/ws/$2" ]]; then
+        echo "FAIL $name: could not apply mutation (no file $2)"
+        failures=$((failures + 1))
+        return
+      fi
+      printf '%s\n' "$3" >>"$tmp/ws/$2"
+    elif (($# > 0)) && ! (cd "$tmp/ws" && cargo add --offline -q "$@") >"$tmp/add.log" 2>&1; then
       echo "FAIL $name: could not apply mutation (cargo add $*)"
       sed 's/^/    /' "$tmp/add.log"
       failures=$((failures + 1))
@@ -138,6 +177,17 @@ self_test() {
     -p anvil-web anvil-storage-sqlite --path crates/anvil-storage-sqlite --dev
   run_case "D: anvil-storage-sqlite gains normal dep anvil-web" fail \
     -p anvil-storage-sqlite anvil-web --path crates/anvil-web
+  run_case "E: anvil-web gains dev dep base64" fail \
+    -p anvil-web base64 --dev
+  run_case "F: anvil-web source calls base64::" fail \
+    --append crates/anvil-web/src/lib.rs \
+    'fn _b(x: &[u8]) -> String { base64::Engine::encode(&base64::engine::general_purpose::STANDARD, x) }'
+  run_case "G: anvil-mail test code hand-rolls a base64 alphabet" fail \
+    --append crates/anvil-mail/tests/templates.rs \
+    'const _T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";'
+  run_case "H: base64:: inside anvil-jose/src is allowed" pass \
+    --append crates/anvil-jose/src/encoding.rs \
+    'const _E: base64::engine::GeneralPurpose = base64::engine::general_purpose::STANDARD;'
 
   if ((failures > 0)); then
     echo "dependency checker self-test FAILED ($failures case(s))"

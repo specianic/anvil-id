@@ -190,10 +190,7 @@ async fn url_encoded_special_characters_in_basic_credentials_decode() {
     // The same secret sent without the urlencoding step does not match ("+" decodes to " ").
     let raw = format!(
         "Basic {}",
-        base64::Engine::encode(
-            &base64::engine::general_purpose::STANDARD,
-            format!("{}:{}", rp.id(), "s3cr+t")
-        )
+        anvil_jose::encoding::b64std(format!("{}:{}", rp.id(), "s3cr+t").as_bytes())
     );
     let resp = token(&app, &Auth::Raw(Some(raw), vec![]), CC).await;
     assert_basic_challenge(&resp);

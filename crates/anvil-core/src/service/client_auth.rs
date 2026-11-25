@@ -13,7 +13,7 @@
 use std::sync::Arc;
 
 use anvil_jose::client_assertion::{AssertionRules, verify_client_assertion};
-use anvil_jose::encoding::{b64url_decode, ct_eq, secret_hash};
+use anvil_jose::encoding::{b64std_decode, b64url_decode, ct_eq, secret_hash};
 use anvil_jose::jwk::Jwks;
 use anvil_jose::jws::MAX_JWS_LEN;
 use time::{Duration, OffsetDateTime};
@@ -69,55 +69,6 @@ fn invalid_client(reason: &str, basic_auth_used: bool) -> CoreError {
     }
 }
 
-/// Strict standard-alphabet base64 (RFC 4648 §4). Padding is optional; when present it must be
-/// correct. Non-canonical trailing bits are rejected.
-fn b64_std_decode(s: &str) -> Option<Vec<u8>> {
-    fn val(c: u8) -> Option<u32> {
-        match c {
-            b'A'..=b'Z' => Some(u32::from(c - b'A')),
-            b'a'..=b'z' => Some(u32::from(c - b'a') + 26),
-            b'0'..=b'9' => Some(u32::from(c - b'0') + 52),
-            b'+' => Some(62),
-            b'/' => Some(63),
-            _ => None,
-        }
-    }
-    let bytes = s.as_bytes();
-    let pad = bytes.iter().rev().take_while(|&&c| c == b'=').count();
-    if pad > 2 || (pad > 0 && !bytes.len().is_multiple_of(4)) {
-        return None;
-    }
-    let data = &bytes[..bytes.len() - pad];
-    if data.len() % 4 == 1 {
-        return None;
-    }
-    let mut out = Vec::with_capacity(data.len() * 3 / 4);
-    for chunk in data.chunks(4) {
-        let mut acc = 0u32;
-        for &c in chunk {
-            acc = (acc << 6) | val(c)?;
-        }
-        match chunk.len() {
-            4 => out.extend_from_slice(&[(acc >> 16) as u8, (acc >> 8) as u8, acc as u8]),
-            3 => {
-                if acc & 0b11 != 0 {
-                    return None;
-                }
-                let acc = acc >> 2;
-                out.extend_from_slice(&[(acc >> 8) as u8, acc as u8]);
-            }
-            2 => {
-                if acc & 0b1111 != 0 {
-                    return None;
-                }
-                out.push((acc >> 4) as u8);
-            }
-            _ => return None,
-        }
-    }
-    Some(out)
-}
-
 /// `application/x-www-form-urlencoded` decoding of one component (`+` is a space).
 fn form_urldecode(s: &str) -> Option<String> {
     let b = s.as_bytes();
@@ -149,7 +100,7 @@ pub fn parse_basic(header: &str) -> Result<(String, String), CoreError> {
     if !scheme.eq_ignore_ascii_case("basic") {
         return Err(bad());
     }
-    let decoded = b64_std_decode(rest.trim()).ok_or_else(bad)?;
+    let decoded = b64std_decode(rest.trim()).map_err(|_| bad())?;
     let decoded = String::from_utf8(decoded).map_err(|_| bad())?;
     let (id, secret) = decoded.split_once(':').ok_or_else(bad)?;
     let id = form_urldecode(id).ok_or_else(bad)?;
@@ -424,28 +375,7 @@ pub(crate) mod tests {
     use anvil_jose::keys::{Alg, SigningKey};
 
     fn b64_std(s: &str) -> String {
-        // Test-side encoder (standard alphabet, padded).
-        const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        let b = s.as_bytes();
-        let mut out = String::new();
-        for c in b.chunks(3) {
-            let n = (u32::from(c[0]) << 16)
-                | (u32::from(*c.get(1).unwrap_or(&0)) << 8)
-                | u32::from(*c.get(2).unwrap_or(&0));
-            out.push(T[(n >> 18) as usize & 63] as char);
-            out.push(T[(n >> 12) as usize & 63] as char);
-            out.push(if c.len() > 1 {
-                T[(n >> 6) as usize & 63] as char
-            } else {
-                '='
-            });
-            out.push(if c.len() > 2 {
-                T[n as usize & 63] as char
-            } else {
-                '='
-            });
-        }
-        out
+        anvil_jose::encoding::b64std(s.as_bytes())
     }
 
     pub(crate) fn client(method: ClientAuthMethod) -> Client {
@@ -516,18 +446,29 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn b64_std_round_trip_and_strictness() {
-        for s in ["", "a", "ab", "abc", "abcd", "rp:s3cret"] {
-            assert_eq!(b64_std_decode(&b64_std(s)).unwrap(), s.as_bytes());
-            let unpadded = b64_std(s).trim_end_matches('=').to_owned();
-            assert_eq!(b64_std_decode(&unpadded).unwrap(), s.as_bytes());
+    fn parse_basic_accepts_padded_and_unpadded_and_rejects_non_canonical_base64() {
+        for padded in [b64_std("ab:c"), b64_std("abc:de"), b64_std("rp:s3cret")] {
+            let unpadded = padded.trim_end_matches('=').to_owned();
+            for h in [&padded, &unpadded] {
+                let (id, secret) = parse_basic(&format!("Basic {h}")).unwrap();
+                assert!(!id.is_empty() && !secret.is_empty());
+            }
         }
-        assert!(
-            b64_std_decode("YR==").is_none(),
-            "non-canonical trailing bits"
-        );
-        assert!(b64_std_decode("Y-I=").is_none(), "url alphabet");
-        assert!(b64_std_decode("YQ===").is_none());
+        // "a:b" = YTpi; non-canonical, URL-alphabet, partial and excess padding are rejected.
+        for bad in [
+            "YTpj=",
+            "YTo=",
+            "YT-i",
+            "YTpi=",
+            "YTpiYQ=",
+            "YTpiYQ===",
+            "YTpiYR==",
+        ] {
+            assert!(
+                is_invalid_client(&parse_basic(&format!("Basic {bad}")), true),
+                "{bad:?} must be rejected"
+            );
+        }
     }
 
     fn input() -> ClientAuthInput {

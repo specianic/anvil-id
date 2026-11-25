@@ -1,10 +1,13 @@
-//! Randomness, hashing, constant-time comparison and strict base64url helpers.
+//! Randomness, hashing, constant-time comparison and strict base64 helpers.
 //!
-//! aws-lc-rs is the only RNG and digest implementation (ARCHITECTURE.md §2).
+//! aws-lc-rs is the only RNG and digest implementation (ARCHITECTURE.md §2). This module is the
+//! only base64 implementation in the workspace (base64url for JOSE, tokens and sealed values;
+//! standard alphabet for HTTP Basic and SMTP AUTH). `scripts/check-deps.sh` rejects any other.
 
 use aws_lc_rs::{digest, rand};
 use base64::Engine as _;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::engine::DecodePaddingMode;
+use base64::engine::general_purpose::{GeneralPurpose, GeneralPurposeConfig, URL_SAFE_NO_PAD};
 use subtle::ConstantTimeEq as _;
 
 use crate::JoseError;
@@ -62,6 +65,41 @@ pub fn b64url_decode(s: &str) -> Result<Vec<u8>, JoseError> {
     URL_SAFE_NO_PAD
         .decode(s.as_bytes())
         .map_err(|_| JoseError::Malformed("invalid base64url"))
+}
+
+/// Standard alphabet (RFC 4648 §4), padded, canonical: encodes with padding; decodes only with
+/// exactly the canonical padding and zero trailing bits.
+const STD: GeneralPurpose = GeneralPurpose::new(
+    &base64::alphabet::STANDARD,
+    GeneralPurposeConfig::new()
+        .with_encode_padding(true)
+        .with_decode_padding_mode(DecodePaddingMode::RequireCanonical)
+        .with_decode_allow_trailing_bits(false),
+);
+
+/// The same alphabet with all padding omitted (decode only; see [`b64std_decode`]).
+const STD_UNPADDED: GeneralPurpose = GeneralPurpose::new(
+    &base64::alphabet::STANDARD,
+    GeneralPurposeConfig::new()
+        .with_encode_padding(false)
+        .with_decode_padding_mode(DecodePaddingMode::RequireNone)
+        .with_decode_allow_trailing_bits(false),
+);
+
+/// Standard base64 with padding (RFC 4648 §4), e.g. HTTP Basic credentials and SMTP AUTH.
+#[must_use]
+pub fn b64std(data: &[u8]) -> String {
+    STD.encode(data)
+}
+
+/// Strict standard-alphabet base64 decoding: rejects the URL alphabet (`-`, `_`), whitespace,
+/// partial or excess padding and non-canonical trailing bits. Input is either fully padded or
+/// carries no padding at all (HTTP Basic clients send both forms); nothing else is accepted.
+pub fn b64std_decode(s: &str) -> Result<Vec<u8>, JoseError> {
+    let engine = if s.contains('=') { &STD } else { &STD_UNPADDED };
+    engine
+        .decode(s.as_bytes())
+        .map_err(|_| JoseError::Malformed("invalid base64"))
 }
 
 /// OIDC `at_hash`: left-most 128 bits of SHA-256 of the access token, base64url (RS256/ES256/PS256).
@@ -137,6 +175,49 @@ mod tests {
     }
 
     #[test]
+    fn b64std_matches_rfc4648_vectors() {
+        // RFC 4648 §10.
+        for (input, expected) in [
+            ("", ""),
+            ("f", "Zg=="),
+            ("fo", "Zm8="),
+            ("foo", "Zm9v"),
+            ("foob", "Zm9vYg=="),
+            ("fooba", "Zm9vYmE="),
+            ("foobar", "Zm9vYmFy"),
+        ] {
+            assert_eq!(b64std(input.as_bytes()), expected, "{input:?}");
+            assert_eq!(b64std_decode(expected).unwrap(), input.as_bytes());
+            let unpadded = expected.trim_end_matches('=');
+            assert_eq!(b64std_decode(unpadded).unwrap(), input.as_bytes());
+        }
+        assert_eq!(b64std(b"\xfb\xff"), "+/8=");
+    }
+
+    #[test]
+    fn b64std_decode_is_strict() {
+        assert!(
+            b64std_decode("YR==").is_err(),
+            "non-canonical trailing bits"
+        );
+        assert!(
+            b64std_decode("YWJ=").is_err(),
+            "non-canonical trailing bits"
+        );
+        assert!(b64std_decode("Y-I=").is_err(), "url alphabet");
+        assert!(b64std_decode("-_8=").is_err(), "url alphabet");
+        assert!(b64std_decode("YQ===").is_err(), "excess padding");
+        assert!(b64std_decode("YQ=").is_err(), "partial padding");
+        assert!(b64std_decode("YW=J").is_err(), "padding inside data");
+        assert!(b64std_decode("Zm9vY").is_err(), "impossible length");
+        assert!(b64std_decode("YW J").is_err(), "whitespace");
+        assert!(b64std_decode(" YWJj").is_err(), "leading whitespace");
+        assert!(b64std_decode("YWJj\n").is_err(), "trailing newline");
+        assert!(b64std_decode("!!!!").is_err(), "invalid characters");
+        assert_eq!(b64std_decode("+/8=").unwrap(), b"\xfb\xff");
+    }
+
+    #[test]
     fn ct_eq_behaviour() {
         assert!(ct_eq(b"abc", b"abc"));
         assert!(!ct_eq(b"abc", b"abd"));
@@ -148,6 +229,11 @@ mod tests {
         #[test]
         fn b64url_roundtrip(data in proptest::collection::vec(any::<u8>(), 0..512)) {
             prop_assert_eq!(b64url_decode(&b64url(&data)).unwrap(), data);
+        }
+
+        #[test]
+        fn b64std_roundtrip(data in proptest::collection::vec(any::<u8>(), 0..512)) {
+            prop_assert_eq!(b64std_decode(&b64std(&data)).unwrap(), data);
         }
     }
 }
