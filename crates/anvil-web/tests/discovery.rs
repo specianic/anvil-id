@@ -62,6 +62,11 @@ const ALLOWED_METADATA: &[&str] = &[
     "authorization_response_iss_parameter_supported",
     // OIDC Discovery (prompt=create spec)
     "prompt_values_supported",
+    // OIDC RP-Initiated Logout 1.0 §2.1
+    "end_session_endpoint",
+    // OIDC Back-Channel Logout 1.0 §2.1
+    "backchannel_logout_supported",
+    "backchannel_logout_session_supported",
 ];
 
 async fn create_acme(app: &TestApp) {
