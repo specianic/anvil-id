@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 01-07-PLAN.md
-last_updated: "2026-11-25T01:12:09.377Z"
-last_activity: 2026-11-25 — Completed 01-07 (storage wiring, static musl build, release-build CI)
+stopped_at: Completed 01-08-PLAN.md
+last_updated: "2026-11-25T01:24:20.338Z"
+last_activity: 2026-11-25 — Completed 01-08 (phase gate: CI green on GitHub, spike verdicts, stack confirmed)
 progress:
   total_phases: 7
-  completed_phases: 0
-  total_plans: 8
-  completed_plans: 7
-  percent: 88
+  completed_phases: 1
+  total_plans: 15
+  completed_plans: 8
+  percent: 53
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 ## Current Position
 
 Phase: 1 of 7 (Foundations and Spikes (M0))
-Plan: 7 of 8 in current phase (01-01 through 01-07 complete)
-Status: In progress
-Last activity: 2026-11-25 — Completed 01-07 (storage wiring, static musl build + idle measurement, release-build CI)
+Plan: 8 of 8 in current phase (phase complete; all plans 01-01 through 01-08 done)
+Status: Phase complete — ready for verification
+Last activity: 2026-11-25 — Completed 01-08 (phase gate: CI green on GitHub, spike verdicts, stack confirmed)
 
-Progress: [█████████░] 88%
+Progress: [█████░░░░░] 53%
 
 ## Performance Metrics
 
@@ -57,6 +57,7 @@ Progress: [█████████░] 88%
 | Phase 01 P06 | 9min | 2 tasks | 6 files |
 | Phase 01 P05 | 4min | 2 tasks | 10 files |
 | Phase 01 P07 | 10min | 3 tasks | 9 files |
+| Phase 01 P08 | 20min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -81,6 +82,8 @@ Recent decisions affecting current work:
 - [Phase 01]: Postgres backend passes the shared contract (incl. 32-way consume) with one PgPool and zero query overrides; two sqlx backends judged manageable (§2.1 condition 3 met)
 - [Phase 01]: anvilid serve requires --database-url (no implicit default DB); unknown schemes rejected without echoing the URL; Postgres pool 10
 - [Phase 01]: Spike B local x86_64 static-pie musl: 9.44 MiB, 18.3 MB idle RSS (vs probe 3.5 MB/9.1 MB, now with sqlx SQLite+Postgres + aws-lc-rs linked); arm64 proven in CI (plan 08)
+- [Phase 01]: Phase 1 gate: §2.1 conditions 1-3 met (conformance green in CI, static musl amd64+arm64, two sqlx backends manageable); Rust stack confirmed
+- [Phase 01]: Conformance suite fetched via blobless --no-checkout clone (sparse-checkout not portable across git versions); mongo on a named volume removed by down -v
 
 ### Pending Todos
 
@@ -88,12 +91,11 @@ None yet.
 
 ### Blockers/Concerns
 
-- [Phase 1]: Rust stack is conditional on spikes A–C succeeding (ARCHITECTURE.md §2.1)
 - [Phase 6]: Decision D4 (pure-Rust SAML XML-DSig vs alternatives) must be resolved before M5; SAML stays experimental until it passes a signature-wrapping attack corpus
 - [Phase 4]: Social login exit criterion requires testing against real providers in a staging environment (provider app registrations needed)
 
 ## Session Continuity
 
-Last session: 2026-11-25T01:12:09.375Z
-Stopped at: Completed 01-07-PLAN.md
+Last session: 2026-11-25T01:24:20.336Z
+Stopped at: Completed 01-08-PLAN.md
 Resume file: None
