@@ -7,13 +7,13 @@ current_phase_name: release 0 3 real world logins
 current_plan: Not started
 status: planning
 stopped_at: Completed 04-15-PLAN.md
-last_updated: "2026-11-25T20:13:29.408Z"
+last_updated: "2026-11-25T20:14:01.563Z"
 last_activity: 2026-11-25
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 98
-  completed_plans: 79
+  completed_plans: 80
   percent: 81
 ---
 
@@ -134,6 +134,7 @@ Phase 3 plans 03-01 through 03-34 are all complete (34/34 summaries); v0.2.0 is 
 | Phase 04 P14 | multi-session | 2 tasks | 8 files |
 | Phase 04 P11 | 100min | 2 tasks | 15 files |
 | Phase 04 P15 | multi-session | 2 tasks | 18 files |
+| Phase 04 P13 | 90min | 2 tasks | 13 files |
 
 ## Accumulated Context
 
@@ -303,6 +304,7 @@ Recent decisions affecting current work:
 - [Phase 04]: 04-14: OutboundError::InvalidUrl maps to UpstreamError::Blocked
 - [Phase 04]: 04-11: connections use admin:settings scopes (system tenant writes need admin:write); Microsoft email trust needs accept_email_trust_risk; email_otp/magic_link turn on only with installation or tenant SMTP
 - [Phase 04]: 04-15: email change to a taken address answers like success but sends nothing; a conflict at confirmation keeps the token
+- [Phase 04]: 04-13: /logout Confirm 303s to /ui/logout with validated client_id/URI/state (never the hint); GET /ui/logout re-decides without hint and creates the CSRF-bound FlowKind::Logout flow; confirmation ends at /ui/signed-out; refusals are 400 logged_out.html with logout.* keys
 
 ### Pending Todos
 

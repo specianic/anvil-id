@@ -164,7 +164,7 @@ Plans:
 - [x] 04-10-PLAN.md — Conformance harness: logout/backchannel selections, callback CA + leaf, outbound settings, browser tasks (wave 2)
 - [ ] 04-11-PLAN.md — Admin API 0.3: connections CRUD with sealed write-only secrets, client logout/resource/MFA fields, tenant settings, OpenAPI regen (wave 3)
 - [x] 04-12-PLAN.md — Resource indicators end to end: multi-valued resource, invalid_target, downscoping, aud, introspection, UserInfo audience rule (wave 3)
-- [ ] 04-13-PLAN.md — RP-initiated logout: /logout GET+POST, hint validation, confirmation flow, signed-out/error pages, discovery fields (wave 3)
+- [x] 04-13-PLAN.md — RP-initiated logout: /logout GET+POST, hint validation, confirmation flow, signed-out/error pages, discovery fields (wave 3)
 - [ ] 04-14-PLAN.md — Upstream transport adapter on the guarded client: discovery, JWKS cache, token exchange, API calls, MockProvider (wave 3)
 - [ ] 04-15-PLAN.md — Account page: profile, email change with re-verification, password change, nav; login_code/email_change/email_changed emails (wave 3)
 - [ ] 04-16-PLAN.md — Login engine: MFA policy enforcement, in-flow enrolment, acr_values step-up, unmet acr, session switch, login_hint (wave 4)
@@ -231,7 +231,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 1. Foundations and Spikes (M0) | 8/8 | Complete    | 2026-11-25 |
 | 2. Release 0.1 "First login" | 23/23 | Complete    | 2026-11-25 |
 | 3. Release 0.2 "Secure by default" | 34/34 | Complete    | 2026-11-25 |
-| 4. Release 0.3 "Real-world logins" | 13/33 | In Progress|  |
+| 4. Release 0.3 "Real-world logins" | 15/33 | In Progress|  |
 | 5. Release 0.4 "Operate it" | 0/TBD | Not started | - |
 | 6. Release 1.0 (Organizations and SSO) | 0/TBD | Not started | - |
 | 7. Release 1.0 (Certification and release) | 0/TBD | Not started | - |
