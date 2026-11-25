@@ -7,6 +7,17 @@
 //! administrator and the management API client, whose secret is returned exactly once.
 //!
 //! The setup token and URL are never logged here; the binary prints the URL once.
+//!
+//! # The console client and the system tenant (Research Open Question 5)
+//!
+//! Users of the system tenant are the installation's administrators, and the admin console signs
+//! in as the built-in public client `anvil-console` of the system tenant. That client is product
+//! configuration, not operator data: [`BootstrapService::ensure_console_client`] runs at every
+//! start and reconciles it with values derived from the public URL (there is no switch to turn it
+//! off in 0.2). The same call enforces `registration = disabled` for the system tenant on
+//! installations created before this rule, so nobody can sign themselves up as an administrator.
+//! Admin scopes only exist on system-tenant clients, so a user of any other tenant can never
+//! obtain them.
 
 use std::sync::Arc;
 
@@ -18,14 +29,16 @@ use time::{Duration, OffsetDateTime};
 use crate::clock::Clock;
 use crate::error::CoreError;
 use crate::model::{
-    ApplicationType, ClientAuthMethod, ClientId, ClientType, DEFAULT_TENANT_SLUG, GrantType,
-    InstallPlan, KeyState, NewClient, NewPasswordCredential, NewSetupToken, NewTenant, NewUser,
-    PublicUrl, RegistrationMode, SYSTEM_TENANT_SLUG, SecretHash, StandardClaims, TenantId,
-    TenantSettings, User, UserId, UserStatus, normalize_email,
+    ApplicationType, AuditAction, AuditActor, AuditDetails, AuditOutcome, Client, ClientAuthMethod,
+    ClientId, ClientType, ClientUpdate, ConsentMode, DEFAULT_TENANT_SLUG, GrantType, InstallPlan,
+    KeyState, NewClient, NewPasswordCredential, NewSetupToken, NewTenant, NewUser, PublicUrl,
+    RegistrationMode, RequestContext, SYSTEM_TENANT_SLUG, SecretHash, StandardClaims, Tenant,
+    TenantId, TenantSettings, TenantUpdate, TokenFormat, User, UserId, UserStatus, normalize_email,
 };
 use crate::policy::{PasswordPolicy, check_password};
 use crate::ports::{InstallOutcome, PasswordHasher, SetupOutcome, Storage, StorageError};
 use crate::service::admin_scope::{ADMIN_READ, ADMIN_WRITE};
+use crate::service::audit::AuditService;
 use crate::service::client::new_client_secret;
 use crate::service::tenant::seal_new_key;
 
@@ -33,6 +46,13 @@ use crate::service::tenant::seal_new_key;
 pub const SETUP_TOKEN_TTL: Duration = Duration::hours(1);
 /// Prefix of the management client's `client_id`.
 pub const MGMT_CLIENT_ID_PREFIX: &str = "mgmt-";
+
+/// `client_id` of the built-in admin console client (system tenant).
+pub const CONSOLE_CLIENT_ID: &str = "anvil-console";
+/// Path of the console's OAuth callback below the public URL.
+pub const CONSOLE_CALLBACK_PATH: &str = "/console/callback";
+/// Display name of the console client.
+pub const CONSOLE_CLIENT_NAME: &str = "AnvilID Console";
 
 /// Result of [`BootstrapService::ensure_installed`].
 #[derive(Debug)]
@@ -49,6 +69,9 @@ pub struct SetupResult {
     pub admin: User,
     pub mgmt_client_id: String,
     pub mgmt_client_secret: SecretString,
+    /// Set when the `admin_setup_completed` audit event could not be stored. Setup itself has
+    /// committed and the secret must still be shown once, so the caller logs this and continues.
+    pub audit_error: Option<CoreError>,
 }
 
 /// A new setup token record and its plaintext.
@@ -154,6 +177,104 @@ pub fn build_mgmt_client(now: OffsetDateTime) -> (NewClient, SecretString) {
     (client, secret)
 }
 
+/// `{public_url}/console/callback`. `PublicUrl` never ends with `/`.
+pub fn console_redirect_uri(public_url: &PublicUrl) -> String {
+    format!("{}{CONSOLE_CALLBACK_PATH}", public_url.as_str())
+}
+
+/// The built-in console client (system tenant): public, auth method `none`, PKCE required,
+/// redirect `{public_url}/console/callback`, grants `authorization_code` + `refresh_token`,
+/// scopes `openid admin:read admin:write`, consent skipped (first party), JWT access tokens.
+pub fn build_console_client(now: OffsetDateTime, public_url: &PublicUrl) -> NewClient {
+    let mut grant_types = vec![GrantType::AuthorizationCode, GrantType::RefreshToken];
+    grant_types.sort();
+    NewClient {
+        id: ClientId::new_v7(),
+        client_id: CONSOLE_CLIENT_ID.to_owned(),
+        name: CONSOLE_CLIENT_NAME.to_owned(),
+        client_type: ClientType::Public,
+        application_type: ApplicationType::Web,
+        auth_method: ClientAuthMethod::None,
+        secret_hash: None,
+        jwks: None,
+        redirect_uris: vec![console_redirect_uri(public_url)],
+        grant_types,
+        scopes: vec![
+            "openid".to_owned(),
+            ADMIN_READ.to_owned(),
+            ADMIN_WRITE.to_owned(),
+        ],
+        require_pkce: true,
+        created_at: now,
+        token_format: TokenFormat::Jwt,
+        consent_mode: ConsentMode::SkipFirstParty,
+        id_token_signed_response_alg: None,
+        can_introspect: false,
+    }
+}
+
+/// The update that brings a stored console client back to `desired`, with the changed field
+/// names; `None` when it already matches. Type, application type and auth method cannot be
+/// updated; a mismatch there means the row was altered outside AnvilID and is an error.
+pub fn console_client_drift(
+    current: &Client,
+    desired: &NewClient,
+) -> Result<Option<(ClientUpdate, Vec<&'static str>)>, CoreError> {
+    if current.client_type != desired.client_type
+        || current.application_type != desired.application_type
+        || current.auth_method != desired.auth_method
+    {
+        return Err(CoreError::Internal(format!(
+            "the built-in {CONSOLE_CLIENT_ID} client has an unexpected type or auth method"
+        )));
+    }
+    let mut update = ClientUpdate::default();
+    let mut fields = Vec::new();
+    if current.name != desired.name {
+        update.name = Some(desired.name.clone());
+        fields.push("name");
+    }
+    if current.redirect_uris != desired.redirect_uris {
+        update.redirect_uris = Some(desired.redirect_uris.clone());
+        fields.push("redirect_uris");
+    }
+    let mut grants = current.grant_types.clone();
+    grants.sort();
+    if grants != desired.grant_types {
+        update.grant_types = Some(desired.grant_types.clone());
+        fields.push("grant_types");
+    }
+    if current.scopes != desired.scopes {
+        update.scopes = Some(desired.scopes.clone());
+        fields.push("scopes");
+    }
+    if current.require_pkce != desired.require_pkce {
+        update.require_pkce = Some(desired.require_pkce);
+        fields.push("require_pkce");
+    }
+    if current.jwks.is_some() {
+        update.jwks = Some(None);
+        fields.push("jwks");
+    }
+    if current.token_format != desired.token_format {
+        update.token_format = Some(desired.token_format);
+        fields.push("token_format");
+    }
+    if current.consent_mode != desired.consent_mode {
+        update.consent_mode = Some(desired.consent_mode);
+        fields.push("consent_mode");
+    }
+    if current.id_token_signed_response_alg != desired.id_token_signed_response_alg {
+        update.id_token_signed_response_alg = Some(desired.id_token_signed_response_alg.clone());
+        fields.push("id_token_signed_response_alg");
+    }
+    if current.can_introspect != desired.can_introspect {
+        update.can_introspect = Some(desired.can_introspect);
+        fields.push("can_introspect");
+    }
+    Ok((!fields.is_empty()).then_some((update, fields)))
+}
+
 /// The first administrator. `email_verified` is true: the operator controls the console.
 fn build_admin(now: OffsetDateTime, email: String) -> NewUser {
     NewUser {
@@ -174,6 +295,7 @@ fn setup_outcome(outcome: SetupOutcome, secret: SecretString) -> Result<SetupRes
             admin: user,
             mgmt_client_id: client.client_id,
             mgmt_client_secret: secret,
+            audit_error: None,
         }),
         SetupOutcome::InvalidToken => Err(CoreError::Forbidden),
     }
@@ -218,6 +340,123 @@ impl BootstrapService {
         Ok(setup_url(&self.public_url, &plaintext))
     }
 
+    fn audit(&self) -> AuditService {
+        AuditService {
+            storage: self.storage.clone(),
+            clock: self.clock.clone(),
+        }
+    }
+
+    async fn system_tenant(&self) -> Result<Tenant, CoreError> {
+        self.storage
+            .tenants()
+            .get_by_slug(SYSTEM_TENANT_SLUG)
+            .await?
+            .ok_or_else(|| {
+                CoreError::Conflict("not installed yet; start the server once to install".into())
+            })
+    }
+
+    /// Reconciles the built-in console client and the system tenant's policy. Called at every
+    /// start (after [`Self::ensure_installed`]) with the configured public URL:
+    ///
+    /// - the system tenant's registration mode is set to `disabled` if it is not (audited as
+    ///   `tenant_updated` by the system actor);
+    /// - `anvil-console` is created ([`build_console_client`], audited `client_created`) or
+    ///   updated to match ([`console_client_drift`], audited `client_updated`), e.g. when the
+    ///   public URL changed. When everything already matches nothing is written or audited.
+    pub async fn ensure_console_client(&self, public_url: &PublicUrl) -> Result<(), CoreError> {
+        let system = self.system_tenant().await?;
+        let ctx = RequestContext::system();
+        if system.settings.registration != RegistrationMode::Disabled {
+            let settings = TenantSettings {
+                registration: RegistrationMode::Disabled,
+                ..system.settings.clone()
+            };
+            self.storage
+                .tenants()
+                .update(
+                    system.id,
+                    &TenantUpdate {
+                        settings: Some(settings),
+                        ..TenantUpdate::default()
+                    },
+                )
+                .await?
+                .ok_or(CoreError::NotFound)?;
+            self.audit()
+                .record(
+                    system.id,
+                    AuditActor::system(),
+                    AuditAction::TenantUpdated,
+                    Some(system.id.to_string()),
+                    AuditOutcome::Success,
+                    &ctx,
+                    AuditDetails::fields(&["settings.registration"]),
+                )
+                .await?;
+        }
+
+        let desired = build_console_client(self.clock.now(), public_url);
+        let clients = self.storage.clients();
+        let current = match clients.get(system.id, CONSOLE_CLIENT_ID).await? {
+            Some(c) => c,
+            None => match clients.create(system.id, &desired).await {
+                Ok(_) => {
+                    return self
+                        .audit()
+                        .record(
+                            system.id,
+                            AuditActor::system(),
+                            AuditAction::ClientCreated,
+                            Some(CONSOLE_CLIENT_ID.to_owned()),
+                            AuditOutcome::Success,
+                            &ctx,
+                            AuditDetails::empty(),
+                        )
+                        .await;
+                }
+                // Another instance created it concurrently: reconcile what it wrote.
+                Err(StorageError::Conflict(_)) => clients
+                    .get(system.id, CONSOLE_CLIENT_ID)
+                    .await?
+                    .ok_or_else(|| {
+                        CoreError::Internal("console client conflict without a row".into())
+                    })?,
+                Err(e) => return Err(e.into()),
+            },
+        };
+        let now = self.clock.now();
+        let mut fields = Vec::new();
+        if let Some((update, changed)) = console_client_drift(&current, &desired)? {
+            clients
+                .update(system.id, CONSOLE_CLIENT_ID, &update, now)
+                .await?
+                .ok_or(CoreError::NotFound)?;
+            fields = changed;
+        }
+        if current.secret_hash.is_some() {
+            clients
+                .set_secret_hash(system.id, CONSOLE_CLIENT_ID, None, now)
+                .await?;
+            fields.push("secret");
+        }
+        if fields.is_empty() {
+            return Ok(());
+        }
+        self.audit()
+            .record(
+                system.id,
+                AuditActor::system(),
+                AuditAction::ClientUpdated,
+                Some(CONSOLE_CLIENT_ID.to_owned()),
+                AuditOutcome::Success,
+                &ctx,
+                AuditDetails::fields(&fields),
+            )
+            .await
+    }
+
     /// Whether `token` is a usable setup token (read-only; for rendering the setup page).
     pub async fn peek(&self, token: &str) -> Result<bool, CoreError> {
         let hash = SecretHash(secret_hash(token));
@@ -230,12 +469,15 @@ impl BootstrapService {
 
     /// Consumes the setup token and creates the first administrator (system tenant) and the
     /// management client in one transaction. Input is validated first; an unknown, used or
-    /// expired token is `Forbidden`.
+    /// expired token is `Forbidden`. On success `admin_setup_completed` is audited in the system
+    /// tenant (actor = the new administrator, `ctx` = the setup request); an audit failure is
+    /// returned in [`SetupResult::audit_error`] because the one-time secret must still be shown.
     pub async fn complete_setup(
         &self,
         token: &str,
         email: &str,
         password: &SecretString,
+        ctx: &RequestContext,
     ) -> Result<SetupResult, CoreError> {
         let email = normalize_email(email)?;
         check_password(&self.policy, password.expose_secret())?;
@@ -277,7 +519,21 @@ impl BootstrapService {
                 }
                 other => other.into(),
             })?;
-        setup_outcome(outcome, secret)
+        let mut result = setup_outcome(outcome, secret)?;
+        result.audit_error = self
+            .audit()
+            .record(
+                system.id,
+                AuditActor::admin(result.admin.id),
+                AuditAction::AdminSetupCompleted,
+                Some(result.admin.id.to_string()),
+                AuditOutcome::Success,
+                ctx,
+                AuditDetails::empty(),
+            )
+            .await
+            .err();
+        Ok(result)
     }
 }
 
@@ -344,6 +600,74 @@ mod tests {
         assert!(!format!("{client:?}").contains(secret.expose_secret()));
         let (other, _) = build_mgmt_client(NOW);
         assert_ne!(client.client_id, other.client_id);
+    }
+
+    fn stored(new: &NewClient) -> Client {
+        Client {
+            id: new.id,
+            tenant_id: TenantId::new_v7(),
+            client_id: new.client_id.clone(),
+            name: new.name.clone(),
+            client_type: new.client_type,
+            application_type: new.application_type,
+            auth_method: new.auth_method,
+            secret_hash: new.secret_hash,
+            jwks: new.jwks.clone(),
+            redirect_uris: new.redirect_uris.clone(),
+            grant_types: new.grant_types.clone(),
+            scopes: new.scopes.clone(),
+            require_pkce: new.require_pkce,
+            created_at: NOW,
+            updated_at: NOW,
+            token_format: new.token_format,
+            consent_mode: new.consent_mode,
+            id_token_signed_response_alg: new.id_token_signed_response_alg.clone(),
+            can_introspect: new.can_introspect,
+        }
+    }
+
+    #[test]
+    fn console_client_values_derive_from_the_public_url() {
+        let url = PublicUrl::parse("https://id.example/").unwrap();
+        let c = build_console_client(NOW, &url);
+        assert_eq!(c.client_id, "anvil-console");
+        assert_eq!(c.client_type, ClientType::Public);
+        assert_eq!(c.auth_method, ClientAuthMethod::None);
+        assert!(c.secret_hash.is_none());
+        assert!(c.require_pkce);
+        assert_eq!(c.redirect_uris, vec!["https://id.example/console/callback"]);
+        assert_eq!(
+            c.grant_types,
+            vec![GrantType::AuthorizationCode, GrantType::RefreshToken]
+        );
+        assert_eq!(c.scopes, vec!["openid", "admin:read", "admin:write"]);
+        assert_eq!(c.consent_mode, ConsentMode::SkipFirstParty);
+        assert_eq!(c.token_format, TokenFormat::Jwt);
+        assert!(!c.can_introspect);
+    }
+
+    #[test]
+    fn console_drift_detects_changes_and_refuses_type_changes() {
+        let a = build_console_client(NOW, &PublicUrl::parse("https://a.example").unwrap());
+        let b = build_console_client(NOW, &PublicUrl::parse("https://b.example").unwrap());
+        assert!(console_client_drift(&stored(&a), &a).unwrap().is_none());
+        let (update, fields) = console_client_drift(&stored(&a), &b).unwrap().unwrap();
+        assert_eq!(fields, vec!["redirect_uris"]);
+        assert_eq!(
+            update.redirect_uris,
+            Some(vec!["https://b.example/console/callback".to_owned()])
+        );
+
+        let mut tampered = stored(&a);
+        tampered.scopes.push("admin:users:write".into());
+        tampered.consent_mode = ConsentMode::Required;
+        tampered.require_pkce = false;
+        let (_, fields) = console_client_drift(&tampered, &a).unwrap().unwrap();
+        assert_eq!(fields, vec!["scopes", "require_pkce", "consent_mode"]);
+
+        let mut confidential = stored(&a);
+        confidential.client_type = ClientType::Confidential;
+        assert!(console_client_drift(&confidential, &a).is_err());
     }
 
     #[test]

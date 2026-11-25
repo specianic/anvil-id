@@ -8,6 +8,7 @@
 //!   submissions exactly one succeeds. The page then shows the management client id and secret
 //!   once (`Cache-Control: no-store`).
 //! - A fresh installation has no users at all: there are no default credentials.
+//! - Completing setup is audited (`admin_setup_completed`) with the request context.
 
 use anvil_core::error::CoreError;
 use anvil_core::flow::engine::FlowInput;
@@ -28,6 +29,7 @@ use super::login::{UiForm, UiQuery, csrf_page, form_status, render_form};
 use crate::adapters::passkey::relying_party;
 use crate::errors::{core_error_page, error_page};
 use crate::render::PageContext;
+use crate::request_context::AuditContext;
 use crate::state::AppState;
 use crate::tenant::ResolvedTenant;
 
@@ -173,6 +175,7 @@ async fn show(
 async fn submit(
     State(state): State<AppState>,
     tenant: Option<ResolvedTenant>,
+    AuditContext(ctx): AuditContext,
     jar: CookieJar,
     Query(q): Query<UiQuery>,
     form: Result<Form<UiForm>, FormRejection>,
@@ -207,9 +210,6 @@ async fn submit(
     );
     let base = state.config().public_url.as_str().to_owned();
     let rp = relying_party(&system, &iss);
-    // The setup flow creates no session and records no audit event (bootstrap does that), so
-    // it carries no request context.
-    let ctx = RequestContext::default();
     let cx = FlowContext {
         tenant: &system,
         issuer: &iss,
@@ -227,7 +227,7 @@ async fn submit(
         .await;
     match outcome.map(|r| r.outcome) {
         Ok(FlowOutcome::SetupSubmitted { email, password }) => {
-            complete(&state, &system, &token, &email, &password).await
+            complete(&state, &system, &token, &email, &password, &ctx).await
         }
         Ok(FlowOutcome::Render(f)) => {
             let status = form_status(&f);
@@ -258,13 +258,18 @@ async fn complete(
     token: &str,
     email: &str,
     password: &secrecy::SecretString,
+    ctx: &RequestContext,
 ) -> Response {
     match state
         .ui_bootstrap_service()
-        .complete_setup(token, email, password)
+        .complete_setup(token, email, password, ctx)
         .await
     {
         Ok(result) => {
+            if let Some(e) = &result.audit_error {
+                // Setup has committed; the one-time secret is still shown.
+                tracing::error!(error = %e, "recording admin_setup_completed failed");
+            }
             let public = state.config().public_url.as_str();
             let ctx = minijinja::context! {
                 page => PageContext::installation(state, "Setup complete").into_value(),
