@@ -1,0 +1,74 @@
+---
+source: crates/anvil-web/tests/i18n.rs
+expression: html
+---
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Sign in · Acme</title>
+<link rel="stylesheet" href="&#x2f;t&#x2f;acme&#x2f;assets/anvil.css">
+</head>
+<body>
+
+<div class="anvil-dev-banner" role="status" id="dev-mode-banner">Development mode: not for production use</div>
+
+<main id="main" aria-labelledby="page-heading">
+<p class="anvil-tenant">Acme</p>
+<h1 id="page-heading">Sign in</h1>
+
+
+<form id="login" method="post" action="&#x2f;t&#x2f;acme&#x2f;ui&#x2f;login?flow=f1" novalidate>
+<input type="hidden" name="csrf_token" value="csrf-sample-token">
+
+
+
+<div class="anvil-field">
+<label for="identifier">Email</label>
+<input id="identifier" name="identifier" type="email" required>
+
+</div>
+
+
+
+
+<div class="anvil-field">
+<label for="password">Password</label>
+<input id="password" name="password" type="password" required>
+
+</div>
+
+
+
+<div class="anvil-form-messages">
+
+<p class="anvil-message anvil-message-error" id="login-msg-1" data-message-key="login.too_many_attempts" role="alert">Too many attempts. Try again in 30 seconds.</p>
+
+<p class="anvil-message anvil-message-error" id="login-msg-2" data-message-key="login.invalid_credentials" role="alert">The email address or password is incorrect.</p>
+
+</div>
+
+<button type="submit" id="login-submit">Sign in</button>
+</form>
+
+
+<form id="login-passkey" class="anvil-passkey" method="post" action="&#x2f;t&#x2f;acme&#x2f;ui&#x2f;login&#x2f;passkey?flow=f1" data-webauthn="authenticate" data-options-url="&#x2f;t&#x2f;acme&#x2f;ui&#x2f;login&#x2f;passkey&#x2f;options?flow=f1" data-webauthn-msg-cancelled="The passkey request was cancelled or timed out. Try again, or sign in with your password." data-webauthn-msg-failed="Your passkey could not be used. Try again, or sign in with your password.">
+<input type="hidden" name="csrf_token" value="csrf-sample-token">
+<input type="hidden" name="response" value="">
+<button type="button" id="login-passkey-submit" class="anvil-secondary" data-webauthn-trigger hidden>Sign in with a passkey</button>
+<p id="login-passkey-status" class="anvil-muted" data-webauthn-status aria-live="polite"></p>
+</form>
+<script src="&#x2f;t&#x2f;acme&#x2f;assets/webauthn.js" defer></script>
+
+
+<nav class="anvil-links" aria-label="Account help">
+<a id="link-recovery" href="&#x2f;t&#x2f;acme&#x2f;ui&#x2f;recovery">Forgot your password?</a>
+<a id="link-registration" href="&#x2f;t&#x2f;acme&#x2f;ui&#x2f;registration">Create an account</a>
+</nav>
+
+
+</main>
+</body>
+</html>

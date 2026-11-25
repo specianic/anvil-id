@@ -12,5 +12,5 @@
 <script src="https://js.hcaptcha.com/1/api.js" async defer></script>
 {% endif %}
 {% if captcha %}
-<noscript><p class="anvil-muted" id="captcha-noscript">This sign-in needs a security check that requires JavaScript. Enable JavaScript and reload the page to continue.</p></noscript>
+<noscript><p class="anvil-muted" id="captcha-noscript">{{ t("captcha.noscript") }}</p></noscript>
 {% endif %}

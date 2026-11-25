@@ -1,11 +1,11 @@
 {% extends "base.html" %}
 {% import "form.html" as forms %}
-{% block heading %}Create an account{% endblock %}
+{% block heading %}{{ t("title.registration") }}{% endblock %}
 {% block content %}
-{{ forms.render(form, "Create account") }}
+{{ forms.render(form, t("registration.submit")) }}
 {% if page.links.login %}
-<nav class="anvil-links" aria-label="Account help">
-<a id="link-login" href="{{ page.links.login }}">Already have an account? Sign in</a>
+<nav class="anvil-links" aria-label="{{ t("nav.account_help") }}">
+<a id="link-login" href="{{ page.links.login }}">{{ t("registration.have_account") }}</a>
 </nav>
 {% endif %}
 {% endblock %}

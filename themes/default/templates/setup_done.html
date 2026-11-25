@@ -1,19 +1,19 @@
 {% extends "base.html" %}
-{% block heading %}Setup complete{% endblock %}
+{% block heading %}{{ t("title.setup_done") }}{% endblock %}
 {% block content %}
-<p class="anvil-lead">The administrator account <strong id="admin-email">{{ admin_email }}</strong> has been created.</p>
+<p class="anvil-lead">{{ t("setup_done.lead_before") }} <strong id="admin-email">{{ admin_email }}</strong> {{ t("setup_done.lead_after") }}</p>
 <div class="anvil-callout anvil-callout-warning" role="note">
-<p><strong>Copy these credentials now.</strong> The client secret is shown only once and cannot be displayed again.</p>
+<p><strong>{{ t("setup_done.copy_now") }}</strong> {{ t("setup_done.copy_note") }}</p>
 </div>
 <dl class="anvil-credentials">
-<dt>Management client ID</dt>
+<dt>{{ t("setup_done.client_id") }}</dt>
 <dd><code id="mgmt-client-id">{{ mgmt_client_id }}</code></dd>
-<dt>Management client secret</dt>
+<dt>{{ t("setup_done.client_secret") }}</dt>
 <dd><code id="mgmt-client-secret">{{ mgmt_client_secret }}</code></dd>
-<dt>Token endpoint</dt>
+<dt>{{ t("setup_done.token_endpoint") }}</dt>
 <dd><code id="token-endpoint">{{ token_endpoint }}</code></dd>
-<dt>Admin API base</dt>
+<dt>{{ t("setup_done.admin_api_base") }}</dt>
 <dd><code id="admin-api-base">{{ admin_api_base }}</code></dd>
 </dl>
-<p class="anvil-muted">Use the client ID and secret with the client credentials grant at the token endpoint to call the admin API.</p>
+<p class="anvil-muted">{{ t("setup_done.usage") }}</p>
 {% endblock %}

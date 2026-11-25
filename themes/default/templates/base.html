@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="{{ page.lang | default("en") }}" dir="{{ page.dir | default("ltr") }}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -9,7 +9,7 @@
 </head>
 <body>
 {% if page.dev_mode %}
-<div class="anvil-dev-banner" role="status" id="dev-mode-banner">Development mode: not for production use</div>
+<div class="anvil-dev-banner" role="status" id="dev-mode-banner">{{ t("dev.banner") }}</div>
 {% endif %}
 <main id="main" aria-labelledby="page-heading">
 {% if page.tenant_name %}<p class="anvil-tenant">{{ page.tenant_name }}</p>{% endif %}

@@ -14,21 +14,21 @@
 <ul class="anvil-app-list" id="app-list">
 {% for a in apps %}
 <li class="anvil-account-section" id="app-{{ loop.index }}" data-client-id="{{ a.client_id }}" aria-labelledby="app-{{ loop.index }}-name">
-<h2 id="app-{{ loop.index }}-name">{{ a.client_name }}</h2>
-<p>Allowed on <time datetime="{{ a.granted_iso }}">{{ a.granted }}</time>. It can:</p>
+<h2 id="app-{{ loop.index }}-name"><bdi>{{ a.client_name }}</bdi></h2>
+<p>{{ t("apps.allowed_on") }} <time datetime="{{ a.granted_iso }}">{{ a.granted }}</time>{{ t("apps.it_can") }}</p>
 <ul class="anvil-scope-list">
 {% for s in a.scopes %}
-<li data-scope="{{ s.name }}">{% if s.description %}{{ s.description }}{% else %}Use <code>{{ s.name }}</code>{% endif %}</li>
+<li data-scope="{{ s.name }}">{% if s.description %}{{ s.description }}{% else %}{{ t("scope.use") }} <code>{{ s.name }}</code>{% endif %}</li>
 {% endfor %}
 </ul>
 <form id="app-revoke-{{ loop.index }}" method="post" action="{{ a.revoke_url }}">
 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-<button type="submit" id="app-revoke-{{ loop.index }}-submit" aria-label="Remove access for {{ a.client_name }}">Remove access</button>
+<button type="submit" id="app-revoke-{{ loop.index }}-submit" aria-label="{{ t("apps.remove_access_for", client=a.client_name) }}">{{ t("apps.remove_access") }}</button>
 </form>
 </li>
 {% endfor %}
 </ul>
 {% else %}
-<p id="apps-empty">No apps have access to your account.</p>
+<p id="apps-empty">{{ t("apps.none") }}</p>
 {% endif %}
 {% endblock %}

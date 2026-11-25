@@ -8,7 +8,7 @@
       is rendered inside the password form so its response is posted with it.
     The password form is written out here (instead of forms.render) so the CAPTCHA widget can sit
     inside it; its markup matches form.html. -#}
-{% block heading %}Sign in{% endblock %}
+{% block heading %}{{ t("title.login") }}{% endblock %}
 {% block content %}
 {% if captcha %}
 <form id="{{ form.id }}" method="post" action="{{ form.action }}" novalidate>
@@ -16,7 +16,7 @@
 {% for field in form.fields %}
 {% set invalid = "error" in field.messages|map(attribute="level")|list %}
 <div class="anvil-field{% if invalid %} anvil-field-invalid{% endif %}">
-<label for="{{ field.name }}">{{ field.label }}{% if not field.required %} <span class="anvil-optional">(optional)</span>{% endif %}</label>
+<label for="{{ field.name }}">{{ field.label }}{% if not field.required %} <span class="anvil-optional">{{ t("form.optional") }}</span>{% endif %}</label>
 <input id="{{ field.name }}" name="{{ field.name }}" type="{{ field.kind }}"
 {%- if field.value is not none and field.kind != "password" %} value="{{ field.value }}"{% endif %}
 {%- if field.required %} required{% endif %}
@@ -32,24 +32,24 @@
 {{ forms.messages(form.messages, form.id) }}
 </div>
 {% endif %}
-<button type="submit" id="{{ form.id }}-submit">Sign in</button>
+<button type="submit" id="{{ form.id }}-submit">{{ t("login.submit") }}</button>
 </form>
 {% else %}
-{{ forms.render(form, "Sign in") }}
+{{ forms.render(form, t("login.submit")) }}
 {% endif %}
 {% if passkey %}
-<form id="login-passkey" class="anvil-passkey" method="post" action="{{ passkey.action }}" data-webauthn="authenticate" data-options-url="{{ passkey.options_url }}" data-webauthn-msg-cancelled="The passkey request was cancelled or timed out. Try again, or sign in with your password." data-webauthn-msg-failed="Your passkey could not be used. Try again, or sign in with your password.">
+<form id="login-passkey" class="anvil-passkey" method="post" action="{{ passkey.action }}" data-webauthn="authenticate" data-options-url="{{ passkey.options_url }}" data-webauthn-msg-cancelled="{{ t("login.webauthn.cancelled") }}" data-webauthn-msg-failed="{{ t("login.webauthn.failed") }}">
 <input type="hidden" name="csrf_token" value="{{ form.csrf_token }}">
 <input type="hidden" name="response" value="">
-<button type="button" id="login-passkey-submit" class="anvil-secondary" data-webauthn-trigger hidden>Sign in with a passkey</button>
+<button type="button" id="login-passkey-submit" class="anvil-secondary" data-webauthn-trigger hidden>{{ t("login.passkey_button") }}</button>
 <p id="login-passkey-status" class="anvil-muted" data-webauthn-status aria-live="polite"></p>
 </form>
 <script src="{{ page.asset_base }}/webauthn.js" defer></script>
 {% endif %}
 {% if page.links.recovery or page.links.registration %}
-<nav class="anvil-links" aria-label="Account help">
-{% if page.links.recovery %}<a id="link-recovery" href="{{ page.links.recovery }}">Forgot your password?</a>{% endif %}
-{% if page.links.registration %}<a id="link-registration" href="{{ page.links.registration }}">Create an account</a>{% endif %}
+<nav class="anvil-links" aria-label="{{ t("nav.account_help") }}">
+{% if page.links.recovery %}<a id="link-recovery" href="{{ page.links.recovery }}">{{ t("login.forgot_password") }}</a>{% endif %}
+{% if page.links.registration %}<a id="link-registration" href="{{ page.links.registration }}">{{ t("login.create_account") }}</a>{% endif %}
 </nav>
 {% endif %}
 {% endblock %}

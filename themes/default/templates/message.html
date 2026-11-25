@@ -3,8 +3,8 @@
 {% block content %}
 <p class="anvil-lead" id="message-body" data-message-key="{{ body_key }}">{{ body }}</p>
 {% if page.links.login %}
-<nav class="anvil-links" aria-label="Next steps">
-<a id="link-login" href="{{ page.links.login }}">Go to sign in</a>
+<nav class="anvil-links" aria-label="{{ t("nav.next_steps") }}">
+<a id="link-login" href="{{ page.links.login }}">{{ t("message.go_to_sign_in") }}</a>
 </nav>
 {% endif %}
 {% endblock %}

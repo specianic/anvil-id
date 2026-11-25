@@ -7,11 +7,11 @@
 {% block content %}
 {% set base = account_base | default("") %}
 {% set current = account_nav | default("") %}
-<nav class="anvil-account-nav" id="account-nav" aria-label="Account">
+<nav class="anvil-account-nav" id="account-nav" aria-label="{{ t("account_nav.label") }}">
 <ul>
-<li><a id="account-nav-security" href="{{ base }}/ui/account/security"{% if current == "security" %} aria-current="page"{% endif %}>Security</a></li>
-<li><a id="account-nav-sessions" href="{{ base }}/ui/account/sessions"{% if current == "sessions" %} aria-current="page"{% endif %}>Sessions</a></li>
-<li><a id="account-nav-apps" href="{{ base }}/ui/account/apps"{% if current == "apps" %} aria-current="page"{% endif %}>Connected apps</a></li>
+<li><a id="account-nav-security" href="{{ base }}/ui/account/security"{% if current == "security" %} aria-current="page"{% endif %}>{{ t("account_nav.security") }}</a></li>
+<li><a id="account-nav-sessions" href="{{ base }}/ui/account/sessions"{% if current == "sessions" %} aria-current="page"{% endif %}>{{ t("account_nav.sessions") }}</a></li>
+<li><a id="account-nav-apps" href="{{ base }}/ui/account/apps"{% if current == "apps" %} aria-current="page"{% endif %}>{{ t("account_nav.apps") }}</a></li>
 </ul>
 </nav>
 <section class="anvil-account" id="account-content" aria-labelledby="page-heading">

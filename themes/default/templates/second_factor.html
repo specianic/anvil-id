@@ -6,7 +6,7 @@
     or none). Selectors: form `second-factor`, inputs `code` and `recovery_code` (inside the
     `recovery-code-toggle` disclosure), button `second-factor-submit`, messages
     `second-factor-msg-N`, link `link-login`. Works without JavaScript. -#}
-{% block heading %}Two-step verification{% endblock %}
+{% block heading %}{{ t("title.second_factor") }}{% endblock %}
 {% block content %}
 {% set has_error = "error" in form.messages|map(attribute="level")|list %}
 <form id="{{ form.id }}" method="post" action="{{ form.action }}" novalidate>
@@ -19,27 +19,27 @@
 {% endif %}
 {% for field in form.fields %}
 {% if field.name == "code" %}
-<p id="code-hint">Open your authenticator app and enter the 6-digit code it shows for this account.</p>
+<p id="code-hint">{{ t("second_factor.code_hint") }}</p>
 <div class="anvil-field{% if has_error %} anvil-field-invalid{% endif %}">
 <label for="code">{{ field.label }}</label>
 <input id="code" name="code" type="text" inputmode="numeric" maxlength="7" autocomplete="one-time-code" spellcheck="false" aria-describedby="code-hint{% if has_error %} second-factor-msg-1{% endif %}"{% if has_error %} aria-invalid="true"{% endif %}>
 </div>
 {% elif field.name == "recovery_code" %}
 <details class="anvil-disclosure" id="recovery-code-toggle">
-<summary>Use a recovery code instead</summary>
+<summary>{{ t("second_factor.use_recovery_code") }}</summary>
 <div class="anvil-field">
 <label for="recovery_code">{{ field.label }}</label>
 <input id="recovery_code" name="recovery_code" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-describedby="recovery-code-hint">
-<p class="anvil-muted" id="recovery-code-hint">Enter one of the recovery codes you saved when you set up the authenticator app. Each code works only once.</p>
+<p class="anvil-muted" id="recovery-code-hint">{{ t("second_factor.recovery_code_hint") }}</p>
 </div>
 </details>
 {% endif %}
 {% endfor %}
-<button type="submit" id="{{ form.id }}-submit">Verify</button>
+<button type="submit" id="{{ form.id }}-submit">{{ t("second_factor.submit") }}</button>
 </form>
 {% if page.links.login %}
-<nav class="anvil-links" aria-label="Other options">
-<a id="link-login" href="{{ page.links.login }}">Start over</a>
+<nav class="anvil-links" aria-label="{{ t("nav.other_options") }}">
+<a id="link-login" href="{{ page.links.login }}">{{ t("second_factor.start_over") }}</a>
 </nav>
 {% endif %}
 {% endblock %}

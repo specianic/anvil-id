@@ -1,11 +1,12 @@
-{#- Renders a FormDescription. Usage: import "form.html" as forms, then call forms.render(form). -#}
+{#- Renders a FormDescription. Usage: import "form.html" as forms, then call forms.render(form).
+    `submit_label` defaults to the translated "Continue". Labels and message texts arrive localized. -#}
 {% macro messages(list, prefix) -%}
 {% for m in list %}
 <p class="anvil-message anvil-message-{{ m.level }}" id="{{ prefix }}-msg-{{ loop.index }}" data-message-key="{{ m.key }}"{% if m.level == "error" %} role="alert"{% endif %}>{{ m.text }}</p>
 {% endfor %}
 {%- endmacro %}
 
-{% macro render(form, submit_label="Continue") -%}
+{% macro render(form, submit_label=none) -%}
 <form id="{{ form.id }}" method="post" action="{{ form.action }}" novalidate>
 <input type="hidden" name="csrf_token" value="{{ form.csrf_token }}">
 {% for field in form.fields %}
@@ -14,7 +15,7 @@
 {% else %}
 {% set invalid = "error" in field.messages|map(attribute="level")|list %}
 <div class="anvil-field{% if invalid %} anvil-field-invalid{% endif %}">
-<label for="{{ field.name }}">{{ field.label }}{% if not field.required %} <span class="anvil-optional">(optional)</span>{% endif %}</label>
+<label for="{{ field.name }}">{{ field.label }}{% if not field.required %} <span class="anvil-optional">{{ t("form.optional") }}</span>{% endif %}</label>
 <input id="{{ field.name }}" name="{{ field.name }}" type="{{ field.kind }}"
 {%- if field.value is not none and field.kind != "password" %} value="{{ field.value }}"{% endif %}
 {%- if field.required %} required{% endif %}
@@ -30,6 +31,6 @@
 {{ messages(form.messages, form.id) }}
 </div>
 {% endif %}
-<button type="submit" id="{{ form.id }}-submit">{{ submit_label }}</button>
+<button type="submit" id="{{ form.id }}-submit">{% if submit_label is none %}{{ t("form.continue") }}{% else %}{{ submit_label }}{% endif %}</button>
 </form>
 {%- endmacro %}

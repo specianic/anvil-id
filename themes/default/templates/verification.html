@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 {% import "form.html" as forms %}
-{% block heading %}Confirm your email address{% endblock %}
+{% block heading %}{{ t("title.verification") }}{% endblock %}
 {% block content %}
 {#- The token travels in a hidden field and is only consumed on POST, so link scanners that GET the URL never use it up. -#}
-<p class="anvil-lead">Select the button below to confirm your email address.</p>
-{{ forms.render(form, "Confirm email") }}
+<p class="anvil-lead">{{ t("verification.lead") }}</p>
+{{ forms.render(form, t("verification.submit")) }}
 {% endblock %}

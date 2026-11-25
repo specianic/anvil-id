@@ -15,21 +15,21 @@
 </div>
 
 <section class="anvil-account-section" id="sessions" aria-labelledby="sessions-heading">
-<h2 id="sessions-heading">Where you are signed in</h2>
+<h2 id="sessions-heading">{{ t("sessions.heading") }}</h2>
 <table class="anvil-table" id="session-list">
-<caption>Your active sessions. Signing out a session also ends the app access granted from it.</caption>
-<thead><tr><th scope="col">Device</th><th scope="col">IP address</th><th scope="col">Signed in</th><th scope="col">Last active</th><th scope="col">Action</th></tr></thead>
+<caption>{{ t("sessions.caption") }}</caption>
+<thead><tr><th scope="col">{{ t("sessions.col_device") }}</th><th scope="col">{{ t("sessions.col_ip") }}</th><th scope="col">{{ t("sessions.col_signed_in") }}</th><th scope="col">{{ t("sessions.col_last_active") }}</th><th scope="col">{{ t("sessions.col_action") }}</th></tr></thead>
 <tbody>
 {% for s in sessions %}
 <tr id="session-{{ s.id }}"{% if s.current %} data-current{% endif %}>
-<td class="anvil-session-device" data-label="Device">{{ s.device }}{% if s.current %} <strong id="session-current-marker">(this device)</strong>{% endif %}</td>
-<td class="anvil-session-ip" data-label="IP address">{% if s.ip %}{{ s.ip }}{% else %}Unknown{% endif %}</td>
-<td data-label="Signed in"><time datetime="{{ s.created_iso }}">{{ s.created }}</time></td>
-<td data-label="Last active"><time datetime="{{ s.last_seen_iso }}">{{ s.last_seen }}</time></td>
+<td class="anvil-session-device" data-label="{{ t("sessions.col_device") }}"><bdi>{{ s.device }}</bdi>{% if s.current %} <strong id="session-current-marker">{{ t("sessions.this_device") }}</strong>{% endif %}</td>
+<td class="anvil-session-ip" data-label="{{ t("sessions.col_ip") }}">{% if s.ip %}{{ s.ip }}{% else %}{{ t("sessions.unknown_ip") }}{% endif %}</td>
+<td data-label="{{ t("sessions.col_signed_in") }}"><time datetime="{{ s.created_iso }}">{{ s.created }}</time></td>
+<td data-label="{{ t("sessions.col_last_active") }}"><time datetime="{{ s.last_seen_iso }}">{{ s.last_seen }}</time></td>
 <td>
 <form id="session-revoke-{{ s.id }}" method="post" action="{{ s.revoke_url }}">
 {{ csrf() }}
-<button type="submit" id="session-revoke-{{ s.id }}-submit" aria-label="Sign out {{ s.device }}{% if s.current %} (this device){% endif %}">Sign out</button>
+<button type="submit" id="session-revoke-{{ s.id }}-submit" aria-label="{% if s.current %}{{ t("sessions.sign_out_this_device", device=s.device) }}{% else %}{{ t("sessions.sign_out_device", device=s.device) }}{% endif %}">{{ t("sessions.sign_out") }}</button>
 </form>
 </td>
 </tr>
@@ -39,7 +39,7 @@
 {% if other_count > 0 %}
 <form id="sessions-revoke-others" method="post" action="{{ revoke_others_url }}">
 {{ csrf() }}
-<button type="submit" id="sessions-revoke-others-submit">Sign out all other sessions</button>
+<button type="submit" id="sessions-revoke-others-submit">{{ t("sessions.sign_out_others") }}</button>
 </form>
 {% endif %}
 </section>

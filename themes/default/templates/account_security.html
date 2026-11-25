@@ -14,24 +14,24 @@
 {% endfor %}
 </div>
 {% if not recent_auth %}
-<p class="anvil-message anvil-message-info" id="account-reauth">To change how you sign in, <a id="link-reauth" href="{{ login_url }}">sign in again</a> first.</p>
+<p class="anvil-message anvil-message-info" id="account-reauth">{{ t("security.reauth_before") }} <a id="link-reauth" href="{{ login_url }}">{{ t("security.reauth_link") }}</a> {{ t("security.reauth_after") }}</p>
 {% endif %}
 
 <section class="anvil-account-section" id="passkeys" aria-labelledby="passkeys-heading">
-<h2 id="passkeys-heading">Passkeys</h2>
+<h2 id="passkeys-heading">{{ t("security.passkeys") }}</h2>
 {% if passkeys %}
 <table class="anvil-table" id="passkey-list">
-<thead><tr><th scope="col">Name</th><th scope="col">Added</th><th scope="col">Last used</th><th scope="col">Action</th></tr></thead>
+<thead><tr><th scope="col">{{ t("security.col_name") }}</th><th scope="col">{{ t("security.col_added") }}</th><th scope="col">{{ t("security.col_last_used") }}</th><th scope="col">{{ t("security.col_action") }}</th></tr></thead>
 <tbody>
 {% for p in passkeys %}
 <tr id="passkey-{{ p.id }}">
-<td class="anvil-credential-label" data-label="Name">{{ p.label }}</td>
-<td data-label="Added"><time datetime="{{ p.created_iso }}">{{ p.created }}</time></td>
-<td data-label="Last used">{% if p.last_used %}<time datetime="{{ p.last_used_iso }}">{{ p.last_used }}</time>{% else %}Never{% endif %}</td>
+<td class="anvil-credential-label" data-label="{{ t("security.col_name") }}"><bdi>{{ p.label }}</bdi></td>
+<td data-label="{{ t("security.col_added") }}"><time datetime="{{ p.created_iso }}">{{ p.created }}</time></td>
+<td data-label="{{ t("security.col_last_used") }}">{% if p.last_used %}<time datetime="{{ p.last_used_iso }}">{{ p.last_used }}</time>{% else %}{{ t("security.never") }}{% endif %}</td>
 <td>
 <form id="credential-delete-{{ p.id }}" method="post" action="{{ p.delete_url }}">
 {{ csrf() }}
-<button type="submit" id="credential-delete-{{ p.id }}-submit" aria-label="Remove passkey {{ p.label }}">Remove</button>
+<button type="submit" id="credential-delete-{{ p.id }}-submit" aria-label="{{ t("security.remove_passkey", label=p.label) }}">{{ t("security.remove") }}</button>
 </form>
 </td>
 </tr>
@@ -39,39 +39,39 @@
 </tbody>
 </table>
 {% else %}
-<p id="passkeys-empty">You have no passkeys yet.</p>
+<p id="passkeys-empty">{{ t("security.no_passkeys") }}</p>
 {% endif %}
-<form id="passkey-register" method="post" action="{{ passkey_url }}" data-webauthn="register" data-options-url="{{ passkey_options_url }}" data-webauthn-msg-cancelled="Adding the passkey was cancelled." data-webauthn-msg-failed="The passkey could not be added. Please try again." novalidate>
+<form id="passkey-register" method="post" action="{{ passkey_url }}" data-webauthn="register" data-options-url="{{ passkey_options_url }}" data-webauthn-msg-cancelled="{{ t("security.webauthn.cancelled") }}" data-webauthn-msg-failed="{{ t("security.webauthn.failed") }}" novalidate>
 {{ csrf() }}
 <input type="hidden" id="response" name="response" value="">
 <div class="anvil-field">
-<label for="label">Passkey name <span class="anvil-optional">(optional)</span></label>
+<label for="label">{{ t("security.passkey_name") }} <span class="anvil-optional">{{ t("form.optional") }}</span></label>
 <input id="label" name="label" type="text" maxlength="64" autocomplete="off">
 </div>
-<button type="button" id="passkey-register-submit" data-webauthn-trigger hidden>Add a passkey</button>
+<button type="button" id="passkey-register-submit" data-webauthn-trigger hidden>{{ t("security.add_passkey") }}</button>
 <p class="anvil-muted" id="passkey-register-status" data-webauthn-status aria-live="polite"></p>
-<noscript><p class="anvil-muted" id="passkey-register-nojs">Adding a passkey needs JavaScript and a browser that supports passkeys.</p></noscript>
+<noscript><p class="anvil-muted" id="passkey-register-nojs">{{ t("security.passkey_nojs") }}</p></noscript>
 </form>
 </section>
 
 <section class="anvil-account-section" id="totp" aria-labelledby="totp-heading">
-<h2 id="totp-heading">Authenticator app</h2>
+<h2 id="totp-heading">{{ t("security.totp_heading") }}</h2>
 {% if totp %}
-<p id="totp-status">Set up on <time datetime="{{ totp.created_iso }}">{{ totp.created }}</time>. Last used: {% if totp.last_used %}<time datetime="{{ totp.last_used_iso }}">{{ totp.last_used }}</time>{% else %}never{% endif %}.</p>
-<p id="recovery-codes-remaining">Recovery codes left: <strong id="recovery-codes-count">{{ recovery_codes_remaining }}</strong></p>
+<p id="totp-status">{{ t("security.totp_set_up_on") }} <time datetime="{{ totp.created_iso }}">{{ totp.created }}</time>{{ t("security.totp_last_used") }} {% if totp.last_used %}<time datetime="{{ totp.last_used_iso }}">{{ totp.last_used }}</time>{% else %}{{ t("security.never_lower") }}{% endif %}{{ t("punct.period") }}</p>
+<p id="recovery-codes-remaining">{{ t("security.recovery_codes_left") }} <strong id="recovery-codes-count">{{ recovery_codes_remaining }}</strong></p>
 <form id="recovery-codes-regenerate" method="post" action="{{ recovery_codes_url }}">
 {{ csrf() }}
-<button type="submit" id="recovery-codes-regenerate-submit">Create new recovery codes</button>
+<button type="submit" id="recovery-codes-regenerate-submit">{{ t("security.new_recovery_codes") }}</button>
 </form>
 <form id="credential-delete-{{ totp.id }}" method="post" action="{{ totp.delete_url }}">
 {{ csrf() }}
-<button type="submit" id="credential-delete-{{ totp.id }}-submit">Remove authenticator app</button>
+<button type="submit" id="credential-delete-{{ totp.id }}-submit">{{ t("security.remove_totp") }}</button>
 </form>
 {% else %}
-<p id="totp-status">Not set up. Use an authenticator app for a one-time code at sign-in.</p>
+<p id="totp-status">{{ t("security.totp_not_set_up") }}</p>
 <form id="totp-begin" method="post" action="{{ totp_url }}">
 {{ csrf() }}
-<button type="submit" id="totp-begin-submit">Set up an authenticator app</button>
+<button type="submit" id="totp-begin-submit">{{ t("security.set_up_totp") }}</button>
 </form>
 {% endif %}
 </section>

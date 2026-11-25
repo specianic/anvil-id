@@ -3,24 +3,24 @@
     Selectors: totp-qr, totp-secret, form totp-confirm with input code, totp-confirm-submit. -#}
 {% extends "account_base.html" %}
 {% block account %}
-<h2 id="totp-enroll-heading">Scan the QR code</h2>
-<p id="totp-instructions">Scan this code with your authenticator app, then enter the 6-digit code the app shows.</p>
+<h2 id="totp-enroll-heading">{{ t("totp_enroll.heading") }}</h2>
+<p id="totp-instructions">{{ t("totp_enroll.instructions") }}</p>
 <div class="anvil-qr" id="totp-qr">{{ qr_svg }}</div>
-<p id="totp-manual">Cannot scan the code? Enter this key in the app instead:</p>
+<p id="totp-manual">{{ t("totp_enroll.manual") }}</p>
 <p><code class="anvil-secret" id="totp-secret">{{ secret_groups }}</code></p>
 <form id="totp-confirm" method="post" action="{{ confirm_url }}" novalidate>
 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 <div class="anvil-field{% if code_error %} anvil-field-invalid{% endif %}">
-<label for="code">Code from the app</label>
+<label for="code">{{ t("totp_enroll.code_label") }}</label>
 <input id="code" name="code" type="text" inputmode="numeric" maxlength="7" autocomplete="one-time-code" required
 {%- if code_error %} aria-invalid="true" aria-describedby="code-msg-1"{% endif %}>
 <div aria-live="polite">
 {% if code_error %}<p class="anvil-message anvil-message-error" id="code-msg-1" data-message-key="{{ code_error.key }}" role="alert">{{ code_error.text }}</p>{% endif %}
 </div>
 </div>
-<button type="submit" id="totp-confirm-submit">Confirm</button>
+<button type="submit" id="totp-confirm-submit">{{ t("totp_enroll.submit") }}</button>
 </form>
-<nav class="anvil-links" aria-label="Next steps">
-<a id="link-account-security" href="{{ security_url }}">Cancel</a>
+<nav class="anvil-links" aria-label="{{ t("nav.next_steps") }}">
+<a id="link-account-security" href="{{ security_url }}">{{ t("totp_enroll.cancel") }}</a>
 </nav>
 {% endblock %}

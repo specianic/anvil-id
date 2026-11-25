@@ -342,3 +342,71 @@ fn shipped_catalog_dir_is_where_the_embed_reads_it() {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../themes/default/locales/en/main.ftl");
     assert!(path.is_file(), "{}", path.display());
 }
+
+/// The sign-in page as the handlers render it: a form with keys only (as anvil-core builds it),
+/// localized in English, inside a page whose language is `en`. Pins the converted templates to
+/// the 0.2 English output.
+#[test]
+fn login_page_in_english_snapshot() {
+    use anvil_core::flow::form::{FieldKind, FormDescription, FormField, FormMessage};
+
+    let field = |name: &str, kind: FieldKind, label_key: &str| FormField {
+        name: name.into(),
+        kind,
+        label_key: label_key.into(),
+        label: String::new(),
+        value: None,
+        required: true,
+        autocomplete: None,
+        messages: Vec::new(),
+    };
+    let mut form = FormDescription {
+        id: "login".into(),
+        action: "/t/acme/ui/login?flow=f1".into(),
+        method: "post",
+        fields: vec![
+            field("identifier", FieldKind::Email, "field.email"),
+            field("password", FieldKind::Password, "field.password"),
+        ],
+        messages: vec![
+            FormMessage::error("login.too_many_attempts").with_arg("seconds", 30),
+            FormMessage::error("login.invalid_credentials"),
+        ],
+        csrf_token: "csrf-sample-token".into(),
+    };
+    let r = Renderer::new(None).expect("renderer");
+    let en = Locale::fallback();
+    r.localize_form(&en, &mut form);
+    assert_eq!(form.fields[0].label, "Email");
+    assert_eq!(
+        form.messages[0].text,
+        "Too many attempts. Try again in 30 seconds."
+    );
+    let html = r
+        .page(
+            "login.html",
+            context! {
+                page => context! {
+                    lang => en.tag.clone(),
+                    dir => en.dir,
+                    title => r.text(&en, "title.login"),
+                    tenant_name => "Acme",
+                    dev_mode => true,
+                    asset_base => "/t/acme/assets",
+                    links => context! {
+                        registration => "/t/acme/ui/registration",
+                        recovery => "/t/acme/ui/recovery",
+                    },
+                },
+                form => minijinja::Value::from(minijinja::value::Serde(&form)),
+                passkey => context! {
+                    action => "/t/acme/ui/login/passkey?flow=f1",
+                    options_url => "/t/acme/ui/login/passkey/options?flow=f1",
+                },
+            },
+        )
+        .expect("renders")
+        .0;
+    assert!(html.contains(r#"<html lang="en" dir="ltr">"#), "{html}");
+    insta::assert_snapshot!("login_page_en", html);
+}
