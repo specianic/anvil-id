@@ -6,7 +6,9 @@
 //!
 //! Order: client_id (missing or duplicated → page) → client (unknown → page) → redirect_uri
 //! (duplicated or not matching → page; required when the client has more than one registered,
-//! else defaults to the single one) → other duplicated parameters → response_type →
+//! else defaults to the single one) → response_mode (an unsupported value is reported with the
+//! default `query` mode; every later error uses the requested mode) → other duplicated
+//! parameters → response_type →
 //! request / request_uri → PKCE (public clients and `require_pkce` clients only; opted-out
 //! confidential clients may omit both PKCE and nonce) → scope → redirect_uri required for OpenID
 //! requests → prompt / max_age → claims.
@@ -15,6 +17,7 @@ use crate::error::CoreError;
 use crate::model::{AuthorizationParams, Client, ClientType, Scope};
 use crate::oauth::claims_request::parse_claims;
 use crate::oauth::redirect::redirect_matches;
+use crate::oauth::response_mode::ResponseMode;
 
 /// Raw authorization request parameters, in arrival order, from the query (GET) or the form
 /// body (POST). Built by the web layer or by [`parse_raw`].
@@ -88,10 +91,11 @@ pub enum AuthorizeError {
         error_key: &'static str,
         detail: String,
     },
-    /// Redirect the error to the trusted `redirect_uri`.
+    /// Deliver the error to the trusted `redirect_uri` with `response_mode`.
     Redirect {
         redirect_uri: String,
         state: Option<String>,
+        response_mode: ResponseMode,
         error: CoreError,
     },
 }
@@ -148,14 +152,37 @@ pub fn validate(
 
     // From here on the redirect URI is trusted.
     let state = raw.single("state").map(str::to_owned);
+
+    // 3. response_mode. An unsupported or repeated value cannot select the delivery, so that
+    // error goes out with the default query mode; every later error uses the requested mode.
+    let response_mode = match ResponseMode::parse(raw.single("response_mode")) {
+        Ok(mode) => mode,
+        Err(error) => {
+            return Err(AuthorizeError::Redirect {
+                redirect_uri,
+                state,
+                response_mode: ResponseMode::Query,
+                error,
+            });
+        }
+    };
+    if raw.count("response_mode") > 1 {
+        return Err(AuthorizeError::Redirect {
+            redirect_uri,
+            state,
+            response_mode: ResponseMode::Query,
+            error: CoreError::InvalidRequest("parameter response_mode is repeated".to_owned()),
+        });
+    }
     let fail = |error: CoreError| AuthorizeError::Redirect {
         redirect_uri: redirect_uri.clone(),
         state: state.clone(),
+        response_mode,
         error,
     };
     let invalid = |m: &str| fail(CoreError::InvalidRequest(m.to_owned()));
 
-    // 3. any other duplicated parameter
+    // 3b. any other duplicated parameter
     if let Some(dup) = raw.first_duplicate() {
         return Err(invalid(&format!("parameter {dup} is repeated")));
     }
@@ -279,6 +306,7 @@ pub fn validate(
             acr_values,
             ui_locales: raw.get("ui_locales").map(str::to_owned),
             claims,
+            response_mode,
         },
         id_token_hint: raw.get("id_token_hint").map(str::to_owned),
     })
@@ -386,12 +414,105 @@ pub(crate) mod tests {
                 redirect_uri,
                 state,
                 error,
+                ..
             }) => {
                 assert_eq!(redirect_uri, RP);
                 (error.oauth_error(), state)
             }
             other => panic!("expected redirect, got {other:?}"),
         }
+    }
+
+    fn redirect_mode(
+        r: Result<ValidatedAuthorize, AuthorizeError>,
+    ) -> (&'static str, ResponseMode) {
+        match r {
+            Err(AuthorizeError::Redirect {
+                error,
+                response_mode,
+                ..
+            }) => (error.oauth_error(), response_mode),
+            other => panic!("expected redirect, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn response_mode_parsing() {
+        let c = client();
+        let v = validate(&raw(&base()), Some(&c)).unwrap();
+        assert_eq!(v.params.response_mode, ResponseMode::Query);
+        let v = validate(&with(&[("response_mode", Some("query"))]), Some(&c)).unwrap();
+        assert_eq!(v.params.response_mode, ResponseMode::Query);
+        let v = validate(&with(&[("response_mode", Some("form_post"))]), Some(&c)).unwrap();
+        assert_eq!(v.params.response_mode, ResponseMode::FormPost);
+        // An empty value is treated as omitted (RFC 6749 §3.1).
+        let v = validate(&with(&[("response_mode", Some(""))]), Some(&c)).unwrap();
+        assert_eq!(v.params.response_mode, ResponseMode::Query);
+        for bad in ["fragment", "FORM_POST", "x"] {
+            let r = with(&[("response_mode", Some(bad))]);
+            assert_eq!(
+                redirect_mode(validate(&r, Some(&c))),
+                ("invalid_request", ResponseMode::Query),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn repeated_response_mode_is_invalid_request_via_query() {
+        let c = client();
+        for second in ["form_post", "query"] {
+            let mut p = base();
+            p.push(("response_mode", "form_post"));
+            p.push(("response_mode", second));
+            assert_eq!(
+                redirect_mode(validate(&raw(&p), Some(&c))),
+                ("invalid_request", ResponseMode::Query)
+            );
+        }
+    }
+
+    #[test]
+    fn later_errors_use_the_requested_mode() {
+        let c = client();
+        let r = with(&[
+            ("response_mode", Some("form_post")),
+            ("response_type", Some("token")),
+        ]);
+        assert_eq!(
+            redirect_mode(validate(&r, Some(&c))),
+            ("unsupported_response_type", ResponseMode::FormPost)
+        );
+        let r = with(&[
+            ("response_mode", Some("form_post")),
+            ("scope", Some("profile")),
+        ]);
+        assert_eq!(
+            redirect_mode(validate(&r, Some(&c))),
+            ("invalid_scope", ResponseMode::FormPost)
+        );
+        let mut p = base();
+        p.push(("response_mode", "form_post"));
+        p.push(("scope", "openid"));
+        assert_eq!(
+            redirect_mode(validate(&raw(&p), Some(&c))),
+            ("invalid_request", ResponseMode::FormPost)
+        );
+    }
+
+    #[test]
+    fn invalid_redirect_with_form_post_is_still_an_error_page() {
+        let c = client();
+        let r = with(&[
+            ("redirect_uri", Some("https://evil.example.test/cb")),
+            ("response_mode", Some("form_post")),
+        ]);
+        assert_eq!(page_key(validate(&r, Some(&c))), "redirect_uri_mismatch");
+        let r = with(&[
+            ("response_mode", Some("fragment")),
+            ("client_id", Some("nope")),
+        ]);
+        assert_eq!(page_key(validate(&r, Some(&c))), "unknown_client");
     }
 
     #[test]

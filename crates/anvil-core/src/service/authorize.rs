@@ -2,7 +2,7 @@
 //! need a login, issue codes and resume after login.
 //!
 //! The protocol decisions live in pure functions ([`crate::oauth::authorize_request::validate`],
-//! [`crate::oauth::decision::decide`], [`build_code`], [`success_redirect`], [`error_redirect`]);
+//! [`crate::oauth::decision::decide`], [`build_code`], [`AuthorizationResponse`]);
 //! this service only orchestrates the ports. It is tested end to end over HTTP on both backends.
 
 use std::sync::Arc;
@@ -16,9 +16,10 @@ use crate::model::{
     AuthRequestId, AuthorizationParams, BrowserSession, Client, GrantType, NewAuthorizationCode,
     NewAuthorizationRequest, NewTokenFamily, SecretHash, Tenant, TokenFamilyId, UserStatus,
 };
-use crate::oauth::authorize_request::{AuthorizeError, RawParams, redirect_with, validate};
+use crate::oauth::authorize_request::{AuthorizeError, RawParams, validate};
 use crate::oauth::decision::{SessionDecision, decide};
 use crate::oauth::redirect::redirect_matches;
+use crate::oauth::response_mode::AuthorizationResponse;
 use crate::ports::{Clock, Storage};
 
 /// Lifetime of an authorization code.
@@ -33,8 +34,9 @@ const MAX_CLIENT_ID_LEN: usize = 255;
 /// What the web layer does next.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthorizeOutcome {
-    /// Redirect the browser (success or error). Always carries `iss`.
-    Redirect(String),
+    /// Deliver an authorization response (success or error) to the trusted redirect URI, in the
+    /// response's mode. Always carries `iss`.
+    Respond(AuthorizationResponse),
     /// Send the user to the login flow, then call [`AuthorizeService::resume`].
     Login { request_id: AuthRequestId },
     /// Show an error page; never redirect. `error_key` is one of `invalid_request`,
@@ -45,38 +47,19 @@ pub enum AuthorizeOutcome {
     },
 }
 
-/// Success redirect: `code`, `state` (if any) and `iss` (RFC 9207).
-pub fn success_redirect(
-    redirect_uri: &str,
-    code: &str,
-    state: Option<&str>,
-    issuer: &str,
-) -> String {
-    let mut pairs = vec![("code", code)];
-    if let Some(s) = state {
-        pairs.push(("state", s));
-    }
-    pairs.push(("iss", issuer));
-    redirect_with(redirect_uri, &pairs)
-}
-
-/// Error redirect: `error`, `error_description`, `state` (if any) and `iss` (RFC 9207).
-pub fn error_redirect(
-    redirect_uri: &str,
+/// The error response for `params` (its redirect URI, state and response mode).
+fn error_response(
+    params: &AuthorizationParams,
     error: &CoreError,
-    state: Option<&str>,
     issuer: &str,
-) -> String {
-    let description = error.description();
-    let mut pairs = vec![
-        ("error", error.oauth_error()),
-        ("error_description", description.as_str()),
-    ];
-    if let Some(s) = state {
-        pairs.push(("state", s));
-    }
-    pairs.push(("iss", issuer));
-    redirect_with(redirect_uri, &pairs)
+) -> AuthorizeOutcome {
+    AuthorizeOutcome::Respond(AuthorizationResponse::error(
+        &params.redirect_uri,
+        error,
+        params.state.as_deref(),
+        issuer,
+        params.response_mode,
+    ))
 }
 
 /// Builds a code and its pre-created token family. Returns the plaintext code (sent to the
@@ -152,26 +135,21 @@ impl AuthorizeService {
             Err(AuthorizeError::Redirect {
                 redirect_uri,
                 state,
+                response_mode,
                 error,
             }) => {
-                return Ok(AuthorizeOutcome::Redirect(error_redirect(
+                return Ok(AuthorizeOutcome::Respond(AuthorizationResponse::error(
                     &redirect_uri,
                     &error,
                     state.as_deref(),
                     issuer,
+                    response_mode,
                 )));
             }
         };
         let client = validated.client;
         let params = validated.params;
-        let fail = |error: CoreError| {
-            AuthorizeOutcome::Redirect(error_redirect(
-                &params.redirect_uri,
-                &error,
-                params.state.as_deref(),
-                issuer,
-            ))
-        };
+        let fail = |error: CoreError| error_response(&params, &error, issuer);
 
         if !client.grant_types.contains(&GrantType::AuthorizationCode) {
             return Ok(fail(CoreError::UnauthorizedClient(
@@ -269,14 +247,13 @@ impl AuthorizeService {
             });
         }
         if !client.grant_types.contains(&GrantType::AuthorizationCode) {
-            return Ok(AuthorizeOutcome::Redirect(error_redirect(
-                &params.redirect_uri,
+            return Ok(error_response(
+                &params,
                 &CoreError::UnauthorizedClient(
                     "the client may not use the authorization code grant".to_owned(),
                 ),
-                params.state.as_deref(),
                 issuer,
-            )));
+            ));
         }
 
         let session = self.usable_session(tenant, session).await?;
@@ -310,12 +287,7 @@ impl AuthorizeService {
                     .grants()
                     .delete_authorization_request(tenant.id, request_id)
                     .await?;
-                Ok(AuthorizeOutcome::Redirect(error_redirect(
-                    &params.redirect_uri,
-                    &error,
-                    params.state.as_deref(),
-                    issuer,
-                )))
+                Ok(error_response(&params, &error, issuer))
             }
         }
     }
@@ -334,11 +306,12 @@ impl AuthorizeService {
             .grants()
             .create_code(tenant.id, &code, &family)
             .await?;
-        Ok(AuthorizeOutcome::Redirect(success_redirect(
+        Ok(AuthorizeOutcome::Respond(AuthorizationResponse::success(
             &params.redirect_uri,
             plaintext.expose_secret(),
             params.state.as_deref(),
             issuer,
+            params.response_mode,
         )))
     }
 
@@ -402,6 +375,7 @@ mod tests {
     use super::*;
     use crate::model::{ACR_PWD, AMR_PWD, SessionId, TenantId, UserId};
     use crate::oauth::authorize_request::tests::{CHALLENGE, RP, client};
+    use crate::oauth::response_mode::ResponseMode;
     use time::macros::datetime;
 
     const ISSUER: &str = "https://id.example.test/t/acme";
@@ -420,6 +394,7 @@ mod tests {
             acr_values: Vec::new(),
             ui_locales: None,
             claims: None,
+            response_mode: ResponseMode::Query,
         }
     }
 
@@ -441,21 +416,6 @@ mod tests {
             ip: None,
             user_agent: None,
         }
-    }
-
-    fn query(url: &str) -> Vec<(String, String)> {
-        let q = url.split_once('?').map_or("", |(_, q)| q);
-        url::form_urlencoded::parse(q.as_bytes())
-            .map(|(k, v)| (k.into_owned(), v.into_owned()))
-            .collect()
-    }
-
-    fn count(q: &[(String, String)], name: &str) -> usize {
-        q.iter().filter(|(k, _)| k == name).count()
-    }
-
-    fn value<'a>(q: &'a [(String, String)], name: &str) -> &'a str {
-        &q.iter().find(|(k, _)| k == name).unwrap().1
     }
 
     #[test]
@@ -496,49 +456,29 @@ mod tests {
     }
 
     #[test]
-    fn success_redirect_has_code_state_and_iss_once() {
-        let state = "s".repeat(2048);
-        let url = success_redirect(RP, "the-code", Some(&state), ISSUER);
-        let q = query(&url);
-        assert!(url.starts_with("https://rp.example.test/cb?"));
-        assert_eq!(count(&q, "iss"), 1);
-        assert_eq!(value(&q, "iss"), ISSUER);
-        assert_eq!(value(&q, "state"), state);
-        assert_eq!(value(&q, "code"), "the-code");
-    }
+    fn error_response_carries_the_stored_mode_state_and_iss() {
+        let mut p = params();
+        p.response_mode = ResponseMode::FormPost;
+        let AuthorizeOutcome::Respond(r) = error_response(&p, &CoreError::LoginRequired, ISSUER)
+        else {
+            panic!("expected a response");
+        };
+        assert_eq!(r.mode, ResponseMode::FormPost);
+        assert_eq!(r.redirect_uri, RP);
+        let keys: Vec<&str> = r.params.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(keys, ["error", "error_description", "state", "iss"]);
+        assert_eq!(r.params[2].1, "st");
+        assert_eq!(r.params[3].1, ISSUER);
 
-    #[test]
-    fn error_redirect_has_error_description_state_and_iss_once() {
-        let state = "a b&c=d/é".repeat(200);
-        let url = error_redirect(RP, &CoreError::LoginRequired, Some(&state), ISSUER);
-        let q = query(&url);
-        assert_eq!(count(&q, "iss"), 1);
-        assert_eq!(value(&q, "iss"), ISSUER);
-        assert_eq!(value(&q, "state"), state);
-        assert_eq!(value(&q, "error"), "login_required");
-        assert!(!value(&q, "error_description").is_empty());
-
-        let url = error_redirect(
-            "https://rp.example.test/cb?keep=1",
-            &CoreError::UnsupportedResponseType,
-            None,
-            ISSUER,
+        let AuthorizeOutcome::Respond(r) =
+            error_response(&params(), &CoreError::LoginRequired, ISSUER)
+        else {
+            panic!("expected a response");
+        };
+        assert_eq!(r.mode, ResponseMode::Query);
+        assert!(
+            r.to_redirect_url()
+                .starts_with("https://rp.example.test/cb?error=login_required")
         );
-        let q = query(&url);
-        assert_eq!(value(&q, "keep"), "1");
-        assert_eq!(count(&q, "state"), 0);
-        assert_eq!(count(&q, "iss"), 1);
-    }
-
-    #[test]
-    fn error_redirect_never_leaks_internal_details() {
-        let url = error_redirect(
-            RP,
-            &CoreError::Internal("db password hunter2".to_owned()),
-            None,
-            ISSUER,
-        );
-        assert!(!url.contains("hunter2"));
-        assert_eq!(value(&query(&url), "error"), "server_error");
     }
 }

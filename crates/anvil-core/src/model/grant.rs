@@ -10,6 +10,7 @@ use super::ids::{
     AuthRequestId, CodeHash, SecretHash, SessionId, TenantId, TokenFamilyId, UserId, str_enum,
 };
 use crate::error::CoreError;
+use crate::oauth::response_mode::ResponseMode;
 
 /// A parsed OAuth scope (RFC 6749 §3.3): a set of scope tokens.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -120,6 +121,9 @@ pub struct AuthorizationParams {
     pub acr_values: Vec<String>,
     pub ui_locales: Option<String>,
     pub claims: Option<ClaimsRequest>,
+    /// How the authorization response is delivered; absent in requests stored by 0.1.
+    #[serde(default)]
+    pub response_mode: ResponseMode,
 }
 
 /// A stored authorization request.

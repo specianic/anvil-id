@@ -362,6 +362,7 @@ pub fn full_params() -> AuthorizationParams {
         acr_values: vec![anvil_core::model::ACR_PWD.to_owned()],
         ui_locales: Some("de en".into()),
         claims: Some(full_claims_request()),
+        response_mode: anvil_core::oauth::response_mode::ResponseMode::FormPost,
     }
 }
 

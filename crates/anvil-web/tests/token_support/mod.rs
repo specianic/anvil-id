@@ -275,6 +275,7 @@ pub fn params(scope: &str, challenge: Option<&str>) -> AuthorizationParams {
         acr_values: vec![],
         ui_locales: None,
         claims: None,
+        response_mode: Default::default(),
     }
 }
 
