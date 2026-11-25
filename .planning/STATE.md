@@ -4,17 +4,17 @@ milestone: v0.1
 milestone_name: milestone
 current_phase: 03
 current_phase_name: release 0 2 secure by default
-current_plan: Not started
-status: planning
-stopped_at: Completed 03-32-PLAN.md
-last_updated: "2026-11-25T08:49:30.608Z"
+current_plan: 33
+status: verifying
+stopped_at: Completed 03-29-PLAN.md (Phase 3 gate, v0.2.0 released)
+last_updated: "2026-11-25T09:56:17.022Z"
 last_activity: 2026-11-25
 progress:
   total_phases: 7
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 64
-  completed_plans: 63
-  percent: 98
+  completed_plans: 64
+  percent: 100
 ---
 
 # Project State
@@ -24,21 +24,21 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-25)
 
 **Core value:** A standards-correct, secure OIDC provider that anyone can run in two minutes.
-**Current focus:** Phase 2: Release 0.1 "First login" (M1) — complete, awaiting verification
+**Current focus:** Phase 3: Release 0.2 "Secure by default" (M2) — complete (v0.2.0 released), awaiting verification
 
 ## Current Position
 
 **Current Phase:** 03
 **Current Phase Name:** release 0 2 secure by default
 **Total Phases:** 7
-**Current Plan:** Not started
-**Total Plans in Phase:** 22
-**Status:** Ready to plan
+**Current Plan:** 33
+**Total Plans in Phase:** 33
+**Status:** Phase complete — ready for verification
 **Last Activity:** 2026-11-25
-**Last Activity Description:** Phase 2 complete, transitioned to Phase 03
-**Progress:** [██████████] 98%
+**Last Activity Description:** Phase 3 gate (03-29) complete: all workflows green on 177b7f4, v0.2.0 released
+**Progress:** [██████████] 100%
 
-Phase 2 plans 02-01 through 02-22 are all complete (22/22 summaries). Next: Phase 2 verification, then Phase 3.
+Phase 3 plans 03-01 through 03-33 are all complete (33/33 summaries); v0.2.0 is published. Next: Phase 3 verification, then Phase 4.
 
 ## Performance Metrics
 
@@ -119,6 +119,7 @@ Phase 2 plans 02-01 through 02-22 are all complete (22/22 summaries). Next: Phas
 | Phase 03 P25 | 75min | 2 tasks | 20 files |
 | Phase 03 P31 | 15min | 1 tasks | 2 files |
 | Phase 03 P33 | 25min | 2 tasks | 17 files |
+| Phase 03 P29 | 65min | 3 tasks | 16 files |
 
 ## Accumulated Context
 
@@ -259,6 +260,9 @@ Recent decisions affecting current work:
 - [Phase 03]: 03-25: e2e run.sh builds admin-ui then a release anvilid so the tested binary embeds the console; console sign-in after an explicit sign-out sends prompt=login
 - [Phase 03]: 03-25: console CSP (script-src/style-src 'self') needs no relaxation; console spec reports no violations
 - [Phase 03]: 03-31: request_not_supported delivered via outer response_mode/state, else the unverified request object's (form_post only; >8 KiB/malformed -> outer params); request_uri never fetched
+- [Phase 03]: 03-29: release.yml/release-build.yml build admin-ui once and fail unless each binary embeds it (scripts/check-console-embedded.sh)
+- [Phase 03]: 03-29: QUAL-01 map extended to 230 pairs covering every Phase 3 control; just ci runs migrations-check and console-check
+- [Phase 03]: 03-29: v0.2.0 released from main at 177b7f4 (anvilid 0.2.0 on main; 0.2 migrations pinned); ghcr package still private (anonymous pull 403)
 
 ### Pending Todos
 
@@ -271,6 +275,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-25T08:49:30.538Z
-Stopped at: Completed 03-32-PLAN.md
+Last session: 2026-11-25T09:56:17.019Z
+Stopped at: Completed 03-29-PLAN.md (Phase 3 gate, v0.2.0 released)
 Resume file: None
