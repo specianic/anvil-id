@@ -16,10 +16,13 @@ use time::{Duration, OffsetDateTime};
 
 use crate::error::CoreError;
 use crate::model::{
-    AuthorizationCode, Client, ClientType, GrantType, NewRefreshToken, RefreshToken, RevokeReason,
-    Scope, SecretHash, Tenant, TokenFamily, User, UserStatus,
+    AuditAction, AuditActor, AuditDetails, AuditOutcome, AuthorizationCode, Client, ClientType,
+    GrantType, NewAccessToken, NewRefreshToken, RefreshToken, RequestContext, RevokeReason, Scope,
+    SecretHash, Tenant, TenantId, TokenFamily, TokenFamilyId, TokenFormat, User, UserId,
+    UserStatus,
 };
 use crate::ports::{Clock, ConsumeOutcome, RotateOutcome, Storage};
+use crate::service::audit::AuditService;
 use crate::service::claims::{
     ACCESS_TOKEN_TTL, AccessTokenInput, IdTokenInput, access_token_claims, id_token_claims,
     requested_claims,
@@ -319,6 +322,27 @@ pub fn sign_access_token(
         .map_err(signing_error)
 }
 
+/// The stored form of a new opaque access token: only the SHA-256 of `raw` is kept, linked to
+/// the family (`None` for client credentials), with the same lifetime as a JWT access token.
+pub fn new_opaque_access_token(
+    raw: &str,
+    client_id: &str,
+    family_id: Option<TokenFamilyId>,
+    user_id: Option<UserId>,
+    scope: &Scope,
+    now: OffsetDateTime,
+) -> NewAccessToken {
+    NewAccessToken {
+        token_hash: SecretHash(secret_hash(raw)),
+        family_id,
+        client_id: client_id.to_owned(),
+        user_id,
+        scope: scope.to_string(),
+        created_at: now,
+        expires_at: now + ACCESS_TOKEN_TTL,
+    }
+}
+
 /// Signs an ID token (`typ: JWT`).
 pub fn sign_id_token(signer: &SigningKey, input: &IdTokenInput) -> Result<String, CoreError> {
     signer
@@ -351,6 +375,53 @@ impl TokenService {
             kek: self.kek.clone(),
             clock: self.clock.clone(),
         }
+    }
+
+    /// Audits a detected code or refresh-token replay. The token endpoint carries no request
+    /// context into the core, so the event has none; the actor is the authenticated client and
+    /// the target the revoked family (never the token).
+    async fn audit_reuse(
+        &self,
+        tenant: TenantId,
+        client: &Client,
+        action: AuditAction,
+        family_id: Option<TokenFamilyId>,
+    ) -> Result<(), CoreError> {
+        AuditService {
+            storage: self.storage.clone(),
+            clock: self.clock.clone(),
+        }
+        .record(
+            tenant,
+            AuditActor::client(&client.client_id),
+            action,
+            family_id.map(|f| f.to_string()),
+            AuditOutcome::Failure,
+            &RequestContext::system(),
+            AuditDetails::empty(),
+        )
+        .await
+    }
+
+    /// Stores a new opaque access token and returns its plaintext.
+    async fn opaque_access_token(
+        &self,
+        tenant: TenantId,
+        client: &Client,
+        family_id: Option<TokenFamilyId>,
+        user_id: Option<UserId>,
+        scope: &Scope,
+        now: OffsetDateTime,
+    ) -> Result<String, CoreError> {
+        let raw = random_token();
+        self.storage
+            .grants()
+            .create_access_token(
+                tenant,
+                &new_opaque_access_token(&raw, &client.client_id, family_id, user_id, scope, now),
+            )
+            .await?;
+        Ok(raw)
     }
 
     /// Handles a token request for `tenant` (whose issuer is `issuer`).
@@ -410,6 +481,8 @@ impl TokenService {
                         .revoke_family(tenant.id, fid, RevokeReason::CodeReuse, now)
                         .await?;
                 }
+                self.audit_reuse(tenant.id, client, AuditAction::CodeReuseDetected, family_id)
+                    .await?;
                 return Err(invalid_grant());
             }
             ConsumeOutcome::NotFound => return Err(invalid_grant()),
@@ -505,9 +578,17 @@ impl TokenService {
             .await?
         {
             RotateOutcome::Rotated(f) => f,
-            RotateOutcome::ReuseDetected { .. } | RotateOutcome::NotFound => {
+            RotateOutcome::ReuseDetected { family_id } => {
+                self.audit_reuse(
+                    tenant.id,
+                    client,
+                    AuditAction::RefreshReuseDetected,
+                    Some(family_id),
+                )
+                .await?;
                 return Err(invalid_grant());
             }
+            RotateOutcome::NotFound => return Err(invalid_grant()),
         };
         let minted = self
             .mint_user_tokens(tenant, issuer, client, &family, &user, &scope, now, None)
@@ -523,21 +604,29 @@ impl TokenService {
         scope: Scope,
     ) -> Result<TokenResponse, CoreError> {
         let now = self.clock.now();
-        let signer = self.keys().signer(tenant.id).await?;
-        let access_token = sign_access_token(
-            &signer,
-            &AccessTokenInput {
-                issuer,
-                sub: &client.client_id,
-                client_id: &client.client_id,
-                scope: &scope,
-                now,
-                jti: random_token(),
-                family_id: None,
-                auth_time: None,
-                acr: None,
-            },
-        )?;
+        let access_token = match client.token_format {
+            TokenFormat::Opaque => {
+                self.opaque_access_token(tenant.id, client, None, None, &scope, now)
+                    .await?
+            }
+            TokenFormat::Jwt => {
+                let signer = self.keys().signer(tenant.id).await?;
+                sign_access_token(
+                    &signer,
+                    &AccessTokenInput {
+                        issuer,
+                        sub: &client.client_id,
+                        client_id: &client.client_id,
+                        scope: &scope,
+                        now,
+                        jti: random_token(),
+                        family_id: None,
+                        auth_time: None,
+                        acr: None,
+                    },
+                )?
+            }
+        };
         Ok(response(
             Minted {
                 access_token,
@@ -563,28 +652,45 @@ impl TokenService {
         now: OffsetDateTime,
         nonce: Option<&str>,
     ) -> Result<Minted, CoreError> {
-        let signer = self.keys().signer(tenant.id).await?;
         let sub = user.id.to_string();
-        let access_token = sign_access_token(
-            &signer,
-            &AccessTokenInput {
-                issuer,
-                sub: &sub,
-                client_id: &family.client_id,
-                scope,
-                now,
-                jti: random_token(),
-                family_id: Some(family.id),
-                auth_time: family.auth_time,
-                acr: family.acr.as_deref(),
-            },
-        )?;
+        let mut at_signer = None;
+        let access_token = match client.token_format {
+            TokenFormat::Opaque => {
+                self.opaque_access_token(
+                    tenant.id,
+                    client,
+                    Some(family.id),
+                    Some(user.id),
+                    scope,
+                    now,
+                )
+                .await?
+            }
+            TokenFormat::Jwt => {
+                let signer = self.keys().signer(tenant.id).await?;
+                let token = sign_access_token(
+                    &signer,
+                    &AccessTokenInput {
+                        issuer,
+                        sub: &sub,
+                        client_id: &family.client_id,
+                        scope,
+                        now,
+                        jti: random_token(),
+                        family_id: Some(family.id),
+                        auth_time: family.auth_time,
+                        acr: family.acr.as_deref(),
+                    },
+                )?;
+                at_signer = Some(signer);
+                token
+            }
+        };
         let id_token = if scope.contains("openid") {
             let alg = id_token_alg(tenant, client)?;
-            let id_signer = if alg == signer.alg() {
-                signer
-            } else {
-                self.keys().signer_for(tenant.id, alg).await?
+            let id_signer = match at_signer {
+                Some(signer) if signer.alg() == alg => signer,
+                _ => self.keys().signer_for(tenant.id, alg).await?,
             };
             let input = family_id_token_input(
                 issuer,
@@ -1069,6 +1175,27 @@ mod tests {
         let c = claims_of(&at);
         assert_eq!(c["aud"], "rp");
         assert_eq!(parse_family_id(c["fid"].as_str().unwrap()), Some(fid));
+    }
+
+    #[test]
+    fn opaque_access_token_is_stored_as_sha256_with_family_and_lifetime() {
+        let scope = Scope::parse("openid profile").unwrap();
+        let fid = TokenFamilyId::new_v7();
+        let uid = UserId::new_v7();
+        let raw = random_token();
+        assert!(!raw.contains('.'), "opaque tokens are never JWT-shaped");
+        assert_eq!(raw.len(), 43, "256 bits, base64url without padding");
+        let rec = new_opaque_access_token(&raw, "rp", Some(fid), Some(uid), &scope, now());
+        assert_eq!(rec.token_hash, SecretHash(secret_hash(&raw)));
+        assert_eq!(rec.family_id, Some(fid));
+        assert_eq!(rec.user_id, Some(uid));
+        assert_eq!(rec.client_id, "rp");
+        assert_eq!(rec.scope, "openid profile");
+        assert_eq!(rec.created_at, now());
+        assert_eq!(rec.expires_at, now() + ACCESS_TOKEN_TTL);
+        // Client credentials: no family, no user.
+        let cc = new_opaque_access_token(&raw, "svc", None, None, &scope, now());
+        assert!(cc.family_id.is_none() && cc.user_id.is_none());
     }
 
     #[test]
