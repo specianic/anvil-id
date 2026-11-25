@@ -1,0 +1,26 @@
+{#- Account chooser for prompt=select_account (plan 04-20, OIDC-14). Variables (besides page):
+      client_name, user_name (optional), user_email, messages [{level, key, text}], csrf_token,
+      action
+    Selectors: form select-account-form, client name select-account-client, account
+    select-account-current (name select-account-name, email select-account-email), buttons
+    select-account-continue and select-account-other (both name="choice", values continue /
+    other). No JavaScript. -#}
+{% extends "base.html" %}
+{% block heading %}{{ t("select_account.heading") }}{% endblock %}
+{% block content %}
+<div class="anvil-form-messages" id="select-account-messages" aria-live="polite">
+{% for m in messages %}
+<p class="anvil-message anvil-message-{{ m.level }}" id="select-account-msg-{{ loop.index }}" data-message-key="{{ m.key }}"{% if m.level == "error" %} role="alert"{% endif %}>{{ m.text }}</p>
+{% endfor %}
+</div>
+<form id="select-account-form" method="post" action="{{ action }}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+<p class="anvil-lead"><strong><bdi id="select-account-client">{{ client_name }}</bdi></strong> {{ t("select_account.lead") }}</p>
+<p class="anvil-account" id="select-account-current">{{ t("select_account.signed_in_as") }}
+{% if user_name %}<strong><bdi id="select-account-name">{{ user_name }}</bdi></strong> (<bdi id="select-account-email">{{ user_email }}</bdi>){% else %}<strong><bdi id="select-account-email">{{ user_email }}</bdi></strong>{% endif %}</p>
+<div class="anvil-actions">
+<button type="submit" id="select-account-continue" name="choice" value="continue">{{ t("select_account.continue") }}</button>
+<button type="submit" id="select-account-other" name="choice" value="other" class="anvil-secondary">{{ t("select_account.other") }}</button>
+</div>
+</form>
+{% endblock %}

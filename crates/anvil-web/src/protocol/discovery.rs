@@ -14,8 +14,13 @@
 //!   ([`enabled_algs`]; RS256 is always enabled).
 //! - Introspection (RFC 7662) refuses public clients, so its auth methods omit `none`; revocation
 //!   (RFC 7009) accepts every token-endpoint method, including `none` for public clients.
+//! - `prompt_values_supported` is per tenant ([`supported_prompt_values`]): `none`, `login`,
+//!   `consent`, `select_account`, plus `create` (Initiating User Registration 1.0) only when the
+//!   tenant's registration is open, which is exactly what `/authorize` accepts.
+//! - `acr_values_supported` lists the single-factor and the multi-factor `acr`.
 
-use anvil_core::model::{ACR_PWD, Tenant};
+use anvil_core::model::{ACR_MFA, ACR_PWD, Tenant};
+use anvil_core::oauth::authorize_request::supported_prompt_values;
 use anvil_core::oauth::response_mode;
 use anvil_core::service::key_rotation::enabled_algs;
 use axum::Router;
@@ -111,8 +116,8 @@ struct ProviderMetadata {
     revocation_endpoint_auth_signing_alg_values_supported: &'static [&'static str],
     code_challenge_methods_supported: &'static [&'static str],
     authorization_response_iss_parameter_supported: bool,
-    prompt_values_supported: &'static [&'static str],
-    acr_values_supported: [&'static str; 1],
+    prompt_values_supported: Vec<&'static str>,
+    acr_values_supported: [&'static str; 2],
     claims_parameter_supported: bool,
     request_parameter_supported: bool,
     request_uri_parameter_supported: bool,
@@ -127,8 +132,14 @@ struct ProviderMetadata {
 }
 
 impl ProviderMetadata {
-    /// The document for `issuer`; `id_token_algs` are the tenant's enabled ID token algorithms.
-    fn for_issuer(issuer: &str, id_token_algs: Vec<&'static str>, ui_locales: Vec<String>) -> Self {
+    /// The document for `issuer`; `id_token_algs` are the tenant's enabled ID token algorithms,
+    /// `prompt_values` the `prompt` values the tenant accepts.
+    fn for_issuer(
+        issuer: &str,
+        id_token_algs: Vec<&'static str>,
+        prompt_values: Vec<&'static str>,
+        ui_locales: Vec<String>,
+    ) -> Self {
         let endpoint = |path: &str| format!("{issuer}{path}");
         Self {
             authorization_endpoint: endpoint("/authorize"),
@@ -153,8 +164,8 @@ impl ProviderMetadata {
             revocation_endpoint_auth_signing_alg_values_supported: AUTH_SIGNING_ALGS,
             code_challenge_methods_supported: &["S256"],
             authorization_response_iss_parameter_supported: true,
-            prompt_values_supported: &["none", "login"],
-            acr_values_supported: [ACR_PWD],
+            prompt_values_supported: prompt_values,
+            acr_values_supported: [ACR_PWD, ACR_MFA],
             claims_parameter_supported: true,
             request_parameter_supported: false,
             request_uri_parameter_supported: false,
@@ -182,6 +193,7 @@ async fn metadata(State(state): State<AppState>, tenant: ResolvedTenant) -> Resp
     let mut resp = axum::Json(ProviderMetadata::for_issuer(
         &tenant.issuer,
         algs,
+        supported_prompt_values(tenant.tenant.settings.registration),
         state.renderer().catalogs().available(),
     ))
     .into_response();
@@ -208,6 +220,7 @@ mod tests {
         let m = ProviderMetadata::for_issuer(
             "https://op.test/t/acme",
             vec!["RS256"],
+            vec!["none"],
             vec!["en".into()],
         );
         assert_eq!(m.issuer, "https://op.test/t/acme");

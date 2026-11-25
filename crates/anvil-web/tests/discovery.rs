@@ -115,7 +115,12 @@ async fn default_tenant_discovery() {
     assert_eq!(doc["authorization_response_iss_parameter_supported"], true);
     assert_eq!(doc["request_uri_parameter_supported"], false);
     assert_eq!(doc["request_parameter_supported"], false);
-    assert_eq!(strings(&doc["prompt_values_supported"]), ["none", "login"]);
+    // The test tenant has open registration, so `create` is advertised (per-tenant cases in
+    // authorize_prompt.rs).
+    assert_eq!(
+        strings(&doc["prompt_values_supported"]),
+        ["none", "login", "consent", "select_account", "create"]
+    );
     assert_eq!(strings(&doc["response_types_supported"]), ["code"]);
     assert_eq!(
         strings(&doc["response_modes_supported"]),
@@ -123,7 +128,7 @@ async fn default_tenant_discovery() {
     );
     assert_eq!(
         strings(&doc["acr_values_supported"]),
-        [anvil_core::model::ACR_PWD]
+        [anvil_core::model::ACR_PWD, anvil_core::model::ACR_MFA]
     );
     assert_eq!(
         strings(&doc["token_endpoint_auth_signing_alg_values_supported"]),
