@@ -2,13 +2,19 @@
 //!
 //! Seeds, through the storage ports, an authorization code, a refresh token (and its rotated
 //! child), a browser session, a client secret digest, a setup token, a self-service token, a flow
-//! CSRF/cookie pair and a replay-guarded jti, each derived from a known plaintext marker. Then it
-//! opens the database file with a plain connection and checks that no TEXT or BLOB column of any
-//! table contains any marker, and that every hash column holds exactly 32 bytes (the expected
-//! digest for the seeded rows).
+//! CSRF/cookie pair and a replay-guarded jti, each derived from a known plaintext marker, plus a
+//! verification email whose link carries a marker token (sealed with the KEK, as the core services
+//! store it). Then it opens the database file with a plain connection and checks that no TEXT or
+//! BLOB column of any table contains any marker, and that every hash column holds exactly 32 bytes
+//! (the expected digest for the seeded rows).
 
-use anvil_core::model::{ReplayKind, SecretHash, SelfServiceKind};
+use std::collections::BTreeMap;
+
+use anvil_core::model::{
+    NewEmail, OutboxId, ReplayKind, SecretHash, SelfServiceKind, seal_payload,
+};
 use anvil_core::ports::{RotateOutcome, Storage};
+use anvil_jose::Kek;
 use anvil_jose::encoding::secret_hash;
 use anvil_storage::contract::{
     GrantCtx, new_client, new_code, new_family, new_flow, new_password, new_refresh,
@@ -44,6 +50,8 @@ fn hash_of(plaintext: &str) -> SecretHash {
 /// The seeded markers, with the table/column their digest must appear in.
 struct Seeded {
     markers: Vec<(String, &'static str, &'static str)>,
+    /// Markers stored only inside sealed values (no digest to look for).
+    sealed_markers: Vec<String>,
 }
 
 async fn seed(storage: &SqliteStorage) -> Seeded {
@@ -68,9 +76,34 @@ async fn seed(storage: &SqliteStorage) -> Seeded {
         Duration::hours(1),
     );
     sst.token_hash = hash_of(&sst_marker);
+    // The verification email carrying the token link, sealed as the flow service stores it.
+    let link_marker = marker("outbox-link");
+    let vars = BTreeMap::from([
+        ("tenant_name".to_owned(), "Acme".to_owned()),
+        ("email".to_owned(), user.email.clone()),
+        (
+            "link".to_owned(),
+            format!("https://id.example.test/ui/verification?token={link_marker}"),
+        ),
+        ("expires_in".to_owned(), "24 hours".to_owned()),
+    ]);
+    let email = NewEmail {
+        id: OutboxId::new_v7(),
+        to: user.email.clone(),
+        template: "verification".to_owned(),
+        payload: seal_payload(&Kek::generate(), tenant, &vars).expect("seal payload"),
+        created_at: now_ms(),
+        expires_at: now_ms() + Duration::days(1),
+    };
     let user = storage
         .users()
-        .create(tenant, &user, Some(&new_password()), Some(&sst), None)
+        .create(
+            tenant,
+            &user,
+            Some(&new_password()),
+            Some(&sst),
+            Some(&email),
+        )
         .await
         .expect("user");
 
@@ -164,7 +197,10 @@ async fn seed(storage: &SqliteStorage) -> Seeded {
         .await
         .expect("record_jti");
 
-    Seeded { markers }
+    Seeded {
+        markers,
+        sealed_markers: vec![link_marker],
+    }
 }
 
 async fn inspect(path: &std::path::Path) -> SqlitePool {
@@ -248,7 +284,30 @@ async fn secrets_never_stored_plaintext() {
         "the scanner must find a stored digest inside a BLOB"
     );
 
-    // No column of any table may contain a plaintext marker, as TEXT or inside a BLOB.
+    // The outbox row is stored (sealed): the scanner sees its template and the sealed envelope.
+    assert!(
+        hits_anywhere(&pool, &columns, b"verification").await > 0,
+        "the scanner must find the stored outbox template"
+    );
+    assert!(
+        hits_anywhere(&pool, &columns, b"sealed").await > 0,
+        "the outbox payload must be stored as a sealed envelope"
+    );
+
+    // No column of any table may contain a plaintext marker, as TEXT or inside a BLOB. This
+    // includes the single-use token inside the email link.
+    for m in &seeded.sealed_markers {
+        assert_eq!(
+            hits_anywhere(&pool, &columns, m.as_bytes()).await,
+            0,
+            "the email link marker {m} is stored in plaintext"
+        );
+        assert_eq!(
+            hits_anywhere(&pool, &columns, b"token=").await,
+            0,
+            "no email link is stored in plaintext"
+        );
+    }
     for (m, _, _) in &seeded.markers {
         assert_eq!(
             hits_anywhere(&pool, &columns, m.as_bytes()).await,

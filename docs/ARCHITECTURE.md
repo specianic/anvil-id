@@ -214,6 +214,7 @@ from handler code.
 | Client secrets, refresh/access tokens (opaque), authorization codes, session IDs, setup and recovery tokens, API keys | SHA-256 of a 256-bit random value. The plaintext is shown once and never stored |
 | MFA recovery codes | ~80-bit random codes, formatted for typing (e.g. `XXXX-XXXX-XXXX-XXXX`), stored as HMAC-SHA-256 under a key derived from the KEK (a plain hash would be brute-forceable at this length). Shown once |
 | TOTP seeds, upstream IdP client secrets, signing private keys, SAML SP keys | AES-256-GCM with a data key derived from the **key-encryption key (KEK)** via HKDF, using the table and row ID as associated data |
+| Email outbox payloads (contain single-use links) | Sealed with the KEK envelope (AES-256-GCM, purpose `anvilid/outbox-payload/v1`, tenant ID as associated data) when the email is created; opened only by the outbox worker immediately before rendering. A payload that cannot be opened is never sent |
 
 **KEK source:** the `ANVILID_KEK` env var or a key file. In zero-config dev mode the binary generates
 a KEK into the data directory on first start and logs a warning telling the operator to back it up.

@@ -6,8 +6,9 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
-use anvil_core::model::{NewEmail, OutboxEmail, OutboxId, TenantId};
+use anvil_core::model::{NewEmail, OutboxEmail, OutboxId, TenantId, seal_payload};
 use anvil_core::ports::{Clock, OutboxRepo, StorageError};
+use anvil_jose::Kek;
 use anvil_mail::{MailError, MailTransport, OutboxAccess, OutgoingMail};
 use time::OffsetDateTime;
 
@@ -186,13 +187,33 @@ pub fn payload(email: &str, link: &str) -> BTreeMap<String, String> {
     ])
 }
 
-/// A new email created at `created_at`, valid for one day.
-pub fn new_email(to: &str, template: &str, link: &str, created_at: OffsetDateTime) -> NewEmail {
+/// A new email for `tenant` created at `created_at`, valid for one day, with the standard
+/// payload sealed under `kek` (as the core services store it).
+pub fn new_email(
+    kek: &Kek,
+    tenant: TenantId,
+    to: &str,
+    template: &str,
+    link: &str,
+    created_at: OffsetDateTime,
+) -> NewEmail {
+    email_with_payload(kek, tenant, to, template, &payload(to, link), created_at)
+}
+
+/// Like [`new_email`] with an explicit (plaintext) payload, sealed under `kek`.
+pub fn email_with_payload(
+    kek: &Kek,
+    tenant: TenantId,
+    to: &str,
+    template: &str,
+    payload: &BTreeMap<String, String>,
+    created_at: OffsetDateTime,
+) -> NewEmail {
     NewEmail {
         id: OutboxId::new_v7(),
         to: to.to_owned(),
         template: template.to_owned(),
-        payload: payload(to, link),
+        payload: seal_payload(kek, tenant, payload).expect("seal test payload"),
         created_at,
         expires_at: created_at + Duration::from_secs(86_400),
     }

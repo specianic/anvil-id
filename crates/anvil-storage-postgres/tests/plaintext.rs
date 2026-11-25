@@ -2,7 +2,9 @@
 //!
 //! Seeds an authorization code, a refresh token, a browser session, a flow, a client secret, a
 //! setup token, a self-service token and a replay guard through the ports, each derived from a
-//! known plaintext marker hashed with `anvil_jose::encoding::secret_hash`. Then it scans every
+//! known plaintext marker hashed with `anvil_jose::encoding::secret_hash`, plus the recovery email
+//! whose link carries a marker token (payload sealed with the KEK, as the core services store
+//! it). Then it scans every
 //! text, text[], jsonb and bytea column of every table with a plain sqlx connection and asserts
 //! that no marker appears anywhere, and that every hash column holds exactly the 32-byte hash.
 //!
@@ -10,10 +12,13 @@
 
 mod support;
 
+use std::collections::BTreeMap;
+
 use anvil_core::model::{
-    FlowKind, NewBrowserSession, NewFlow, NewRefreshToken, NewSelfServiceToken, NewSetupToken,
-    ReplayKind, SecretHash, SelfServiceKind,
+    FlowKind, NewBrowserSession, NewEmail, NewFlow, NewRefreshToken, NewSelfServiceToken,
+    NewSetupToken, OutboxId, ReplayKind, SecretHash, SelfServiceKind, seal_payload,
 };
+use anvil_jose::Kek;
 use anvil_jose::encoding::secret_hash;
 use anvil_storage::contract::*;
 use sqlx::{Connection, PgConnection, Row};
@@ -178,6 +183,25 @@ async fn secrets_never_stored_plaintext() {
         .expect("create_setup_token");
 
     let self_service = marker("selfservice");
+    // The recovery email carrying the token link, sealed as the flow service stores it.
+    let link = marker("outboxlink");
+    let vars = BTreeMap::from([
+        ("tenant_name".to_owned(), "Acme".to_owned()),
+        ("email".to_owned(), ctx.user.email.clone()),
+        (
+            "link".to_owned(),
+            format!("https://id.example.test/ui/recovery?token={}", link.plain),
+        ),
+        ("expires_in".to_owned(), "1 hour".to_owned()),
+    ]);
+    let recovery_email = NewEmail {
+        id: OutboxId::new_v7(),
+        to: ctx.user.email.clone(),
+        template: "recovery".to_owned(),
+        payload: seal_payload(&Kek::generate(), ctx.tenant, &vars).expect("seal payload"),
+        created_at: now,
+        expires_at: now + Duration::hours(1),
+    };
     s.storage
         .users()
         .issue_self_service_token(
@@ -191,7 +215,7 @@ async fn secrets_never_stored_plaintext() {
                     Duration::hours(1),
                 )
             },
-            None,
+            Some(&recovery_email),
         )
         .await
         .expect("issue_self_service_token");
@@ -219,6 +243,8 @@ async fn secrets_never_stored_plaintext() {
         &setup,
         &self_service,
         &jti,
+        // The single-use token inside the email link.
+        &link,
     ];
 
     // --- inspect the raw rows -------------------------------------------------------------
@@ -259,6 +285,18 @@ async fn secrets_never_stored_plaintext() {
     assert!(
         email_found.contains(&"user.email".to_owned()),
         "the scan must find the user's email, found {email_found:?}"
+    );
+
+    // The outbox row exists and its payload is the sealed envelope, not the template variables.
+    let sealed_found = locations(&mut conn, &columns, "sealed").await;
+    assert!(
+        sealed_found.iter().any(|l| l.starts_with("email_outbox.")),
+        "the outbox payload must be stored as a sealed envelope, found {sealed_found:?}"
+    );
+    let link_found = locations(&mut conn, &columns, "token=").await;
+    assert!(
+        link_found.is_empty(),
+        "no email link may be stored in plaintext, found in {link_found:?}"
     );
 
     // Every hash column holds exactly the 32-byte hash that was passed in.

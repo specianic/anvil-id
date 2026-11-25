@@ -5,6 +5,10 @@
 //! - Attempt `n` failing reschedules at `now + min(30 s * 2^(n-1), 1 h)`.
 //! - After [`MAX_ATTEMPTS`] attempts the row is parked at its `expires_at`, so it is never
 //!   claimed again (claims require `expires_at > now`).
+//! - Payloads are stored sealed with the KEK (`anvil_core::model::seal_payload`). The worker
+//!   opens each payload immediately before rendering. A payload that cannot be opened (wrong KEK,
+//!   tampered or unsealed row) is never sent: the attempt is recorded as failed with the generic
+//!   error [`PAYLOAD_DECRYPT_ERROR`].
 //! - Logs and `last_error` contain the outbox id, template name and error kind only, never the
 //!   message body, the payload or links (they carry single-use tokens).
 
@@ -12,8 +16,9 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anvil_core::model::OutboxEmail;
+use anvil_core::model::{OutboxEmail, open_payload};
 use anvil_core::ports::{Clock, OutboxRepo, Storage};
+use anvil_jose::Kek;
 
 use crate::MailError;
 use crate::render::EmailRenderer;
@@ -27,6 +32,8 @@ pub const BATCH_SIZE: u32 = 50;
 pub const MAX_ATTEMPTS: u32 = 8;
 /// Delay between polls when the outbox is idle (or after an error).
 pub const IDLE_POLL: Duration = Duration::from_secs(2);
+/// `last_error` of a row whose sealed payload cannot be opened.
+pub const PAYLOAD_DECRYPT_ERROR: &str = "payload could not be decrypted";
 
 const BASE_BACKOFF: Duration = Duration::from_secs(30);
 const MAX_BACKOFF: Duration = Duration::from_secs(3600);
@@ -53,6 +60,29 @@ pub struct OutboxWorker {
     pub clock: Arc<dyn Clock>,
     /// Sender address (`From`) of every email.
     pub from: String,
+    /// Opens the sealed outbox payloads.
+    pub kek: Arc<Kek>,
+}
+
+/// Why one delivery failed. The message of each variant is what `last_error` records.
+enum DeliveryError {
+    Payload,
+    Mail(MailError),
+}
+
+impl DeliveryError {
+    fn message(&self) -> String {
+        match self {
+            Self::Payload => PAYLOAD_DECRYPT_ERROR.to_owned(),
+            Self::Mail(e) => e.to_string(),
+        }
+    }
+}
+
+impl From<MailError> for DeliveryError {
+    fn from(e: MailError) -> Self {
+        Self::Mail(e)
+    }
 }
 
 /// Backoff after failed attempt `attempt` (1-based): `min(30 s * 2^(attempt-1), 1 h)`.
@@ -114,9 +144,14 @@ impl OutboxWorker {
         Ok((claimed, sent))
     }
 
-    async fn deliver(&self, row: &OutboxEmail) -> Result<(), MailError> {
-        let (subject, text, html) = self.renderer.render(&row.template, &row.payload)?;
-        self.transport
+    async fn deliver(&self, row: &OutboxEmail) -> Result<(), DeliveryError> {
+        // The open error is deliberately dropped: it is generic and the stored value is never
+        // logged.
+        let payload = open_payload(&self.kek, row.tenant_id, &row.payload)
+            .map_err(|_| DeliveryError::Payload)?;
+        let (subject, text, html) = self.renderer.render(&row.template, &payload)?;
+        Ok(self
+            .transport
             .send(OutgoingMail {
                 to: row.to.clone(),
                 from: self.from.clone(),
@@ -124,10 +159,10 @@ impl OutboxWorker {
                 text,
                 html,
             })
-            .await
+            .await?)
     }
 
-    async fn record_failure(&self, repo: &dyn OutboxRepo, row: &OutboxEmail, err: &MailError) {
+    async fn record_failure(&self, repo: &dyn OutboxRepo, row: &OutboxEmail, err: &DeliveryError) {
         // `attempts` already counts this attempt (claiming increments it).
         let attempt = row.attempts.max(1);
         let now = self.clock.now();
@@ -136,7 +171,7 @@ impl OutboxWorker {
         } else {
             (now + backoff(attempt)).min(row.expires_at)
         };
-        let message = err.to_string();
+        let message = err.message();
         tracing::warn!(
             outbox_id = %row.id.0,
             template = %row.template,
