@@ -110,12 +110,27 @@ mod pg {
         url
     }
 
+    /// Connect to the test server's `postgres` database, retrying while the container finishes
+    /// starting (it can report "ready" a moment before it accepts connections under load).
+    async fn connect_admin(server: &str) -> sqlx::PgConnection {
+        let url = format!("{server}/postgres");
+        let mut last_err = None;
+        for _ in 0..50 {
+            match sqlx::PgConnection::connect(&url).await {
+                Ok(conn) => return conn,
+                Err(e) => {
+                    last_err = Some(e);
+                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                }
+            }
+        }
+        panic!("admin connection to the test Postgres failed after retries: {last_err:?}");
+    }
+
     pub(super) async fn fresh() -> Arc<dyn Storage> {
         let server = server_url().await;
         let db = format!("test_{}", Uuid::now_v7().simple());
-        let mut admin = sqlx::PgConnection::connect(&format!("{server}/postgres"))
-            .await
-            .expect("admin connection to the test Postgres");
+        let mut admin = connect_admin(server).await;
         // `db` contains only a UUID's hex digits, so interpolating it is safe.
         sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {db}")))
             .execute(&mut admin)

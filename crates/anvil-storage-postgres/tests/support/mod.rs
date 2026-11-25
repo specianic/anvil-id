@@ -47,6 +47,23 @@ async fn server_url() -> &'static str {
     url
 }
 
+/// Connect to the test server's `postgres` database, retrying while the container finishes
+/// starting (it can report "ready" a moment before it accepts connections under load).
+async fn connect_admin(server: &str) -> sqlx::PgConnection {
+    let url = format!("{server}/postgres");
+    let mut last_err = None;
+    for _ in 0..50 {
+        match sqlx::PgConnection::connect(&url).await {
+            Ok(conn) => return conn,
+            Err(e) => {
+                last_err = Some(e);
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
+        }
+    }
+    panic!("admin connection to the test Postgres failed after retries: {last_err:?}");
+}
+
 /// A fresh, migrated database on the shared container. The guard holds the database URL
 /// (`String`) so row-inspection tests can open their own connection.
 pub async fn postgres() -> TestStorage {
@@ -54,9 +71,7 @@ pub async fn postgres() -> TestStorage {
     let db = format!("test_{}", Uuid::now_v7().simple());
 
     // Create the database through a short-lived admin connection to `postgres` (never template1).
-    let mut admin = sqlx::PgConnection::connect(&format!("{server}/postgres"))
-        .await
-        .expect("admin connection to the test Postgres must succeed");
+    let mut admin = connect_admin(&server).await;
     // `db` is built only from a UUID's hex digits, so interpolating it is safe.
     sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {db}")))
         .execute(&mut admin)
