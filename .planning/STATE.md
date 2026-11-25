@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 01-03-PLAN.md
-last_updated: "2026-11-25T00:54:54.137Z"
-last_activity: 2026-11-25 — Completed 01-04 (anvil-web router, anvilid serve)
+stopped_at: Completed 01-02-PLAN.md
+last_updated: "2026-11-25T00:55:30.031Z"
+last_activity: 2026-11-25 — Completed 01-03 (storage contract suite, SQLite backend, sqlx.sh)
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 8
-  completed_plans: 3
-  percent: 25
+  completed_plans: 4
+  percent: 38
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 ## Current Position
 
 Phase: 1 of 7 (Foundations and Spikes (M0))
-Plan: 3 of 8 in current phase (01-01, 01-03, 01-04 complete)
+Plan: 4 of 8 in current phase (01-01, 01-02, 01-03, 01-04 complete)
 Status: In progress
-Last activity: 2026-11-25 — Completed 01-03 (storage contract suite, SQLite backend, sqlx.sh)
+Last activity: 2026-11-25 — Completed 01-02 (cargo-deny policy, dependency-rule checker + self-test, CI workflow)
 
-Progress: [████░░░░░░] 38%
+Progress: [█████░░░░░] 50%
 
 ## Performance Metrics
 
@@ -53,6 +53,7 @@ Progress: [████░░░░░░] 38%
 | Phase 01 P01 | 15min | 3 tasks | 28 files |
 | Phase 01 P04 | 5min | 2 tasks | 7 files |
 | Phase 01 P03 | 4min | 3 tasks | 13 files |
+| Phase 01 P02 | 15min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -70,6 +71,8 @@ Recent decisions affecting current work:
 - [Phase 01]: Discovery document serialised once at router build; advertised-but-unbuilt endpoints return 501 JSON
 - [Phase 01]: SQLite storage passes the contract (incl. 32-way consume) with the production single-writer config; no multi-connection writer
 - [Phase 01]: sqlx metadata prepared per crate via scripts/sqlx.sh (skips crates without sqlx.toml); dev Postgres bound to 127.0.0.1
+- [Phase 01]: cargo-deny >= 0.22 required (0.21 fails on transitive dev-only unmaintained advisories); bans not loosened
+- [Phase 01]: Dependency rules apply to normal+build edges only (cargo tree -p, --target all); self-test counts only RULE VIOLATION output as rejection
 
 ### Pending Todos
 
@@ -83,6 +86,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-25T00:54:54.135Z
-Stopped at: Completed 01-03-PLAN.md
+Last session: 2026-11-25T00:55:30.029Z
+Stopped at: Completed 01-02-PLAN.md
 Resume file: None
