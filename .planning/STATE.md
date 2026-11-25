@@ -6,15 +6,15 @@ current_phase: 04
 current_phase_name: release 0 3 real world logins
 current_plan: Not started
 status: planning
-stopped_at: Completed 04-29-PLAN.md
-last_updated: "2026-11-25T23:12:26.394Z"
+stopped_at: Completed 04-27-PLAN.md
+last_updated: "2026-11-25T23:13:49.350Z"
 last_activity: 2026-11-25
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 98
-  completed_plans: 93
-  percent: 95
+  completed_plans: 94
+  percent: 96
 ---
 
 # Project State
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 **Status:** Ready to plan
 **Last Activity:** 2026-11-25
 **Last Activity Description:** Phase 3 complete, transitioned to Phase 04
-**Progress:** [██████████] 95%
+**Progress:** [██████████] 96%
 
 Phase 3 plans 03-01 through 03-34 are all complete (34/34 summaries); v0.2.0 is published. 03-34 closed the verification gap (base64). Next: Phase 3 re-verification, then Phase 4.
 
@@ -148,6 +148,7 @@ Phase 3 plans 03-01 through 03-34 are all complete (34/34 summaries); v0.2.0 is 
 | Phase 04 P24 | 2h | 2 tasks | 13 files |
 | Phase 04 P30 | 35min | 2 tasks | 13 files |
 | Phase 04 P29 | 45min | 2 tasks | 6 files |
+| Phase 04 P27 | 45min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -335,6 +336,7 @@ Recent decisions affecting current work:
 - [Phase 04]: 04-24: email code / magic link sign-in only for active accounts with a verified address; unverified answers like unknown (no email)
 - [Phase 04]: 04-30: German (de) is a shipped locale; tests/i18n_catalogs.rs enforces per-file id/variable/plural parity, so every new en/*.ftl needs a de counterpart
 - [Phase 04]: 04-29: email sign-in e2e runs in a dedicated tenant (email_otp+magic_link) deleted afterwards; nojs-*.spec.ts names not matched by the nojs project regex must set javaScriptEnabled false themselves
+- [Phase 04]: 04-27: upstream e2e specs use a fresh tenant per test; nojs project regex also matches nojs-*.spec.ts
 
 ### Pending Todos
 
@@ -347,6 +349,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-25T23:12:26.392Z
-Stopped at: Completed 04-29-PLAN.md
+Last session: 2026-11-25T23:13:49.347Z
+Stopped at: Completed 04-27-PLAN.md
 Resume file: None
