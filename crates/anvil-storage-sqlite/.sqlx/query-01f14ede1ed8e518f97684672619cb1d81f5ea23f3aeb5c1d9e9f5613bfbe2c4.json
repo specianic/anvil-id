@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM identity_link\n              WHERE tenant_id = ?1 AND user_id = ?2 AND id = ?3\n                AND (EXISTS (SELECT 1 FROM credential c\n                              WHERE c.tenant_id = ?1 AND c.user_id = ?2\n                                AND c.kind IN ('password', 'webauthn'))\n                     OR EXISTS (SELECT 1 FROM identity_link o\n                                 WHERE o.tenant_id = ?1 AND o.user_id = ?2 AND o.id <> ?3)\n                     OR (?4 AND EXISTS (SELECT 1 FROM user u\n                                         WHERE u.tenant_id = ?1 AND u.id = ?2\n                                           AND u.email_verified = 1)))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "01f14ede1ed8e518f97684672619cb1d81f5ea23f3aeb5c1d9e9f5613bfbe2c4"
+}

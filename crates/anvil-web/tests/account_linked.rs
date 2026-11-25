@@ -295,6 +295,67 @@ async fn unlink_of_the_only_sign_in_method_is_refused() {
     assert!(links(&u.app, &user).await.is_empty());
 }
 
+/// Sets the user's `email_verified` directly (independent of the connection's trust setting).
+async fn set_email_verified(app: &TestApp, user: &User, verified: bool) {
+    app.storage()
+        .users()
+        .update(
+            user.tenant_id,
+            user.id,
+            &anvil_core::model::UserUpdate {
+                email_verified: Some(verified),
+                ..anvil_core::model::UserUpdate::default()
+            },
+            app.clock().now(),
+        )
+        .await
+        .expect("user update")
+        .expect("user exists");
+}
+
+#[tokio::test]
+async fn unverified_email_is_not_a_remaining_sign_in_method() {
+    let u = setup(true).await;
+    let user = upstream_only_user(&u).await;
+    set_email_verified(&u.app, &user, false).await;
+    tenant_settings(&u.app, |s| {
+        s.email_otp = true;
+        s.magic_link = true;
+    })
+    .await;
+    let link = links(&u.app, &user).await.remove(0);
+    let (action, csrf) = unlink_form(&u.app, &link).await;
+    let resp = u.app.post_form(&action, &[("csrf_token", &csrf)]).await;
+    assert_message(&resp, 409, "account.last_sign_in_method");
+    assert_eq!(
+        links(&u.app, &user).await.len(),
+        1,
+        "the link is kept: an unverified email is no way to sign in"
+    );
+    assert!(
+        audit(&u.app, AuditAction::IdentityUnlinked)
+            .await
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn verified_email_with_email_sign_in_allows_unlink() {
+    let u = setup(true).await;
+    let user = upstream_only_user(&u).await;
+    set_email_verified(&u.app, &user, true).await;
+    tenant_settings(&u.app, |s| s.email_otp = true).await;
+    let link = links(&u.app, &user).await.remove(0);
+    let (action, csrf) = unlink_form(&u.app, &link).await;
+    let resp = u.app.post_form(&action, &[("csrf_token", &csrf)]).await;
+    assert_message(&resp, 200, "linked.unlinked");
+    assert!(links(&u.app, &user).await.is_empty());
+    let events = audit(&u.app, AuditAction::IdentityUnlinked).await;
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].details.as_map()["connection"], SLUG);
+    assert_eq!(events[0].details.as_map()["mode"], "account");
+}
+
 #[tokio::test]
 async fn unlink_with_another_link_left_is_allowed() {
     let u = setup(true).await;

@@ -70,12 +70,7 @@ impl AppState {
     /// The canonical issuer of a managed tenant (used in emailed links): its custom host, the
     /// public URL for `default`, else `/t/{slug}`.
     pub(crate) fn admin_issuer_of(&self, tenant: &anvil_core::model::Tenant) -> String {
-        let base = match &tenant.host {
-            Some(h) => TenantBase::Host(h.clone()),
-            None if tenant.slug == anvil_core::model::DEFAULT_TENANT_SLUG => TenantBase::Root,
-            None => TenantBase::Path(tenant.slug.clone()),
-        };
-        issuer(&self.config().public_url, &base)
+        anvil_core::service::logout::canonical_issuer(&self.config().public_url, tenant)
     }
 }
 

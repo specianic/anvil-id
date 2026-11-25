@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id AS \"id!: uuid::Uuid\", tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      client_id AS \"client_id!\", uri AS \"uri!\", sub AS \"sub!\", sid AS \"sid!\",\n                      attempts AS \"attempts!\", next_attempt_at AS \"next_attempt_at!\",\n                      give_up_at AS \"give_up_at!\", created_at AS \"created_at!\",\n                      delivered_at AS \"delivered_at?\", last_error AS \"last_error?\"\n                 FROM logout_delivery\n                WHERE tenant_id = ?1 AND client_id = ?2\n                ORDER BY created_at, id",
+  "query": "SELECT id AS \"id!: uuid::Uuid\", tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      client_id AS \"client_id!\", uri AS \"uri!\", sub AS \"sub!\", sid AS \"sid!\",\n                      issuer AS \"issuer?\", attempts AS \"attempts!\", next_attempt_at AS \"next_attempt_at!\",\n                      give_up_at AS \"give_up_at!\", created_at AS \"created_at!\",\n                      delivered_at AS \"delivered_at?\", last_error AS \"last_error?\"\n                 FROM logout_delivery\n                WHERE tenant_id = ?1 AND client_id = ?2\n                ORDER BY created_at, id",
   "describe": {
     "columns": [
       {
@@ -70,8 +70,19 @@
         }
       },
       {
-        "name": "attempts!",
+        "name": "issuer?",
         "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "logout_delivery",
+            "name": "issuer"
+          }
+        }
+      },
+      {
+        "name": "attempts!",
+        "ordinal": 7,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -82,7 +93,7 @@
       },
       {
         "name": "next_attempt_at!",
-        "ordinal": 7,
+        "ordinal": 8,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -93,7 +104,7 @@
       },
       {
         "name": "give_up_at!",
-        "ordinal": 8,
+        "ordinal": 9,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -104,7 +115,7 @@
       },
       {
         "name": "created_at!",
-        "ordinal": 9,
+        "ordinal": 10,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -115,7 +126,7 @@
       },
       {
         "name": "delivered_at?",
-        "ordinal": 10,
+        "ordinal": 11,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -126,7 +137,7 @@
       },
       {
         "name": "last_error?",
-        "ordinal": 11,
+        "ordinal": 12,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -146,6 +157,7 @@
       false,
       false,
       false,
+      true,
       false,
       false,
       false,
@@ -154,5 +166,5 @@
       true
     ]
   },
-  "hash": "eda5f34755af11bd0b661b928e4ea8a8910b98303e824dab90f597cdf22a9b1b"
+  "hash": "82da333b2e73a4f08263bb1409b3a0883f5f51711a1c11a7d064f840d677f584"
 }

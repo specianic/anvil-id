@@ -734,6 +734,7 @@ async fn rp_session_for(app: &TestApp, user: UserId, session: SessionId) -> Stri
                 acr: "0".into(),
                 amr: vec!["pwd".into()],
                 token_family_id: family,
+                issuer: "https://op.test".into(),
                 expires_at: now + time::Duration::minutes(1),
                 created_at: now,
             },

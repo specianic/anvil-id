@@ -24,6 +24,7 @@ struct DeliveryRow {
     uri: String,
     sub: String,
     sid: String,
+    issuer: Option<String>,
     attempts: i64,
     next_attempt_at: i64,
     give_up_at: i64,
@@ -43,6 +44,7 @@ impl TryFrom<DeliveryRow> for LogoutDelivery {
             uri: r.uri,
             sub: r.sub,
             sid: r.sid,
+            issuer: r.issuer,
             attempts: i64_to_u32(r.attempts, "logout_delivery.attempts")?,
             next_attempt_at: ms_to_odt(r.next_attempt_at)?,
             give_up_at: ms_to_odt(r.give_up_at)?,
@@ -55,7 +57,8 @@ impl TryFrom<DeliveryRow> for LogoutDelivery {
 
 /// Enqueues, on `conn` (the caller's transaction), one back-channel logout delivery per RP
 /// session of each of `sessions` whose client has a `backchannel_logout_uri`: the uri is copied
-/// from the client, `sub` = `user`, `sid` = the session id, due now, given up after
+/// from the client, `sub` = `user`, `sid` = the session id, `issuer` copied from the RP session
+/// (the issuer of the RP's ID tokens), due now, given up after
 /// [`LOGOUT_DELIVERY_TTL`]. Callers pass only the sessions their own statement revoked, so a call
 /// that revoked nothing enqueues nothing.
 pub(crate) async fn enqueue_deliveries(
@@ -70,7 +73,8 @@ pub(crate) async fn enqueue_deliveries(
     let sub = user.to_string();
     for &session in sessions {
         let targets = sqlx::query!(
-            r#"SELECT r.client_id AS "client_id!", c.backchannel_logout_uri AS "uri!"
+            r#"SELECT r.client_id AS "client_id!", c.backchannel_logout_uri AS "uri!",
+                      r.issuer AS "issuer?"
                  FROM rp_session r
                  JOIN client c ON c.tenant_id = r.tenant_id AND c.client_id = r.client_id
                 WHERE r.tenant_id = ?1 AND r.session_id = ?2
@@ -87,9 +91,9 @@ pub(crate) async fn enqueue_deliveries(
             let id = LogoutDeliveryId::new_v7();
             sqlx::query!(
                 "INSERT INTO logout_delivery
-                     (id, tenant_id, client_id, uri, sub, sid, attempts, next_attempt_at,
+                     (id, tenant_id, client_id, uri, sub, sid, issuer, attempts, next_attempt_at,
                       give_up_at, created_at, delivered_at, last_error)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?8, ?7, NULL, NULL)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?9, 0, ?7, ?8, ?7, NULL, NULL)",
                 id.0,
                 tenant.0,
                 t.client_id,
@@ -98,6 +102,7 @@ pub(crate) async fn enqueue_deliveries(
                 sid,
                 now_ms,
                 give_up_ms,
+                t.issuer,
             )
             .execute(&mut *conn)
             .await
@@ -107,23 +112,29 @@ pub(crate) async fn enqueue_deliveries(
     Ok(())
 }
 
-/// Records on `conn` (the `create_code` transaction) that `session` signed in to `client_id`.
-/// Idempotent; only a session of `tenant` that exists is recorded.
+/// Records on `conn` (the `create_code` transaction) that `session` signed in to `client_id`
+/// with ID tokens from `issuer`. An existing row keeps its `created_at` and takes the latest
+/// issuer; only a session of `tenant` that exists is recorded.
 pub(crate) async fn record_rp_session(
     conn: &mut SqliteConnection,
     tenant: TenantId,
     session: SessionId,
     client_id: &str,
+    issuer: &str,
     now: OffsetDateTime,
 ) -> Result<(), StorageError> {
     let now_ms = odt_to_ms(now);
+    // `WHERE` before `ON CONFLICT` is required: SQLite would otherwise parse the upsert's `ON`
+    // as a join constraint of the SELECT.
     sqlx::query!(
-        "INSERT OR IGNORE INTO rp_session (tenant_id, session_id, client_id, created_at)
-         SELECT tenant_id, id, ?3, ?4 FROM browser_session WHERE tenant_id = ?1 AND id = ?2",
+        "INSERT INTO rp_session (tenant_id, session_id, client_id, created_at, issuer)
+         SELECT tenant_id, id, ?3, ?4, ?5 FROM browser_session WHERE tenant_id = ?1 AND id = ?2
+         ON CONFLICT (tenant_id, session_id, client_id) DO UPDATE SET issuer = excluded.issuer",
         tenant.0,
         session.0,
         client_id,
         now_ms,
+        issuer,
     )
     .execute(conn)
     .await
@@ -140,7 +151,7 @@ impl LogoutRepo for SqliteLogout {
     ) -> Result<Vec<RpSession>, StorageError> {
         let rows = sqlx::query!(
             r#"SELECT tenant_id AS "tenant_id!: uuid::Uuid", session_id AS "session_id!: uuid::Uuid",
-                      client_id AS "client_id!", created_at AS "created_at!"
+                      client_id AS "client_id!", issuer AS "issuer?", created_at AS "created_at!"
                  FROM rp_session
                 WHERE tenant_id = ?1 AND session_id = ?2
                 ORDER BY client_id"#,
@@ -156,6 +167,7 @@ impl LogoutRepo for SqliteLogout {
                     tenant_id: TenantId(r.tenant_id),
                     session_id: SessionId(r.session_id),
                     client_id: r.client_id,
+                    issuer: r.issuer,
                     created_at: ms_to_odt(r.created_at)?,
                 })
             })
@@ -183,7 +195,7 @@ impl LogoutRepo for SqliteLogout {
                               LIMIT ?3)
             RETURNING id AS "id!: uuid::Uuid", tenant_id AS "tenant_id!: uuid::Uuid",
                       client_id AS "client_id!", uri AS "uri!", sub AS "sub!", sid AS "sid!",
-                      attempts AS "attempts!", next_attempt_at AS "next_attempt_at!",
+                      issuer AS "issuer?", attempts AS "attempts!", next_attempt_at AS "next_attempt_at!",
                       give_up_at AS "give_up_at!", created_at AS "created_at!",
                       delivered_at AS "delivered_at?", last_error AS "last_error?""#,
             lease_ms,
@@ -259,7 +271,7 @@ impl LogoutRepo for SqliteLogout {
             DeliveryRow,
             r#"SELECT id AS "id!: uuid::Uuid", tenant_id AS "tenant_id!: uuid::Uuid",
                       client_id AS "client_id!", uri AS "uri!", sub AS "sub!", sid AS "sid!",
-                      attempts AS "attempts!", next_attempt_at AS "next_attempt_at!",
+                      issuer AS "issuer?", attempts AS "attempts!", next_attempt_at AS "next_attempt_at!",
                       give_up_at AS "give_up_at!", created_at AS "created_at!",
                       delivered_at AS "delivered_at?", last_error AS "last_error?"
                  FROM logout_delivery

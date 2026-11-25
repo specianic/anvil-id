@@ -291,7 +291,8 @@ pub fn params_with_claims(scope: &str, claims: ClaimsRequest) -> AuthorizationPa
     }
 }
 
-/// Stores a code (and its family) and returns the plaintext code.
+/// Stores a code (and its family) and returns the plaintext code. The code records the
+/// tenant's canonical issuer (as if the authorization request came through it).
 pub async fn issue_code(
     app: &TestApp,
     tenant: TenantId,
@@ -299,7 +300,15 @@ pub async fn issue_code(
     session: &BrowserSession,
     p: &AuthorizationParams,
 ) -> String {
-    let (plain, code, family) = build_code(&rp.client, p, session, app.clock_now());
+    let t = app
+        .storage()
+        .tenants()
+        .get(tenant)
+        .await
+        .expect("tenant lookup")
+        .expect("tenant exists");
+    let issuer = anvil_core::service::logout::canonical_issuer(&app.config.public_url, &t);
+    let (plain, code, family) = build_code(&rp.client, p, session, &issuer, app.clock_now());
     app.storage()
         .grants()
         .create_code(tenant, &code, &family)

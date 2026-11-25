@@ -1,8 +1,9 @@
 //! `ClientRepo` on SQLite.
 
 use anvil_core::model::{
-    ApplicationType, Client, ClientAuthMethod, ClientId, ClientType, ClientUpdate, ConsentMode,
-    MfaPolicy, NewClient, Page, PageRequest, RevokeReason, SecretHash, TenantId, TokenFormat,
+    ApplicationType, BrandingScope, Client, ClientAuthMethod, ClientId, ClientType, ClientUpdate,
+    ConsentMode, MfaPolicy, NewClient, Page, PageRequest, RevokeReason, SecretHash, TenantId,
+    TokenFormat,
 };
 use anvil_core::ports::{ClientRepo, StorageError};
 use sqlx::{SqliteConnection, SqlitePool};
@@ -415,6 +416,17 @@ impl ClientRepo for SqliteClients {
             client_id,
             revoked_at,
             reason,
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(map_err)?;
+        // The client's branding goes with it; the draft lives in columns of the same row. Its
+        // logo becomes unreferenced and is removed by the next `purge_expired`.
+        let scope_key = BrandingScope::Client(client_id.to_owned()).scope_key();
+        sqlx::query!(
+            "DELETE FROM branding WHERE tenant_id = ?1 AND scope_key = ?2",
+            tenant.0,
+            scope_key,
         )
         .execute(&mut *tx)
         .await

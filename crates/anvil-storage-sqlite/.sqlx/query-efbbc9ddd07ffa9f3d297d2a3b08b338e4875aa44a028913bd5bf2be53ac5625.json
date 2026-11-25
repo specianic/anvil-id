@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM branding WHERE tenant_id = ?1 AND scope_key = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "efbbc9ddd07ffa9f3d297d2a3b08b338e4875aa44a028913bd5bf2be53ac5625"
+}

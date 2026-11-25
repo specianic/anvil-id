@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM branding_logo WHERE rowid IN\n               (SELECT l.rowid FROM branding_logo l\n                 WHERE NOT EXISTS (SELECT 1 FROM branding b\n                                    WHERE b.tenant_id = l.tenant_id\n                                      AND b.logo_sha256 = l.sha256)\n                 LIMIT ?2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "48383a452ae9e626934737e077646707a32468030c750ddad9c305c20dbc1b2c"
+}

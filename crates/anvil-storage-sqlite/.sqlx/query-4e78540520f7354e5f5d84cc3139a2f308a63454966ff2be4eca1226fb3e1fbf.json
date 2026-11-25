@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT tenant_id AS \"tenant_id!: uuid::Uuid\", session_id AS \"session_id!: uuid::Uuid\",\n                      client_id AS \"client_id!\", created_at AS \"created_at!\"\n                 FROM rp_session\n                WHERE tenant_id = ?1 AND session_id = ?2\n                ORDER BY client_id",
+  "query": "SELECT tenant_id AS \"tenant_id!: uuid::Uuid\", session_id AS \"session_id!: uuid::Uuid\",\n                      client_id AS \"client_id!\", issuer AS \"issuer?\", created_at AS \"created_at!\"\n                 FROM rp_session\n                WHERE tenant_id = ?1 AND session_id = ?2\n                ORDER BY client_id",
   "describe": {
     "columns": [
       {
@@ -37,8 +37,19 @@
         }
       },
       {
-        "name": "created_at!",
+        "name": "issuer?",
         "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "rp_session",
+            "name": "issuer"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 4,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -55,8 +66,9 @@
       false,
       false,
       false,
+      true,
       false
     ]
   },
-  "hash": "f75e50c9f589122113ce6c97aa54f17f490351750d7264cb271d2a46bf300c4a"
+  "hash": "4e78540520f7354e5f5d84cc3139a2f308a63454966ff2be4eca1226fb3e1fbf"
 }

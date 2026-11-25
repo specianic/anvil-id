@@ -121,12 +121,13 @@ async fn wait_healthy(base: &str, http: &reqwest::Client) {
     }
 }
 
-/// Seeds a session signed in to the client (code issued); returns the session cookie value and
-/// the code.
+/// Seeds a session signed in to the client (code issued by `issuer`); returns the session cookie
+/// value and the code.
 async fn signed_in(
     storage: &dyn Storage,
     tenant: &Tenant,
     client: &anvil_core::model::Client,
+    issuer: &str,
     n: usize,
 ) -> (String, String) {
     let now = OffsetDateTime::now_utc();
@@ -189,7 +190,7 @@ async fn signed_in(
         response_mode: Default::default(),
         resource: vec![],
     };
-    let (plain, code, family) = build_code(client, &params, &session, now);
+    let (plain, code, family) = build_code(client, &params, &session, issuer, now);
     storage
         .grants()
         .create_code(tenant.id, &code, &family)
@@ -256,7 +257,7 @@ async fn logout_wakes_the_worker_and_the_rp_gets_the_token_without_waiting_for_t
     let cookie_name = CookiePolicy::new(false).session_name(&tenant);
 
     for n in 0..3 {
-        let (session_token, code) = signed_in(&storage, &tenant, &client, n).await;
+        let (session_token, code) = signed_in(&storage, &tenant, &client, &base, n).await;
         let resp = http
             .post(format!("{base}/token"))
             .basic_auth(&client.client_id, Some(secret.expose_secret()))

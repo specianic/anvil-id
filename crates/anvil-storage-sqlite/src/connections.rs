@@ -6,14 +6,15 @@
 
 use anvil_core::model::{
     Connection, ConnectionConfig, ConnectionId, ConnectionUpdate, IdentityLink, IdentityLinkId,
-    NewConnection, NewIdentityLink, NewUser, TenantId, User, UserId,
+    NewConnection, NewEmail, NewIdentityLink, NewSelfServiceToken, NewUser, TenantId, User, UserId,
 };
-use anvil_core::ports::{ConnectionRepo, StorageError};
+use anvil_core::ports::{ConnectionRepo, DeleteLinkOutcome, StorageError};
 use sqlx::{SqliteConnection, SqlitePool};
 use time::OffsetDateTime;
 
 use crate::convert::{from_json, map_err, ms_to_odt, odt_to_ms, opt_ms_to_odt, to_json};
-use crate::users::insert_user;
+use crate::outbox::insert_email;
+use crate::users::{insert_self_service_token, insert_user};
 
 #[derive(Debug, Clone)]
 pub(crate) struct SqliteConnections {
@@ -404,17 +405,54 @@ impl ConnectionRepo for SqliteConnections {
         tenant: TenantId,
         user: UserId,
         id: IdentityLinkId,
-    ) -> Result<bool, StorageError> {
+        email_sign_in: bool,
+    ) -> Result<DeleteLinkOutcome, StorageError> {
+        // One writer transaction: SQLite writes are serialised through the single writer, so a
+        // concurrent unlink of the user's other link runs entirely before or after this one and
+        // the guard below sees its result.
+        let mut tx = self.writer.begin().await.map_err(map_err)?;
+        // The guard: the user keeps a password, a passkey, another link, or a verified email the
+        // tenant lets them sign in with. TOTP is a second factor, never a sign-in method.
         let done = sqlx::query!(
-            "DELETE FROM identity_link WHERE tenant_id = ?1 AND user_id = ?2 AND id = ?3",
+            "DELETE FROM identity_link
+              WHERE tenant_id = ?1 AND user_id = ?2 AND id = ?3
+                AND (EXISTS (SELECT 1 FROM credential c
+                              WHERE c.tenant_id = ?1 AND c.user_id = ?2
+                                AND c.kind IN ('password', 'webauthn'))
+                     OR EXISTS (SELECT 1 FROM identity_link o
+                                 WHERE o.tenant_id = ?1 AND o.user_id = ?2 AND o.id <> ?3)
+                     OR (?4 AND EXISTS (SELECT 1 FROM user u
+                                         WHERE u.tenant_id = ?1 AND u.id = ?2
+                                           AND u.email_verified = 1)))",
+            tenant.0,
+            user.0,
+            id.0,
+            email_sign_in,
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(map_err)?;
+        if done.rows_affected() > 0 {
+            tx.commit().await.map_err(map_err)?;
+            return Ok(DeleteLinkOutcome::Deleted);
+        }
+        let exists = sqlx::query_scalar!(
+            r#"SELECT 1 AS "one!: i64" FROM identity_link
+                WHERE tenant_id = ?1 AND user_id = ?2 AND id = ?3"#,
             tenant.0,
             user.0,
             id.0,
         )
-        .execute(&self.writer)
+        .fetch_optional(&mut *tx)
         .await
-        .map_err(map_err)?;
-        Ok(done.rows_affected() > 0)
+        .map_err(map_err)?
+        .is_some();
+        tx.commit().await.map_err(map_err)?;
+        Ok(if exists {
+            DeleteLinkOutcome::LastSignInMethod
+        } else {
+            DeleteLinkOutcome::NotFound
+        })
     }
 
     async fn create_user_with_link(
@@ -422,11 +460,19 @@ impl ConnectionRepo for SqliteConnections {
         tenant: TenantId,
         user: &NewUser,
         link: &NewIdentityLink,
+        token: Option<&NewSelfServiceToken>,
+        email: Option<&NewEmail>,
     ) -> Result<User, StorageError> {
         let mut tx = self.writer.begin().await.map_err(map_err)?;
-        // Any error drops `tx` uncommitted: neither the user nor the link is stored.
+        // Any error drops `tx` uncommitted: none of the user, link, token or email is stored.
         let created = insert_user(&mut tx, tenant, user).await?;
         insert_link(&mut tx, tenant, link).await?;
+        if let Some(token) = token {
+            insert_self_service_token(&mut tx, tenant, token).await?;
+        }
+        if let Some(email) = email {
+            insert_email(&mut tx, tenant, email).await?;
+        }
         tx.commit().await.map_err(map_err)?;
         Ok(created)
     }

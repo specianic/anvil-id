@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO rp_session (tenant_id, session_id, client_id, created_at, issuer)\n         SELECT tenant_id, id, ?3, ?4, ?5 FROM browser_session WHERE tenant_id = ?1 AND id = ?2\n         ON CONFLICT (tenant_id, session_id, client_id) DO UPDATE SET issuer = excluded.issuer",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "5b88fc22509feeb41657de07d6c317662dc2cbf9d30866671ca855f3bae082dd"
+}

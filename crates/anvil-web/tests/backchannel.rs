@@ -464,3 +464,157 @@ async fn wake_runs_the_worker_without_waiting_for_the_poll() {
         .expect("worker stops on shutdown")
         .expect("worker task");
 }
+
+/// `GET {path}` with an explicit `Host` and the session cookie.
+async fn get_at_host(f: &Fx, host: &str, path: &str, cookie: &str) -> support::TestResponse {
+    f.app
+        .send(
+            axum::http::Request::get(path)
+                .header(axum::http::header::HOST, host)
+                .header(axum::http::header::COOKIE, cookie)
+                .body(axum::body::Body::empty())
+                .expect("request"),
+        )
+        .await
+}
+
+/// A code-exchange `POST {path}` with an explicit `Host` and Basic client authentication.
+async fn exchange_at_host(
+    f: &Fx,
+    host: &str,
+    path: &str,
+    rp: &token_support::Rp,
+    code: &str,
+) -> support::TestResponse {
+    let body = url::form_urlencoded::Serializer::new(String::new())
+        .extend_pairs([
+            ("grant_type", "authorization_code"),
+            ("code", code),
+            ("redirect_uri", token_support::REDIRECT),
+            ("code_verifier", token_support::VERIFIER),
+        ])
+        .finish();
+    f.app
+        .send(
+            axum::http::Request::post(path)
+                .header(axum::http::header::HOST, host)
+                .header(
+                    axum::http::header::CONTENT_TYPE,
+                    "application/x-www-form-urlencoded",
+                )
+                .header(
+                    axum::http::header::AUTHORIZATION,
+                    token_support::basic(rp.id(), rp.secret()),
+                )
+                .body(axum::body::Body::from(body))
+                .expect("request"),
+        )
+        .await
+}
+
+#[tokio::test]
+async fn logout_token_iss_is_the_issuer_the_rp_signed_in_with() {
+    const HOST: &str = "login.acme.test";
+    let f = leaked().await;
+    let server = rp_answering(204).await;
+    let storage = f.app.storage();
+    let now = f.app.clock().now();
+
+    // A tenant with a custom host (also reachable as /t/acme) and a back-channel client.
+    let acme = token_support::acme(&f.app).await;
+    let acme = storage
+        .tenants()
+        .update(
+            acme.id,
+            &TenantUpdate {
+                host: Some(Some(HOST.into())),
+                ..TenantUpdate::default()
+            },
+        )
+        .await
+        .expect("tenant update")
+        .expect("tenant exists");
+    let rp = token_support::register(
+        &f.app,
+        acme.id,
+        token_support::web_input(anvil_core::model::ClientAuthMethod::ClientSecretBasic),
+    )
+    .await;
+    let client = storage
+        .clients()
+        .update(
+            acme.id,
+            rp.id(),
+            &ClientUpdate {
+                backchannel_logout_uri: Some(Some(format!("{}/bc", server.uri()))),
+                consent_mode: Some(anvil_core::model::ConsentMode::SkipFirstParty),
+                ..ClientUpdate::default()
+            },
+            now,
+        )
+        .await
+        .expect("client update")
+        .expect("client exists");
+    let rp = token_support::Rp {
+        client,
+        secret: rp.secret,
+    };
+    let user = token_support::seed_user(&f.app, acme.id, "grace@example.test").await;
+    let query = url::form_urlencoded::Serializer::new(String::new())
+        .extend_pairs([
+            ("client_id", rp.id()),
+            ("redirect_uri", token_support::REDIRECT),
+            ("response_type", "code"),
+            ("scope", "openid"),
+            ("code_challenge", CHALLENGE),
+            ("code_challenge_method", "S256"),
+            ("nonce", token_support::NONCE),
+        ])
+        .finish();
+    let public_host = f.app.config.public_url.host_port().to_owned();
+    let path_issuer = f.app.issuer(Some("acme"));
+    let host_issuer = format!("{}://{HOST}", f.app.config.public_url.scheme());
+
+    // (host, path prefix, the issuer the RP's ID tokens carry)
+    let cases = [
+        (public_host.as_str(), "/t/acme", path_issuer.as_str()),
+        (HOST, "", host_issuer.as_str()),
+    ];
+    for (i, (host, prefix, want_iss)) in cases.into_iter().enumerate() {
+        let (session, cookie) = session_for(&f.app, &acme, &user).await;
+        let resp = get_at_host(f, host, &format!("{prefix}/authorize?{query}"), &cookie).await;
+        assert_eq!(resp.status, 303, "{host}{prefix}: {}", resp.text());
+        let loc = url::Url::parse(&support::location(&resp)).expect("redirect url");
+        let code = loc
+            .query_pairs()
+            .find(|(k, _)| k == "code")
+            .map(|(_, v)| v.into_owned())
+            .unwrap_or_else(|| panic!("no code in {loc}"));
+        let resp = exchange_at_host(f, host, &format!("{prefix}/token"), &rp, &code).await;
+        assert_eq!(resp.status, 200, "{host}{prefix}: {}", resp.text());
+        let id_token = support::json(&resp)["id_token"]
+            .as_str()
+            .expect("id_token")
+            .to_owned();
+        let id_iss = jwt_part(&id_token, 1)["iss"].clone();
+        assert_eq!(id_iss, want_iss, "the ID token's iss");
+
+        assert!(
+            storage
+                .sessions()
+                .revoke_with_families(acme.id, session.id, f.app.clock().now())
+                .await
+                .expect("revoke")
+        );
+        assert_eq!(worker(f).run_once().await.expect("run").delivered, 1);
+        let reqs = received(&server).await;
+        assert_eq!(reqs.len(), i + 1);
+        let logout_token = &form(&reqs[i])[0].1;
+        let claims = jwt_part(logout_token, 1);
+        assert_eq!(
+            claims["iss"], id_iss,
+            "{host}{prefix}: the logout token's iss equals the ID token's"
+        );
+        assert_eq!(claims["sid"], session.id.to_string());
+    }
+}

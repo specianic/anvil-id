@@ -751,6 +751,85 @@ async fn upgrade_from_0_2_keeps_every_row_and_widens_checks() {
     pool.close().await;
 }
 
+/// Last 0.3 schema version before the RP-session issuer (migration 0006).
+const LAST_PRE_ISSUER_VERSION: i64 = 5;
+
+/// 0.3 rows written before migration 0006: an RP session of the 0.2 fixture session and a
+/// queued back-channel logout delivery, in the 0005 shape (no issuer column).
+const V0_3_PRE_ISSUER_FIXTURES: &str = r#"
+UPDATE client SET backchannel_logout_uri = 'https://rp.example.test/bc'
+ WHERE client_id = 'v02-web';
+INSERT INTO rp_session (tenant_id, session_id, client_id, created_at) VALUES
+  (x'00000000000070008000000000020001', x'00000000000070008000000000020030', 'v02-web',
+   1735689600000);
+INSERT INTO logout_delivery (id, tenant_id, client_id, uri, sub, sid, attempts, next_attempt_at,
+                             give_up_at, created_at, delivered_at, last_error) VALUES
+  (x'00000000000070008000000000020070', x'00000000000070008000000000020001', 'v02-web',
+   'https://rp.example.test/bc', 'grace', 'session', 0, 1735689600000, 4102444800000,
+   1735689600000, NULL, NULL);
+"#;
+
+/// 0.2 → 0.3 before 0006 → latest: RP sessions and deliveries written before the issuer column
+/// survive with `issuer` NULL (the delivery worker then uses the canonical issuer).
+#[tokio::test]
+async fn upgrade_keeps_pre_issuer_rp_sessions_and_deliveries_with_null_issuer() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let url = format!("sqlite://{}", dir.path().join("anvil.db").display());
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::from_str(&url)
+                .expect("url")
+                .create_if_missing(true)
+                .foreign_keys(true),
+        )
+        .await
+        .expect("open raw pool");
+    sqlx::migrate!()
+        .run_to(LAST_V0_2_VERSION, &pool)
+        .await
+        .expect("0.2 migrations apply");
+    sqlx::raw_sql(V0_2_FIXTURES)
+        .execute(&pool)
+        .await
+        .expect("0.2 fixtures load");
+    sqlx::migrate!()
+        .run_to(LAST_PRE_ISSUER_VERSION, &pool)
+        .await
+        .expect("0.3 migrations up to 0005 apply");
+    sqlx::raw_sql(V0_3_PRE_ISSUER_FIXTURES)
+        .execute(&pool)
+        .await
+        .expect("pre-issuer 0.3 fixtures load");
+    pool.close().await;
+
+    let storage = SqliteStorage::connect(&url).await.expect("connect");
+    storage
+        .migrate_with(MigrateOptions::default())
+        .await
+        .expect("0006 applies without the destructive flag");
+    let tenant = TenantId(V02_TENANT);
+    let rps = storage
+        .logout()
+        .rp_sessions(tenant, SessionId(V02_SESSION))
+        .await
+        .expect("rp_sessions");
+    assert_eq!(rps.len(), 1, "the RP session survives");
+    assert_eq!(rps[0].client_id, "v02-web");
+    assert_eq!(rps[0].issuer, None, "pre-0006 RP sessions have no issuer");
+    let deliveries = storage
+        .logout()
+        .deliveries_for_client(tenant, "v02-web")
+        .await
+        .expect("deliveries");
+    assert_eq!(deliveries.len(), 1, "the queued delivery survives");
+    assert_eq!(deliveries[0].sid, "session");
+    assert_eq!(
+        deliveries[0].issuer, None,
+        "pre-0006 deliveries have no issuer"
+    );
+}
+
 #[tokio::test]
 async fn upgrade_from_0_2_is_idempotent_on_restart() {
     let up = upgraded_from_v0_2().await;

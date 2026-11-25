@@ -331,6 +331,19 @@ impl Storage for SqliteStorage {
                                     WHERE c.token_family_id = f.id AND c.expires_at > ?1)
                  LIMIT ?2)"
         );
+        // Logos no branding row of the same tenant references (replaced, cleared, or their
+        // scope or client deleted). Drafts never reference logos. Runs after the draft cleanup
+        // above so rows it removed no longer count. Needs no `now` (only ?2 is bound by
+        // position; ?1 is unused). A concurrent `put` cannot interleave: it runs on the same
+        // single writer.
+        total += purge!(
+            "DELETE FROM branding_logo WHERE rowid IN
+               (SELECT l.rowid FROM branding_logo l
+                 WHERE NOT EXISTS (SELECT 1 FROM branding b
+                                    WHERE b.tenant_id = l.tenant_id
+                                      AND b.logo_sha256 = l.sha256)
+                 LIMIT ?2)"
+        );
         Ok(total)
     }
 }

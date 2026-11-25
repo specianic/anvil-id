@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "UPDATE logout_delivery SET next_attempt_at = ?1\n                WHERE id IN (SELECT id FROM logout_delivery\n                              WHERE delivered_at IS NULL AND next_attempt_at <= ?2\n                                AND give_up_at > ?2\n                              ORDER BY next_attempt_at, created_at, id\n                              LIMIT ?3)\n            RETURNING id AS \"id!: uuid::Uuid\", tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      client_id AS \"client_id!\", uri AS \"uri!\", sub AS \"sub!\", sid AS \"sid!\",\n                      attempts AS \"attempts!\", next_attempt_at AS \"next_attempt_at!\",\n                      give_up_at AS \"give_up_at!\", created_at AS \"created_at!\",\n                      delivered_at AS \"delivered_at?\", last_error AS \"last_error?\"",
+  "query": "UPDATE logout_delivery SET next_attempt_at = ?1\n                WHERE id IN (SELECT id FROM logout_delivery\n                              WHERE delivered_at IS NULL AND next_attempt_at <= ?2\n                                AND give_up_at > ?2\n                              ORDER BY next_attempt_at, created_at, id\n                              LIMIT ?3)\n            RETURNING id AS \"id!: uuid::Uuid\", tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      client_id AS \"client_id!\", uri AS \"uri!\", sub AS \"sub!\", sid AS \"sid!\",\n                      issuer AS \"issuer?\", attempts AS \"attempts!\", next_attempt_at AS \"next_attempt_at!\",\n                      give_up_at AS \"give_up_at!\", created_at AS \"created_at!\",\n                      delivered_at AS \"delivered_at?\", last_error AS \"last_error?\"",
   "describe": {
     "columns": [
       {
@@ -70,8 +70,19 @@
         }
       },
       {
-        "name": "attempts!",
+        "name": "issuer?",
         "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "logout_delivery",
+            "name": "issuer"
+          }
+        }
+      },
+      {
+        "name": "attempts!",
+        "ordinal": 7,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -82,7 +93,7 @@
       },
       {
         "name": "next_attempt_at!",
-        "ordinal": 7,
+        "ordinal": 8,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -93,7 +104,7 @@
       },
       {
         "name": "give_up_at!",
-        "ordinal": 8,
+        "ordinal": 9,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -104,7 +115,7 @@
       },
       {
         "name": "created_at!",
-        "ordinal": 9,
+        "ordinal": 10,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -115,7 +126,7 @@
       },
       {
         "name": "delivered_at?",
-        "ordinal": 10,
+        "ordinal": 11,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -126,7 +137,7 @@
       },
       {
         "name": "last_error?",
-        "ordinal": 11,
+        "ordinal": 12,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -146,6 +157,7 @@
       false,
       false,
       false,
+      true,
       false,
       false,
       false,
@@ -154,5 +166,5 @@
       true
     ]
   },
-  "hash": "1c133e44d153f2f5f7cd8755059f6418dbf9ee9a208a8af589a31e258ec74b83"
+  "hash": "97a0d5cd1bdd913496b7eed50c4b47c27693d28d5dc31c75c29b33dc5e3f5567"
 }
