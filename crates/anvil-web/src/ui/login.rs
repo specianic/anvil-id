@@ -18,6 +18,11 @@
 //! | `POST /ui/login/passkey/options?flow=` | discoverable WebAuthn request options (JSON, for webauthn.js) |
 //! | `POST /ui/login/passkey?flow=` | the passkey assertion (`response`) |
 //! | `GET/POST /ui/login/second-factor?flow=` | TOTP or recovery code, or the enrolment code ([`super::mfa`]) |
+//! | `/ui/login/email-code[/verify]`, `/ui/login/email-link` | email code and magic link ([`super::email_code`]) |
+//!
+//! When the tenant enables email sign-in (`email_otp` or `magic_link`) the sign-in form is followed
+//! by the "Email me a sign-in code" form (`email_code` template variable), its address prefilled
+//! like the identifier.
 //!
 //! # MFA policy, step-up and `login_hint` (AUTH-08, OIDC-14)
 //!
@@ -48,6 +53,7 @@ use std::time::Duration;
 
 use anvil_cache::limiter::Decision;
 use anvil_core::error::CoreError;
+use anvil_core::flow::email_code::{EMAIL_CODE_FORM_ID, LINK_INVALID, OTHER_BROWSER};
 use anvil_core::flow::engine::{FlowEnv, FlowInput, FlowState};
 use anvil_core::flow::form::{FormDescription, FormMessage, MessageLevel};
 use anvil_core::flow::login::{ENROLL_FORM_ID, SECOND_FACTOR_FORM_ID, UPSTREAM_LINK_FORM_ID};
@@ -792,6 +798,7 @@ pub(super) fn form_template(form_id: &str) -> (&'static str, &'static str) {
         UPSTREAM_LINK_FORM_ID => ("upstream_link.html", "title.upstream_link"),
         SECOND_FACTOR_FORM_ID => ("second_factor.html", "title.second_factor"),
         ENROLL_FORM_ID => ("mfa_enroll.html", "title.mfa_enroll"),
+        EMAIL_CODE_FORM_ID => ("email_code.html", "title.email_code"),
         "registration" => ("registration.html", "title.registration"),
         "verification" => ("verification.html", "title.verification"),
         "recovery" => ("recovery.html", "title.recovery"),
@@ -890,6 +897,14 @@ struct PasskeyView {
     action: String,
 }
 
+/// The "Email me a sign-in code" form of the sign-in page.
+#[derive(Serialize)]
+struct EmailCodeView {
+    action: String,
+    /// Prefilled address (the identifier field's value: echoed input or `login_hint`).
+    value: Option<String>,
+}
+
 /// Values of the `captcha.html` partial.
 #[derive(Serialize)]
 struct CaptchaView {
@@ -933,7 +948,16 @@ pub(super) fn render_tenant_form_with(
     let mut factor_token = None;
     let mut qr_svg = None;
     let mut secret_groups = None;
+    let mut email_code = None;
+    let mut resend_action = None;
     match (form.id.as_str(), flow_of(&form)) {
+        (EMAIL_CODE_FORM_ID, Some(flow)) => {
+            factor_token = extras.factor_token.clone();
+            resend_action = Some(carry_ui_locales(
+                &format!("{base}/login/email-code?flow={flow}"),
+                loc,
+            ));
+        }
         ("login" | UPSTREAM_LINK_FORM_ID, Some(flow)) => {
             if tenant_relying_party(tenant).is_ok() {
                 passkey = Some(PasskeyView {
@@ -960,6 +984,19 @@ pub(super) fn render_tenant_form_with(
         }
         _ => {}
     }
+    if form.id == "login"
+        && email_code_enabled(&tenant.tenant)
+        && let Some(flow) = flow_of(&form)
+    {
+        email_code = Some(EmailCodeView {
+            action: carry_ui_locales(&format!("{base}/login/email-code?flow={flow}"), loc),
+            value: form
+                .fields
+                .iter()
+                .find(|f| f.name == "identifier")
+                .and_then(|f| f.value.clone()),
+        });
+    }
     form.action = carry_ui_locales(&form.action, loc);
     let ctx = minijinja::context! {
         page => page.into_value(),
@@ -974,6 +1011,8 @@ pub(super) fn render_tenant_form_with(
         qr_svg => qr_svg,
         secret_groups => secret_groups,
         upstream => Value::from(Serde(&extras.upstream)),
+        email_code => Value::from(Serde(&email_code)),
+        resend_action => resend_action,
     };
     let mut resp = render_page(state, Some(tenant), loc, template, ctx, status, jar);
     let csp = match (captcha, &passkey) {
@@ -997,6 +1036,7 @@ fn message_heading(key: &str) -> &'static str {
         "recovery.done" => "heading.password_changed",
         "verification.done" => "heading.email_confirmed",
         "registration.disabled" => "heading.registration_unavailable",
+        OTHER_BROWSER | LINK_INVALID => "title.magic_link",
         SIGNED_IN => "heading.signed_in",
         _ => "heading.done",
     }
@@ -1063,7 +1103,7 @@ fn started_response(
 }
 
 /// [`started_response`] with sign-in page extras (step-up binding token, enrolment secret).
-fn started_response_with(
+pub(super) fn started_response_with(
     state: &AppState,
     tenant: &ResolvedTenant,
     loc: &Locale,

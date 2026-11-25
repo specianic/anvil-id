@@ -1,0 +1,19 @@
+# Email one-time code and magic-link sign-in (AUTH-06).
+title-email_code = Check your email
+title-magic_link = Continue signing in
+email_code-request_toggle = Email me a sign-in code
+email_code-request = Email me a sign-in code
+email_code-request_hint = We send a code and a sign-in link to this address.
+email_code-sent = If an account exists for that address, we sent a code to it. It expires in 10 minutes.
+email_code-code_hint = Enter the 6-digit code from the email, or open the link in it.
+email_code-submit = Sign in
+email_code-resend = Send a new code
+email_code-other_way = Use another way to sign in
+email_code-invalid = That code is not right. Check the email and try again.
+email_code-expired = That code has expired. Send a new code.
+email_code-invalidated = That code can no longer be used. Send a new code.
+email_code-too_many_sends = Too many codes were sent for this sign-in. Start again from the sign-in page.
+email_code-link_explain = Press the button to finish signing in.
+email_code-link_continue = Continue signing in
+email_code-link_invalid = This sign-in link can no longer be used. Request a new code from the sign-in page.
+email_code-other_browser = Open the link in the browser where you started signing in, or type the code from the email there.

@@ -4,9 +4,10 @@
 //!
 //! From the identify step the user asks for a sign-in email ([`request`]). The login moves to
 //! [`LoginStep::EmailCode`] holding an [`EmailCodeState`] and the page always says "if an account
-//! exists for that address, we sent a code" (no account enumeration). Only an active user gets the
-//! `login_code` email (a 6-digit code and a magic link, [`EMAIL_CODE_TTL`]); an unknown or inactive
-//! address gets the same state, the same work (a code and a link token are generated and hashed)
+//! exists for that address, we sent a code" (no account enumeration). Only an active user with a
+//! verified address gets the `login_code` email (a 6-digit code and a magic link,
+//! [`EMAIL_CODE_TTL`]); an unknown, inactive or unverified address (which may not belong to the
+//! account holder) gets the same state, the same work (a code and a link token are generated and hashed)
 //! and the same page, but no email.
 //!
 //! The code ([`verify`]) or the link ([`link`]) is then the primary authentication: single factor
@@ -70,8 +71,8 @@ pub const OTHER_BROWSER: &str = "email_code.other_browser";
 pub struct EmailCodeState {
     /// The normalised address the code was requested for.
     pub email: String,
-    /// The active user of that address; `None` for an unknown or inactive address (same page, no
-    /// email).
+    /// The active user with this verified address; `None` for an unknown, inactive or unverified
+    /// address (same page, no email).
     #[serde(default)]
     pub user_id: Option<UserId>,
     /// `email_code_hash(kek, flow id, code)`; `None` once used or invalidated.

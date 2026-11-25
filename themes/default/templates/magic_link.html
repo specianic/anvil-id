@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{#- Magic link landing page (AUTH-06). Opening the emailed link only shows this button; nothing is
+    used until the button is pressed (link scanners cannot sign in), and it signs in only in the
+    browser where the sign-in started. Variables besides `page`: `action` (POST target),
+    `csrf_token`, `token` (the link token, posted back). Selectors: form `magic-link`, button
+    `magic-link-submit`, link `link-login`. Works without JavaScript. -#}
+{% block heading %}{{ t("title.magic_link") }}{% endblock %}
+{% block content %}
+<p class="anvil-lead" id="magic-link-explain">{{ t("email_code.link_explain") }}</p>
+<form id="magic-link" method="post" action="{{ action }}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+<input type="hidden" id="token" name="token" value="{{ token }}">
+<button type="submit" id="magic-link-submit">{{ t("email_code.link_continue") }}</button>
+</form>
+{% if page.links.login %}
+<nav class="anvil-links" aria-label="{{ t("nav.other_options") }}">
+<a id="link-login" href="{{ page.links.login }}">{{ t("email_code.other_way") }}</a>
+</nav>
+{% endif %}
+{% endblock %}

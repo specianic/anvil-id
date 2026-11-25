@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% import "form.html" as forms %}
+{#- "Check your email" page (AUTH-06): shown after a sign-in email was requested, whether or not
+    an account exists for the address (the first message, `email_code.sent`, says so). Variables
+    besides `page` and `form` (form id `email-code`, field `code`): `factor_token` (hidden limiter
+    token, or none) and `resend_action` (the "Send a new code" form, or none). Selectors: form
+    `email-code`, input `code`, button `email-code-submit`, messages `email-code-msg-N`, form
+    `email-code-resend` with button `email-code-resend-submit`, link `link-login`. Works without
+    JavaScript. -#}
+{% block heading %}{{ t("title.email_code") }}{% endblock %}
+{% block content %}
+{% set has_error = "error" in form.messages|map(attribute="level")|list %}
+<form id="{{ form.id }}" method="post" action="{{ form.action }}" novalidate>
+<input type="hidden" name="csrf_token" value="{{ form.csrf_token }}">
+{% if factor_token %}<input type="hidden" id="factor_token" name="factor_token" value="{{ factor_token }}">{% endif %}
+{% if form.messages %}
+<div class="anvil-form-messages">
+{{ forms.messages(form.messages, form.id) }}
+</div>
+{% endif %}
+<p id="code-hint">{{ t("email_code.code_hint") }}</p>
+<div class="anvil-field{% if has_error %} anvil-field-invalid{% endif %}">
+<label for="code">{{ t("field.code") }}</label>
+<input id="code" name="code" type="text" inputmode="numeric" maxlength="7" autocomplete="one-time-code" spellcheck="false" required aria-describedby="code-hint"{% if has_error %} aria-invalid="true"{% endif %}>
+</div>
+<button type="submit" id="{{ form.id }}-submit">{{ t("email_code.submit") }}</button>
+</form>
+{% if resend_action %}
+<form id="email-code-resend" method="post" action="{{ resend_action }}">
+<input type="hidden" name="csrf_token" value="{{ form.csrf_token }}">
+{% if factor_token %}<input type="hidden" name="factor_token" value="{{ factor_token }}">{% endif %}
+<button type="submit" id="email-code-resend-submit" class="anvil-secondary">{{ t("email_code.resend") }}</button>
+</form>
+{% endif %}
+{% if page.links.login %}
+<nav class="anvil-links" aria-label="{{ t("nav.other_options") }}">
+<a id="link-login" href="{{ page.links.login }}">{{ t("email_code.other_way") }}</a>
+</nav>
+{% endif %}
+{% endblock %}

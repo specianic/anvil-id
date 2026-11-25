@@ -75,7 +75,8 @@
 //!
 //! [`Effect::SendEmailCode`] does the same work for every address (lookup, a fresh code and link
 //! token, their hashes stored in the flow with a compare-and-swap) and enqueues the sealed
-//! `login_code` email only for an active user; the page is the same either way.
+//! `login_code` email only for an active user with a verified address (an unverified address is
+//! treated like an unknown one); the page is the same either way.
 //! [`Effect::VerifyEmailCode`] checks the code against the stored HMAC and stores the verdict with
 //! a compare-and-swap (a right code clears the code and the link, so it works once; the fifth
 //! wrong code invalidates both). The magic link goes through [`FlowService::email_link`]: bound to
@@ -1129,7 +1130,10 @@ impl FlowService {
             return Ok(EmailLinkOutcome::Rejected(email_code::LINK_INVALID));
         }
         let user = match ec.user_id {
-            Some(u) => self.second_factor_user(tenant, u).await?,
+            Some(u) => self
+                .second_factor_user(tenant, u)
+                .await?
+                .filter(email_code_recipient),
             None => None,
         };
         let Some(user) = user else {
@@ -1182,13 +1186,15 @@ impl FlowService {
         let FlowState::Login(mut s) = decode_state(exec.state_json)? else {
             return Err(CoreError::Internal("email code outside a login".into()));
         };
-        // The same work for every address: lookup, code, link token, both hashes.
+        // The same work for every address: lookup, code, link token, both hashes. Only an active
+        // account with a verified address gets the email: an unverified address may not belong to
+        // the account holder, so it is treated exactly like an unknown one.
         let user = self
             .storage
             .users()
             .get_by_email(tenant, email)
             .await?
-            .filter(|u| u.status == UserStatus::Active);
+            .filter(email_code_recipient);
         let code = generate_email_code();
         let token = random_token();
         let code_hash = email_code::code_hash(&self.kek, flow.id, &code)
@@ -1282,7 +1288,10 @@ impl FlowService {
                 )
                 .await?;
         let user = match (check, won, ec.user_id) {
-            (Check::Accepted, true, Some(u)) => self.second_factor_user(tenant, u).await?,
+            (Check::Accepted, true, Some(u)) => self
+                .second_factor_user(tenant, u)
+                .await?
+                .filter(email_code_recipient),
             _ => None,
         };
         if let Some(user) = user {
@@ -2150,6 +2159,12 @@ fn recovery_code_used_email(
 /// always carries both the code and the link).
 pub fn email_code_enabled(tenant: &Tenant) -> bool {
     tenant.settings.email_otp || tenant.settings.magic_link
+}
+
+/// Whether `user` may sign in by email code or link: active, with a verified address (checked when
+/// the code is sent and again when it is used).
+fn email_code_recipient(user: &User) -> bool {
+    user.status == UserStatus::Active && user.email_verified
 }
 
 /// Marks a login whose primary authentication was an email code or link (its second factor then

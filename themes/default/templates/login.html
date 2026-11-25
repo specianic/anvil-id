@@ -9,6 +9,10 @@
     - `upstream` (list of {slug, name, action}): one button per enabled upstream connection, each
       in its own form posting the CSRF token to the upstream start route (no JavaScript needed).
       Selectors: form `upstream-{slug}-form`, button `upstream-{slug}` (`data-connection` = slug).
+    - `email_code` ({action, value} or none): the tenant enables email sign-in (AUTH-06); the
+      "Email me a sign-in code" form, open and prefilled when an address is known (`login_hint`).
+      Selectors: disclosure `email-code-toggle`, form `email-code-request`, input
+      `email-code-email`, button `email-code-request-submit`.
     The password form is written out here (instead of forms.render) so the CAPTCHA widget can sit
     inside it; its markup matches form.html. -#}
 {% block heading %}{{ t("title.login") }}{% endblock %}
@@ -39,6 +43,19 @@
 </form>
 {% else %}
 {{ forms.render(form, t("login.submit")) }}
+{% endif %}{% if email_code %}
+<details class="anvil-disclosure" id="email-code-toggle"{% if email_code.value %} open{% endif %}>
+<summary>{{ t("email_code.request_toggle") }}</summary>
+<form id="email-code-request" method="post" action="{{ email_code.action }}" novalidate>
+<input type="hidden" name="csrf_token" value="{{ form.csrf_token }}">
+<div class="anvil-field">
+<label for="email-code-email">{{ t("field.email") }}</label>
+<input id="email-code-email" name="email" type="email" required autocomplete="username" aria-describedby="email-code-request-hint"{% if email_code.value %} value="{{ email_code.value }}"{% endif %}>
+<p class="anvil-muted" id="email-code-request-hint">{{ t("email_code.request_hint") }}</p>
+</div>
+<button type="submit" id="email-code-request-submit" class="anvil-secondary">{{ t("email_code.request") }}</button>
+</form>
+</details>
 {% endif %}{% if upstream %}
 <div class="anvil-upstream" role="group" aria-label="{{ t("upstream.group_label") }}">
 <p class="anvil-muted">{{ t("upstream.or") }}</p>
