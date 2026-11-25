@@ -62,7 +62,30 @@ Plans:
   3. A scripted CI check goes from zero-config `docker run` to a completed login in the sample app in 2 minutes or less; on an empty database the operator gets a one-time setup URL and there are no default credentials
   4. Every ARCHITECTURE.md §11 control in scope has a passing negative test (wrong/unregistered redirect URI, missing or `plain` PKCE, code reuse, refresh reuse revoking the family, bad client secret, replayed `jti`, CSRF failure), and the test suite runs on both backends
   5. A user can self-register, verify their email, log in with a password and recover the account through built-in pages with no external assets, and an admin can manage tenants, clients and users through the OpenAPI management API
-**Plans**: TBD
+**Plans**: 21 plans in 6 waves
+
+Plans:
+- [ ] 02-01-PLAN.md — Dependency foundation (all manifests, lockfile, recipes, workflows) + anvil-jose (keys, KEK, JWKS, signing, client assertions, PKCE) (wave 1)
+- [ ] 02-02-PLAN.md — Domain model, storage/service ports, CoreError, FormDescription, core module skeleton, full contract suite, transitional backend shims (wave 1)
+- [ ] 02-03-PLAN.md — Default theme: page + email templates, CSS, stable selector contract (wave 1)
+- [ ] 02-04-PLAN.md — Sample RP (examples/node-rp, openid-client) + Playwright skeleton and helpers (wave 1)
+- [ ] 02-05-PLAN.md — SQLite backend for all 0.1 ports, contract green, plaintext inspection (wave 2)
+- [ ] 02-06-PLAN.md — Postgres backend for all 0.1 ports, contract green, plaintext inspection (wave 2)
+- [ ] 02-07-PLAN.md — Core authorize: request validation, redirect matching, PKCE policy, prompt/max_age decisions, code issuance (wave 2)
+- [ ] 02-08-PLAN.md — Core token side: client auth, KeyService, grants, token minting, AT verification, UserInfo (wave 2)
+- [ ] 02-09-PLAN.md — Core flows (login, registration, verification, recovery, setup form) + SessionService (wave 2)
+- [ ] 02-10-PLAN.md — Core management: tenant/client/user services, admin scopes, BootstrapService (wave 2)
+- [ ] 02-11-PLAN.md — anvil-mail: templates, SMTP transport, outbox worker (wave 2)
+- [ ] 02-12-PLAN.md — Web shell: AppState, tenant resolution, errors, CSRF/CSP/cookies, renderer, Argon2/HIBP adapters, test harness (wave 2)
+- [ ] 02-13-PLAN.md — Discovery (both paths), JWKS, /authorize + continue, authorize-side security tests (wave 3)
+- [ ] 02-14-PLAN.md — /token and /userinfo, token-side security tests (wave 3)
+- [ ] 02-15-PLAN.md — UI handlers (login, registration, verification, recovery, setup) + CSRF/cookie/CSP/enumeration tests (wave 3)
+- [ ] 02-16-PLAN.md — OpenAPI 3.1 management API with admin scopes + drift check (wave 3)
+- [ ] 02-17-PLAN.md — Fuzz targets (JWT, assertion, authorize, redirect) + SEC-06 release-graph gate (wave 3)
+- [ ] 02-18-PLAN.md — Binary wiring: zero-config, figment config, CLI, bootstrap, TLS listener, jobs, conformance ratchet refresh (wave 4)
+- [ ] 02-19-PLAN.md — Conformance gate: Basic OP + Config OP over TLS (wave 5)
+- [ ] 02-20-PLAN.md — Container image < 50 MB, QUAL-04 ≤ 2 min on both backends, Playwright self-service e2e (wave 5)
+- [ ] 02-21-PLAN.md — Phase gate: security-test map, `just ci`, docs sync, push + CI green (checkpoint) (wave 6)
 
 Note: the multi-tenant data model and the `serve`, `migrate`, `config` and `admin setup-url` CLI commands land here; ORG-01 and ADM-07 are mapped to Phase 5, where they are completed.
 
@@ -133,7 +156,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundations and Spikes (M0) | 8/8 | Complete    | 2026-11-25 |
-| 2. Release 0.1 "First login" | 0/TBD | Not started | - |
+| 2. Release 0.1 "First login" | 0/21 | Planned | - |
 | 3. Release 0.2 "Secure by default" | 0/TBD | Not started | - |
 | 4. Release 0.3 "Real-world logins" | 0/TBD | Not started | - |
 | 5. Release 0.4 "Operate it" | 0/TBD | Not started | - |
