@@ -6,14 +6,14 @@ current_phase: 03
 current_phase_name: release 0 2 secure by default
 current_plan: Not started
 status: planning
-stopped_at: Completed 03-19-PLAN.md
-last_updated: "2026-11-25T07:33:39.113Z"
+stopped_at: Completed 03-18-PLAN.md
+last_updated: "2026-11-25T07:37:28.312Z"
 last_activity: 2026-11-25
 progress:
   total_phases: 7
   completed_phases: 2
   total_plans: 61
-  completed_plans: 50
+  completed_plans: 51
   percent: 80
 ---
 
@@ -107,6 +107,7 @@ Phase 2 plans 02-01 through 02-22 are all complete (22/22 summaries). Next: Phas
 | Phase 03 P22 | 25min | 2 tasks | 3 files |
 | Phase 03 P19 | 75min | 2 tasks | 4 files |
 | Phase 03 P30 | 15min | 2 tasks | 5 files |
+| Phase 03 P18 | 75min | 2 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -225,6 +226,9 @@ Recent decisions affecting current work:
 - [Phase 03]: 03-22: Console at /console/* on the outer router (outside tenant resolution); CSP script-src/style-src/connect-src 'self'; per-variant ETag; assets/ immutable, index no-cache; placeholder when dist missing
 - [Phase 03]: 03-19: session touch throttled to once per 60 s (needs_touch); sessions page uses settings-flow binding without re-auth (SessionService::check_settings_binding); admin_list_user/admin_list_tenant/admin_revoke/admin_revoke_all return SessionInfo/NotFound for 03-23
 - [Phase 03]: 03-30: password_changed notice now enqueued inside complete_recovery (RecoveryNotice without email); the outbox worker fills a missing `email` variable from the row recipient, never overriding a payload value
+- [Phase 03]: 03-18: access-token aud stays client_id until RFC 8707 (Phase 4); family claim is fid
+- [Phase 03]: 03-18: revoking another client's token is 200 with no effect (no oracle); can_introspect never grants revocation
+- [Phase 03]: 03-18: JWT client-credentials access tokens cannot be revoked (unsupported_token_type); opaque CC tokens can
 
 ### Pending Todos
 
@@ -237,6 +241,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-25T07:35:55.000Z
-Stopped at: Completed 03-30-PLAN.md
+Last session: 2026-11-25T07:37:28.309Z
+Stopped at: Completed 03-18-PLAN.md
 Resume file: None
