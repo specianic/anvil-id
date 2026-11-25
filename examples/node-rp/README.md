@@ -27,7 +27,7 @@ The end-to-end tests in `tests/e2e` use this RP. openid-client checks the ID tok
    ```sh
    cd examples/node-rp
    npm ci
-   ISSUER=http://localhost:8080/t/default \
+   ISSUER=http://localhost:8080 \
    CLIENT_ID=<client id> \
    CLIENT_SECRET=<client secret> \
    npm start
@@ -36,11 +36,14 @@ The end-to-end tests in `tests/e2e` use this RP. openid-client checks the ID tok
 4. Open <http://localhost:3000>, choose **Log in**, sign in on AnvilID and you land on `/me`.
    Choose **Refresh tokens** to run a refresh-token grant.
 
+The whole sequence (zero-config container, setup, client registration, sign-up through this RP,
+UserInfo and a refresh) is automated by `scripts/qual04.sh sqlite|postgres` (`just qual04`).
+
 ## Configuration
 
 | Variable         | Required | Default                    | Meaning                                         |
 |------------------|----------|----------------------------|-------------------------------------------------|
-| `ISSUER`         | yes      |                            | Issuer URL of the AnvilID tenant                |
+| `ISSUER`         | yes      |                            | Issuer URL of the AnvilID tenant (`http://localhost:8080` for the `default` tenant, `http://localhost:8080/t/<slug>` for others) |
 | `CLIENT_ID`      | yes      |                            | Client id                                       |
 | `CLIENT_SECRET`  | yes      |                            | Client secret (sent with `client_secret_basic`) |
 | `PORT`           | no       | `3000`                     | Listen port                                     |

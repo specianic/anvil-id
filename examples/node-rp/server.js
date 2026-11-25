@@ -5,7 +5,7 @@
 // `iss`, `nonce` and PKCE checks) and Express 5.
 //
 // Configuration comes from environment variables only:
-//   ISSUER          AnvilID issuer URL, e.g. http://localhost:8080/t/default   (required)
+//   ISSUER          AnvilID issuer URL, e.g. http://localhost:8080 (default tenant)  (required)
 //   CLIENT_ID       client id registered in AnvilID                            (required)
 //   CLIENT_SECRET   client secret (client_secret_basic)                        (required)
 //   PORT            listen port (default 3000)

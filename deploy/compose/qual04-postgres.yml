@@ -1,0 +1,34 @@
+# QUAL-04 check on Postgres: AnvilID (the anvilid:ci image) with a Postgres 18 database.
+# Used by scripts/qual04.sh postgres. Not a production deployment.
+#
+# ANVILID_KEK must be provided by the caller's environment (scripts/qual04.sh generates a random
+# one per run and never writes it to disk). The Postgres credentials below are throwaway,
+# local-only defaults for this test stack; the database port is not published to the host.
+name: anvilid-qual04
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: anvilid
+      POSTGRES_PASSWORD: anvilid-local-only
+      POSTGRES_DB: anvilid
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U anvilid -d anvilid"]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+    tmpfs:
+      - /var/lib/postgresql
+
+  anvilid:
+    image: ${ANVILID_IMAGE:-anvilid:ci}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ANVILID_DATABASE_URL: postgres://anvilid:anvilid-local-only@postgres:5432/anvilid
+      # Empty when unset: anvilid then refuses to start (it never generates a KEK for Postgres).
+      ANVILID_KEK: ${ANVILID_KEK:-}
+    ports:
+      - "8080:8080"
