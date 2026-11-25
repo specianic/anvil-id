@@ -5,17 +5,22 @@
 //! crypto dependency and storage never interprets them.
 
 use std::collections::BTreeMap;
+use std::net::{IpAddr, Ipv6Addr};
+use std::sync::Arc;
 use std::time::Duration as StdDuration;
 
 use anvil_core::model::{
-    Address, ApplicationType, AuthRequestId, AuthorizationCode, AuthorizationParams, ClaimsRequest,
-    Client, ClientAuthMethod, ClientId, ClientType, ConsentMode, FlowId, FlowKind, GrantType,
-    KeyState, NewAuthorizationCode, NewAuthorizationRequest, NewBrowserSession, NewClient,
-    NewEmail, NewFlow, NewPasswordCredential, NewRefreshToken, NewSelfServiceToken, NewSetupToken,
-    NewSigningKey, NewTenant, NewTokenFamily, NewUser, OutboxId, RecoveryNotice, RefreshToken,
-    RegistrationMode, RequestedClaim, SecretHash, SelfServiceKind, SessionId, SigningKeyId,
-    StandardClaims, TenantId, TenantSettings, TokenFamily, TokenFamilyId, TokenFormat, User,
-    UserId, UserStatus, truncate_to_ms,
+    AccessTokenRecord, ActorKind, Address, ApplicationType, AuditAction, AuditActor, AuditDetails,
+    AuditEvent, AuditEventId, AuditOutcome, AuthRequestId, AuthorizationCode, AuthorizationParams,
+    ClaimsRequest, Client, ClientAuthMethod, ClientId, ClientType, ConsentId, ConsentMode,
+    CredentialId, EmailKind, EmailTemplate, FlowId, FlowKind, GrantType, KeyState, NewAccessToken,
+    NewAuditEvent, NewAuthorizationCode, NewAuthorizationRequest, NewBrowserSession, NewClient,
+    NewConsent, NewEmail, NewFlow, NewPasskey, NewPasswordCredential, NewRefreshToken,
+    NewSelfServiceToken, NewSetupToken, NewSigningKey, NewTenant, NewTokenFamily, NewTotp, NewUser,
+    OutboxId, PasskeyCredential, RecoveryCodeHash, RecoveryNotice, RefreshToken, RegistrationMode,
+    RequestContext, RequestedClaim, SecretHash, SelfServiceKind, SessionId, SigningKeyId,
+    SmtpSettings, SmtpTls, StandardClaims, TenantId, TenantSettings, TokenFamily, TokenFamilyId,
+    TokenFormat, User, UserId, UserStatus, truncate_to_ms,
 };
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
@@ -583,4 +588,203 @@ pub fn new_setup_token(expires_in: Duration) -> NewSetupToken {
         created_at: now,
         expires_at: now + expires_in,
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Phase 3: credentials, consent, access tokens, audit, mail settings
+
+/// A passkey with a unique WebAuthn credential id.
+pub fn new_passkey() -> NewPasskey {
+    NewPasskey {
+        id: CredentialId::new_v7(),
+        credential_id: Uuid::now_v7().as_bytes().to_vec(),
+        passkey_json: format!(r#"{{"cred":{{"id":"{}","counter":0}}}}"#, short()),
+        counter: 0,
+        backup_eligible: true,
+        label: "Laptop".to_owned(),
+        created_at: now_ms(),
+    }
+}
+
+/// The record `UserRepo::passkeys` / `find_passkey` must return for `p` of `user`.
+pub fn expected_passkey(user: UserId, p: &NewPasskey) -> PasskeyCredential {
+    PasskeyCredential {
+        id: p.id,
+        user_id: user,
+        credential_id: p.credential_id.clone(),
+        passkey_json: p.passkey_json.clone(),
+        counter: p.counter,
+        backup_eligible: p.backup_eligible,
+        label: p.label.clone(),
+        created_at: p.created_at,
+        last_used_at: None,
+    }
+}
+
+/// A TOTP credential with a fake sealed seed.
+pub fn new_totp() -> NewTotp {
+    let id = CredentialId::new_v7();
+    NewTotp {
+        id,
+        secret_enc: id.0.as_bytes().repeat(3),
+        created_at: now_ms(),
+    }
+}
+
+/// `n` distinct fake recovery-code hashes.
+pub fn recovery_codes(n: usize) -> Vec<RecoveryCodeHash> {
+    (0..n).map(|_| RecoveryCodeHash(unique_hash().0)).collect()
+}
+
+/// A consent of `user` for `client_id`.
+pub fn new_consent(user: UserId, client_id: &str, scopes: &[&str]) -> NewConsent {
+    NewConsent {
+        id: ConsentId::new_v7(),
+        user_id: user,
+        client_id: client_id.to_owned(),
+        scopes: scopes.iter().map(|s| (*s).to_owned()).collect(),
+        created_at: now_ms(),
+    }
+}
+
+/// A client-credentials family (no user, no session, no authentication context).
+pub fn new_service_family(client_id: &str, absolute_in: Duration) -> NewTokenFamily {
+    let now = now_ms();
+    NewTokenFamily {
+        id: TokenFamilyId::new_v7(),
+        client_id: client_id.to_owned(),
+        user_id: None,
+        scope: "api".to_owned(),
+        auth_time: None,
+        acr: None,
+        amr: Vec::new(),
+        session_id: None,
+        claims: None,
+        created_at: now,
+        absolute_expires_at: now + absolute_in,
+    }
+}
+
+/// An opaque access token.
+pub fn new_access_token(
+    family: Option<TokenFamilyId>,
+    client_id: &str,
+    user: Option<UserId>,
+    expires_in: Duration,
+) -> NewAccessToken {
+    let now = now_ms();
+    NewAccessToken {
+        token_hash: unique_hash(),
+        family_id: family,
+        client_id: client_id.to_owned(),
+        user_id: user,
+        scope: "openid profile".to_owned(),
+        created_at: now,
+        expires_at: now + expires_in,
+    }
+}
+
+/// The unrevoked record `find_access_token` must return for `t` stored under `tenant`.
+pub fn expected_access_token(tenant: TenantId, t: &NewAccessToken) -> AccessTokenRecord {
+    AccessTokenRecord {
+        token_hash: t.token_hash,
+        tenant_id: tenant,
+        family_id: t.family_id,
+        client_id: t.client_id.clone(),
+        user_id: t.user_id,
+        scope: t.scope.clone(),
+        created_at: t.created_at,
+        expires_at: t.expires_at,
+        revoked_at: None,
+    }
+}
+
+/// An audit event with every optional field populated.
+pub fn new_audit_event(
+    action: AuditAction,
+    outcome: AuditOutcome,
+    actor_id: &str,
+    target: &str,
+    at: OffsetDateTime,
+) -> NewAuditEvent {
+    NewAuditEvent {
+        id: AuditEventId::new_v7(),
+        at,
+        actor: AuditActor {
+            kind: ActorKind::User,
+            id: Some(actor_id.to_owned()),
+        },
+        action,
+        target: Some(target.to_owned()),
+        outcome,
+        ctx: RequestContext::new(
+            Some(IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1))),
+            Some("Mozilla/5.0 (contract)"),
+            Some(format!("trace-{}", short())),
+        ),
+        details: AuditDetails::login("password").with(AuditDetails::reason("contract")),
+    }
+}
+
+/// The stored record for `e` under `tenant`.
+pub fn expected_audit_event(tenant: TenantId, e: &NewAuditEvent) -> AuditEvent {
+    AuditEvent {
+        id: e.id,
+        tenant_id: tenant,
+        at: e.at,
+        actor: e.actor.clone(),
+        action: e.action,
+        target: e.target.clone(),
+        outcome: e.outcome,
+        ctx: e.ctx.clone(),
+        details: e.details.clone(),
+    }
+}
+
+/// SMTP settings with every optional field populated.
+pub fn new_smtp_settings() -> SmtpSettings {
+    SmtpSettings {
+        host: format!("smtp-{}.example.test", short()),
+        port: 587,
+        username: Some("mailer".to_owned()),
+        password_enc: Some(Uuid::now_v7().as_bytes().repeat(2)),
+        from: "noreply@example.test".to_owned(),
+        tls: SmtpTls::Starttls,
+        updated_at: now_ms(),
+    }
+}
+
+/// An email template override for `kind`.
+pub fn new_email_template(kind: EmailKind) -> EmailTemplate {
+    EmailTemplate {
+        kind,
+        subject: format!("Subject {}", short()),
+        body_html: "<p>Hello {{ tenant_name }}</p>".to_owned(),
+        body_text: "Hello {{ tenant_name }}".to_owned(),
+        updated_at: now_ms(),
+    }
+}
+
+/// Runs `n` copies of `f` released together by a barrier and collects the results.
+pub async fn race<T, F, Fut>(n: usize, f: F) -> Vec<T>
+where
+    T: Send + 'static,
+    F: Fn(usize) -> Fut,
+    Fut: std::future::Future<Output = T> + Send + 'static,
+{
+    let barrier = Arc::new(tokio::sync::Barrier::new(n));
+    let mut set = tokio::task::JoinSet::new();
+    for i in 0..n {
+        let barrier = Arc::clone(&barrier);
+        let fut = f(i);
+        set.spawn(async move {
+            barrier.wait().await;
+            fut.await
+        });
+    }
+    let mut out = Vec::with_capacity(n);
+    while let Some(joined) = set.join_next().await {
+        out.push(joined.expect("race task panicked"));
+    }
+    out
 }

@@ -20,22 +20,34 @@ use std::sync::Arc;
 
 use anvil_core::ports::Storage;
 
+mod access_tokens;
+mod audit;
 mod clients;
+mod consent;
+mod credentials;
 pub mod fixtures;
 mod flows;
 mod grants;
+mod jobs;
 mod keys;
+mod mail_settings;
 mod outbox;
 mod sessions;
 mod setup;
 mod tenants;
 mod users;
 
+pub use access_tokens::*;
+pub use audit::*;
 pub use clients::*;
+pub use consent::*;
+pub use credentials::*;
 pub use fixtures::*;
 pub use flows::*;
 pub use grants::*;
+pub use jobs::*;
 pub use keys::*;
+pub use mail_settings::*;
 pub use outbox::*;
 pub use sessions::*;
 pub use setup::*;
@@ -138,6 +150,65 @@ macro_rules! storage_contract_tests {
             outbox_expired_not_claimed,
             // purge
             purge_expired_removes_only_expired_rows,
+            // ---- Phase 3 (plan 03-02); backends implement them in 03-05 / 03-06 ----
+            // clients and sessions: new columns
+            client_phase3_fields_round_trip,
+            session_request_context_round_trip,
+            // users: recovery notice addressed by storage
+            recovery_notice_not_enqueued_for_invalid_token,
+            // credentials
+            passkey_create_list_find,
+            passkey_duplicate_credential_id_conflicts,
+            passkey_update_counter_compare_and_swap,
+            passkey_concurrent_updates_never_move_counter_backwards,
+            totp_create_get_and_conflict,
+            totp_step_accepted_once,
+            totp_step_concurrent_single_winner,
+            recovery_code_consumed_once,
+            recovery_code_concurrent_single_winner,
+            recovery_code_notice_enqueued_only_on_success,
+            delete_totp_removes_recovery_codes,
+            delete_credential_only_own_and_never_password,
+            list_credentials_summarises_every_kind,
+            credentials_isolated_by_tenant,
+            // consent
+            consent_upsert_unions_scopes,
+            consent_revoked_is_ignored_and_reactivated,
+            consent_revoke_revokes_only_that_clients_families,
+            consent_isolated_by_tenant,
+            // access tokens and families without a code
+            access_token_create_find_with_and_without_family,
+            access_token_found_in_any_state,
+            access_token_revoke,
+            create_family_without_code,
+            // keys
+            key_list_returns_every_state,
+            key_promote_retires_then_activates,
+            key_promote_stale_ids_change_nothing,
+            key_delete_expired_removes_only_expired_retired,
+            // sessions
+            session_get_in_any_state,
+            session_list_for_user_active_newest_first,
+            session_list_tenant_wide_paging,
+            session_revoke_with_families_only_its_own,
+            session_revoke_all_for_user_keeps_except,
+            // flows
+            flow_swap_state_compare_and_swap,
+            flow_swap_state_concurrent_single_winner,
+            // audit
+            audit_append_and_query_newest_first,
+            audit_query_filters,
+            audit_cursor_pages_without_gaps,
+            audit_isolated_by_tenant,
+            audit_purge_before_deletes_only_older,
+            // mail settings
+            mail_template_put_get_list_delete,
+            mail_smtp_put_get_delete,
+            mail_settings_isolated_by_tenant,
+            // job leases
+            job_lease_exclusive_renew_and_release,
+            job_expired_lease_taken_over,
+            job_lease_concurrent_single_holder,
         );
     };
     (@each $factory:path; $($name:ident),+ $(,)?) => {

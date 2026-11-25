@@ -1,6 +1,8 @@
 //! ClientRepo contract.
 
-use anvil_core::model::{ClientUpdate, GrantType, PageRequest, RevokeReason};
+use anvil_core::model::{
+    ClientUpdate, ConsentMode, GrantType, NewClient, PageRequest, RevokeReason, TokenFormat,
+};
 use anvil_core::ports::{RotateOutcome, StorageError};
 use time::Duration;
 
@@ -264,4 +266,53 @@ pub async fn client_list_pagination(s: &TestStorage) {
         ids[2..]
     );
     assert_eq!(second.next_cursor, None);
+}
+
+pub async fn client_phase3_fields_round_trip(s: &TestStorage) {
+    let tenant = seed_tenant(s).await;
+    let new = NewClient {
+        token_format: TokenFormat::Opaque,
+        consent_mode: ConsentMode::SkipFirstParty,
+        id_token_signed_response_alg: Some("ES256".into()),
+        can_introspect: true,
+        ..new_client()
+    };
+    let created = s
+        .storage
+        .clients()
+        .create(tenant, &new)
+        .await
+        .expect("create");
+    assert_eq!(created, expected_client(tenant, &new));
+    assert_eq!(
+        s.storage
+            .clients()
+            .get(tenant, &new.client_id)
+            .await
+            .expect("get"),
+        Some(expected_client(tenant, &new))
+    );
+
+    let updated = s
+        .storage
+        .clients()
+        .update(
+            tenant,
+            &new.client_id,
+            &ClientUpdate {
+                token_format: Some(TokenFormat::Jwt),
+                consent_mode: Some(ConsentMode::Required),
+                id_token_signed_response_alg: Some(None),
+                can_introspect: Some(false),
+                ..ClientUpdate::default()
+            },
+            now_ms(),
+        )
+        .await
+        .expect("update")
+        .expect("client");
+    assert_eq!(updated.token_format, TokenFormat::Jwt);
+    assert_eq!(updated.consent_mode, ConsentMode::Required);
+    assert_eq!(updated.id_token_signed_response_alg, None);
+    assert!(!updated.can_introspect);
 }

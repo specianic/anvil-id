@@ -927,3 +927,71 @@ pub async fn recovery_token_single_use_concurrent(s: &TestStorage) {
     }
     assert_eq!(won, 1, "exactly one concurrent recovery must win");
 }
+
+pub async fn recovery_notice_not_enqueued_for_invalid_token(s: &TestStorage) {
+    let ctx = seed_grant_ctx(s).await;
+    let users = s.storage.users();
+    let before = users
+        .password(ctx.tenant, ctx.user.id)
+        .await
+        .expect("password")
+        .expect("password");
+
+    let unknown = new_recovery_notice();
+    assert_eq!(
+        users
+            .complete_recovery(ctx.tenant, &unique_hash(), "$x", now_ms(), Some(&unknown))
+            .await
+            .expect("complete_recovery"),
+        None
+    );
+
+    let token = new_self_service_token(
+        SelfServiceKind::Recovery,
+        ctx.user.id,
+        &ctx.user.email,
+        Duration::hours(1),
+    );
+    users
+        .issue_self_service_token(ctx.tenant, &token, None)
+        .await
+        .expect("issue");
+    users
+        .complete_recovery(ctx.tenant, &token.token_hash, "$first", now_ms(), None)
+        .await
+        .expect("complete_recovery")
+        .expect("first use completes");
+    let replay = new_recovery_notice();
+    assert_eq!(
+        users
+            .complete_recovery(
+                ctx.tenant,
+                &token.token_hash,
+                "$second",
+                now_ms(),
+                Some(&replay)
+            )
+            .await
+            .expect("complete_recovery"),
+        None,
+        "a consumed token must not complete"
+    );
+
+    let claimed = s
+        .storage
+        .outbox()
+        .claim_due(now_ms(), 10, LEASE)
+        .await
+        .expect("claim_due");
+    assert!(
+        claimed.is_empty(),
+        "no notice for an invalid or consumed token: {claimed:?}"
+    );
+    let after = users
+        .password(ctx.tenant, ctx.user.id)
+        .await
+        .expect("password")
+        .expect("password");
+    assert_eq!(after.phc, "$first", "the replay changed nothing");
+    assert_ne!(before.phc, after.phc);
+}

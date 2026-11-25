@@ -138,3 +138,91 @@ pub async fn flow_isolated_by_tenant(s: &TestStorage) {
             .is_some()
     );
 }
+
+pub async fn flow_swap_state_compare_and_swap(s: &TestStorage) {
+    let tenant = seed_tenant(s).await;
+    let other = seed_tenant(s).await;
+    let flow = new_flow(None, Duration::minutes(10));
+    let repo = s.storage.flows();
+    repo.create(tenant, &flow).await.expect("create");
+
+    assert!(
+        repo.swap_state(tenant, flow.id, &flow.state, r#"{"step":"b"}"#, now_ms())
+            .await
+            .expect("swap")
+    );
+    assert!(
+        !repo
+            .swap_state(tenant, flow.id, &flow.state, r#"{"step":"c"}"#, now_ms())
+            .await
+            .expect("swap"),
+        "a stale expected state must not swap"
+    );
+    assert_eq!(
+        repo.get(tenant, flow.id, now_ms())
+            .await
+            .expect("get")
+            .expect("flow")
+            .state,
+        r#"{"step":"b"}"#
+    );
+    assert!(
+        !repo
+            .swap_state(other, flow.id, r#"{"step":"b"}"#, "{}", now_ms())
+            .await
+            .expect("swap"),
+        "another tenant cannot swap"
+    );
+    assert!(
+        !repo
+            .swap_state(tenant, FlowId::new_v7(), "{}", "{}", now_ms())
+            .await
+            .expect("swap")
+    );
+
+    let expired = new_flow(None, Duration::seconds(-1));
+    repo.create(tenant, &expired).await.expect("create");
+    assert!(
+        !repo
+            .swap_state(tenant, expired.id, &expired.state, "{}", now_ms())
+            .await
+            .expect("swap"),
+        "an expired flow cannot swap"
+    );
+}
+
+pub async fn flow_swap_state_concurrent_single_winner(s: &TestStorage) {
+    const N: usize = 8;
+    let tenant = seed_tenant(s).await;
+    let flow = new_flow(None, Duration::minutes(10));
+    s.storage
+        .flows()
+        .create(tenant, &flow)
+        .await
+        .expect("create");
+    let id = flow.id;
+    let expected: std::sync::Arc<str> = flow.state.clone().into();
+    let results = race(N, |i| {
+        let storage = std::sync::Arc::clone(&s.storage);
+        let expected = std::sync::Arc::clone(&expected);
+        async move {
+            storage
+                .flows()
+                .swap_state(
+                    tenant,
+                    id,
+                    &expected,
+                    &format!(r#"{{"winner":{i}}}"#),
+                    now_ms(),
+                )
+                .await
+        }
+    })
+    .await;
+    let won = results
+        .iter()
+        .map(|r| *r.as_ref().expect("no storage errors allowed"))
+        .filter(|ok| *ok)
+        .count();
+    assert_eq!(won, 1, "exactly one concurrent swap must win");
+}
