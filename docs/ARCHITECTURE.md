@@ -109,8 +109,8 @@ crates/
   anvil-core/              Domain model + protocol state machines. No I/O, no axum, no sqlx.
   anvil-jose/              JWK/JWS/JWT, key generation, signing-key lifecycle helpers.
   anvil-storage/           Storage traits, error types, and the storage contract test suite.
-  anvil-storage-sqlite/    sqlx SQLite implementation + migrations/sqlite/.
-  anvil-storage-postgres/  sqlx Postgres implementation + migrations/postgres/.
+  anvil-storage-sqlite/    sqlx SQLite implementation + its own migrations/ directory.
+  anvil-storage-postgres/  sqlx Postgres implementation + its own migrations/ directory.
   anvil-cache/             Cache trait, moka and redis implementations, keyed rate limiter.
   anvil-web/               axum routers, extractors, middleware, templates, embedded assets.
   anvil-mail/              Email rendering + SMTP transport + outbox worker.
@@ -123,7 +123,7 @@ tests/
 docs/
 ```
 
-**Dependency rules** (checked in CI with a small script over `cargo metadata`):
+**Dependency rules** (checked in CI with a small script over per-crate `cargo tree -p` output; `cargo metadata` unifies features across the workspace and gives false positives):
 
 - `anvil-core` depends only on `anvil-jose` and pure libraries (serde, time, uuid, url, thiserror).
 - `anvil-storage-*` depend on `anvil-storage` and `anvil-core` (for domain types), never on `anvil-web`.
@@ -259,7 +259,7 @@ contract:
 
 ### 7.3 Migrations
 
-- `migrations/sqlite/` and `migrations/postgres/` are embedded with `sqlx::migrate!` and run at
+- Each storage crate's `migrations/` directory (`crates/anvil-storage-sqlite/migrations/`, `crates/anvil-storage-postgres/migrations/`) is embedded with `sqlx::migrate!` and run at
   startup (can be disabled with `--no-migrate`). They are guarded by an advisory lock (Postgres) or
   the exclusive file lock (SQLite).
 - Migrations are forward-only and **expand/contract**: a release never drops or renames a column that
@@ -573,4 +573,4 @@ These are designed in from the start so later modules don't require rewrites:
 | D4 | SAML stack: pure-Rust XML-DSig (saml-rs/bergshamra) vs alternatives | Evaluate against a signature-wrapping attack corpus; experimental flag until it passes | before M5 |
 | D5 | Permissions engine: embedded tuple store vs integrating OpenFGA/SpiceDB | Decide at the 3.0 addendum | 3.0 |
 | D6 | Embedded HA without Postgres (replicated SQLite) | Not planned; revisit on user demand | post-1.0 |
-| D7 | sqlx minimum supported Rust version vs our toolchain policy | Verify in M0 spike A | M0 |
+| D7 | sqlx minimum supported Rust version vs our toolchain policy | **Resolved 2026-11-25:** sqlx 0.9.1 requires Rust ≥ 1.94; pin current stable (1.100.0) in `rust-toolchain.toml` | ✓ |

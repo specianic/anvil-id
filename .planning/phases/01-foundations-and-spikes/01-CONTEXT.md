@@ -36,7 +36,7 @@ the spikes need.
 
 ### Rules enforced from day one
 - cargo-deny with bans: openssl, native-tls, ring (as second backend — allow transitive only if unavoidable, document), RustCrypto `rsa`, chrono, samael, xmlsec, oxide-auth
-- Dependency-rule checker (script over `cargo metadata`): anvil-core may not depend on tokio/sqlx/axum/reqwest or any storage crate; anvil-web may not depend on anvil-storage-sqlite/postgres
+- Dependency-rule checker (script over per-crate `cargo tree -p`, per 01-RESEARCH.md): anvil-core may not depend on tokio/sqlx/axum/reqwest or any storage crate; anvil-web may not depend on anvil-storage-sqlite/postgres
 - CLAUDE.md rules apply: no stubs returning success, no test hooks in production code
 
 ### Storage (Spike A)
