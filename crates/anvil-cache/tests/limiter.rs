@@ -83,7 +83,11 @@ fn gcra_defaults_match_the_documented_quotas() {
 async fn gcra_auth_burst_exhausted_then_denied_with_retry_after() {
     let (l, clock) = limiter();
     for i in 0..5 {
-        assert_eq!(l.check(RouteClass::Auth, &ip(1)).await, Decision::Allow, "request {i}");
+        assert_eq!(
+            l.check(RouteClass::Auth, &ip(1)).await,
+            Decision::Allow,
+            "request {i}"
+        );
     }
     let wait = retry_after(l.check(RouteClass::Auth, &ip(1)).await);
     assert!(wait > Duration::ZERO);
@@ -95,7 +99,10 @@ async fn gcra_auth_burst_exhausted_then_denied_with_retry_after() {
 
     // Still denied just before the window; allowed once retry_after has elapsed.
     clock.advance(wait - Duration::from_millis(1));
-    assert!(matches!(l.check(RouteClass::Auth, &ip(1)).await, Decision::Deny { .. }));
+    assert!(matches!(
+        l.check(RouteClass::Auth, &ip(1)).await,
+        Decision::Deny { .. }
+    ));
     clock.advance(Duration::from_millis(1));
     assert_eq!(l.check(RouteClass::Auth, &ip(1)).await, Decision::Allow);
 }
@@ -107,7 +114,10 @@ async fn gcra_route_classes_are_independent() {
     for _ in 0..50 {
         assert_eq!(l.check(RouteClass::Token, &key).await, Decision::Allow);
     }
-    assert!(matches!(l.check(RouteClass::Token, &key).await, Decision::Deny { .. }));
+    assert!(matches!(
+        l.check(RouteClass::Token, &key).await,
+        Decision::Deny { .. }
+    ));
     // Token exhaustion does not touch Auth, Admin or Default for the same IP.
     assert_eq!(l.check(RouteClass::Auth, &key).await, Decision::Allow);
     assert_eq!(l.check(RouteClass::Admin, &key).await, Decision::Allow);
@@ -117,16 +127,29 @@ async fn gcra_route_classes_are_independent() {
 #[tokio::test]
 async fn gcra_token_client_keys_use_the_client_quota() {
     let (l, _clock) = limiter();
-    let key = LimitKey::Client { tenant: TenantId::new_v7(), client_id: "app".into() };
+    let key = LimitKey::Client {
+        tenant: TenantId::new_v7(),
+        client_id: "app".into(),
+    };
     for i in 0..100 {
-        assert_eq!(l.check(RouteClass::Token, &key).await, Decision::Allow, "request {i}");
+        assert_eq!(
+            l.check(RouteClass::Token, &key).await,
+            Decision::Allow,
+            "request {i}"
+        );
     }
-    assert!(matches!(l.check(RouteClass::Token, &key).await, Decision::Deny { .. }));
+    assert!(matches!(
+        l.check(RouteClass::Token, &key).await,
+        Decision::Deny { .. }
+    ));
 }
 
 #[tokio::test]
 async fn gcra_custom_quota_is_honoured() {
-    let config = LimiterConfig { admin: RateQuota::per_second(1, 2), ..LimiterConfig::default() };
+    let config = LimiterConfig {
+        admin: RateQuota::per_second(1, 2),
+        ..LimiterConfig::default()
+    };
     let (l, clock) = limiter_with(config);
     assert_eq!(l.check(RouteClass::Admin, &ip(1)).await, Decision::Allow);
     assert_eq!(l.check(RouteClass::Admin, &ip(1)).await, Decision::Allow);
@@ -138,7 +161,10 @@ async fn gcra_custom_quota_is_honoured() {
 
 #[tokio::test]
 async fn gcra_disabled_allows_everything() {
-    let config = LimiterConfig { enabled: false, ..LimiterConfig::default() };
+    let config = LimiterConfig {
+        enabled: false,
+        ..LimiterConfig::default()
+    };
     let (l, _clock) = limiter_with(config);
     for _ in 0..1_000 {
         assert_eq!(l.check(RouteClass::Auth, &ip(1)).await, Decision::Allow);
@@ -149,14 +175,21 @@ async fn gcra_disabled_allows_everything() {
 async fn gcra_housekeeping_drops_stale_keys_at_most_once_per_minute() {
     let (l, clock) = limiter();
     for n in 0..200 {
-        assert_eq!(l.check(RouteClass::Default, &ip_n(n)).await, Decision::Allow);
+        assert_eq!(
+            l.check(RouteClass::Default, &ip_n(n)).await,
+            Decision::Allow
+        );
     }
     assert_eq!(l.tracked_keys(RouteClass::Default), 200);
 
     // 61 s later every key's window has passed; the next check triggers housekeeping.
     clock.advance(Duration::from_secs(61));
     l.check(RouteClass::Default, &ip_n(10_000)).await;
-    assert!(l.tracked_keys(RouteClass::Default) <= 1, "{}", l.tracked_keys(RouteClass::Default));
+    assert!(
+        l.tracked_keys(RouteClass::Default) <= 1,
+        "{}",
+        l.tracked_keys(RouteClass::Default)
+    );
 
     // A fresh batch of keys, then 30 s: housekeeping must not run again yet.
     for n in 0..100 {
@@ -169,7 +202,11 @@ async fn gcra_housekeeping_drops_stale_keys_at_most_once_per_minute() {
     // Past the 60 s interval it runs and the stale batch is dropped.
     clock.advance(Duration::from_secs(31));
     l.check(RouteClass::Default, &ip_n(40_000)).await;
-    assert!(l.tracked_keys(RouteClass::Default) <= 1, "{}", l.tracked_keys(RouteClass::Default));
+    assert!(
+        l.tracked_keys(RouteClass::Default) <= 1,
+        "{}",
+        l.tracked_keys(RouteClass::Default)
+    );
 }
 
 #[tokio::test]
@@ -185,5 +222,8 @@ async fn gcra_housekeeping_never_resets_an_active_denial() {
     clock.advance(Duration::from_secs(2));
     assert_eq!(l.check(RouteClass::Auth, &ip(5)).await, Decision::Allow);
     assert_eq!(l.tracked_keys(RouteClass::Auth), 2);
-    assert!(matches!(l.check(RouteClass::Auth, &ip(4)).await, Decision::Deny { .. }));
+    assert!(matches!(
+        l.check(RouteClass::Auth, &ip(4)).await,
+        Decision::Deny { .. }
+    ));
 }
