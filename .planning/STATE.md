@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: verifying
-stopped_at: Completed 02-02-PLAN.md
-last_updated: "2026-11-25T01:58:00.000Z"
+stopped_at: Completed 02-11-PLAN.md
+last_updated: "2026-11-25T02:04:17.494Z"
 last_activity: "2026-11-25 — Completed 01-08 (phase gate: CI green on GitHub, spike verdicts, stack confirmed)"
 progress:
   total_phases: 7
   completed_phases: 1
-  total_plans: 19
-  completed_plans: 8
+  total_plans: 29
+  completed_plans: 13
   percent: 53
 ---
 
@@ -62,6 +62,7 @@ Progress: [█████░░░░░] 53%
 | Phase 02 P04 | 8min | 2 tasks | 12 files |
 | Phase 02 P01 | 16min | 3 tasks | 29 files |
 | Phase 02 P02 | 31min | 3 tasks | 50 files |
+| Phase 02 P11 | 25min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -99,6 +100,9 @@ Recent decisions affecting current work:
 - [Phase 02]: CoreError single mapping: Validation->invalid_request/422, NotFound/Conflict/Forbidden->not_found/conflict/forbidden (404/409/403), Overloaded->temporarily_unavailable/503, Internal/Storage->server_error/500 with generic description
 - [Phase 02]: purge_expired keeps consumed-but-unexpired codes/refresh tokens so reuse detection survives purges; Page.next_cursor is Some iff more items follow
 - [Phase 02]: Backends run on TRANSITIONAL pending.rs (StorageError::Unsupported) until 02-05/02-06; contract suite (67 tests) compiles and fails with Unsupported until then
+- [Phase 02]: Mail: subject is the first .txt line (optional 'Subject:' prefix stripped); strict undefined so a missing payload key fails the row
+- [Phase 02]: Mail: OutboxWorker depends on narrow OutboxAccess (StorageOutbox wraps Arc<dyn Storage>); backoff min(30s*2^(n-1),1h), parked at expires_at after 8 attempts, 2 min lease
+- [Phase 02]: Mail: SmtpTransport::from_url needs a Tokio runtime (lettre pool) and never echoes the URL
 
 ### Pending Todos
 
@@ -111,6 +115,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-25T01:24:20.336Z
-Stopped at: Completed 02-02-PLAN.md
+Last session: 2026-11-25T02:04:17.492Z
+Stopped at: Completed 02-11-PLAN.md
 Resume file: None

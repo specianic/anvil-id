@@ -44,8 +44,8 @@ Source of truth for wording and detail: [docs/PRD.md](../docs/PRD.md) §8–9. I
 ### Authentication and self-service
 
 - [ ] **AUTH-01**: User can log in with a password (Argon2id, policy, optional breached-password check) [0.1]
-- [ ] **AUTH-02**: User can self-register (can be disabled or invite-only) and verify their email [0.1]
-- [ ] **AUTH-03**: User can recover their account by email without revealing whether an account exists [0.1]
+- [x] **AUTH-02**: User can self-register (can be disabled or invite-only) and verify their email [0.1]
+- [x] **AUTH-03**: User can recover their account by email without revealing whether an account exists [0.1]
 - [ ] **AUTH-04**: User can register and log in with passkeys, including usernameless; clone detection via signature counter [0.2]
 - [ ] **AUTH-05**: User can enroll TOTP with recovery codes and use it as a second factor [0.2]
 - [ ] **AUTH-06**: User can log in with email OTP or magic link [0.3]
@@ -196,8 +196,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | OIDC-24 | Phase 2 | Pending |
 | OIDC-25 | Phase 3 | Pending |
 | AUTH-01 | Phase 2 | Pending |
-| AUTH-02 | Phase 2 | Pending |
-| AUTH-03 | Phase 2 | Pending |
+| AUTH-02 | Phase 2 | Complete |
+| AUTH-03 | Phase 2 | Complete |
 | AUTH-04 | Phase 3 | Pending |
 | AUTH-05 | Phase 3 | Pending |
 | AUTH-06 | Phase 4 | Pending |
