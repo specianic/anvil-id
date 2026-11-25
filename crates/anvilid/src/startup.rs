@@ -69,7 +69,7 @@ pub async fn start(cfg: &Config) -> anyhow::Result<Started> {
     let backend = Backend::from_url(url)?;
     let (lock, kek) = prepare_data_dir(cfg, backend)?;
     let kek = Arc::new(kek);
-    let storage = storage::open_storage(url, cfg.migrate).await?;
+    let storage = storage::open_storage(url, cfg.migrations()).await?;
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let hasher: Arc<dyn PasswordHasher> = Arc::new(Argon2Pool::new(
         Argon2Pool::owasp_params(),

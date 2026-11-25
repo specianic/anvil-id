@@ -21,7 +21,7 @@ use figment::{Figment, Profile, Provider};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
-use crate::storage::Backend;
+use crate::storage::{Backend, Migrations};
 
 /// Environment variable prefix.
 pub const ENV_PREFIX: &str = "ANVILID_";
@@ -48,6 +48,7 @@ pub const KEYS: &[&str] = &[
     "breach_check",
     "breach_check_url",
     "no_migrate",
+    "allow_destructive_migrations",
     "insecure_http",
     "log_format",
 ];
@@ -125,6 +126,12 @@ pub struct CliOverrides {
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub no_migrate: bool,
 
+    /// Apply pending destructive migrations (`NNNN_destructive_*`) instead of refusing to start.
+    /// Take a backup first.
+    #[arg(long)]
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub allow_destructive_migrations: bool,
+
     /// Allow a plain-http public URL on a non-loopback host (development and test setups only).
     #[arg(long)]
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -155,6 +162,7 @@ pub struct RawConfig {
     pub breach_check: String,
     pub breach_check_url: String,
     pub no_migrate: bool,
+    pub allow_destructive_migrations: bool,
     pub insecure_http: bool,
     pub log_format: Option<String>,
 }
@@ -184,6 +192,7 @@ impl Default for RawConfig {
             breach_check: "hibp".to_owned(),
             breach_check_url: HIBP_BASE_URL.to_owned(),
             no_migrate: false,
+            allow_destructive_migrations: false,
             insecure_http: false,
             log_format: None,
         }
@@ -369,6 +378,8 @@ pub struct Config {
     pub tls: Option<TlsFiles>,
     pub breach_check: BreachCheckMode,
     pub migrate: bool,
+    /// Pending destructive migrations may run (`--allow-destructive-migrations`).
+    pub allow_destructive_migrations: bool,
     pub insecure_http: bool,
     pub log_format: LogFormat,
     /// Non-fatal findings, logged as warnings on start.
@@ -380,6 +391,18 @@ fn field_error(key: &str, message: impl fmt::Display) -> anyhow::Error {
 }
 
 impl Config {
+    /// How `serve` treats migrations: skipped with `no_migrate`, otherwise run with the
+    /// destructive-migration permission.
+    pub fn migrations(&self) -> Migrations {
+        if self.migrate {
+            Migrations::Run {
+                allow_destructive: self.allow_destructive_migrations,
+            }
+        } else {
+            Migrations::Skip
+        }
+    }
+
     /// Validates the merged configuration and derives the dependent defaults.
     pub fn resolve(raw: RawConfig) -> anyhow::Result<Self> {
         let public_url = PublicUrl::parse(raw.public_url.trim()).map_err(|e| match e {
@@ -494,6 +517,7 @@ impl Config {
             tls,
             breach_check,
             migrate: !raw.no_migrate,
+            allow_destructive_migrations: raw.allow_destructive_migrations,
             insecure_http: raw.insecure_http,
             log_format,
             warnings,
@@ -582,6 +606,7 @@ pub fn show(layers: &Layers, raw: &RawConfig) -> String {
             "breach_check" => raw.breach_check.clone(),
             "breach_check_url" => raw.breach_check_url.clone(),
             "no_migrate" => raw.no_migrate.to_string(),
+            "allow_destructive_migrations" => raw.allow_destructive_migrations.to_string(),
             "insecure_http" => raw.insecure_http.to_string(),
             "log_format" => raw.log_format.clone().unwrap_or_else(|| {
                 if public_url.as_ref().is_some_and(PublicUrl::is_dev_mode) {
@@ -790,6 +815,33 @@ mod tests {
             "{:?}",
             cfg.warnings
         );
+    }
+
+    #[test]
+    fn allow_destructive_migrations_defaults_off_and_reads_env_bool() {
+        let cfg = resolve(&layers(&CliOverrides::default(), &[], None)).expect("cfg");
+        assert!(!cfg.allow_destructive_migrations);
+        assert_eq!(
+            cfg.migrations(),
+            Migrations::Run {
+                allow_destructive: false
+            }
+        );
+        let env = [("allow_destructive_migrations", s("true"))];
+        let cfg = resolve(&layers(&CliOverrides::default(), &env, None)).expect("cfg");
+        assert_eq!(
+            cfg.migrations(),
+            Migrations::Run {
+                allow_destructive: true
+            }
+        );
+        let cli = CliOverrides {
+            no_migrate: true,
+            allow_destructive_migrations: true,
+            ..CliOverrides::default()
+        };
+        let cfg = resolve(&layers(&cli, &[], None)).expect("cfg");
+        assert_eq!(cfg.migrations(), Migrations::Skip);
     }
 
     #[test]

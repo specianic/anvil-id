@@ -15,6 +15,7 @@ mod grants;
 mod jobs;
 mod keys;
 mod mail_settings;
+pub mod migrate;
 mod outbox;
 mod sessions;
 mod setup;
@@ -41,6 +42,8 @@ use crate::sessions::PgSessions;
 use crate::setup::PgSetup;
 use crate::tenants::PgTenants;
 use crate::users::PgUsers;
+
+pub use crate::migrate::{MigrateError, MigrateOptions, PendingMigration};
 
 /// Rows deleted per `purge_expired` statement, so a large backlog never holds long locks.
 pub(crate) const PURGE_BATCH: i64 = 1000;
@@ -90,14 +93,6 @@ impl PostgresStorage {
             jobs: PgJobs { pool: pool.clone() },
             pool,
         }
-    }
-
-    /// Runs embedded migrations.
-    pub async fn migrate(&self) -> Result<(), StorageError> {
-        sqlx::migrate!()
-            .run(&self.pool)
-            .await
-            .map_err(|e| StorageError::Backend(Box::new(e)))
     }
 }
 

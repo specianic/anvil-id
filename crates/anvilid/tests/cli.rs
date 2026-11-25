@@ -153,6 +153,96 @@ fn migrate_creates_the_sqlite_file() {
 }
 
 #[test]
+fn migrate_accepts_allow_destructive_migrations() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db = dir.path().join("x.db");
+    let url = format!("sqlite://{}", db.display());
+    let out = run(
+        dir.path(),
+        &[
+            "migrate",
+            "--allow-destructive-migrations",
+            "--database-url",
+            &url,
+        ],
+        &[],
+    );
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(db.exists(), "database file was not created");
+}
+
+#[test]
+fn allow_destructive_migrations_defaults_off_in_config_show() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = run(dir.path(), &["config", "show"], &[]);
+    assert!(out.status.success(), "{}", text(&out));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("allow_destructive_migrations = false (default)"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn allow_destructive_migrations_from_env_and_cli_in_config_show() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = run(
+        dir.path(),
+        &["config", "show"],
+        &[("ANVILID_ALLOW_DESTRUCTIVE_MIGRATIONS", "true")],
+    );
+    assert!(out.status.success(), "{}", text(&out));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains(
+            "allow_destructive_migrations = true (env ANVILID_ALLOW_DESTRUCTIVE_MIGRATIONS)"
+        ),
+        "{stdout}"
+    );
+    let out = run(
+        dir.path(),
+        &["config", "show", "--allow-destructive-migrations"],
+        &[],
+    );
+    assert!(out.status.success(), "{}", text(&out));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("allow_destructive_migrations = true (cli --allow-destructive-migrations)"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn serve_parses_allow_destructive_migrations_from_env() {
+    // The flag parses and the configuration resolves: serve then stops at the next check (plain
+    // http on a public host), before touching any database.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = run(
+        dir.path(),
+        &["serve", "--public-url", "http://id.example.test"],
+        &[("ANVILID_ALLOW_DESTRUCTIVE_MIGRATIONS", "true")],
+    );
+    assert!(!out.status.success());
+    let all = text(&out);
+    assert!(all.contains("--insecure-http"), "{all}");
+    assert!(!all.contains("allow_destructive_migrations"), "{all}");
+}
+
+#[test]
+fn serve_rejects_a_non_boolean_allow_destructive_migrations() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = run(
+        dir.path(),
+        &["serve"],
+        &[("ANVILID_ALLOW_DESTRUCTIVE_MIGRATIONS", "maybe")],
+    );
+    assert!(!out.status.success());
+    let all = text(&out);
+    assert!(all.contains("allow_destructive_migrations"), "{all}");
+    assert!(!dir.path().join("anvilid-data").exists(), "{all}");
+}
+
+#[test]
 fn serve_rejects_unsupported_scheme_without_echoing_the_url() {
     let dir = tempfile::tempdir().expect("tempdir");
     let out = run(

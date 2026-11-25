@@ -3,8 +3,12 @@
 use std::sync::Arc;
 
 use anvil_core::ports::Storage;
-use anvil_storage_postgres::PostgresStorage;
-use anvil_storage_sqlite::SqliteStorage;
+use anvil_storage_postgres::{
+    MigrateError as PgMigrateError, MigrateOptions as PgMigrateOptions, PostgresStorage,
+};
+use anvil_storage_sqlite::{
+    MigrateError as SqliteMigrateError, MigrateOptions as SqliteMigrateOptions, SqliteStorage,
+};
 use anyhow::{Context, bail};
 
 /// Maximum Postgres pool size.
@@ -38,10 +42,31 @@ impl Backend {
     }
 }
 
-/// Opens the backend selected by the URL scheme and, if `migrate` is set, applies its migrations.
+/// Whether `open_storage` applies migrations, and whether destructive ones may run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Migrations {
+    Skip,
+    Run { allow_destructive: bool },
+}
+
+/// Refusal shown when pending migrations are destructive and the operator did not allow them.
+fn refuse_destructive(list: &[impl std::fmt::Display]) -> anyhow::Error {
+    let list = list
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    anyhow::anyhow!(
+        "refusing to run destructive migrations: {list}; re-run with \
+         --allow-destructive-migrations after taking a backup"
+    )
+}
+
+/// Opens the backend selected by the URL scheme and, unless `migrations` is `Skip`, applies its
+/// migrations. Pending destructive migrations are refused unless `allow_destructive` is set.
 ///
 /// Only the backend kind is logged; the URL may hold credentials.
-pub async fn open_storage(url: &str, migrate: bool) -> anyhow::Result<Arc<dyn Storage>> {
+pub async fn open_storage(url: &str, migrations: Migrations) -> anyhow::Result<Arc<dyn Storage>> {
     let backend = Backend::from_url(url)?;
     tracing::info!(backend = backend.name(), "opening storage");
     let storage: Arc<dyn Storage> = match backend {
@@ -49,10 +74,17 @@ pub async fn open_storage(url: &str, migrate: bool) -> anyhow::Result<Arc<dyn St
             let s = SqliteStorage::connect(url)
                 .await
                 .context("failed to open sqlite database")?;
-            if migrate {
-                s.migrate()
+            if let Migrations::Run { allow_destructive } = migrations {
+                match s
+                    .migrate_with(SqliteMigrateOptions { allow_destructive })
                     .await
-                    .context("failed to migrate sqlite database")?;
+                {
+                    Ok(()) => {}
+                    Err(SqliteMigrateError::Destructive(list)) => {
+                        return Err(refuse_destructive(&list));
+                    }
+                    Err(e) => return Err(e).context("failed to migrate sqlite database"),
+                }
             }
             Arc::new(s)
         }
@@ -60,24 +92,28 @@ pub async fn open_storage(url: &str, migrate: bool) -> anyhow::Result<Arc<dyn St
             let s = PostgresStorage::connect(url, POSTGRES_MAX_CONNECTIONS)
                 .await
                 .context("failed to connect to postgres")?;
-            if migrate {
-                s.migrate()
-                    .await
-                    .context("failed to migrate postgres database")?;
+            if let Migrations::Run { allow_destructive } = migrations {
+                match s.migrate_with(PgMigrateOptions { allow_destructive }).await {
+                    Ok(()) => {}
+                    Err(PgMigrateError::Destructive(list)) => {
+                        return Err(refuse_destructive(&list));
+                    }
+                    Err(e) => return Err(e).context("failed to migrate postgres database"),
+                }
             }
             Arc::new(s)
         }
     };
-    if migrate {
-        tracing::info!(
+    match migrations {
+        Migrations::Run { allow_destructive } => tracing::info!(
             backend = backend.name(),
+            allow_destructive,
             "storage ready (migrations applied)"
-        );
-    } else {
-        tracing::info!(
+        ),
+        Migrations::Skip => tracing::info!(
             backend = backend.name(),
             "storage ready (migrations skipped)"
-        );
+        ),
     }
     Ok(storage)
 }
@@ -120,6 +156,17 @@ mod tests {
         assert_eq!(
             sqlite_file("sqlite://./anvilid-data/anvilid.db"),
             Some("./anvilid-data/anvilid.db".into())
+        );
+    }
+
+    #[test]
+    fn destructive_refusal_names_the_migrations_and_the_flag() {
+        let err =
+            refuse_destructive(&["0005 destructive drop x", "0006 destructive y"]).to_string();
+        assert_eq!(
+            err,
+            "refusing to run destructive migrations: 0005 destructive drop x, 0006 destructive y; \
+             re-run with --allow-destructive-migrations after taking a backup"
         );
     }
 

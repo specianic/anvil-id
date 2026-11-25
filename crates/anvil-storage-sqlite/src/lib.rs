@@ -18,6 +18,7 @@ mod grants;
 mod jobs;
 mod keys;
 mod mail_settings;
+pub mod migrate;
 mod outbox;
 mod sessions;
 mod setup;
@@ -47,6 +48,8 @@ use crate::sessions::SqliteSessions;
 use crate::setup::SqliteSetup;
 use crate::tenants::SqliteTenants;
 use crate::users::SqliteUsers;
+
+pub use crate::migrate::{MigrateError, MigrateOptions, PendingMigration};
 
 /// Maximum number of reader connections for file databases.
 const READER_CONNECTIONS: u32 = 8;
@@ -166,14 +169,6 @@ impl SqliteStorage {
             },
             writer,
         })
-    }
-
-    /// Runs embedded migrations on the writer.
-    pub async fn migrate(&self) -> Result<(), StorageError> {
-        sqlx::migrate!()
-            .run(&self.writer)
-            .await
-            .map_err(|e| StorageError::Backend(Box::new(e)))
     }
 }
 

@@ -132,7 +132,13 @@ async fn migrate(cfg: &Config) -> anyhow::Result<()> {
     {
         datadir::ensure_dir(parent)?;
     }
-    storage::open_storage(url, true).await?;
+    storage::open_storage(
+        url,
+        storage::Migrations::Run {
+            allow_destructive: cfg.allow_destructive_migrations,
+        },
+    )
+    .await?;
     println!("migrations applied");
     Ok(())
 }
@@ -157,7 +163,7 @@ async fn setup_url(cfg: &Config) -> anyhow::Result<()> {
         OnMissing::RefuseNotInstalled,
     )?;
     // No migrations and no serve.lock: this runs next to a running server (Pitfall P10).
-    let storage = storage::open_storage(url, false).await?;
+    let storage = storage::open_storage(url, storage::Migrations::Skip).await?;
     let bootstrap = BootstrapService {
         storage,
         clock: Arc::new(SystemClock),
