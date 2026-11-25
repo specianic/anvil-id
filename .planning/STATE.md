@@ -7,13 +7,13 @@ current_phase_name: release 0 3 real world logins
 current_plan: Not started
 status: planning
 stopped_at: "Completed 03-34-PLAN.md (Phase 3 gap closure: single base64 implementation)"
-last_updated: "2026-11-25T13:53:51.844Z"
+last_updated: "2026-11-25T14:50:04.397Z"
 last_activity: 2026-11-25
 progress:
   total_phases: 7
   completed_phases: 3
-  total_plans: 65
-  completed_plans: 65
+  total_plans: 98
+  completed_plans: 66
   percent: 100
 ---
 
@@ -121,6 +121,7 @@ Phase 3 plans 03-01 through 03-34 are all complete (34/34 summaries); v0.2.0 is 
 | Phase 03 P33 | 25min | 2 tasks | 17 files |
 | Phase 03 P29 | 65min | 3 tasks | 16 files |
 | Phase 03 P34 | 40min | 2 tasks | 18 files |
+| Phase 04 P03 | 25min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -265,6 +266,7 @@ Recent decisions affecting current work:
 - [Phase 03]: 03-29: QUAL-01 map extended to 230 pairs covering every Phase 3 control; just ci runs migrations-check and console-check
 - [Phase 03]: 03-29: v0.2.0 released from main at 177b7f4 (anvilid 0.2.0 on main; 0.2 migrations pinned); ghcr package still private (anonymous pull 403)
 - [Phase 03]: 03-34: anvil_jose::encoding is the only base64 implementation (b64url/b64url_decode, b64std/b64std_decode: padded or unpadded, canonical); check-deps.sh rejects base64 deps, base64:: and alphabet tables elsewhere under crates/
+- [Phase 04]: 04-03: e2e mock IdP (lib/mock-idp.ts, node:http/crypto only) binds 127.0.0.1 vs AnvilID on localhost; sample RP verifies back-channel logout tokens with node:crypto against the issuer JWKS; run.sh default globs specs/*.spec.ts (a11y first, qual04 excluded)
 
 ### Pending Todos
 
