@@ -71,7 +71,7 @@ Plans:
 - [x] 02-04-PLAN.md — Sample RP (examples/node-rp, openid-client) + Playwright skeleton and helpers (wave 1)
 - [ ] 02-05-PLAN.md — SQLite backend for all 0.1 ports, contract green, plaintext inspection (wave 2)
 - [ ] 02-06-PLAN.md — Postgres backend for all 0.1 ports, contract green, plaintext inspection (wave 2)
-- [ ] 02-07-PLAN.md — Core authorize: request validation, redirect matching, PKCE policy, prompt/max_age decisions, code issuance (wave 2)
+- [x] 02-07-PLAN.md — Core authorize: request validation, redirect matching, PKCE policy, prompt/max_age decisions, code issuance (wave 2)
 - [ ] 02-08-PLAN.md — Core token side: client auth, KeyService, grants, token minting, AT verification, UserInfo (wave 2)
 - [ ] 02-09-PLAN.md — Core flows (login, registration, verification, recovery, setup form) + SessionService (wave 2)
 - [ ] 02-10-PLAN.md — Core management: tenant/client/user services, admin scopes, BootstrapService (wave 2)

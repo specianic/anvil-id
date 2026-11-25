@@ -4,13 +4,13 @@ milestone: v1.0
 milestone_name: milestone
 status: verifying
 stopped_at: Completed 02-11-PLAN.md
-last_updated: "2026-11-25T02:04:17.494Z"
+last_updated: "2026-11-25T02:04:48.022Z"
 last_activity: "2026-11-25 — Completed 01-08 (phase gate: CI green on GitHub, spike verdicts, stack confirmed)"
 progress:
   total_phases: 7
   completed_phases: 1
   total_plans: 29
-  completed_plans: 13
+  completed_plans: 14
   percent: 53
 ---
 
@@ -63,6 +63,7 @@ Progress: [█████░░░░░] 53%
 | Phase 02 P01 | 16min | 3 tasks | 29 files |
 | Phase 02 P02 | 31min | 3 tasks | 50 files |
 | Phase 02 P11 | 25min | 2 tasks | 6 files |
+| Phase 02 P07 | 20min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -103,6 +104,9 @@ Recent decisions affecting current work:
 - [Phase 02]: Mail: subject is the first .txt line (optional 'Subject:' prefix stripped); strict undefined so a missing payload key fails the row
 - [Phase 02]: Mail: OutboxWorker depends on narrow OutboxAccess (StorageOutbox wraps Arc<dyn Storage>); backoff min(30s*2^(n-1),1h), parked at expires_at after 8 attempts, 2 min lease
 - [Phase 02]: Mail: SmtpTransport::from_url needs a Tokio runtime (lettre pool) and never echoes the URL
+- [Phase 02]: redirect_uri defaults to the single registered URI only for error reporting; OpenID requests must send it explicitly, so codes never bind an implicit redirect URI
+- [Phase 02]: max_age is satisfied by a login during the request (auth_time >= request created_at), so max_age=0 acts like prompt=login without a resume loop
+- [Phase 02]: id_token_hint sub is compared with session user_id.to_string(); ID tokens must use the user id as sub
 
 ### Pending Todos
 

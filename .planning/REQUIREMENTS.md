@@ -19,8 +19,8 @@ Source of truth for wording and detail: [docs/PRD.md](../docs/PRD.md) §8–9. I
 
 ### OAuth 2.1 / OpenID Connect server
 
-- [ ] **OIDC-01**: A client can complete authorization code flow with PKCE; only S256 is accepted; PKCE is required by default and only confidential clients may opt out (then nonce is mandatory) [0.1]
-- [ ] **OIDC-02**: Redirect URIs are matched exactly (loopback port flexibility only for native apps); invalid redirects show an error page and never redirect [0.1]
+- [x] **OIDC-01**: A client can complete authorization code flow with PKCE; only S256 is accepted; PKCE is required by default and only confidential clients may opt out (then nonce is mandatory) [0.1]
+- [x] **OIDC-02**: Redirect URIs are matched exactly (loopback port flexibility only for native apps); invalid redirects show an error page and never redirect [0.1]
 - [ ] **OIDC-03**: Authorization codes are single-use, ≤60 s, bound to client/redirect/PKCE; reuse revokes the tokens issued from that code [0.1]
 - [ ] **OIDC-04**: Clients authenticate with client_secret_basic, client_secret_post, private_key_jwt (aud = issuer, jti replay rejected) or none; secrets hashed, compared in constant time [0.1]
 - [ ] **OIDC-05**: Refresh tokens rotate on every use; reuse revokes the whole token family [0.1]
@@ -38,7 +38,7 @@ Source of truth for wording and detail: [docs/PRD.md](../docs/PRD.md) §8–9. I
 - [ ] **OIDC-17**: Clients can register dynamically (RFC 7591/7592) under an admin policy: disabled / allow-listed / open [0.4]
 - [ ] **OIDC-18**: Clients can use pushed authorization requests (RFC 9126) [1.0]
 - [ ] **OIDC-23**: The OpenID conformance suite passes in CI for Basic OP, Config OP, Form Post, RP-Initiated Logout and Back-Channel Logout; certification filed [1.0]
-- [ ] **OIDC-24**: Authorization responses include the `iss` parameter (RFC 9207) [0.1]
+- [x] **OIDC-24**: Authorization responses include the `iss` parameter (RFC 9207) [0.1]
 - [ ] **OIDC-25**: Authorization responses support `query` and `form_post` response modes [0.2]
 
 ### Authentication and self-service
@@ -106,7 +106,7 @@ Source of truth for wording and detail: [docs/PRD.md](../docs/PRD.md) §8–9. I
 
 ### Security (PRD §9.2)
 
-- [ ] **SEC-01**: Defaults follow RFC 9700 and OAuth 2.1
+- [x] **SEC-01**: Defaults follow RFC 9700 and OAuth 2.1
 - [ ] **SEC-02**: Signing keys are generated at first start, encrypted at rest with a KEK, and rotated on schedule with overlap
 - [ ] **SEC-03**: All secrets are stored hashed; TOTP seeds and upstream IdP secrets are encrypted
 - [ ] **SEC-04**: Browser endpoints have CSRF protection, hardened cookies and a strict CSP
@@ -174,8 +174,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | FND-03 | Phase 1 | Complete |
 | FND-04 | Phase 1 | Complete |
 | FND-05 | Phase 1 | Complete |
-| OIDC-01 | Phase 2 | Pending |
-| OIDC-02 | Phase 2 | Pending |
+| OIDC-01 | Phase 2 | Complete |
+| OIDC-02 | Phase 2 | Complete |
 | OIDC-03 | Phase 2 | Pending |
 | OIDC-04 | Phase 2 | Pending |
 | OIDC-05 | Phase 2 | Pending |
@@ -193,7 +193,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | OIDC-17 | Phase 5 | Pending |
 | OIDC-18 | Phase 7 | Pending |
 | OIDC-23 | Phase 7 | Pending |
-| OIDC-24 | Phase 2 | Pending |
+| OIDC-24 | Phase 2 | Complete |
 | OIDC-25 | Phase 3 | Pending |
 | AUTH-01 | Phase 2 | Pending |
 | AUTH-02 | Phase 2 | Complete |
@@ -240,7 +240,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | OPS-07 | Phase 5 | Pending |
 | OPS-08 | Phase 5 | Pending |
 | OPS-09 | Phase 5 | Pending |
-| SEC-01 | Phase 2 | Pending |
+| SEC-01 | Phase 2 | Complete |
 | SEC-02 | Phase 3 | Pending |
 | SEC-03 | Phase 4 | Pending |
 | SEC-04 | Phase 2 | Pending |
