@@ -153,7 +153,7 @@ Plans:
 
 Plans:
 - [ ] 04-01-PLAN.md — Core foundation: all Phase 4 model/ports (connections, branding, logout deliveries, UpstreamClient), errors, audit actions, anvil-jose email code, Fluent/moka deps, contract suite, backend shims (wave 1)
-- [ ] 04-02-PLAN.md — The single SSRF-guarded outbound client + operator config, CAPTCHA/HIBP migrated, AppState handles, pre-registered web modules (wave 1)
+- [x] 04-02-PLAN.md — The single SSRF-guarded outbound client + operator config, CAPTCHA/HIBP migrated, AppState handles, pre-registered web modules (wave 1)
 - [x] 04-03-PLAN.md — E2E infra: Node mock IdP (Apple-like, GitHub-like), upstream/logout helpers, sample RP logout + back-channel endpoint, run.sh spec glob (wave 1)
 - [ ] 04-04-PLAN.md — SQLite 0005 (CHECK rebuilds, new tables/columns), repos, enqueue-on-revoke, upgrade + plaintext tests (wave 2)
 - [ ] 04-05-PLAN.md — Postgres 0004, repos (SKIP LOCKED delivery leasing), enqueue-on-revoke, upgrade + plaintext tests (wave 2)
@@ -231,7 +231,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 1. Foundations and Spikes (M0) | 8/8 | Complete    | 2026-11-25 |
 | 2. Release 0.1 "First login" | 23/23 | Complete    | 2026-11-25 |
 | 3. Release 0.2 "Secure by default" | 34/34 | Complete    | 2026-11-25 |
-| 4. Release 0.3 "Real-world logins" | 1/33 | In Progress | - |
+| 4. Release 0.3 "Real-world logins" | 2/33 | In Progress | - |
 | 5. Release 0.4 "Operate it" | 0/TBD | Not started | - |
 | 6. Release 1.0 (Organizations and SSO) | 0/TBD | Not started | - |
 | 7. Release 1.0 (Certification and release) | 0/TBD | Not started | - |
