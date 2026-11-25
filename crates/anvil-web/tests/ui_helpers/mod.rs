@@ -11,10 +11,58 @@ use anvil_core::model::{
 use anvil_core::ports::Clock as _;
 use time::Duration;
 
-use crate::support::{TestApp, TestResponse};
+use std::sync::{Arc, Mutex};
+
+use anvil_core::model::PublicUrl;
+use anvil_core::ports::Storage;
+use anvil_core::service::bootstrap::{BootstrapService, InstallResult};
+use anvil_jose::kek::Kek;
+use anvil_web::adapters::argon2::Argon2Pool;
+use anvil_web::adapters::hibp::{BreachCheckMode, breach_checker};
+use anvil_web::{AppConfig, AppDeps};
+use axum::Router;
+use axum::body::Body;
+use axum::http::{HeaderMap, Method, Request, header};
+use http_body_util::BodyExt;
+use secrecy::ExposeSecret as _;
+use tower::ServiceExt;
+
+use crate::support::{Backend, PROD_URL, TestApp, TestClock, TestResponse, start_time};
+
+/// What the form helpers need from an app under test.
+pub trait Client {
+    /// `scheme://host[:port]` of the public URL.
+    fn origin(&self) -> String;
+    fn get(&self, path: &str) -> impl std::future::Future<Output = TestResponse>;
+    fn post_form(
+        &self,
+        path: &str,
+        pairs: &[(&str, &str)],
+    ) -> impl std::future::Future<Output = TestResponse>;
+    fn clear_cookies(&self);
+}
+
+impl Client for TestApp {
+    fn origin(&self) -> String {
+        format!(
+            "{}://{}",
+            self.config.public_url.scheme(),
+            self.config.public_url.host_port()
+        )
+    }
+    async fn get(&self, path: &str) -> TestResponse {
+        TestApp::get(self, path).await
+    }
+    async fn post_form(&self, path: &str, pairs: &[(&str, &str)]) -> TestResponse {
+        TestApp::post_form(self, path, pairs).await
+    }
+    fn clear_cookies(&self) {
+        TestApp::clear_cookies(self);
+    }
+}
 
 /// The `action` of the first form in a page, as a path on the public origin.
-pub fn form_action(app: &TestApp, html: &str) -> String {
+pub fn form_action<C: Client>(app: &C, html: &str) -> String {
     let marker = "action=\"";
     let start = html.find(marker).expect("page has a form action") + marker.len();
     let end = html[start..].find('"').expect("action is quoted") + start;
@@ -25,12 +73,8 @@ pub fn form_action(app: &TestApp, html: &str) -> String {
 }
 
 /// An absolute URL on the public origin as a path (other values unchanged).
-pub fn to_path(app: &TestApp, url: &str) -> String {
-    let origin = format!(
-        "{}://{}",
-        app.config.public_url.scheme(),
-        app.config.public_url.host_port()
-    );
+pub fn to_path<C: Client>(app: &C, url: &str) -> String {
+    let origin = app.origin();
     url.strip_prefix(&origin).unwrap_or(url).to_owned()
 }
 
@@ -68,7 +112,7 @@ pub fn element_text(html: &str, id: &str) -> String {
 }
 
 /// GETs a form page (expects 200) and returns `(action path, csrf token)`.
-pub async fn open_form(app: &TestApp, path: &str) -> (String, String) {
+pub async fn open_form<C: Client>(app: &C, path: &str) -> (String, String) {
     let resp = app.get(path).await;
     assert_eq!(resp.status, 200, "GET {path}: {}", resp.text());
     let html = resp.html();
@@ -100,7 +144,7 @@ pub fn hidden_inputs(html: &str) -> Vec<(String, String)> {
 
 /// Opens a form page and submits it like a browser: the CSRF token, the form's hidden inputs and
 /// `pairs` (a pair overrides a hidden input of the same name).
-pub async fn submit_form(app: &TestApp, path: &str, pairs: &[(&str, &str)]) -> TestResponse {
+pub async fn submit_form<C: Client>(app: &C, path: &str, pairs: &[(&str, &str)]) -> TestResponse {
     let resp = app.get(path).await;
     assert_eq!(resp.status, 200, "GET {path}: {}", resp.text());
     let html = resp.html();
@@ -118,7 +162,7 @@ pub async fn submit_form(app: &TestApp, path: &str, pairs: &[(&str, &str)]) -> T
 
 /// Self-registers `email` / `password` on the tenant at `base` (`""` or `/t/{slug}`) and forgets
 /// the resulting cookies. Returns the registration response.
-pub async fn register(app: &TestApp, base: &str, email: &str, password: &str) -> TestResponse {
+pub async fn register<C: Client>(app: &C, base: &str, email: &str, password: &str) -> TestResponse {
     let resp = submit_form(
         app,
         &format!("{base}/ui/registration"),
@@ -136,7 +180,12 @@ pub async fn register(app: &TestApp, base: &str, email: &str, password: &str) ->
 }
 
 /// Submits the login form of the tenant at `base`.
-pub async fn login(app: &TestApp, base: &str, identifier: &str, password: &str) -> TestResponse {
+pub async fn login<C: Client>(
+    app: &C,
+    base: &str,
+    identifier: &str,
+    password: &str,
+) -> TestResponse {
     submit_form(
         app,
         &format!("{base}/ui/login"),
@@ -273,7 +322,7 @@ pub fn normalize(html: &str) -> String {
     while let Some(i) = out.find("?flow=") {
         let start = i + "?flow=".len();
         let end = out[start..]
-            .find(|c: char| c == '"' || c == '&')
+            .find(['"', '&'])
             .map_or(out.len(), |e| start + e);
         out.replace_range(i..end, "?FLOW");
     }
@@ -286,4 +335,173 @@ pub fn form_fragment(html: &str) -> String {
     let start = n.find("<form").expect("page has a form");
     let end = n[start..].find("</form>").expect("form closes") + start + "</form>".len();
     n[start..end].to_owned()
+}
+
+// ---------------------------------------------------------------------------------------------
+// OwnApp: the application installed through the production BootstrapService, with handles the
+// harness does not expose (shared storage `Arc`, the Argon2 pool and its verification counter,
+// the setup URL printed at install).
+// ---------------------------------------------------------------------------------------------
+
+/// The application installed by `BootstrapService::ensure_installed` (production first start).
+pub struct OwnApp {
+    pub router: Router,
+    pub storage: Arc<dyn Storage>,
+    pub clock: Arc<TestClock>,
+    pub kek: Arc<Kek>,
+    pub hasher: Arc<Argon2Pool>,
+    pub config: AppConfig,
+    /// The setup token from the install-time setup URL.
+    pub setup_token: String,
+    jar: Mutex<BTreeMap<String, String>>,
+}
+
+impl OwnApp {
+    pub async fn installed() -> Self {
+        let storage = Backend::from_env().storage().await;
+        let clock = Arc::new(TestClock::new(start_time()));
+        let kek = Arc::new(Kek::generate());
+        let config = AppConfig::new(PublicUrl::parse(PROD_URL).expect("valid public url"));
+        let hasher = Arc::new(
+            Argon2Pool::new(
+                argon2::Params::new(256, 1, 1, None).expect("test argon2 params"),
+                4,
+            )
+            .expect("argon2 pool"),
+        );
+        let bootstrap = BootstrapService {
+            storage: Arc::clone(&storage),
+            clock: Arc::clone(&clock) as Arc<dyn anvil_core::ports::Clock>,
+            kek: Arc::clone(&kek),
+            hasher: Arc::clone(&hasher) as Arc<dyn anvil_core::ports::PasswordHasher>,
+            policy: config.password_policy,
+            public_url: config.public_url.clone(),
+        };
+        let setup_url = match bootstrap.ensure_installed().await.expect("install") {
+            InstallResult::Installed { setup_url } => setup_url.expose_secret().to_owned(),
+            InstallResult::AlreadyInstalled => panic!("fresh database installs"),
+        };
+        let setup_token = setup_url
+            .split_once("token=")
+            .expect("setup url carries the token")
+            .1
+            .to_owned();
+        let deps = AppDeps {
+            storage: Arc::clone(&storage),
+            clock: Arc::clone(&clock) as Arc<dyn anvil_core::ports::Clock>,
+            hasher: Arc::clone(&hasher) as Arc<dyn anvil_core::ports::PasswordHasher>,
+            breach: breach_checker(BreachCheckMode::Off),
+            kek: Arc::clone(&kek),
+        };
+        let router = anvil_web::app(config.clone(), deps).expect("app builds");
+        Self {
+            router,
+            storage,
+            clock,
+            kek,
+            hasher,
+            config,
+            setup_token,
+            jar: Mutex::new(BTreeMap::new()),
+        }
+    }
+
+    pub async fn tenant(&self, slug: &str) -> Tenant {
+        self.storage
+            .tenants()
+            .get_by_slug(slug)
+            .await
+            .expect("tenant lookup")
+            .expect("installed tenant")
+    }
+
+    pub fn cookies(&self) -> BTreeMap<String, String> {
+        self.jar.lock().expect("jar lock").clone()
+    }
+
+    /// Sends a request with the public Host and the jar's cookies; stores `Set-Cookie` answers.
+    pub async fn send(&self, mut req: Request<Body>) -> TestResponse {
+        req.headers_mut().insert(
+            header::HOST,
+            self.config.public_url.host_port().parse().expect("host"),
+        );
+        let cookie_header = self
+            .jar
+            .lock()
+            .expect("jar lock")
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join("; ");
+        if !cookie_header.is_empty() {
+            req.headers_mut()
+                .insert(header::COOKIE, cookie_header.parse().expect("cookie"));
+        }
+        let resp = self.router.clone().oneshot(req).await.expect("infallible");
+        let status = resp.status();
+        let headers = resp.headers().clone();
+        let body = resp
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes()
+            .to_vec();
+        self.store_cookies(&headers);
+        TestResponse {
+            status,
+            headers,
+            body,
+        }
+    }
+
+    fn store_cookies(&self, headers: &HeaderMap) {
+        let mut jar = self.jar.lock().expect("jar lock");
+        for v in headers.get_all(header::SET_COOKIE) {
+            let Ok(raw) = v.to_str() else { continue };
+            let Ok(c) = axum_extra::extract::cookie::Cookie::parse(raw.to_owned()) else {
+                continue;
+            };
+            if c.value().is_empty() || c.max_age().is_some_and(|m| m.is_zero()) {
+                jar.remove(c.name());
+            } else {
+                jar.insert(c.name().to_owned(), c.value().to_owned());
+            }
+        }
+    }
+}
+
+impl Client for OwnApp {
+    fn origin(&self) -> String {
+        format!(
+            "{}://{}",
+            self.config.public_url.scheme(),
+            self.config.public_url.host_port()
+        )
+    }
+
+    async fn get(&self, path: &str) -> TestResponse {
+        self.send(Request::get(path).body(Body::empty()).expect("request"))
+            .await
+    }
+
+    async fn post_form(&self, path: &str, pairs: &[(&str, &str)]) -> TestResponse {
+        let body = url::form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(pairs)
+            .finish();
+        self.send(
+            Request::builder()
+                .method(Method::POST)
+                .uri(path)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header("sec-fetch-site", "same-origin")
+                .body(Body::from(body))
+                .expect("request"),
+        )
+        .await
+    }
+
+    fn clear_cookies(&self) {
+        self.jar.lock().expect("jar lock").clear();
+    }
 }
