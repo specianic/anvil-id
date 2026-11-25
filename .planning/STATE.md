@@ -6,15 +6,15 @@ current_phase: 04
 current_phase_name: release 0 3 real world logins
 current_plan: Not started
 status: planning
-stopped_at: Completed 04-27-PLAN.md
-last_updated: "2026-11-25T23:13:49.350Z"
+stopped_at: Completed 04-28-PLAN.md
+last_updated: "2026-11-25T23:15:43.592Z"
 last_activity: 2026-11-25
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 98
-  completed_plans: 94
-  percent: 96
+  completed_plans: 96
+  percent: 98
 ---
 
 # Project State
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 **Status:** Ready to plan
 **Last Activity:** 2026-11-25
 **Last Activity Description:** Phase 3 complete, transitioned to Phase 04
-**Progress:** [██████████] 96%
+**Progress:** [██████████] 98%
 
 Phase 3 plans 03-01 through 03-34 are all complete (34/34 summaries); v0.2.0 is published. 03-34 closed the verification gap (base64). Next: Phase 3 re-verification, then Phase 4.
 
@@ -149,6 +149,8 @@ Phase 3 plans 03-01 through 03-34 are all complete (34/34 summaries); v0.2.0 is 
 | Phase 04 P30 | 35min | 2 tasks | 13 files |
 | Phase 04 P29 | 45min | 2 tasks | 6 files |
 | Phase 04 P27 | 45min | 2 tasks | 7 files |
+| Phase 04 P31 | 50min | 2 tasks | 6 files |
+| Phase 04 P28 | 35min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -337,6 +339,9 @@ Recent decisions affecting current work:
 - [Phase 04]: 04-30: German (de) is a shipped locale; tests/i18n_catalogs.rs enforces per-file id/variable/plural parity, so every new en/*.ftl needs a de counterpart
 - [Phase 04]: 04-29: email sign-in e2e runs in a dedicated tenant (email_otp+magic_link) deleted afterwards; nojs-*.spec.ts names not matched by the nojs project regex must set javaScriptEnabled false themselves
 - [Phase 04]: 04-27: upstream e2e specs use a fresh tenant per test; nojs project regex also matches nojs-*.spec.ts
+- [Phase 04]: 04-31: Docs keep historical 'built in 0.x' paragraphs and add 'added in 0.3' text; known gaps are documented as open items, not as done
+- [Phase 04]: 04-31: UPGRADING warns that breach_check_url and back-channel endpoints on private networks need outbound_allow_cidrs (guarded client covers HIBP and CAPTCHA)
+- [Phase 04]: 04-28: e2e adds prompt/acr_values by rewriting the RP's /authorize redirect (Playwright routes only the first request of a redirect chain); specs changing tenant settings use withTenantSettings
 
 ### Pending Todos
 
@@ -349,6 +354,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-25T23:13:49.347Z
-Stopped at: Completed 04-27-PLAN.md
+Last session: 2026-11-25T23:15:43.589Z
+Stopped at: Completed 04-28-PLAN.md
 Resume file: None
