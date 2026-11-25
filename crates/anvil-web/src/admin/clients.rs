@@ -6,7 +6,6 @@
 
 use anvil_core::model::{SYSTEM_TENANT_SLUG, Tenant};
 use anvil_core::service::admin_scope::{Access, Resource};
-use anvil_core::service::client::{ClientOptions, ClientOptionsPatch};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::Response;
@@ -98,17 +97,10 @@ pub(crate) async fn create_client(
     AdminJson(body): AdminJson<CreateClient>,
 ) -> AdminResult<Response> {
     let tenant = authorize(&state, &auth, &slug, Access::Write).await?;
-    // The 0.2 client options get wire fields in 03-23; until then registrations use the
-    // secure defaults.
+    let (input, options) = body.into_parts();
     let created_client = state
         .admin_clients()
-        .create(
-            &tenant,
-            body.into(),
-            ClientOptions::default(),
-            auth.actor(),
-            &ctx,
-        )
+        .create(&tenant, input, options, auth.actor(), &ctx)
         .await?;
     let mut view = ClientView::from(created_client.client);
     view.client_secret = created_client
@@ -154,7 +146,8 @@ pub(crate) async fn get_client(
     Ok(json(StatusCode::OK, &ClientView::from(client)))
 }
 
-/// Update a client. The merged registration is validated again.
+/// Update a client. The merged registration (including the ID-token algorithm against the
+/// tenant's enabled algorithms) is validated again.
 #[utoipa::path(
     patch,
     path = "/api/admin/v1/tenants/{slug}/clients/{client_id}",
@@ -185,16 +178,10 @@ pub(crate) async fn update_client(
     AdminJson(body): AdminJson<UpdateClient>,
 ) -> AdminResult<Response> {
     let tenant = authorize(&state, &auth, &slug, Access::Write).await?;
+    let (patch, options) = body.into_parts();
     let client = state
         .admin_clients()
-        .update(
-            &tenant,
-            &client_id,
-            body.into(),
-            ClientOptionsPatch::default(),
-            auth.actor(),
-            &ctx,
-        )
+        .update(&tenant, &client_id, patch, options, auth.actor(), &ctx)
         .await?;
     Ok(json(StatusCode::OK, &ClientView::from(client)))
 }

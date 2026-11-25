@@ -1,5 +1,7 @@
-//! Management API (`/api/admin/v1`): tenants, clients and users, authenticated with AnvilID's own
-//! OAuth access tokens (system tenant, admin scopes). Errors are RFC 9457 problem JSON.
+//! Management API (`/api/admin/v1`): tenants (with signing algorithms and CAPTCHA), clients,
+//! users and their credentials, sessions, the audit log, and email templates/SMTP, authenticated
+//! with AnvilID's own OAuth access tokens (system tenant, admin scopes). Errors are RFC 9457
+//! problem JSON.
 //!
 //! The OpenAPI 3.1 document is generated from the handlers ([`openapi`]), served without
 //! authentication at `/api/admin/v1/openapi.json` and committed as `docs/openapi/admin-v1.json`
@@ -8,6 +10,7 @@
 mod auth;
 mod clients;
 pub mod dto;
+mod sessions;
 mod tenants;
 mod users;
 
@@ -43,8 +46,13 @@ const TOKEN_URL: &str = "/t/system/token";
 /// Human description of an admin scope for the security scheme.
 fn scope_description(scope: &str) -> String {
     match scope {
-        "admin:read" => "Read tenants, clients and users".to_owned(),
-        "admin:write" => "Full administration (read and write everything)".to_owned(),
+        "admin:read" => "Read everything: tenants and their settings, clients, users and their \
+                         credentials, sessions, the audit log, email templates and SMTP settings"
+            .to_owned(),
+        "admin:write" => "Full administration: read and write everything (tenants and their \
+                          settings, clients, users and their credentials, sessions, email \
+                          templates, SMTP settings and test sends)"
+            .to_owned(),
         other => {
             let mut parts = other.split(':').skip(1);
             let resource = parts.next().unwrap_or_default();
@@ -87,9 +95,9 @@ fn base_document() -> OpenApi {
                 .title("AnvilID Management API")
                 .version("v1")
                 .description(Some(
-                    "Installation-level management of tenants, OAuth clients and users. \
-                     Requests carry a Bearer access token issued by the system tenant. Lists use \
-                     cursor pagination (`after`, `limit`); errors are RFC 9457 problem details.",
+                    "Installation-level management of tenants, OAuth clients, users, sessions, \
+                     the audit log and tenant email settings. Requests carry a Bearer access \
+                     token issued by the system tenant. Lists use cursor pagination (`after`, `limit`); errors are RFC 9457 problem details.",
                 ))
                 .build(),
         )
@@ -97,7 +105,8 @@ fn base_document() -> OpenApi {
         .tags(Some([
             tag("tenants", "Tenants (issuers) of the installation"),
             tag("clients", "OAuth clients of a tenant"),
-            tag("users", "Users of a tenant"),
+            tag("users", "Users of a tenant and their credentials"),
+            tag("sessions", "Browser sessions of a tenant's users"),
         ]))
         .build()
 }
@@ -123,6 +132,14 @@ fn api_router() -> OpenApiRouter<AppState> {
             users::get_user,
             users::update_user,
             users::delete_user
+        ))
+        .routes(routes!(users::list_user_credentials))
+        .routes(routes!(users::delete_user_credential))
+        .routes(routes!(sessions::list_sessions))
+        .routes(routes!(sessions::revoke_session))
+        .routes(routes!(
+            sessions::list_user_sessions,
+            sessions::revoke_user_sessions
         ))
 }
 

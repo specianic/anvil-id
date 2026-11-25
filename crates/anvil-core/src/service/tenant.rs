@@ -308,6 +308,47 @@ pub fn plan_settings(
     Ok(Some(settings))
 }
 
+/// Client ids of `tenant` whose `id_token_signed_response_alg` is one of `algs`, in listing
+/// order.
+async fn clients_using_algs(
+    storage: &dyn Storage,
+    tenant: TenantId,
+    algs: &[String],
+) -> Result<Vec<String>, CoreError> {
+    let mut out = Vec::new();
+    let mut after = None;
+    loop {
+        let page = storage
+            .clients()
+            .list(tenant, PageRequest { after, limit: 200 })
+            .await?;
+        out.extend(
+            page.items
+                .into_iter()
+                .filter(|c| {
+                    c.id_token_signed_response_alg
+                        .as_ref()
+                        .is_some_and(|a| algs.contains(a))
+                })
+                .map(|c| c.client_id),
+        );
+        match page.next_cursor {
+            Some(next) => after = Some(next),
+            None => return Ok(out),
+        }
+    }
+}
+
+/// The conflict message for [`TenantService::update`] refusing to disable algorithms in use.
+pub fn disabled_algs_in_use_message(algs: &[String], clients: &[String]) -> String {
+    format!(
+        "cannot disable signing algorithm(s) {} while clients use them for ID tokens: {} \
+         (change id_token_signed_response_alg of these clients first)",
+        algs.join(", "),
+        clients.join(", ")
+    )
+}
+
 fn map_conflict(e: StorageError) -> CoreError {
     match e {
         StorageError::Conflict(_) => CoreError::Conflict("slug or host already in use".to_owned()),
@@ -493,6 +534,9 @@ impl TenantService {
             Some(Some(h)) => Some(Some(validate_host(&h)?)),
         };
         let settings = plan_settings(&self.kek, &tenant, patch.settings, captcha.as_ref())?;
+        if let Some(new) = &settings {
+            self.refuse_disabling_used_algs(&tenant, new).await?;
+        }
         let settings_changed = settings.is_some();
         let update = TenantUpdate {
             display_name,
@@ -518,6 +562,33 @@ impl TenantService {
         )
         .await?;
         Ok(updated)
+    }
+
+    /// Refuses settings that disable a signing algorithm which a client of the tenant still uses
+    /// as its `id_token_signed_response_alg` (its token requests would fail otherwise):
+    /// `Conflict` naming the algorithms and the affected client ids.
+    async fn refuse_disabling_used_algs(
+        &self,
+        tenant: &Tenant,
+        new: &TenantSettings,
+    ) -> Result<(), CoreError> {
+        let enabled = new.effective_signing_algs();
+        let removed: Vec<String> = tenant
+            .settings
+            .effective_signing_algs()
+            .into_iter()
+            .filter(|a| !enabled.contains(a))
+            .collect();
+        if removed.is_empty() {
+            return Ok(());
+        }
+        let users = clients_using_algs(self.storage.as_ref(), tenant.id, &removed).await?;
+        if users.is_empty() {
+            return Ok(());
+        }
+        Err(CoreError::Conflict(disabled_algs_in_use_message(
+            &removed, &users,
+        )))
     }
 
     /// Deletes a tenant and everything in it. The bootstrap tenants are `Forbidden`. Audited as

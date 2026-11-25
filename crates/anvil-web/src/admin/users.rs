@@ -1,8 +1,8 @@
 //! `/api/admin/v1/tenants/{slug}/users`: user management (password or invitation, claims,
-//! block, delete).
+//! block, delete) and the user's credentials (list; remove a passkey or TOTP).
 
 use anvil_core::error::CoreError;
-use anvil_core::model::{Tenant, UserId};
+use anvil_core::model::{CredentialId, Tenant, UserId};
 use anvil_core::service::admin_scope::{Access, Resource};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -11,7 +11,7 @@ use axum::response::Response;
 use super::auth::{
     AdminAuth, AdminJson, AdminQuery, AdminResult, created, json, no_content, page_request,
 };
-use super::dto::{CreateUser, ListQuery, Problem, UpdateUser, UserList, UserView};
+use super::dto::{CreateUser, CredentialList, ListQuery, Problem, UpdateUser, UserList, UserView};
 use crate::request_context::AuditContext;
 use crate::state::AppState;
 
@@ -209,6 +209,87 @@ pub(crate) async fn delete_user(
     state
         .admin_users()
         .delete(tenant.id, user_id(&id)?, auth.actor(), &ctx)
+        .await?;
+    Ok(no_content())
+}
+
+/// List a user's credentials (password, passkeys, TOTP). No secret material is returned.
+#[utoipa::path(
+    get,
+    path = "/api/admin/v1/tenants/{slug}/users/{user_id}/credentials",
+    tag = "users",
+    operation_id = "listUserCredentials",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("user_id" = uuid::Uuid, Path, description = "User id"),
+    ),
+    responses(
+        (status = 200, description = "The user's credentials", body = CredentialList),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant or user", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:users:read"]),
+        ("oauth2" = ["admin:users:write"]),
+        ("oauth2" = ["admin:read"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn list_user_credentials(
+    auth: AdminAuth,
+    State(state): State<AppState>,
+    Path((slug, id)): Path<(String, String)>,
+) -> AdminResult<Response> {
+    let tenant = authorize(&state, &auth, &slug, Access::Read).await?;
+    let items = state
+        .ui_account_service()
+        .admin_list(tenant.id, user_id(&id)?)
+        .await?;
+    Ok(json(
+        StatusCode::OK,
+        &CredentialList {
+            items: items.into_iter().map(Into::into).collect(),
+        },
+    ))
+}
+
+/// Remove a passkey or the TOTP factor (with its recovery codes) of a user. Passwords cannot
+/// be removed here.
+#[utoipa::path(
+    delete,
+    path = "/api/admin/v1/tenants/{slug}/users/{user_id}/credentials/{credential_id}",
+    tag = "users",
+    operation_id = "deleteUserCredential",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("user_id" = uuid::Uuid, Path, description = "User id"),
+        ("credential_id" = uuid::Uuid, Path, description = "Credential id"),
+    ),
+    responses(
+        (status = 204, description = "Removed"),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant, user or credential (or a password)", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:users:write"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn delete_user_credential(
+    auth: AdminAuth,
+    State(state): State<AppState>,
+    AuditContext(ctx): AuditContext,
+    Path((slug, id, credential)): Path<(String, String, String)>,
+) -> AdminResult<Response> {
+    let tenant = authorize(&state, &auth, &slug, Access::Write).await?;
+    let credential = uuid::Uuid::parse_str(&credential)
+        .map(CredentialId)
+        .map_err(|_| CoreError::NotFound)?;
+    state
+        .ui_account_service()
+        .admin_remove(tenant.id, user_id(&id)?, credential, &auth.claims.sub, &ctx)
         .await?;
     Ok(no_content())
 }

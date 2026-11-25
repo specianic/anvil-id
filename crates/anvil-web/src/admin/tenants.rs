@@ -106,7 +106,10 @@ pub(crate) async fn get_tenant(
     Ok(json(StatusCode::OK, &TenantView::from(tenant)))
 }
 
-/// Update a tenant (the slug is immutable).
+/// Update a tenant (the slug is immutable). Settings are merged with the current ones; the
+/// CAPTCHA secret is write-only. Enabling a signing algorithm creates its key at once; disabling
+/// one that a client still uses for its ID tokens is refused (409, the problem lists the
+/// clients).
 #[utoipa::path(
     patch,
     path = "/api/admin/v1/tenants/{slug}",
@@ -119,7 +122,7 @@ pub(crate) async fn get_tenant(
         (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
         (status = 403, description = "Insufficient scope", body = Problem, content_type = "application/problem+json"),
         (status = 404, description = "Unknown tenant", body = Problem, content_type = "application/problem+json"),
-        (status = 409, description = "Host already in use", body = Problem, content_type = "application/problem+json"),
+        (status = 409, description = "Host already in use, or a disabled signing algorithm is still used by clients", body = Problem, content_type = "application/problem+json"),
         (status = 422, description = "Validation failed", body = Problem, content_type = "application/problem+json"),
     ),
     security(
@@ -135,10 +138,11 @@ pub(crate) async fn update_tenant(
     AdminJson(body): AdminJson<UpdateTenant>,
 ) -> AdminResult<Response> {
     auth.require(Resource::Tenants, Access::Write)?;
-    // CAPTCHA changes get a wire field in 03-23.
-    let tenant = state
-        .admin_tenants()
-        .update(&slug, body.into(), None, auth.actor(), &ctx)
+    let tenants = state.admin_tenants();
+    let current = tenants.get(&slug).await?;
+    let (patch, captcha) = body.into_patch(&current.settings);
+    let tenant = tenants
+        .update(&slug, patch, captcha, auth.actor(), &ctx)
         .await?;
     Ok(json(StatusCode::OK, &TenantView::from(tenant)))
 }
