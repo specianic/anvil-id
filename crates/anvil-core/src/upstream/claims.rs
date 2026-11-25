@@ -15,12 +15,12 @@
 //!
 //! Pure: no I/O.
 
-use anvil_jose::{JoseError, Jwks};
+use anvil_jose::{JoseError, Jwks, verify_jwt};
 use serde_json::{Map, Value};
 use time::OffsetDateTime;
 
-use super::providers::{IssuerRule, ResolvedProvider};
-use crate::model::ClaimMapping;
+use super::providers::{GOOGLE_ISSUER, IssuerRule, ResolvedProvider, TENANT_PLACEHOLDER};
+use crate::model::{ClaimMapping, ConnectionKind};
 
 /// Accepted clock skew for `exp`, `iat` and `nbf` (seconds).
 pub const CLOCK_SKEW_SECS: i64 = 60;
@@ -88,8 +88,177 @@ pub fn validate_id_token(
     expected_nonce: Option<&str>,
     now: OffsetDateTime,
 ) -> Result<Map<String, Value>, UpstreamTokenError> {
-    let _ = (token, jwks, resolved, client_id, expected_nonce, now);
-    Err(UpstreamTokenError::Signature)
+    // 1. Algorithm allow-list + signature. Plain OAuth2 providers have an empty allow-list.
+    let rule = resolved
+        .issuer_rule
+        .as_ref()
+        .ok_or(UpstreamTokenError::Signature)?;
+    if resolved.allowed_algs.is_empty() {
+        return Err(UpstreamTokenError::Signature);
+    }
+    let claims = verify_jwt(token, jwks, &resolved.allowed_algs)
+        .map_err(|e| match e {
+            JoseError::UnknownKey => UpstreamTokenError::UnknownKey,
+            _ => UpstreamTokenError::Signature,
+        })?
+        .claims;
+
+    // 2. Issuer (+ Microsoft tid, Google hd).
+    check_issuer(&claims, rule, resolved)?;
+    if !resolved.hosted_domains.is_empty() {
+        let hd = str_claim(&claims, "hd").map(str::to_ascii_lowercase);
+        if !hd.is_some_and(|hd| resolved.hosted_domains.contains(&hd)) {
+            return Err(UpstreamTokenError::HostedDomain);
+        }
+    }
+
+    // 3. Audience / authorized party.
+    check_audience(&claims, client_id)?;
+
+    // 4. Time.
+    let now = now.unix_timestamp();
+    let exp = time_claim(&claims, "exp")?.ok_or(UpstreamTokenError::MissingClaim("exp"))?;
+    if exp <= now - CLOCK_SKEW_SECS {
+        return Err(UpstreamTokenError::Expired);
+    }
+    let iat = time_claim(&claims, "iat")?.ok_or(UpstreamTokenError::MissingClaim("iat"))?;
+    if iat > now + CLOCK_SKEW_SECS {
+        return Err(UpstreamTokenError::IssuedInFuture);
+    }
+    if let Some(nbf) = time_claim(&claims, "nbf")?
+        && nbf > now + CLOCK_SKEW_SECS
+    {
+        return Err(UpstreamTokenError::IssuedInFuture);
+    }
+
+    // 5. Nonce.
+    if let Some(expected) = expected_nonce
+        && str_claim(&claims, "nonce") != Some(expected)
+    {
+        return Err(UpstreamTokenError::Nonce);
+    }
+
+    match str_claim(&claims, "sub") {
+        Some(sub) if !sub.is_empty() => Ok(claims),
+        _ => Err(UpstreamTokenError::MissingClaim("sub")),
+    }
+}
+
+fn str_claim<'a>(claims: &'a Map<String, Value>, name: &str) -> Option<&'a str> {
+    claims.get(name).and_then(Value::as_str)
+}
+
+/// A NumericDate claim: `None` when absent, `MissingClaim` when not a number.
+fn time_claim(
+    claims: &Map<String, Value>,
+    name: &'static str,
+) -> Result<Option<i64>, UpstreamTokenError> {
+    match claims.get(name) {
+        None => Ok(None),
+        Some(v) => v
+            .as_i64()
+            .or_else(|| {
+                v.as_f64()
+                    .filter(|f| f.is_finite() && f.abs() < 1e15)
+                    .map(|f| f.floor() as i64)
+            })
+            .map(Some)
+            .ok_or(UpstreamTokenError::MissingClaim(name)),
+    }
+}
+
+/// A Microsoft `tid` in canonical (lowercase, hyphenated) UUID form.
+fn canonical_tid(claims: &Map<String, Value>) -> Result<&str, UpstreamTokenError> {
+    let tid = str_claim(claims, "tid").ok_or(UpstreamTokenError::Issuer)?;
+    match uuid::Uuid::try_parse(tid) {
+        Ok(u) if u.hyphenated().to_string() == tid => Ok(tid),
+        _ => Err(UpstreamTokenError::Issuer),
+    }
+}
+
+fn check_issuer(
+    claims: &Map<String, Value>,
+    rule: &IssuerRule,
+    resolved: &ResolvedProvider,
+) -> Result<(), UpstreamTokenError> {
+    let iss = str_claim(claims, "iss").ok_or(UpstreamTokenError::Issuer)?;
+    let ok = match rule {
+        IssuerRule::Exact(expected) => iss == expected,
+        IssuerRule::Google => iss == GOOGLE_ISSUER || iss == "accounts.google.com",
+        IssuerRule::MicrosoftTemplate(template) => {
+            let tid = canonical_tid(claims)?;
+            iss == template.replace(TENANT_PLACEHOLDER, tid)
+        }
+    };
+    if !ok {
+        return Err(UpstreamTokenError::Issuer);
+    }
+    if resolved.kind == ConnectionKind::Microsoft {
+        let tid = canonical_tid(claims)?;
+        if !resolved.allowed_tenants.is_empty()
+            && !resolved.allowed_tenants.iter().any(|t| t == tid)
+        {
+            return Err(UpstreamTokenError::Issuer);
+        }
+    }
+    Ok(())
+}
+
+fn check_audience(claims: &Map<String, Value>, client_id: &str) -> Result<(), UpstreamTokenError> {
+    let audiences: Vec<&str> = match claims.get("aud") {
+        Some(Value::String(a)) => vec![a.as_str()],
+        Some(Value::Array(list)) => list
+            .iter()
+            .map(|v| v.as_str().ok_or(UpstreamTokenError::Audience))
+            .collect::<Result<_, _>>()?,
+        _ => return Err(UpstreamTokenError::Audience),
+    };
+    if !audiences.contains(&client_id) {
+        return Err(UpstreamTokenError::Audience);
+    }
+    let azp = claims.get("azp");
+    if (audiences.len() > 1 || azp.is_some()) && azp.and_then(Value::as_str) != Some(client_id) {
+        return Err(UpstreamTokenError::Audience);
+    }
+    Ok(())
+}
+
+/// Trim, strip control characters, cap at [`MAX_NAME_CHARS`]; empty -> `None`.
+fn clean_name(v: Option<&Value>) -> Option<String> {
+    let raw = v?.as_str()?;
+    let stripped: String = raw.chars().filter(|c| !c.is_control()).collect();
+    let capped: String = stripped.trim().chars().take(MAX_NAME_CHARS).collect();
+    let out = capped.trim_end();
+    (!out.is_empty()).then(|| out.to_owned())
+}
+
+/// Trimmed address with exactly one `@`, no control characters or whitespace, at most
+/// [`MAX_EMAIL_CHARS`]; anything else -> `None`.
+fn clean_email(v: Option<&Value>) -> Option<String> {
+    let e = v?.as_str()?.trim();
+    let valid = !e.is_empty()
+        && e.chars().count() <= MAX_EMAIL_CHARS
+        && !e.chars().any(|c| c.is_control() || c.is_whitespace())
+        && e.matches('@').count() == 1
+        && !e.starts_with('@')
+        && !e.ends_with('@');
+    valid.then(|| e.to_owned())
+}
+
+fn subject(claims: &Map<String, Value>) -> Result<String, UpstreamTokenError> {
+    match str_claim(claims, "sub") {
+        Some(s) if !s.is_empty() => Ok(s.to_owned()),
+        _ => Err(UpstreamTokenError::MissingClaim("sub")),
+    }
+}
+
+fn copy_ids(claims: &Map<String, Value>, names: &[&str]) -> Map<String, Value> {
+    names
+        .iter()
+        .filter_map(|n| {
+            str_claim(claims, n).map(|v| ((*n).to_owned(), Value::String(v.to_owned())))
+        })
+        .collect()
 }
 
 /// Normalise validated OIDC claims (Google, Microsoft, generic OIDC, UserInfo).
@@ -98,8 +267,28 @@ pub fn normalise_oidc(
     resolved: &ResolvedProvider,
     trust: bool,
 ) -> Result<UpstreamIdentity, UpstreamTokenError> {
-    let _ = (claims, resolved, trust);
-    Err(UpstreamTokenError::MissingClaim("sub"))
+    let subject = subject(claims)?;
+    let email = clean_email(claims.get("email"));
+    let asserted = claims.get("email_verified") == Some(&Value::Bool(true));
+    let metadata = match resolved.kind {
+        ConnectionKind::Microsoft => copy_ids(claims, &["tid", "oid"]),
+        ConnectionKind::Google => copy_ids(claims, &["hd"]),
+        _ => Map::new(),
+    };
+    Ok(UpstreamIdentity {
+        subject,
+        email_verified: email.is_some() && asserted && trust && resolved.email_trusted,
+        email,
+        given_name: clean_name(claims.get("given_name")),
+        family_name: clean_name(claims.get("family_name")),
+        name: clean_name(claims.get("name")),
+        metadata,
+    })
+}
+
+/// Apple sends `email_verified` as a boolean or as the strings `"true"` / `"false"`.
+fn apple_bool(v: Option<&Value>) -> bool {
+    matches!(v, Some(Value::Bool(true))) || matches!(v, Some(Value::String(s)) if s == "true")
 }
 
 /// Normalise validated Apple ID-token claims plus the optional first-authorization `user` JSON
@@ -110,8 +299,37 @@ pub fn normalise_apple(
     user_json: Option<&str>,
     trust: bool,
 ) -> Result<UpstreamIdentity, UpstreamTokenError> {
-    let _ = (claims, user_json, trust);
-    Err(UpstreamTokenError::MissingClaim("sub"))
+    let subject = subject(claims)?;
+    let email = clean_email(claims.get("email"));
+    let asserted = apple_bool(claims.get("email_verified"));
+    let user: Option<Value> = user_json.and_then(|j| serde_json::from_str(j).ok());
+    let name_obj = user.as_ref().and_then(|u| u.get("name"));
+    let given_name = clean_name(name_obj.and_then(|n| n.get("firstName")));
+    let family_name = clean_name(name_obj.and_then(|n| n.get("lastName")));
+    let name = match (&given_name, &family_name) {
+        (None, None) => None,
+        (g, f) => {
+            let joined = [g.as_deref(), f.as_deref()]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" ");
+            clean_name(Some(&Value::String(joined)))
+        }
+    };
+    let mut metadata = Map::new();
+    if apple_bool(claims.get("is_private_email")) {
+        metadata.insert("is_private_email".into(), Value::Bool(true));
+    }
+    Ok(UpstreamIdentity {
+        subject,
+        email_verified: email.is_some() && asserted && trust,
+        email,
+        given_name,
+        family_name,
+        name,
+        metadata,
+    })
 }
 
 /// Normalise a GitHub `/user` profile and `/user/emails` list: subject = numeric `id`, email only
@@ -121,8 +339,32 @@ pub fn normalise_github(
     emails: &Value,
     trust: bool,
 ) -> Result<UpstreamIdentity, UpstreamTokenError> {
-    let _ = (user, emails, trust);
-    Err(UpstreamTokenError::MissingClaim("id"))
+    let id = user
+        .get("id")
+        .and_then(Value::as_u64)
+        .ok_or(UpstreamTokenError::MissingClaim("id"))?;
+    let email = emails
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|e| {
+            e.get("primary") == Some(&Value::Bool(true))
+                && e.get("verified") == Some(&Value::Bool(true))
+        })
+        .and_then(|e| clean_email(e.get("email")));
+    let mut metadata = Map::new();
+    if let Some(login) = user.get("login").and_then(Value::as_str) {
+        metadata.insert("login".into(), Value::String(login.to_owned()));
+    }
+    Ok(UpstreamIdentity {
+        subject: id.to_string(),
+        email_verified: email.is_some() && trust,
+        email,
+        given_name: None,
+        family_name: None,
+        name: clean_name(user.get("name")),
+        metadata,
+    })
 }
 
 /// Normalise a generic OAuth2 profile through JSON pointers. `email_verified` requires a mapped
@@ -132,17 +374,32 @@ pub fn normalise_oauth2(
     mapping: &ClaimMapping,
     trust: bool,
 ) -> Result<UpstreamIdentity, UpstreamTokenError> {
-    let _ = (profile, mapping, trust);
-    Err(UpstreamTokenError::MissingClaim("subject"))
+    let subject = match profile.pointer(&mapping.subject) {
+        Some(Value::String(s)) if !s.is_empty() => s.clone(),
+        Some(Value::Number(n)) if n.is_u64() || n.is_i64() => n.to_string(),
+        _ => return Err(UpstreamTokenError::MissingClaim("subject")),
+    };
+    let at = |ptr: &Option<String>| ptr.as_deref().and_then(|p| profile.pointer(p));
+    let email = clean_email(at(&mapping.email));
+    let asserted = at(&mapping.email_verified) == Some(&Value::Bool(true));
+    Ok(UpstreamIdentity {
+        subject,
+        email_verified: email.is_some() && asserted && trust,
+        email,
+        given_name: None,
+        family_name: None,
+        name: clean_name(at(&mapping.name)),
+        metadata: Map::new(),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{Connection, EndpointOverrides, OidcConfig};
     use crate::model::{
         ConnectionConfig, ConnectionId, ConnectionKind, SocialConfig, SocialProvider, TenantId,
     };
-    use crate::model::{Connection, EndpointOverrides, OidcConfig};
     use crate::ports::ProviderMetadata;
     use crate::upstream::providers::{APPLE_ISSUER, GOOGLE_ISSUER, resolve};
     use anvil_jose::encoding::b64url;
@@ -293,7 +550,11 @@ mod tests {
     fn google_rule_rejects_other_issuers() {
         let k = rsa_key();
         let r = resolved(social(SocialProvider::Google));
-        for iss in ["https://evil", "http://accounts.google.com", "https://accounts.google.com/"] {
+        for iss in [
+            "https://evil",
+            "http://accounts.google.com",
+            "https://accounts.google.com/",
+        ] {
             assert_eq!(
                 check(&k, &r, &base(iss)),
                 Err(UpstreamTokenError::Issuer),
@@ -427,7 +688,13 @@ mod tests {
         assert_eq!(check(&k, &r, &c), Err(UpstreamTokenError::Issuer));
 
         // tid not a canonical UUID (would otherwise make the template match an attacker iss).
-        for bad in ["evil", "", "{9188040d-6c67-4c5b-b112-36a304b66dad}", "9188040D-6C67-4C5B-B112-36A304B66DAD", "urn:uuid:9188040d-6c67-4c5b-b112-36a304b66dad"] {
+        for bad in [
+            "evil",
+            "",
+            "{9188040d-6c67-4c5b-b112-36a304b66dad}",
+            "9188040D-6C67-4C5B-B112-36A304B66DAD",
+            "urn:uuid:9188040d-6c67-4c5b-b112-36a304b66dad",
+        ] {
             let mut c = base(&format!("https://login.microsoftonline.com/{bad}/v2.0"));
             c.insert("tid".into(), json!(bad));
             assert_eq!(check(&k, &r, &c), Err(UpstreamTokenError::Issuer), "{bad}");
@@ -508,7 +775,10 @@ mod tests {
         c.insert("exp".into(), json!(NOW - 59));
         assert!(check(&k, &r, &c).is_ok(), "within skew");
         c.remove("exp");
-        assert_eq!(check(&k, &r, &c), Err(UpstreamTokenError::MissingClaim("exp")));
+        assert_eq!(
+            check(&k, &r, &c),
+            Err(UpstreamTokenError::MissingClaim("exp"))
+        );
 
         let mut c = base(GOOGLE_ISSUER);
         c.insert("iat".into(), json!(NOW + 61));
@@ -516,9 +786,15 @@ mod tests {
         c.insert("iat".into(), json!(NOW + 60));
         assert!(check(&k, &r, &c).is_ok());
         c.remove("iat");
-        assert_eq!(check(&k, &r, &c), Err(UpstreamTokenError::MissingClaim("iat")));
+        assert_eq!(
+            check(&k, &r, &c),
+            Err(UpstreamTokenError::MissingClaim("iat"))
+        );
         c.insert("iat".into(), json!("now"));
-        assert_eq!(check(&k, &r, &c), Err(UpstreamTokenError::MissingClaim("iat")));
+        assert_eq!(
+            check(&k, &r, &c),
+            Err(UpstreamTokenError::MissingClaim("iat"))
+        );
 
         let mut c = base(GOOGLE_ISSUER);
         c.insert("nbf".into(), json!(NOW + 120));
@@ -545,9 +821,15 @@ mod tests {
         let r = resolved(social(SocialProvider::Google));
         let mut c = base(GOOGLE_ISSUER);
         c.insert("sub".into(), json!(""));
-        assert_eq!(check(&k, &r, &c), Err(UpstreamTokenError::MissingClaim("sub")));
+        assert_eq!(
+            check(&k, &r, &c),
+            Err(UpstreamTokenError::MissingClaim("sub"))
+        );
         c.insert("sub".into(), json!(12));
-        assert_eq!(check(&k, &r, &c), Err(UpstreamTokenError::MissingClaim("sub")));
+        assert_eq!(
+            check(&k, &r, &c),
+            Err(UpstreamTokenError::MissingClaim("sub"))
+        );
     }
 
     #[test]
@@ -603,8 +885,10 @@ mod tests {
     #[test]
     fn oidc_email_verified_requires_trust_and_boolean_true() {
         let r = resolved(social(SocialProvider::Google));
-        let c = obj(json!({"sub": "s", "email": "A@Example.com ", "email_verified": true,
-            "given_name": "Ada", "family_name": "Lovelace", "name": "Ada Lovelace", "hd": "example.com"}));
+        let c = obj(
+            json!({"sub": "s", "email": "A@Example.com ", "email_verified": true,
+            "given_name": "Ada", "family_name": "Lovelace", "name": "Ada Lovelace", "hd": "example.com"}),
+        );
         let id = normalise_oidc(&c, &r, true).unwrap();
         assert_eq!(id.subject, "s");
         assert_eq!(id.email.as_deref(), Some("A@Example.com"));
@@ -614,7 +898,10 @@ mod tests {
         assert_eq!(id.name.as_deref(), Some("Ada Lovelace"));
         assert_eq!(id.metadata["hd"], "example.com");
 
-        assert!(!normalise_oidc(&c, &r, false).unwrap().email_verified, "untrusted");
+        assert!(
+            !normalise_oidc(&c, &r, false).unwrap().email_verified,
+            "untrusted"
+        );
         let c2 = obj(json!({"sub": "s", "email": "a@b.example", "email_verified": "true"}));
         assert!(
             !normalise_oidc(&c2, &r, true).unwrap().email_verified,
@@ -635,8 +922,10 @@ mod tests {
         let s = social(SocialProvider::Microsoft);
         let r = resolve(&connection(ConnectionConfig::Social(s), true), None).unwrap();
         assert_eq!(r.kind, ConnectionKind::Microsoft);
-        let c = obj(json!({"sub": "s", "email": "a@b.example", "email_verified": true,
-            "tid": TID, "oid": "00000000-0000-0000-0000-000000000001"}));
+        let c = obj(
+            json!({"sub": "s", "email": "a@b.example", "email_verified": true,
+            "tid": TID, "oid": "00000000-0000-0000-0000-000000000001"}),
+        );
         let id = normalise_oidc(&c, &r, true).unwrap();
         assert!(!id.email_verified);
         assert_eq!(id.metadata["tid"], TID);
@@ -656,10 +945,15 @@ mod tests {
     fn names_sanitised() {
         let r = resolved(social(SocialProvider::Google));
         let long = "x".repeat(500);
-        let c = obj(json!({"sub": "s", "given_name": "  A\u{0}d\u{1b}a\n ", "family_name": long, "name": "   "}));
+        let c = obj(
+            json!({"sub": "s", "given_name": "  A\u{0}d\u{1b}a\n ", "family_name": long, "name": "   "}),
+        );
         let id = normalise_oidc(&c, &r, true).unwrap();
         assert_eq!(id.given_name.as_deref(), Some("Ada"));
-        assert_eq!(id.family_name.as_ref().map(|s| s.chars().count()), Some(MAX_NAME_CHARS));
+        assert_eq!(
+            id.family_name.as_ref().map(|s| s.chars().count()),
+            Some(MAX_NAME_CHARS)
+        );
         assert_eq!(id.name, None);
     }
 
@@ -688,7 +982,9 @@ mod tests {
             (json!(1), false),
             (Value::Null, false),
         ] {
-            let c = obj(json!({"sub": "001.abc", "email": "x@privaterelay.appleid.com", "email_verified": v}));
+            let c = obj(
+                json!({"sub": "001.abc", "email": "x@privaterelay.appleid.com", "email_verified": v}),
+            );
             let id = normalise_apple(&c, None, true).unwrap();
             assert_eq!(id.email_verified, expect, "{v:?}");
             assert!(!normalise_apple(&c, None, false).unwrap().email_verified);
@@ -711,10 +1007,18 @@ mod tests {
 
         let long = format!(r#"{{"name":{{"firstName":"{}"}}}}"#, "y".repeat(1000));
         let id = normalise_apple(&c, Some(&long), true).unwrap();
-        assert_eq!(id.given_name.map(|s| s.chars().count()), Some(MAX_NAME_CHARS));
+        assert_eq!(
+            id.given_name.map(|s| s.chars().count()),
+            Some(MAX_NAME_CHARS)
+        );
         assert_eq!(id.family_name, None);
 
-        for bad in ["not json", "[]", r#"{"name":"Ada"}"#, r#"{"name":{"firstName":5}}"#] {
+        for bad in [
+            "not json",
+            "[]",
+            r#"{"name":"Ada"}"#,
+            r#"{"name":{"firstName":5}}"#,
+        ] {
             let id = normalise_apple(&c, Some(bad), true).unwrap();
             assert_eq!(id.given_name, None, "{bad}");
             assert_eq!(id.name, None, "{bad}");
@@ -746,15 +1050,32 @@ mod tests {
         let id = normalise_github(&user, &emails, true).unwrap();
         assert_eq!(id.email.as_deref(), Some("octo@x.example"));
         assert!(id.email_verified);
-        assert!(!normalise_github(&user, &emails, false).unwrap().email_verified);
+        assert!(
+            !normalise_github(&user, &emails, false)
+                .unwrap()
+                .email_verified
+        );
 
         // Profile `email` is never used.
         let user2 = json!({"id": 1, "login": "x", "email": "profile@x.example"});
-        assert_eq!(normalise_github(&user2, &json!([]), true).unwrap().email, None);
+        assert_eq!(
+            normalise_github(&user2, &json!([]), true).unwrap().email,
+            None
+        );
         // Garbage emails payload: no email.
-        assert_eq!(normalise_github(&user2, &json!({"message": "x"}), true).unwrap().email, None);
+        assert_eq!(
+            normalise_github(&user2, &json!({"message": "x"}), true)
+                .unwrap()
+                .email,
+            None
+        );
 
-        for bad in [json!({"login": "octocat"}), json!({"id": "583231", "login": "o"}), json!({"id": -1}), json!({"id": 1.5})] {
+        for bad in [
+            json!({"login": "octocat"}),
+            json!({"id": "583231", "login": "o"}),
+            json!({"id": -1}),
+            json!({"id": 1.5}),
+        ] {
             assert_eq!(
                 normalise_github(&bad, &emails, true),
                 Err(UpstreamTokenError::MissingClaim("id")),
@@ -789,8 +1110,16 @@ mod tests {
         assert!(!id.email_verified, "non-boolean");
 
         let p2 = json!({"data": {"id": "abc"}});
-        assert_eq!(normalise_oauth2(&p2, &mapping(None), true).unwrap().subject, "abc");
-        for bad in [json!({"data": {}}), json!({"data": {"id": ""}}), json!({"data": {"id": true}}), json!({"data": {"id": 1.5}})] {
+        assert_eq!(
+            normalise_oauth2(&p2, &mapping(None), true).unwrap().subject,
+            "abc"
+        );
+        for bad in [
+            json!({"data": {}}),
+            json!({"data": {"id": ""}}),
+            json!({"data": {"id": true}}),
+            json!({"data": {"id": 1.5}}),
+        ] {
             assert_eq!(
                 normalise_oauth2(&bad, &mapping(None), true),
                 Err(UpstreamTokenError::MissingClaim("subject")),

@@ -131,8 +131,329 @@ pub fn resolve(
     conn: &Connection,
     metadata: Option<&ProviderMetadata>,
 ) -> Result<ResolvedProvider, CoreError> {
-    let _ = (conn, metadata);
-    Err(CoreError::Internal("upstream::providers::resolve".into()))
+    match &conn.config {
+        ConnectionConfig::Social(s) => resolve_social(s, conn.trust_email_verified),
+        ConnectionConfig::Oidc(o) => {
+            let md = metadata.ok_or_else(|| {
+                CoreError::Internal("generic OIDC connection resolved without metadata".into())
+            })?;
+            if md.issuer != o.issuer {
+                return Err(invalid(
+                    "issuer",
+                    "discovery issuer does not match the configured issuer",
+                ));
+            }
+            let allowed_algs = alg_intersection(&md.id_token_signing_alg_values_supported)?;
+            Ok(ResolvedProvider {
+                kind: ConnectionKind::Oidc,
+                protocol: Protocol::Oidc,
+                authorization_endpoint: parse_url(
+                    "authorization_endpoint",
+                    &md.authorization_endpoint,
+                )?,
+                token_endpoint: checked("token_endpoint", &md.token_endpoint)?,
+                userinfo_endpoint: md
+                    .userinfo_endpoint
+                    .as_deref()
+                    .map(|u| checked("userinfo_endpoint", u))
+                    .transpose()?,
+                jwks_uri: Some(checked("jwks_uri", &md.jwks_uri)?),
+                issuer_rule: Some(IssuerRule::Exact(o.issuer.clone())),
+                allowed_algs,
+                scopes: with_openid(scopes_or(&o.scopes, &["openid", "email", "profile"])),
+                use_pkce: o.use_pkce,
+                response_mode: ResponseMode::Query,
+                token_auth: TokenEndpointAuth::Basic,
+                email_trusted: conn.trust_email_verified,
+                api_profile: ApiProfile::Standard,
+                api_base_url: None,
+                apple_audience: None,
+                allowed_tenants: vec![],
+                hosted_domains: vec![],
+            })
+        }
+        ConnectionConfig::Oauth2(o) => Ok(ResolvedProvider {
+            kind: ConnectionKind::Oauth2,
+            protocol: Protocol::OAuth2,
+            authorization_endpoint: parse_url("authorization_endpoint", &o.authorization_endpoint)?,
+            token_endpoint: checked("token_endpoint", &o.token_endpoint)?,
+            userinfo_endpoint: Some(checked("userinfo_endpoint", &o.userinfo_endpoint)?),
+            jwks_uri: None,
+            issuer_rule: None,
+            allowed_algs: vec![],
+            scopes: o.scopes.clone(),
+            use_pkce: o.use_pkce,
+            response_mode: ResponseMode::Query,
+            token_auth: TokenEndpointAuth::Basic,
+            email_trusted: conn.trust_email_verified,
+            api_profile: ApiProfile::Standard,
+            api_base_url: None,
+            apple_audience: None,
+            allowed_tenants: vec![],
+            hosted_domains: vec![],
+        }),
+    }
+}
+
+/// Built-in endpoints of a social preset before overrides.
+struct PresetEndpoints {
+    authorization: String,
+    token: String,
+    userinfo: Option<String>,
+    jwks: Option<String>,
+}
+
+fn resolve_social(s: &SocialConfig, trust: bool) -> Result<ResolvedProvider, CoreError> {
+    let o = &s.endpoints;
+    let kind = s.provider.kind();
+    let (preset, default_rule, default_scopes): (PresetEndpoints, Option<IssuerRule>, &[&str]) =
+        match s.provider {
+            SocialProvider::Google => (
+                PresetEndpoints {
+                    authorization: GOOGLE_AUTHORIZATION.into(),
+                    token: GOOGLE_TOKEN.into(),
+                    userinfo: Some(GOOGLE_USERINFO.into()),
+                    jwks: Some(GOOGLE_JWKS.into()),
+                },
+                Some(IssuerRule::Google),
+                &["openid", "email", "profile"],
+            ),
+            SocialProvider::Microsoft => {
+                let tenant = microsoft_tenant(s.microsoft_tenant.as_deref())?;
+                let rule = match tenant.as_str() {
+                    "common" | "organizations" | "consumers" => {
+                        IssuerRule::MicrosoftTemplate(MICROSOFT_ISSUER_TEMPLATE.into())
+                    }
+                    uuid => IssuerRule::Exact(
+                        MICROSOFT_ISSUER_TEMPLATE.replace(TENANT_PLACEHOLDER, uuid),
+                    ),
+                };
+                (
+                    PresetEndpoints {
+                        authorization: format!("{MICROSOFT_LOGIN}/{tenant}/oauth2/v2.0/authorize"),
+                        token: format!("{MICROSOFT_LOGIN}/{tenant}/oauth2/v2.0/token"),
+                        userinfo: Some(MICROSOFT_USERINFO.into()),
+                        jwks: Some(format!("{MICROSOFT_LOGIN}/{tenant}/discovery/v2.0/keys")),
+                    },
+                    Some(rule),
+                    &["openid", "email", "profile"],
+                )
+            }
+            SocialProvider::Apple => {
+                if s.apple.is_none() {
+                    return Err(invalid(
+                        "apple",
+                        "Apple connections need team_id and key_id",
+                    ));
+                }
+                (
+                    PresetEndpoints {
+                        authorization: APPLE_AUTHORIZATION.into(),
+                        token: APPLE_TOKEN.into(),
+                        userinfo: None,
+                        jwks: Some(APPLE_JWKS.into()),
+                    },
+                    Some(IssuerRule::Exact(APPLE_ISSUER.into())),
+                    &["name", "email"],
+                )
+            }
+            SocialProvider::Github => {
+                let api = o
+                    .api_base_url
+                    .as_deref()
+                    .map(|b| checked("api_base_url", b.trim_end_matches('/')))
+                    .transpose()?
+                    .unwrap_or_else(|| GITHUB_API_BASE.into());
+                (
+                    PresetEndpoints {
+                        authorization: GITHUB_AUTHORIZATION.into(),
+                        token: GITHUB_TOKEN.into(),
+                        userinfo: Some(format!("{api}/user")),
+                        jwks: None,
+                    },
+                    None,
+                    &["read:user", "user:email"],
+                )
+            }
+        };
+
+    let protocol = if default_rule.is_some() {
+        Protocol::Oidc
+    } else {
+        Protocol::OAuth2
+    };
+    let issuer_override = o
+        .issuer
+        .as_deref()
+        .map(|i| checked("issuer", i))
+        .transpose()?;
+    let issuer_rule = match (default_rule, issuer_override.clone()) {
+        (None, _) => None,
+        (Some(rule), None) => Some(rule),
+        (Some(_), Some(i))
+            if kind == ConnectionKind::Microsoft && i.contains(TENANT_PLACEHOLDER) =>
+        {
+            Some(IssuerRule::MicrosoftTemplate(i))
+        }
+        (Some(_), Some(i)) => Some(IssuerRule::Exact(i)),
+    };
+    let scopes = scopes_or(&s.scopes, default_scopes);
+    let apple = s.provider == SocialProvider::Apple;
+    let response_mode = if apple && scopes.iter().any(|sc| sc == "name" || sc == "email") {
+        ResponseMode::FormPost
+    } else {
+        ResponseMode::Query
+    };
+    let jwks_uri = match protocol {
+        Protocol::Oidc => override_or("jwks_uri", o.jwks_uri.as_deref(), preset.jwks)?,
+        Protocol::OAuth2 => None,
+    };
+
+    Ok(ResolvedProvider {
+        kind,
+        protocol,
+        authorization_endpoint: parse_url(
+            "authorization_endpoint",
+            o.authorization_endpoint
+                .as_deref()
+                .unwrap_or(&preset.authorization),
+        )?,
+        token_endpoint: checked(
+            "token_endpoint",
+            o.token_endpoint.as_deref().unwrap_or(&preset.token),
+        )?,
+        userinfo_endpoint: override_or(
+            "userinfo_endpoint",
+            o.userinfo_endpoint.as_deref(),
+            preset.userinfo,
+        )?,
+        jwks_uri,
+        issuer_rule,
+        allowed_algs: match protocol {
+            Protocol::Oidc => vec![Alg::RS256],
+            Protocol::OAuth2 => vec![],
+        },
+        scopes,
+        use_pkce: !apple,
+        response_mode,
+        token_auth: match s.provider {
+            SocialProvider::Apple | SocialProvider::Github => TokenEndpointAuth::Post,
+            SocialProvider::Google | SocialProvider::Microsoft => TokenEndpointAuth::Basic,
+        },
+        email_trusted: trust && kind != ConnectionKind::Microsoft,
+        api_profile: if s.provider == SocialProvider::Github {
+            ApiProfile::Github
+        } else {
+            ApiProfile::Standard
+        },
+        api_base_url: (s.provider == SocialProvider::Github)
+            .then(|| preset_api_base(o.api_base_url.as_deref())),
+        apple_audience: apple.then(|| issuer_override.unwrap_or_else(|| APPLE_ISSUER.into())),
+        allowed_tenants: if kind == ConnectionKind::Microsoft {
+            lowercase(&s.allowed_tenants)
+        } else {
+            vec![]
+        },
+        hosted_domains: if kind == ConnectionKind::Google {
+            lowercase(&s.hosted_domains)
+        } else {
+            vec![]
+        },
+    })
+}
+
+fn preset_api_base(over: Option<&str>) -> String {
+    over.map_or_else(
+        || GITHUB_API_BASE.into(),
+        |b| b.trim_end_matches('/').to_owned(),
+    )
+}
+
+/// `common` (default), `organizations`, `consumers` or a canonical tenant UUID.
+fn microsoft_tenant(t: Option<&str>) -> Result<String, CoreError> {
+    let t = t.unwrap_or("common");
+    if matches!(t, "common" | "organizations" | "consumers") {
+        return Ok(t.into());
+    }
+    match uuid::Uuid::try_parse(t) {
+        Ok(u) if u.hyphenated().to_string() == t.to_ascii_lowercase() => {
+            Ok(u.hyphenated().to_string())
+        }
+        _ => Err(invalid(
+            "microsoft_tenant",
+            "must be common, organizations, consumers or a tenant UUID",
+        )),
+    }
+}
+
+fn lowercase(v: &[String]) -> Vec<String> {
+    v.iter().map(|s| s.trim().to_ascii_lowercase()).collect()
+}
+
+fn scopes_or(configured: &[String], defaults: &[&str]) -> Vec<String> {
+    if configured.is_empty() {
+        defaults.iter().map(|s| (*s).to_owned()).collect()
+    } else {
+        configured.to_vec()
+    }
+}
+
+fn with_openid(mut scopes: Vec<String>) -> Vec<String> {
+    if !scopes.iter().any(|s| s == "openid") {
+        scopes.insert(0, "openid".into());
+    }
+    scopes
+}
+
+/// metadata algorithms ∩ [`SUPPORTED_ID_TOKEN_ALGS`], in metadata order.
+fn alg_intersection(advertised: &[String]) -> Result<Vec<Alg>, CoreError> {
+    let mut algs: Vec<Alg> = Vec::new();
+    for a in advertised {
+        if let Ok(alg) = a.parse::<Alg>()
+            && SUPPORTED_ID_TOKEN_ALGS.contains(&alg)
+            && !algs.contains(&alg)
+        {
+            algs.push(alg);
+        }
+    }
+    if algs.is_empty() {
+        return Err(invalid(
+            "id_token_signing_alg_values_supported",
+            "the provider advertises no supported ID-token algorithm (RS256, PS256, ES256, Ed25519)",
+        ));
+    }
+    Ok(algs)
+}
+
+fn invalid(field: &'static str, message: &str) -> CoreError {
+    CoreError::Validation {
+        field,
+        message: message.into(),
+    }
+}
+
+/// An absolute http(s) URL.
+fn parse_url(field: &'static str, s: &str) -> Result<Url, CoreError> {
+    let url = Url::parse(s).map_err(|_| invalid(field, "must be an absolute URL"))?;
+    if !matches!(url.scheme(), "https" | "http") || url.host_str().is_none() {
+        return Err(invalid(field, "must be an http(s) URL"));
+    }
+    Ok(url)
+}
+
+fn checked(field: &'static str, s: &str) -> Result<String, CoreError> {
+    parse_url(field, s).map(|_| s.to_owned())
+}
+
+fn override_or(
+    field: &'static str,
+    over: Option<&str>,
+    preset: Option<String>,
+) -> Result<Option<String>, CoreError> {
+    match over {
+        Some(o) => checked(field, o).map(Some),
+        None => Ok(preset),
+    }
 }
 
 /// Claims of an Apple client-secret JWT (`iss` = team id, `sub` = services id, `aud` =
@@ -144,8 +465,17 @@ pub fn apple_client_secret_claims(
     audience: &str,
     now: OffsetDateTime,
 ) -> Map<String, Value> {
-    let _ = (team_id, services_id, audience, now);
-    Map::new()
+    let iat = now.unix_timestamp();
+    let mut claims = Map::new();
+    claims.insert("iss".into(), Value::from(team_id));
+    claims.insert("sub".into(), Value::from(services_id));
+    claims.insert("aud".into(), Value::from(audience));
+    claims.insert("iat".into(), Value::from(iat));
+    claims.insert(
+        "exp".into(),
+        Value::from(iat + APPLE_CLIENT_SECRET_TTL_SECS),
+    );
+    claims
 }
 
 /// The upstream authorization URL (RFC 6749 §4.1.1 query encoding). `response_mode=form_post`
@@ -159,15 +489,29 @@ pub fn authorization_url(
     code_challenge: Option<&str>,
     login_hint: Option<&str>,
 ) -> Url {
-    let _ = (
-        client_id,
-        redirect_uri,
-        state,
-        nonce,
-        code_challenge,
-        login_hint,
-    );
-    resolved.authorization_endpoint.clone()
+    let mut url = resolved.authorization_endpoint.clone();
+    {
+        let mut q = url.query_pairs_mut();
+        q.append_pair("response_type", "code");
+        q.append_pair("client_id", client_id);
+        q.append_pair("redirect_uri", redirect_uri);
+        q.append_pair("scope", &resolved.scopes.join(" "));
+        q.append_pair("state", state);
+        if let Some(n) = nonce {
+            q.append_pair("nonce", n);
+        }
+        if let Some(c) = code_challenge {
+            q.append_pair("code_challenge", c);
+            q.append_pair("code_challenge_method", "S256");
+        }
+        if let Some(h) = login_hint {
+            q.append_pair("login_hint", h);
+        }
+        if resolved.response_mode == ResponseMode::FormPost {
+            q.append_pair("response_mode", "form_post");
+        }
+    }
+    url
 }
 
 #[cfg(test)]
@@ -397,7 +741,10 @@ mod tests {
             let r = resolved_social(s);
             assert_eq!(r.authorization_endpoint.as_str(), "http://127.0.0.1:9000/a");
             assert_eq!(r.token_endpoint, "http://127.0.0.1:9000/t");
-            assert_eq!(r.userinfo_endpoint.as_deref(), Some("http://127.0.0.1:9000/u"));
+            assert_eq!(
+                r.userinfo_endpoint.as_deref(),
+                Some("http://127.0.0.1:9000/u")
+            );
             if r.protocol == Protocol::Oidc {
                 assert_eq!(r.jwks_uri.as_deref(), Some("http://127.0.0.1:9000/k"));
                 assert_eq!(

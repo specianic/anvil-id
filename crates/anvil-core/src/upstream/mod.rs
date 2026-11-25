@@ -5,10 +5,10 @@
 //! `ports::UpstreamClient` and the upstream service orchestrates ports; every security property
 //! (issuer rules, alg allow-list, audience, nonce, email trust, auto-link) lives here.
 //!
-//! - [`providers`]: presets and [`providers::resolve`], authorization URL, Apple client-secret
-//!   claims.
-//! - [`claims`]: [`claims::validate_id_token`] and the `normalise_*` functions.
-//! - [`linking`]: [`linking::link_decision`].
+//! - [`providers`] holds the presets, [`providers::resolve`], the authorization URL and the Apple
+//!   client-secret claims.
+//! - [`claims`] holds [`claims::validate_id_token`] and the `normalise_*` functions.
+//! - [`linking`] holds [`linking::link_decision`].
 
 pub mod claims;
 pub mod linking;

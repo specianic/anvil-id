@@ -59,16 +59,47 @@ pub enum LinkDecision {
     AutoLink(UserId),
     /// The user must sign in to the existing account to confirm the link. `candidate` is set only
     /// when the upstream email is verified and trusted.
-    PendingLink { candidate: Option<UserId> },
+    PendingLink {
+        candidate: Option<UserId>,
+    },
     /// Create a new local user with the link.
-    JitCreate { email_verified: bool },
+    JitCreate {
+        email_verified: bool,
+    },
     Refuse(RefuseReason),
 }
 
 /// Decide how to handle an upstream login.
 pub fn link_decision(inputs: &LinkInputs<'_>) -> LinkDecision {
-    let _ = inputs;
-    LinkDecision::Refuse(RefuseReason::NoAccount)
+    if let Some(link) = inputs.existing_link {
+        return if inputs.link_user_active {
+            LinkDecision::SignIn(link.user_id)
+        } else {
+            LinkDecision::Refuse(RefuseReason::Inactive)
+        };
+    }
+    // Already AND-ed with the connection's trust by the normaliser.
+    let upstream_verified = inputs.identity.email_verified;
+    if let Some(m) = inputs.email_match {
+        let auto = upstream_verified
+            && m.email_verified
+            && inputs.auto_link_enabled
+            && inputs.connection_kind != ConnectionKind::Microsoft;
+        return if auto {
+            LinkDecision::AutoLink(m.user_id)
+        } else {
+            LinkDecision::PendingLink {
+                candidate: upstream_verified.then_some(m.user_id),
+            }
+        };
+    }
+    if inputs.registration_allowed {
+        LinkDecision::JitCreate {
+            email_verified: upstream_verified,
+        }
+    } else {
+        LinkDecision::Refuse(RefuseReason::NoAccount)
+    }
 }
 
 #[cfg(test)]
@@ -228,7 +259,11 @@ mod tests {
             let mut i = inputs(&id);
             i.email_match = matched(3, true);
             i.connection_kind = kind;
-            assert_eq!(link_decision(&i), LinkDecision::AutoLink(uid(3)), "{kind:?}");
+            assert_eq!(
+                link_decision(&i),
+                LinkDecision::AutoLink(uid(3)),
+                "{kind:?}"
+            );
         }
     }
 
