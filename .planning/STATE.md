@@ -6,15 +6,15 @@ current_phase: 04
 current_phase_name: release 0 3 real world logins
 current_plan: Not started
 status: planning
-stopped_at: Completed 04-18-PLAN.md
-last_updated: "2026-11-25T21:55:37.245Z"
+stopped_at: Completed 04-16-PLAN.md
+last_updated: "2026-11-25T21:59:50.885Z"
 last_activity: 2026-11-25
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 98
-  completed_plans: 83
-  percent: 85
+  completed_plans: 84
+  percent: 86
 ---
 
 # Project State
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 **Status:** Ready to plan
 **Last Activity:** 2026-11-25
 **Last Activity Description:** Phase 3 complete, transitioned to Phase 04
-**Progress:** [█████████░] 85%
+**Progress:** [█████████░] 86%
 
 Phase 3 plans 03-01 through 03-34 are all complete (34/34 summaries); v0.2.0 is published. 03-34 closed the verification gap (base64). Next: Phase 3 re-verification, then Phase 4.
 
@@ -137,6 +137,7 @@ Phase 3 plans 03-01 through 03-34 are all complete (34/34 summaries); v0.2.0 is 
 | Phase 04 P13 | 90min | 2 tasks | 13 files |
 | Phase 04 P19 | 35min | 2 tasks | 10 files |
 | Phase 04 P18 | 90min | 2 tasks | 17 files |
+| Phase 04 P16 | 150min | 2 tasks | 15 files |
 
 ## Accumulated Context
 
@@ -309,6 +310,7 @@ Recent decisions affecting current work:
 - [Phase 04]: 04-13: /logout Confirm 303s to /ui/logout with validated client_id/URI/state (never the hint); GET /ui/logout re-decides without hint and creates the CSRF-bound FlowKind::Logout flow; confirmation ends at /ui/signed-out; refusals are 400 logged_out.html with logout.* keys
 - [Phase 04]: 04-19: console secrets reach requests through a ref, never mutation variables (kept out of the query cache)
 - [Phase 04]: 04-18: branding publish identifies the draft by preview token; logo upload is JSON base64; 400 KiB body limit only on the logo route
+- [Phase 04]: 04-16: MFA step-up only checked on existing sessions when acr requested or policy Required; unmet essential acr signs in single-factor and resume answers unmet_authentication_requirements; session switch revokes the other user's session with families
 
 ### Pending Todos
 
@@ -321,6 +323,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-25T21:55:37.242Z
-Stopped at: Completed 04-18-PLAN.md
+Last session: 2026-11-25T21:59:50.882Z
+Stopped at: Completed 04-16-PLAN.md
 Resume file: None
