@@ -6,15 +6,15 @@ current_phase: 04
 current_phase_name: release 0 3 real world logins
 current_plan: Not started
 status: planning
-stopped_at: Completed 04-05-PLAN.md
-last_updated: "2026-11-25T15:48:40.536Z"
+stopped_at: Completed 04-14-PLAN.md
+last_updated: "2026-11-25T20:09:12.440Z"
 last_activity: 2026-11-25
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 98
-  completed_plans: 75
-  percent: 100
+  completed_plans: 77
+  percent: 79
 ---
 
 # Project State
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 **Status:** Ready to plan
 **Last Activity:** 2026-11-25
 **Last Activity Description:** Phase 3 complete, transitioned to Phase 04
-**Progress:** [██████████] 100%
+**Progress:** [████████░░] 79%
 
 Phase 3 plans 03-01 through 03-34 are all complete (34/34 summaries); v0.2.0 is published. 03-34 closed the verification gap (base64). Next: Phase 3 re-verification, then Phase 4.
 
@@ -131,6 +131,7 @@ Phase 3 plans 03-01 through 03-34 are all complete (34/34 summaries); v0.2.0 is 
 | Phase 04 P04 | 20min | 3 tasks | 75 files |
 | Phase 04 P05 | 75min | 3 tasks | 15 files |
 | Phase 04 P06 | 30min | 3 tasks | 60 files |
+| Phase 04 P14 | multi-session | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -295,6 +296,9 @@ Recent decisions affecting current work:
 - [Phase 04]: 04-05: Without Docker, Postgres verified on a local throwaway PG14 cluster (contract/upgrade/plaintext green); PG14-generated .sqlx byte-identical for unchanged queries; PG18 testcontainers run left to CI
 - [Phase 04]: 04-06: i18n via Fluent: one .ftl per feature under themes/default/locales/{lang}/ (id = dotted key with '.'->'-'); negotiation ui_locales > user locale claim > Accept-Language > tenant default > en; core forms carry keys (label_key, FormMessage.args), web localizes; t() reads page.lang
 - [Phase 04]: 04-06: UI handlers take RequestLocale and use error_page_in/core_error_page_in; layer error pages render in the tenant default locale; an honoured ui_locales is carried as &ui_locales= on form actions
+- [Phase 04]: 04-14: throttled forced JWKS refresh serves the cached set; no-store/no-cache count as 5 min TTL
+- [Phase 04]: 04-14: GitHub-style 200 token error is InvalidResponse; non-2xx is Status without echoing body
+- [Phase 04]: 04-14: OutboundError::InvalidUrl maps to UpstreamError::Blocked
 
 ### Pending Todos
 
@@ -307,6 +311,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-25T15:44:50.964Z
-Stopped at: Completed 04-05-PLAN.md
+Last session: 2026-11-25T20:09:12.438Z
+Stopped at: Completed 04-14-PLAN.md
 Resume file: None
