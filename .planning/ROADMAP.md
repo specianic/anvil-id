@@ -122,7 +122,7 @@ Plans:
 - [x] 03-16-PLAN.md — Destructive-migration guard + flag, 0.1→0.2 upgrade tests on both backends, migration lint/immutability (wave 3)
 - [ ] 03-17-PLAN.md — Consent (decide/remember/deny/revoke) + connected apps page (wave 4)
 - [ ] 03-18-PLAN.md — Opaque vs JWT access tokens, /introspect, /revoke, Phase 3 discovery metadata (wave 4)
-- [ ] 03-19-PLAN.md — Sessions: idle/absolute timeouts, throttled touch, list/revoke (wave 4)
+- [x] 03-19-PLAN.md — Sessions: idle/absolute timeouts, throttled touch, list/revoke (wave 4)
 - [ ] 03-20-PLAN.md — Login UI: passkey button, second-factor page, brute-force protection + CAPTCHA escalation (wave 4)
 - [ ] 03-21-PLAN.md — Core management: admin audit, new client/tenant settings, console client reconciliation (wave 4)
 - [x] 03-22-PLAN.md — Console embedding at /console/* (pre-compressed negotiation, caching, SPA fallback, placeholder) (wave 4)

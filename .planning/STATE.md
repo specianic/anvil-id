@@ -6,14 +6,14 @@ current_phase: 03
 current_phase_name: release 0 2 secure by default
 current_plan: Not started
 status: planning
-stopped_at: Completed 03-12-PLAN.md
-last_updated: "2026-11-25T07:31:44.296Z"
+stopped_at: Completed 03-19-PLAN.md
+last_updated: "2026-11-25T07:33:39.113Z"
 last_activity: 2026-11-25
 progress:
   total_phases: 7
   completed_phases: 2
   total_plans: 61
-  completed_plans: 49
+  completed_plans: 50
   percent: 80
 ---
 
@@ -105,6 +105,7 @@ Phase 2 plans 02-01 through 02-22 are all complete (22/22 summaries). Next: Phas
 | Phase 03 P14 | 55min | 2 tasks | 7 files |
 | Phase 03 P12 | 150min | 3 tasks | 16 files |
 | Phase 03 P22 | 25min | 2 tasks | 3 files |
+| Phase 03 P19 | 75min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -221,6 +222,7 @@ Recent decisions affecting current work:
 - [Phase 03]: 03-12: FlowContext.rp is &Result<RelyingParty, CoreError>; only passkey effects propagate the error
 - [Phase 03]: 03-12: submit returns SubmitResult { outcome, attempt: Option<AuthAttempt> } for the 03-20 limiter
 - [Phase 03]: 03-22: Console at /console/* on the outer router (outside tenant resolution); CSP script-src/style-src/connect-src 'self'; per-variant ETag; assets/ immutable, index no-cache; placeholder when dist missing
+- [Phase 03]: 03-19: session touch throttled to once per 60 s (needs_touch); sessions page uses settings-flow binding without re-auth (SessionService::check_settings_binding); admin_list_user/admin_list_tenant/admin_revoke/admin_revoke_all return SessionInfo/NotFound for 03-23
 
 ### Pending Todos
 
@@ -233,6 +235,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-25T07:05:43.983Z
-Stopped at: Completed 03-12-PLAN.md
+Last session: 2026-11-25T07:33:39.110Z
+Stopped at: Completed 03-19-PLAN.md
 Resume file: None
