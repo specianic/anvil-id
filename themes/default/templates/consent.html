@@ -1,9 +1,11 @@
 {#- Consent screen (plan 03-17). Variables (besides page):
-      client_name, client_id, scopes [{name, description}], messages [{level, key, text}],
-      csrf_token, action
+      client_name, client_id, scopes [{name, description}], resources [string] (RFC 8707,
+      plan 04-12), messages [{level, key, text}], csrf_token, action
     Selectors: form consent-form, client name consent-client, scope list consent-scopes with
     items consent-scope-{n} (data-scope = scope name), buttons consent-allow and consent-deny
-    (both name="decision", values allow / deny). No JavaScript. -#}
+    (both name="decision", values allow / deny). Requested resources (only when there are
+    any): list consent-resources with items consent-resource-{n} (data-resource = the value).
+    No JavaScript. -#}
 {% extends "base.html" %}
 {% block heading %}{{ t("consent.heading") }}{% endblock %}
 {% block content %}
@@ -22,6 +24,16 @@
 {% endfor %}
 </ul>
 </fieldset>
+{% if resources %}
+<section class="anvil-consent-resources" aria-labelledby="consent-resources-heading">
+<h2 id="consent-resources-heading">{{ t("consent.resources") }}</h2>
+<ul class="anvil-scope-list" id="consent-resources">
+{% for r in resources %}
+<li id="consent-resource-{{ loop.index }}" data-resource="{{ r }}"><bdi><code>{{ r }}</code></bdi></li>
+{% endfor %}
+</ul>
+</section>
+{% endif %}
 <p class="anvil-muted" id="consent-note">{{ t("consent.note") }}</p>
 <div class="anvil-actions">
 <button type="submit" id="consent-allow" name="decision" value="allow">{{ t("consent.allow") }}</button>

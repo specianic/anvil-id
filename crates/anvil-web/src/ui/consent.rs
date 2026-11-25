@@ -2,7 +2,7 @@
 //!
 //! | Route | |
 //! |---|---|
-//! | `GET  /ui/consent?request=` | names the client and lists the requested scopes; starts a consent flow (flow cookie + CSRF token) |
+//! | `GET  /ui/consent?request=` | names the client and lists the requested scopes (and RFC 8707 resources); starts a consent flow (flow cookie + CSRF token) |
 //! | `POST /ui/consent?flow=&request=` | `decision=allow` or `decision=deny` (two submit buttons named `decision`) |
 //!
 //! `/authorize` sends the signed-in user here when consent is needed
@@ -246,6 +246,7 @@ async fn consent_page(
         client_name => &page.client_name,
         client_id => &page.client_id,
         scopes => minijinja::Value::from(minijinja::value::Serde(&scopes)),
+        resources => &page.resources,
         messages => minijinja::Value::from(minijinja::value::Serde(&messages)),
         csrf_token => flow.csrf_token.expose_secret(),
         action => carry_ui_locales(
