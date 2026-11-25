@@ -52,7 +52,7 @@ sqlx-check crate="":
 
 # Remove leftover testcontainers containers.
 clean-test-containers:
-    docker ps -aq --filter label=org.testcontainers=true | xargs -r docker rm -f
+    docker ps -aq --filter label=org.testcontainers.managed-by=testcontainers | xargs -r docker rm -f
 
 # Static musl release build for one target.
 musl target="x86_64-unknown-linux-musl":
