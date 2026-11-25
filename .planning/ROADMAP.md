@@ -100,7 +100,38 @@ Note: the multi-tenant data model and the `serve`, `migrate`, `config` and `admi
   3. Brute-force and rate-limit tests pass (per-account and per-IP throttling, correct client IP behind a trusted proxy), and the axe accessibility audit of the login pages is clean, with the password flow working without JavaScript
   4. Users see a consent screen that is remembered and revocable, can list and revoke their sessions, and admins can review users, clients, sessions and the audit log in admin console v1
   5. An upgrade test migrates a 0.1 database to 0.2 in CI without data loss, and destructive migrations refuse to run without an explicit flag
-**Plans**: TBD
+**Plans**: 29 plans in 7 waves
+
+Plans:
+- [ ] 03-01-PLAN.md — All Phase 3 dependencies (deny rsa wrapper) + anvil-jose ES256/Ed25519 JWS/JWK, per-alg at_hash, TOTP, peppered recovery codes (wave 1)
+- [ ] 03-02-PLAN.md — Core model/ports for all of Phase 3, AuditAction + AuditService, pre-declared modules, full contract suite, backend shims (wave 1)
+- [ ] 03-03-PLAN.md — Admin console SPA scaffold (Vite/React/TanStack/shadcn, OpenAPI types, oidc-client-ts), Users + Clients pages, Node CI job (wave 1)
+- [ ] 03-04-PLAN.md — E2E infra (CDP authenticator, axe, TOTP helper, nojs project) + WCAG 2.2 AA baseline of Phase 2 pages (wave 1)
+- [ ] 03-05-PLAN.md — SQLite 0.2 migrations (incl. no-transaction token_family rebuild) + all new repos, contract green (wave 2)
+- [ ] 03-06-PLAN.md — Postgres 0.2 migration + all new repos, contract green (wave 2)
+- [ ] 03-07-PLAN.md — The single keyed limiter in anvil-cache (governor GCRA + progressive backoff, two-tier gate) (wave 2)
+- [ ] 03-08-PLAN.md — Trusted-proxy client IP + RequestContext, ConnectInfo in the binary, skeleton route modules, TestApp::storage_arc (wave 2)
+- [ ] 03-09-PLAN.md — webauthn-rs adapter for PasskeyCeremonies, SVG QR renderer, webauthn.js (wave 2)
+- [ ] 03-10-PLAN.md — Rotation planner + KeyRotationService, per-client ID-token alg, JWKS cache headers (wave 3)
+- [ ] 03-11-PLAN.md — form_post response mode via one core response builder (wave 3)
+- [ ] 03-12-PLAN.md — Core login flow: usernameless passkey, TOTP/recovery second factor, attempts, audit, transactional recovery notice (wave 3)
+- [ ] 03-13-PLAN.md — Limiter wiring: route-class layer on by default, per-client token limit, brute-force helpers, CAPTCHA (wave 3)
+- [ ] 03-14-PLAN.md — Account security: passkey registration, TOTP enrolment + recovery codes, removal (wave 3)
+- [ ] 03-15-PLAN.md — Tenant email templates (fuel, compile check) + per-tenant SMTP + synchronous test send (wave 3)
+- [ ] 03-16-PLAN.md — Destructive-migration guard + flag, 0.1→0.2 upgrade tests on both backends, migration lint/immutability (wave 3)
+- [ ] 03-17-PLAN.md — Consent (decide/remember/deny/revoke) + connected apps page (wave 4)
+- [ ] 03-18-PLAN.md — Opaque vs JWT access tokens, /introspect, /revoke, Phase 3 discovery metadata (wave 4)
+- [ ] 03-19-PLAN.md — Sessions: idle/absolute timeouts, throttled touch, list/revoke (wave 4)
+- [ ] 03-20-PLAN.md — Login UI: passkey button, second-factor page, brute-force protection + CAPTCHA escalation (wave 4)
+- [ ] 03-21-PLAN.md — Core management: admin audit, new client/tenant settings, console client reconciliation (wave 4)
+- [ ] 03-22-PLAN.md — Console embedding at /console/* (pre-compressed negotiation, caching, SPA fallback, placeholder) (wave 4)
+- [ ] 03-23-PLAN.md — Management API 0.2: sessions, credentials, audit query, email templates/SMTP, new fields, OpenAPI (wave 5)
+- [ ] 03-24-PLAN.md — Binary wiring: proxy/rate-limit/rotation/retention config, leased jobs, `keys rotate`, audit JSON to stdout (wave 5)
+- [ ] 03-25-PLAN.md — Console pages (sessions, audit, email/SMTP, user tabs, client editing) + console e2e with axe (wave 6)
+- [ ] 03-26-PLAN.md — E2E: passkeys (usernameless, clone rollback, negatives) and TOTP/recovery codes (wave 6)
+- [ ] 03-27-PLAN.md — E2E: consent + sessions; full axe/no-JS/keyboard audit of Phase 3 pages (wave 6)
+- [ ] 03-28-PLAN.md — Conformance: Form Post OP plan in CI; Basic/Config re-run with consent-free clients (wave 6)
+- [ ] 03-29-PLAN.md — Phase gate: security-test map, `just ci`, release console check, migration pinning, docs sync, push + CI green (checkpoint) (wave 7)
 
 ### Phase 4: Release 0.3 "Real-world logins"
 **Goal**: AnvilID handles the login journeys real products need: social and passwordless sign-in, safe account linking, MFA policy and step-up, standard logout, and branded, translated pages
@@ -158,7 +189,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 |-------|----------------|--------|-----------|
 | 1. Foundations and Spikes (M0) | 8/8 | Complete    | 2026-11-25 |
 | 2. Release 0.1 "First login" | 19/22 | In Progress|  |
-| 3. Release 0.2 "Secure by default" | 0/TBD | Not started | - |
+| 3. Release 0.2 "Secure by default" | 0/29 | Planned | - |
 | 4. Release 0.3 "Real-world logins" | 0/TBD | Not started | - |
 | 5. Release 0.4 "Operate it" | 0/TBD | Not started | - |
 | 6. Release 1.0 (Organizations and SSO) | 0/TBD | Not started | - |
