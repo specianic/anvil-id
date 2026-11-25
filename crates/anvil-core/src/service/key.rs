@@ -1,5 +1,8 @@
-//! Signing-key service: opens the tenant's active RS256 key with the KEK and assembles the
-//! published JWKS. Key creation and rotation live in the tenant service (plan 02-10).
+//! Signing-key service: opens the tenant's active key for an algorithm with the KEK and assembles
+//! the published JWKS. Key generation lives in the tenant service ([`seal_new_key_for`]), rotation
+//! in [`key_rotation`](super::key_rotation).
+//!
+//! [`seal_new_key_for`]: super::tenant::seal_new_key_for
 
 use std::sync::Arc;
 
@@ -11,7 +14,7 @@ use crate::error::CoreError;
 use crate::model::{self, SIGNING_KEY_PURPOSE, TenantId, signing_key_aad};
 use crate::ports::{Clock, Storage};
 
-/// The signing algorithm of 0.1 tokens.
+/// The signing algorithm of access tokens (and the default for ID tokens).
 pub const TOKEN_ALG: Alg = Alg::RS256;
 
 /// Decrypts a stored key with the KEK (purpose [`SIGNING_KEY_PURPOSE`], AAD bound to the row id)
@@ -58,14 +61,22 @@ pub struct KeyService {
 }
 
 impl KeyService {
-    /// The tenant's active RS256 signing key. No active key is an internal error.
+    /// The tenant's active RS256 signing key (access tokens). No active key is an internal error.
     pub async fn signer(&self, tenant: TenantId) -> Result<SigningKey, CoreError> {
+        self.signer_for(tenant, TOKEN_ALG).await
+    }
+
+    /// The tenant's active signing key for `alg`. No active key for that algorithm is an
+    /// internal error: callers never fall back to another algorithm.
+    pub async fn signer_for(&self, tenant: TenantId, alg: Alg) -> Result<SigningKey, CoreError> {
         let key = self
             .storage
             .keys()
-            .active(tenant, TOKEN_ALG.as_str())
+            .active(tenant, alg.as_str())
             .await?
-            .ok_or_else(|| CoreError::Internal("tenant has no active signing key".to_owned()))?;
+            .ok_or_else(|| {
+                CoreError::Internal(format!("tenant has no active {} signing key", alg.as_str()))
+            })?;
         open_key(&self.kek, &key)
     }
 

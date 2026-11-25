@@ -6,6 +6,7 @@
 use std::sync::Arc;
 
 use anvil_jose::Kek;
+use anvil_jose::keys::Alg;
 use time::OffsetDateTime;
 
 use crate::clock::Clock;
@@ -37,20 +38,32 @@ pub fn admin_page(page: PageRequest) -> PageRequest {
     }
 }
 
-/// Generates an RS256 key and seals its PKCS#8 private key with the KEK (purpose
-/// [`SIGNING_KEY_PURPOSE`], AAD [`signing_key_aad`] of the new row id). The kid is the RFC 7638
-/// thumbprint of the public JWK. `activated_at` is set when `state` is `Active`.
-///
-/// `tenant` is the tenant the caller will insert the key for; the sealed envelope is bound to
-/// the key row id, which is unique across tenants.
+/// Generates an RS256 key and seals it: [`seal_new_key_for`] with [`Alg::RS256`]. Bootstrap,
+/// installation and the test harness use this.
 pub fn seal_new_key(
     kek: &Kek,
     tenant: TenantId,
     now: OffsetDateTime,
     state: KeyState,
 ) -> Result<NewSigningKey, CoreError> {
+    seal_new_key_for(kek, tenant, Alg::RS256, now, state)
+}
+
+/// Generates a key for `alg` and seals its PKCS#8 private key with the KEK (purpose
+/// [`SIGNING_KEY_PURPOSE`], AAD [`signing_key_aad`] of the new row id). The kid is the RFC 7638
+/// thumbprint of the public JWK. `activated_at` is set when `state` is `Active`.
+///
+/// `tenant` is the tenant the caller will insert the key for; the sealed envelope is bound to
+/// the key row id, which is unique across tenants.
+pub fn seal_new_key_for(
+    kek: &Kek,
+    tenant: TenantId,
+    alg: Alg,
+    now: OffsetDateTime,
+    state: KeyState,
+) -> Result<NewSigningKey, CoreError> {
     let _ = tenant;
-    let generated = anvil_jose::generate_rs256()
+    let generated = anvil_jose::generate(alg)
         .map_err(|e| CoreError::Internal(format!("signing key generation failed: {e}")))?;
     let id = SigningKeyId::new_v7();
     let private_key_enc = kek
@@ -281,6 +294,29 @@ impl TenantService {
 mod tests {
     use super::*;
     use anvil_jose::{Alg, Jwk, SigningKey, thumbprint};
+
+    #[test]
+    fn seal_new_key_for_produces_es256_and_ed25519_keys() {
+        let kek = Kek::generate();
+        let now = OffsetDateTime::UNIX_EPOCH;
+        for alg in [Alg::ES256, Alg::Ed25519] {
+            let key = seal_new_key_for(&kek, TenantId::new_v7(), alg, now, KeyState::Next).unwrap();
+            assert_eq!(key.alg, alg.as_str());
+            assert!(key.activated_at.is_none());
+            let jwk: Jwk = serde_json::from_str(&key.public_jwk).unwrap();
+            assert_eq!(key.kid, thumbprint(&jwk).unwrap());
+            assert_eq!(jwk.alg.as_deref(), Some(alg.as_str()));
+            let pkcs8 = kek
+                .open(
+                    SIGNING_KEY_PURPOSE,
+                    &signing_key_aad(key.id),
+                    &key.private_key_enc,
+                )
+                .unwrap();
+            let signer = SigningKey::from_pkcs8(&key.kid, alg, &pkcs8).unwrap();
+            assert_eq!(signer.alg(), alg);
+        }
+    }
 
     #[test]
     fn seal_new_key_produces_a_sealed_rs256_key() {
