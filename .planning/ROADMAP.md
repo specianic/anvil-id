@@ -130,7 +130,7 @@ Plans:
 - [x] 03-24-PLAN.md — Binary wiring: proxy/rate-limit/rotation/retention config, leased jobs, `keys rotate`, audit JSON to stdout (wave 5)
 - [ ] 03-25-PLAN.md — Console pages (sessions, audit, email/SMTP, user tabs, client editing) + console e2e with axe (wave 6)
 - [x] 03-26-PLAN.md — E2E: passkeys (usernameless, clone rollback, negatives) and TOTP/recovery codes (wave 6)
-- [ ] 03-27-PLAN.md — E2E: consent + sessions; full axe/no-JS/keyboard audit of Phase 3 pages (wave 6)
+- [x] 03-27-PLAN.md — E2E: consent + sessions; full axe/no-JS/keyboard audit of Phase 3 pages (wave 6)
 - [ ] 03-28-PLAN.md — Conformance: Form Post OP plan in CI; Basic/Config re-run with consent-free clients (wave 6)
 - [ ] 03-29-PLAN.md — Phase gate: security-test map, `just ci`, release console check, migration pinning, docs sync, push + CI green (checkpoint) (wave 7)
 - [x] 03-30-PLAN.md — Gap closure: account_security audit filtering, password-changed notice inside the recovery transaction (worker fills `email` from recipient) (wave 4)

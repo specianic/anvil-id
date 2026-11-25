@@ -6,14 +6,14 @@ current_phase: 03
 current_phase_name: release 0 2 secure by default
 current_plan: Not started
 status: planning
-stopped_at: Completed 03-26-PLAN.md
-last_updated: "2026-11-25T08:21:23.171Z"
+stopped_at: Completed 03-27-PLAN.md
+last_updated: "2026-11-25T08:32:22.766Z"
 last_activity: 2026-11-25
 progress:
   total_phases: 7
   completed_phases: 2
   total_plans: 61
-  completed_plans: 57
+  completed_plans: 58
   percent: 92
 ---
 
@@ -114,6 +114,7 @@ Phase 2 plans 02-01 through 02-22 are all complete (22/22 summaries). Next: Phas
 | Phase 03 P24 | 25min | 2 tasks | 10 files |
 | Phase 03 P23 | 75min | 3 tasks | 16 files |
 | Phase 03 P26 | 20min | 2 tasks | 3 files |
+| Phase 03 P27 | 35min | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -249,6 +250,7 @@ Recent decisions affecting current work:
 - [Phase 03]: 03-23: TenantService::update refuses disabling a signing algorithm still used as a client's id_token_signed_response_alg: 409 Conflict naming the algorithms and client ids
 - [Phase 03]: 03-23: e2e createClient and conformance static clients default to consent_mode=skip_first_party; API default stays required
 - [Phase 03]: 03-26: TOTP e2e replay is deterministic: enrol with step S, sign in with step S+1 (+-1 window), replay that code; amr asserted via a dedicated code client since the sample RP hides the ID token
+- [Phase 03]: 03-27: Account pages use a wider card and stack tables below 30rem with data-label cells; TOTP QR capped at 13rem, black on white in all schemes, forced-color-adjust none
 
 ### Pending Todos
 
@@ -261,6 +263,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-25T08:21:23.168Z
-Stopped at: Completed 03-26-PLAN.md
+Last session: 2026-11-25T08:32:22.763Z
+Stopped at: Completed 03-27-PLAN.md
 Resume file: None

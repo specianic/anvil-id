@@ -85,3 +85,17 @@ fail 9 anvil-web tests. Both fixes are in files outside 03-13's files_modified:
   `security_admin_v02::every_new_route_requires_its_scope`,
   `admin_api_v02::disabling_a_signing_algorithm_in_use_is_refused_with_the_client_ids`,
   `security_admin_v02::captcha_secret_and_smtp_password_are_never_disclosed`.
+
+## From 03-27
+
+- `tests/e2e/run.sh` default spec list (owned by 03-25 this wave) does not include
+  `specs/consent.spec.ts` and `specs/sessions.spec.ts`; add them so `just e2e` runs them.
+- `themes/default/templates/captcha.html`: Turnstile's default widget is 300 px wide, wider than
+  the card content at 320 px. `.anvil-captcha` now scrolls horizontally inside the card instead of
+  the page, but `data-size="flexible"` on the Turnstile div would avoid the inner scroll.
+- `examples/node-rp` spawn/port helpers are duplicated in `nojs.spec.ts` and `consent.spec.ts`;
+  move them into `tests/e2e/lib/` once lib/ is free (owned by 03-25/03-26 this wave).
+- `themes/default/README.md`: document the classes the default CSS now styles for the 0.2 pages
+  (`anvil-secondary`, `anvil-table` with `data-label` cells, `anvil-disclosure`, `anvil-qr`,
+  `anvil-recovery-codes`, `anvil-secret`, `anvil-actions`, `anvil-account-nav`) and the
+  `too_many_requests` error sentence.
