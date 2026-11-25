@@ -3,6 +3,7 @@
 mod config;
 mod datadir;
 mod jobs;
+mod keys;
 mod server;
 mod startup;
 mod storage;
@@ -56,6 +57,18 @@ enum Command {
         #[command(subcommand)]
         cmd: AdminCommand,
     },
+    /// Signing-key commands.
+    Keys {
+        #[command(subcommand)]
+        cmd: KeysCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum KeysCommand {
+    /// Rotate a tenant's signing key: prepublish a next key, or with --immediate replace the
+    /// active key at once (compromise). Audited.
+    Rotate(keys::RotateArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -98,6 +111,9 @@ fn main() -> anyhow::Result<()> {
         Command::Admin {
             cmd: AdminCommand::SetupUrl(args),
         } => setup_url(&load(&args)?),
+        Command::Keys {
+            cmd: KeysCommand::Rotate(args),
+        } => keys_rotate(&load(&args.config)?, &args),
     }
 }
 
@@ -223,6 +239,12 @@ async fn setup_url(cfg: &Config) -> anyhow::Result<()> {
 }
 
 #[tokio::main(flavor = "multi_thread")]
+async fn keys_rotate(cfg: &Config, args: &keys::RotateArgs) -> anyhow::Result<()> {
+    init_tracing(cfg.log_format);
+    keys::rotate(cfg, args).await
+}
+
+#[tokio::main(flavor = "multi_thread")]
 async fn serve(cfg: &Config) -> anyhow::Result<()> {
     init_tracing(cfg.log_format);
     log_warnings(cfg);
@@ -241,8 +263,15 @@ async fn serve(cfg: &Config) -> anyhow::Result<()> {
 
     let (stop_tx, stop_rx) = watch::channel(false);
     let stop_tx = Arc::new(stop_tx);
+    let jobs_config = jobs::JobsConfig {
+        smtp_url: cfg.smtp_url.clone(),
+        smtp_from: cfg.smtp_from.clone(),
+        theme_dir: cfg.theme_dir.clone(),
+        rotation: cfg.rotation,
+        audit_retention: cfg.audit_retention,
+    };
     let mut jobs = jobs::spawn(
-        cfg,
+        &jobs_config,
         &started.storage,
         &started.clock,
         &started.kek,
