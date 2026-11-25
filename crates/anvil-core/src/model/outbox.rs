@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 
 use anvil_jose::Kek;
+use anvil_jose::encoding::{b64url, b64url_decode};
 use time::OffsetDateTime;
 
 use super::ids::{OutboxId, TenantId};
@@ -45,21 +46,38 @@ pub const SEALED_PAYLOAD_KEY: &str = "sealed";
 /// Seals template variables for storage (they can carry single-use links). Returns
 /// `{"sealed": base64url(Kek::seal(OUTBOX_PAYLOAD_PURPOSE, tenant id bytes, json))}`.
 pub fn seal_payload(
-    _kek: &Kek,
-    _tenant: TenantId,
-    _payload: &BTreeMap<String, String>,
+    kek: &Kek,
+    tenant: TenantId,
+    payload: &BTreeMap<String, String>,
 ) -> Result<BTreeMap<String, String>, CoreError> {
-    Err(CoreError::Internal("not implemented".into()))
+    let json = serde_json::to_vec(payload)
+        .map_err(|_| CoreError::Internal("outbox payload could not be serialised".into()))?;
+    let sealed = kek
+        .seal(OUTBOX_PAYLOAD_PURPOSE, tenant.0.as_bytes(), &json)
+        .map_err(|_| CoreError::Internal("outbox payload could not be sealed".into()))?;
+    Ok(BTreeMap::from([(
+        SEALED_PAYLOAD_KEY.to_owned(),
+        b64url(&sealed),
+    )]))
 }
 
 /// Opens a payload sealed with [`seal_payload`]. Anything but exactly one `sealed` entry is
 /// rejected (there is no plaintext fallback). Errors are generic and never contain the value.
 pub fn open_payload(
-    _kek: &Kek,
-    _tenant: TenantId,
-    _stored: &BTreeMap<String, String>,
+    kek: &Kek,
+    tenant: TenantId,
+    stored: &BTreeMap<String, String>,
 ) -> Result<BTreeMap<String, String>, CoreError> {
-    Err(CoreError::Internal("not implemented".into()))
+    let undecryptable = || CoreError::Internal("outbox payload could not be decrypted".into());
+    let sealed = match (stored.len(), stored.get(SEALED_PAYLOAD_KEY)) {
+        (1, Some(v)) => v,
+        _ => return Err(undecryptable()),
+    };
+    let raw = b64url_decode(sealed).map_err(|_| undecryptable())?;
+    let json = kek
+        .open(OUTBOX_PAYLOAD_PURPOSE, tenant.0.as_bytes(), &raw)
+        .map_err(|_| undecryptable())?;
+    serde_json::from_slice(&json).map_err(|_| undecryptable())
 }
 
 #[cfg(test)]
@@ -148,7 +166,9 @@ mod tests {
     fn open_error_does_not_echo_the_value() {
         let kek = Kek::generate();
         let tenant = TenantId::new_v7();
-        let err = open_payload(&kek, tenant, &payload()).unwrap_err().to_string();
+        let err = open_payload(&kek, tenant, &payload())
+            .unwrap_err()
+            .to_string();
         assert!(!err.contains("MARKER-TOKEN-1234") && !err.contains("alice"));
     }
 }

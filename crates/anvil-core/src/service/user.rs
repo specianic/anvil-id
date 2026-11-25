@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use anvil_jose::Kek;
 use anvil_jose::encoding::{random_token, secret_hash};
 use secrecy::{ExposeSecret as _, SecretString};
 use time::{Duration, OffsetDateTime};
@@ -16,7 +17,7 @@ use crate::error::CoreError;
 use crate::model::{
     NewEmail, NewPasswordCredential, NewSelfServiceToken, NewUser, OutboxId, Page, PageRequest,
     SecretHash, SelfServiceKind, StandardClaims, Tenant, TenantId, User, UserId, UserStatus,
-    UserUpdate, normalize_email,
+    UserUpdate, normalize_email, seal_payload,
 };
 use crate::policy::{PasswordPolicy, check_password};
 use crate::ports::{PasswordHasher, Storage, StorageError};
@@ -90,14 +91,16 @@ fn validate_username(raw: &str) -> Result<String, CoreError> {
     Ok(u.to_owned())
 }
 
-/// Builds an `Invitation` token and its email. The link is `{issuer}/ui/recovery?token=…`.
+/// Builds an `Invitation` token and its email. The link is `{issuer}/ui/recovery?token=…`; the
+/// email payload is sealed with the KEK ([`seal_payload`]) because the link carries the token.
 pub fn build_invitation(
+    kek: &Kek,
     now: OffsetDateTime,
     tenant: &Tenant,
     issuer: &str,
     user_id: UserId,
     email: &str,
-) -> Invitation {
+) -> Result<Invitation, CoreError> {
     let plaintext = random_token();
     let expires_at = now + INVITATION_TTL;
     let token = NewSelfServiceToken {
@@ -120,21 +123,22 @@ pub fn build_invitation(
         ),
         ("expires_in".to_owned(), INVITATION_TTL_TEXT.to_owned()),
     ]);
-    Invitation {
+    Ok(Invitation {
         token,
         email: NewEmail {
             id: OutboxId::new_v7(),
             to: email.to_owned(),
             template: INVITATION_TEMPLATE.to_owned(),
-            payload,
+            payload: seal_payload(kek, tenant.id, &payload)?,
             created_at: now,
             expires_at,
         },
-    }
+    })
 }
 
 /// Validates a [`UserInput`] and builds the records to store. Pure apart from randomness.
 pub fn build_user_plan(
+    kek: &Kek,
     now: OffsetDateTime,
     tenant: &Tenant,
     issuer: &str,
@@ -169,9 +173,18 @@ pub fn build_user_plan(
         status: UserStatus::Active,
         created_at: now,
     };
-    let invitation = input
-        .invite
-        .then(|| build_invitation(now, tenant, issuer, user.id, &user.email));
+    let invitation = if input.invite {
+        Some(build_invitation(
+            kek,
+            now,
+            tenant,
+            issuer,
+            user.id,
+            &user.email,
+        )?)
+    } else {
+        None
+    };
     Ok(UserPlan {
         user,
         password: input.password,
@@ -194,6 +207,8 @@ pub struct UserService {
     pub clock: Arc<dyn Clock>,
     pub hasher: Arc<dyn PasswordHasher>,
     pub policy: PasswordPolicy,
+    /// Seals invitation email payloads (they carry the invitation token).
+    pub kek: Arc<Kek>,
 }
 
 impl UserService {
@@ -206,7 +221,7 @@ impl UserService {
         input: UserInput,
     ) -> Result<User, CoreError> {
         let now = self.clock.now();
-        let plan = build_user_plan(now, tenant, issuer, &self.policy, input)?;
+        let plan = build_user_plan(&self.kek, now, tenant, issuer, &self.policy, input)?;
         let credential = match &plan.password {
             Some(p) => Some(NewPasswordCredential {
                 phc: self.hasher.hash(p.expose_secret()).await?,
@@ -277,7 +292,7 @@ impl UserService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::TenantSettings;
+    use crate::model::{SEALED_PAYLOAD_KEY, TenantSettings, open_payload};
 
     fn tenant() -> Tenant {
         Tenant {
@@ -302,9 +317,14 @@ mod tests {
     }
 
     fn plan(input: UserInput) -> Result<UserPlan, CoreError> {
+        plan_for(&Kek::generate(), &tenant(), input)
+    }
+
+    fn plan_for(kek: &Kek, tenant: &Tenant, input: UserInput) -> Result<UserPlan, CoreError> {
         build_user_plan(
+            kek,
             OffsetDateTime::UNIX_EPOCH,
-            &tenant(),
+            tenant,
             "https://id.example/t/acme",
             &PasswordPolicy::default(),
             input,
@@ -352,7 +372,9 @@ mod tests {
 
     #[test]
     fn invite_builds_invitation_token_and_email() {
-        let p = plan(input(None, true)).unwrap();
+        let kek = Kek::generate();
+        let tenant = tenant();
+        let p = plan_for(&kek, &tenant, input(None, true)).unwrap();
         assert!(p.password.is_none());
         let inv = p.invitation.expect("invitation");
         let now = OffsetDateTime::UNIX_EPOCH;
@@ -363,16 +385,23 @@ mod tests {
         assert_eq!(inv.email.template, "invitation");
         assert_eq!(inv.email.to, "alice@example.com");
         assert_eq!(inv.email.expires_at, now + Duration::days(7));
-        let link = &inv.email.payload["link"];
+        // The stored payload is sealed: one `sealed` entry, no plaintext link.
+        assert_eq!(inv.email.payload.len(), 1);
+        assert!(inv.email.payload.contains_key(SEALED_PAYLOAD_KEY));
+        assert!(!inv.email.payload[SEALED_PAYLOAD_KEY].contains("token="));
+        assert!(open_payload(&Kek::generate(), tenant.id, &inv.email.payload).is_err());
+        let payload = open_payload(&kek, tenant.id, &inv.email.payload).unwrap();
+        let link = &payload["link"];
         let token = link
             .strip_prefix("https://id.example/t/acme/ui/recovery?token=")
             .expect("link format");
         assert_eq!(token.len(), 43);
         // The stored hash belongs to the emailed token; the plaintext is not stored.
         assert_eq!(inv.token.token_hash, SecretHash(secret_hash(token)));
-        assert_eq!(inv.email.payload["tenant_name"], "Acme");
-        assert_eq!(inv.email.payload["expires_in"], "7 days");
-        assert_eq!(inv.email.payload["email"], "alice@example.com");
-        assert_eq!(inv.email.payload.len(), 4);
+        assert!(!inv.email.payload[SEALED_PAYLOAD_KEY].contains(token));
+        assert_eq!(payload["tenant_name"], "Acme");
+        assert_eq!(payload["expires_in"], "7 days");
+        assert_eq!(payload["email"], "alice@example.com");
+        assert_eq!(payload.len(), 4);
     }
 }

@@ -24,6 +24,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 
+use anvil_jose::Kek;
 use anvil_jose::encoding::{ct_eq, random_token, secret_hash};
 use secrecy::{ExposeSecret as _, SecretString};
 use time::{Duration, OffsetDateTime};
@@ -37,7 +38,7 @@ use crate::flow::form::{FormDescription, FormMessage, MessageLevel};
 use crate::model::{
     ACR_PWD, AMR_PWD, AuthRequestId, Flow, FlowId, FlowKind, NewEmail, NewFlow,
     NewPasswordCredential, NewSelfServiceToken, NewUser, OutboxId, SecretHash, SelfServiceKind,
-    SessionId, StandardClaims, Tenant, User, UserId, UserStatus,
+    SessionId, StandardClaims, Tenant, User, UserId, UserStatus, seal_payload,
 };
 use crate::policy::PasswordPolicy;
 use crate::ports::{BreachChecker, Clock, PasswordCheck, PasswordHasher, Storage, StorageError};
@@ -165,6 +166,8 @@ pub struct FlowService {
     pub hasher: Arc<dyn PasswordHasher>,
     pub breach: Arc<dyn BreachChecker>,
     pub policy: PasswordPolicy,
+    /// Seals outbox email payloads (verification and recovery links carry single-use tokens).
+    pub kek: Arc<Kek>,
 }
 
 enum Step {
@@ -432,13 +435,14 @@ impl FlowService {
                     Some(Effect::EnqueueEmail(EmailKind::Verification))
                 ) {
                     queue.pop_front();
-                    Some(self.self_service_token(
+                    Some(self_service_email(
+                        &self.kek,
                         cx,
                         SelfServiceKind::Verification,
                         new_user.id,
                         email,
                         now,
-                    ))
+                    )?)
                 } else {
                     None
                 };
@@ -494,13 +498,14 @@ impl FlowService {
                 if let Some(user) = users.get_by_email(tenant, email).await?
                     && user.status == UserStatus::Active
                 {
-                    let (token, mail) = self.self_service_token(
+                    let (token, mail) = self_service_email(
+                        &self.kek,
                         cx,
                         SelfServiceKind::Recovery,
                         user.id,
                         &user.email,
                         self.clock.now(),
-                    );
+                    )?;
                     users
                         .issue_self_service_token(tenant, &token, Some(&mail))
                         .await?;
@@ -533,7 +538,7 @@ impl FlowService {
                 };
                 // The recipient is only known once the token is consumed, so the notice is
                 // enqueued right after the recovery transaction.
-                let notice = password_changed_email(cx, &user.email, now);
+                let notice = password_changed_email(&self.kek, cx, &user.email, now)?;
                 self.storage.outbox().enqueue(tenant, &notice).await?;
                 Ok(Step::Continue)
             }
@@ -569,68 +574,74 @@ impl FlowService {
             Err(e) => Err(e),
         }
     }
-
-    /// A new self-service token for `user` and the email carrying its link.
-    fn self_service_token(
-        &self,
-        cx: &FlowContext<'_>,
-        kind: SelfServiceKind,
-        user: UserId,
-        email: &str,
-        now: OffsetDateTime,
-    ) -> (NewSelfServiceToken, NewEmail) {
-        let token = random_token();
-        let (ttl, page, template, expires_in) = match kind {
-            SelfServiceKind::Verification => (
-                VERIFICATION_TOKEN_TTL,
-                "verification",
-                "verification",
-                "24 hours",
-            ),
-            SelfServiceKind::Recovery => (RECOVERY_TOKEN_TTL, "recovery", "recovery", "1 hour"),
-            SelfServiceKind::Invitation => (Duration::days(7), "recovery", "invitation", "7 days"),
-        };
-        let expires_at = now + ttl;
-        let record = NewSelfServiceToken {
-            token_hash: SecretHash(secret_hash(&token)),
-            kind,
-            user_id: user,
-            email: email.to_owned(),
-            created_at: now,
-            expires_at,
-        };
-        let mut payload = BTreeMap::new();
-        payload.insert("tenant_name".to_owned(), cx.tenant.display_name.clone());
-        payload.insert("email".to_owned(), email.to_owned());
-        payload.insert(
-            "link".to_owned(),
-            format!("{}/{}?token={}", cx.ui_base, page, token),
-        );
-        payload.insert("expires_in".to_owned(), expires_in.to_owned());
-        let mail = NewEmail {
-            id: OutboxId::new_v7(),
-            to: email.to_owned(),
-            template: template.to_owned(),
-            payload,
-            created_at: now,
-            expires_at,
-        };
-        (record, mail)
-    }
 }
 
-fn password_changed_email(cx: &FlowContext<'_>, to: &str, now: OffsetDateTime) -> NewEmail {
+/// A new self-service token for `user` and the email carrying its link. The payload is sealed
+/// with the KEK because the link carries the token.
+fn self_service_email(
+    kek: &Kek,
+    cx: &FlowContext<'_>,
+    kind: SelfServiceKind,
+    user: UserId,
+    email: &str,
+    now: OffsetDateTime,
+) -> Result<(NewSelfServiceToken, NewEmail), CoreError> {
+    let token = random_token();
+    let (ttl, page, template, expires_in) = match kind {
+        SelfServiceKind::Verification => (
+            VERIFICATION_TOKEN_TTL,
+            "verification",
+            "verification",
+            "24 hours",
+        ),
+        SelfServiceKind::Recovery => (RECOVERY_TOKEN_TTL, "recovery", "recovery", "1 hour"),
+        SelfServiceKind::Invitation => (Duration::days(7), "recovery", "invitation", "7 days"),
+    };
+    let expires_at = now + ttl;
+    let record = NewSelfServiceToken {
+        token_hash: SecretHash(secret_hash(&token)),
+        kind,
+        user_id: user,
+        email: email.to_owned(),
+        created_at: now,
+        expires_at,
+    };
+    let mut payload = BTreeMap::new();
+    payload.insert("tenant_name".to_owned(), cx.tenant.display_name.clone());
+    payload.insert("email".to_owned(), email.to_owned());
+    payload.insert(
+        "link".to_owned(),
+        format!("{}/{}?token={}", cx.ui_base, page, token),
+    );
+    payload.insert("expires_in".to_owned(), expires_in.to_owned());
+    let mail = NewEmail {
+        id: OutboxId::new_v7(),
+        to: email.to_owned(),
+        template: template.to_owned(),
+        payload: seal_payload(kek, cx.tenant.id, &payload)?,
+        created_at: now,
+        expires_at,
+    };
+    Ok((record, mail))
+}
+
+fn password_changed_email(
+    kek: &Kek,
+    cx: &FlowContext<'_>,
+    to: &str,
+    now: OffsetDateTime,
+) -> Result<NewEmail, CoreError> {
     let mut payload = BTreeMap::new();
     payload.insert("tenant_name".to_owned(), cx.tenant.display_name.clone());
     payload.insert("email".to_owned(), to.to_owned());
-    NewEmail {
+    Ok(NewEmail {
         id: OutboxId::new_v7(),
         to: to.to_owned(),
         template: "password_changed".to_owned(),
-        payload,
+        payload: seal_payload(kek, cx.tenant.id, &payload)?,
         created_at: now,
         expires_at: now + NOTICE_EMAIL_TTL,
-    }
+    })
 }
 
 fn encode_state(state: &FlowState) -> Result<String, CoreError> {
@@ -642,7 +653,7 @@ fn encode_state(state: &FlowState) -> Result<String, CoreError> {
 mod tests {
     use super::*;
     use crate::flow::engine::LoginState;
-    use crate::model::{TenantId, TenantSettings};
+    use crate::model::{SEALED_PAYLOAD_KEY, TenantId, TenantSettings, open_payload};
     use time::macros::datetime;
 
     const NOW: OffsetDateTime = datetime!(2026-11-25 12:00 UTC);
@@ -787,5 +798,71 @@ mod tests {
             format!("https://id.example.test/t/acme/ui/login?flow={id}")
         );
         assert_eq!(bound.csrf_token, "csrf-tok");
+    }
+
+    fn acme() -> Tenant {
+        Tenant {
+            id: TenantId::new_v7(),
+            slug: "acme".into(),
+            display_name: "Acme".into(),
+            host: None,
+            settings: TenantSettings::default(),
+            created_at: NOW,
+        }
+    }
+
+    fn cx(tenant: &Tenant) -> FlowContext<'_> {
+        FlowContext {
+            tenant,
+            issuer: "https://id.example.test/t/acme",
+            ui_base: "https://id.example.test/t/acme/ui",
+        }
+    }
+
+    #[test]
+    fn self_service_emails_are_sealed() {
+        let kek = Kek::generate();
+        let tenant = acme();
+        let cx = cx(&tenant);
+        for (kind, page, template, expires_in) in [
+            (
+                SelfServiceKind::Verification,
+                "verification",
+                "verification",
+                "24 hours",
+            ),
+            (SelfServiceKind::Recovery, "recovery", "recovery", "1 hour"),
+        ] {
+            let user = UserId::new_v7();
+            let (record, mail) =
+                self_service_email(&kek, &cx, kind, user, "alice@example.com", NOW).unwrap();
+            assert_eq!(mail.template, template);
+            assert_eq!(mail.payload.len(), 1, "{template}: one sealed entry");
+            assert!(mail.payload.contains_key(SEALED_PAYLOAD_KEY));
+            assert!(!mail.payload[SEALED_PAYLOAD_KEY].contains("token="));
+            assert!(open_payload(&kek, TenantId::new_v7(), &mail.payload).is_err());
+            let payload = open_payload(&kek, tenant.id, &mail.payload).unwrap();
+            let token = payload["link"]
+                .strip_prefix(&format!("https://id.example.test/t/acme/ui/{page}?token="))
+                .expect("link format");
+            assert_eq!(record.token_hash, SecretHash(secret_hash(token)));
+            assert!(!mail.payload[SEALED_PAYLOAD_KEY].contains(token));
+            assert_eq!(payload["email"], "alice@example.com");
+            assert_eq!(payload["tenant_name"], "Acme");
+            assert_eq!(payload["expires_in"], expires_in);
+        }
+    }
+
+    #[test]
+    fn password_changed_email_is_sealed() {
+        let kek = Kek::generate();
+        let tenant = acme();
+        let mail = password_changed_email(&kek, &cx(&tenant), "alice@example.com", NOW).unwrap();
+        assert_eq!(mail.template, "password_changed");
+        assert_eq!(mail.payload.len(), 1);
+        assert!(mail.payload.contains_key(SEALED_PAYLOAD_KEY));
+        let payload = open_payload(&kek, tenant.id, &mail.payload).unwrap();
+        assert_eq!(payload["email"], "alice@example.com");
+        assert_eq!(payload["tenant_name"], "Acme");
     }
 }
