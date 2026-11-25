@@ -254,7 +254,10 @@ mod tests {
             let p = contract_payload(kind);
             let (subject, text, html) = r.render_with(None, kind, &p).unwrap();
             assert!(subject.contains("Acme"), "{kind:?}: {subject}");
-            assert!(!text.starts_with(&subject), "{kind:?}: subject left in body");
+            assert!(
+                !text.starts_with(&subject),
+                "{kind:?}: subject left in body"
+            );
             assert!(html.contains("Acme"), "{kind:?}");
             let t = EmailTemplate {
                 kind,

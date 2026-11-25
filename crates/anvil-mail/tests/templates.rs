@@ -251,10 +251,19 @@ fn phase4_defaults_render_with_their_contract_variables() {
             .unwrap_or_else(|e| panic!("{kind:?}: {e}"));
         assert!(subject.contains("Acme"), "{kind:?}: {subject}");
         assert!(!subject.contains("482913"), "{kind:?}: code in subject");
-        assert!(!text.starts_with(&subject), "{kind:?}: subject left in body");
+        assert!(
+            !text.starts_with(&subject),
+            "{kind:?}: subject left in body"
+        );
         if p.contains_key("link") {
-            assert!(text.contains(&p["link"]), "{kind:?}: link missing from text");
-            assert!(html.contains("token=tok-123"), "{kind:?}: link missing from html");
+            assert!(
+                text.contains(&p["link"]),
+                "{kind:?}: link missing from text"
+            );
+            assert!(
+                html.contains("token=tok-123"),
+                "{kind:?}: link missing from html"
+            );
         }
         if p.contains_key("new_email") {
             // Text is plain, HTML is escaped.
@@ -267,7 +276,11 @@ fn phase4_defaults_render_with_their_contract_variables() {
         }
     }
     let (_, text, html) = r
-        .render_with(None, EmailKind::LoginCode, &phase4_payload(EmailKind::LoginCode))
+        .render_with(
+            None,
+            EmailKind::LoginCode,
+            &phase4_payload(EmailKind::LoginCode),
+        )
         .unwrap();
     assert!(text.contains("482913") && html.contains("<b>482913</b>"));
     assert!(text.contains("If you did not try to sign in, ignore this email"));
@@ -293,7 +306,12 @@ fn phase4_override_with_unknown_variable_is_rejected() {
     for kind in PHASE4_KINDS {
         // `email` is in no Phase 4 contract (the worker may add it, templates may not use it).
         let err = TemplateChecker
-            .check(kind, "Hi {{ tenant_name }}", "<p>x</p>", "Hello\n{{ email }}\n")
+            .check(
+                kind,
+                "Hi {{ tenant_name }}",
+                "<p>x</p>",
+                "Hello\n{{ email }}\n",
+            )
             .unwrap_err();
         assert!(err.message.starts_with("body_text: "), "{kind:?}: {err:?}");
         assert!(err.message.contains("email"), "{kind:?}: {err:?}");
