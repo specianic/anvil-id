@@ -44,21 +44,21 @@ Versions are the latest stable releases as of the date above. Pin them in the wo
 | Cache | moka (in-process), redis 1.x (optional) | Behind a `Cache` trait |
 | Passwords | argon2 (Argon2id), run on a bounded blocking pool | |
 | Passkeys | webauthn-rs 0.6 | Challenge state kept server-side only |
-| TOTP | totp-rs 6 | Last-used time step stored to prevent replay |
+| TOTP | totp-rs 6 | RFC 6238 code computation only (RustCrypto HMAC-SHA-1, see below); the seed is sealed with the KEK. Last-used time step stored to prevent replay. Enrolment QR codes are rendered server-side as inline SVG with qrcodegen (no script) |
 | Email | lettre 0.11 (rustls) | Outbox table + background sender |
 | Templates | minijinja 3 | Login pages: embedded defaults, overridable from a theme directory at runtime |
 | Admin UI | React + TypeScript, built with Vite as a static single-page app; TanStack Router and Query; shadcn/ui (Radix) components; TanStack Table. Embedded with rust-embed | Talks only to the public management API. TypeScript types and API client generated from the OpenAPI spec (`openapi-typescript`), so API drift fails the build. No server-side rendering (no Next.js) |
 | Config | figment (TOML file + `ANVILID_*` env vars + CLI flags) | |
 | CLI | clap 4 | |
 | Observability | tracing, tracing-subscriber (JSON), metrics + Prometheus exporter; OpenTelemetry behind the `otel` feature | |
-| Rate limiting | governor, with our own keyed limiter (§11) | One limiter implementation |
+| Rate limiting | governor (GCRA buckets) and moka (brute-force backoff state), wrapped by our keyed limiter in `anvil-cache` (§11) | One limiter implementation. governor runs on the core `Clock`, so tests drive it with a fake clock |
 | HTTP client | reqwest 0.13 (rustls) with SSRF guard | Upstream IdPs, JWKS fetch, webhooks, client metadata documents |
 | Time | `time` crate only | `chrono` is banned to avoid mixed types |
 | IDs | UUIDv7 | Time-ordered primary keys |
 | OpenAPI | utoipa | Spec generated from handler annotations; checked in CI |
 | Testing | proptest, insta, wiremock, testcontainers, Playwright, OpenID conformance suite | |
 | Supply chain | cargo-deny, cargo-audit, cargo-auditable | |
-| Release | Tag-triggered GitHub Actions workflow (`release.yml`), static musl builds (amd64, arm64), macOS builds, mimalloc allocator, distroless image | cargo-dist was planned; 0.1 uses a small custom workflow around `scripts/build-musl.sh` (see `docs/RELEASING.md`) |
+| Release | Tag-triggered GitHub Actions workflow (`release.yml`), static musl builds (amd64, arm64), macOS builds, mimalloc allocator, distroless image | cargo-dist was planned; a small custom workflow around `scripts/build-musl.sh` is used instead (see `docs/RELEASING.md`). Since 0.2 it builds the admin console once and fails if any binary does not embed it (`scripts/check-console-embedded.sh`) |
 
 **Banned dependencies** (enforced with cargo-deny): `openssl`, `native-tls`, `ring` as a second crypto
 backend, the RustCrypto `rsa` crate for private-key operations (unpatched timing side channel),
@@ -68,7 +68,12 @@ backend, the RustCrypto `rsa` crate for private-key operations (unpatched timing
 through aws-lc-rs. One exception is accepted: webauthn-rs pulls in RustCrypto crates (via
 `crypto-glue`, including `rsa`) for verifying authenticator signatures. Verification uses public keys
 only, so the `rsa` timing side channel does not apply. This exception is scoped in `deny.toml` with a
-`wrappers = ["crypto-glue"]` entry, so no other crate can use `rsa`.
+`wrappers = ["crypto-glue"]` entry, so no other crate can use `rsa`. The same crates bring in
+MPL-2.0 licences, which `deny.toml` accepts per crate rather than globally.
+
+A second, narrower exception: totp-rs computes TOTP codes with RustCrypto `hmac`/`sha1`. This is
+code computation over a seed that is stored sealed with aws-lc-rs (AES-256-GCM under the KEK) and
+opened only for the check; no key material is generated or stored by RustCrypto code.
 
 ### 2.1 Conditions on the Rust choice
 
@@ -181,10 +186,10 @@ from handler code.
 
 | Entity | Key fields | Notes |
 |---|---|---|
-| `tenant` | id, slug, display_name, issuer_mode (path/host), host, settings (JSON), created_at | One `system` and one `default` tenant created at bootstrap. `host` is unique and set only for host-based tenants. 0.1 settings: registration mode (open/invite_only/disabled), require_verified_email |
+| `tenant` | id, slug, display_name, issuer_mode (path/host), host, settings (JSON), created_at | One `system` and one `default` tenant created at bootstrap. `host` is unique and set only for host-based tenants. 0.1 settings: registration mode (open/invite_only/disabled), require_verified_email. 0.2 adds `signing_algs` (enabled ID token algorithms, RS256 always) and `captcha` (provider, site key, secret sealed with the KEK) |
 | `user` | id, tenant_id, email, email_verified, phone, phone_verified, username, attributes (JSON, validated against the tenant's schema), status (active/blocked), created_at, updated_at, last_login_at | Unique (tenant_id, email); unique (tenant_id, username). Core stores email normalised (trimmed, lowercased). In 0.1 the OIDC standard claims (§5.1, incl. phone and address) are a typed `StandardClaims` record stored as JSON; tenant schemas come later |
-| `credential` | id, tenant_id, user_id, kind (password/webauthn/totp), data (encrypted or hashed per kind), counter (integer, nullable), label, created_at, last_used_at | Password: PHC string. TOTP: encrypted seed; `counter` = last accepted time step. WebAuthn: credential JSON; `counter` = signature counter. Counters are plain columns so replay and clone checks are a single conditional `UPDATE … WHERE counter < ?` |
-| `recovery_code` | id, tenant_id, user_id, code_hash, created_at, used_at | One row per code, consumed atomically (`UPDATE … SET used_at … WHERE used_at IS NULL`) |
+| `credential` | id, tenant_id, user_id, kind (password/webauthn/totp), data (encrypted or hashed per kind), external_id (WebAuthn credential ID, nullable), counter (integer, nullable), backup_eligible, label, created_at, last_used_at | Password: PHC string. TOTP: sealed seed; `counter` = last accepted time step. WebAuthn: credential JSON; `counter` = signature counter. Counters are plain columns so replay and clone checks are a single conditional `UPDATE … WHERE counter < ?`. Partial unique indexes: one password and one TOTP per user, `external_id` unique per tenant; SQLite also checks `(kind = 'webauthn') = (external_id IS NOT NULL)`. Password rows migrated from 0.1 get random ids |
+| `recovery_code` | tenant_id, user_id, code_hash, created_at, used_at | Primary key (tenant_id, user_id, code_hash). One row per code, consumed atomically (`UPDATE … SET used_at … WHERE used_at IS NULL`). Removing TOTP deletes the user's codes |
 | `identity_link` | id, tenant_id, user_id, provider_id, subject, email_at_link, created_at | Upstream identities (social/enterprise). Unique (tenant_id, provider_id, subject) |
 | `client` | id, tenant_id, client_id, name, type (confidential/public), application_type (web/native), require_pkce, auth_method, secret_hash, jwks / jwks_uri, redirect_uris, post_logout_redirect_uris, grant_types, scopes, token_format (jwt/opaque), consent_mode (required/skip_first_party), backchannel_logout_uri, branding (JSON), created_at | `client_id` is unique per tenant; URL-form client IDs (CIMD) are cached in `client_metadata_cache` |
 | `signing_key` | id, tenant_id, kid, alg, state (next/active/retired), private_key (encrypted with KEK), public_jwk, activated_at, retired_at, expires_at | |
@@ -195,16 +200,30 @@ from handler code.
 | `authorization_code` | code_hash (PK), tenant_id, client_id, user_id, browser_session_id, redirect_uri, scope, nonce, code_challenge, resource, auth_time, acr, amr, expires_at, consumed_at, token_family_id | The token family is created in the same transaction as the code, so a code replay that races the exchange still finds and revokes it |
 | `token_family` | id, tenant_id, client_id, user_id?, scope, resource, auth_time?, acr?, amr, browser_session_id?, claims request (JSON)?, created_at, absolute_expires_at, revoked_at, revoked_reason | Groups a refresh-token chain; revoking the family revokes all of its tokens. Carries the authentication context so refreshed ID tokens repeat `auth_time` and UserInfo applies `claims.userinfo`. Access tokens carry the family id and UserInfo checks `revoked_at` |
 | `refresh_token` | token_hash (PK), tenant_id, family_id, parent_hash?, expires_at, consumed_at | Rotation: each use consumes the token and issues a child |
-| `access_token` | token_hash (PK), tenant_id, family_id?, client_id, user_id?, scope, resource, expires_at, revoked_at | Only for opaque tokens; JWT access tokens are not stored. Revocation of a JWT revokes its family |
-| `consent_grant` | id, tenant_id, user_id, client_id, scopes, resource?, created_at, revoked_at | |
+| `access_token` | token_hash (PK), tenant_id, family_id?, client_id, user_id?, scope, created_at, expires_at, revoked_at | Only for opaque tokens; JWT access tokens are not stored. Revocation of a JWT revokes its family. Opaque client-credentials tokens have no family. `resource` arrives with RFC 8707 |
+| `consent_grant` | id, tenant_id, user_id, client_id, scopes, created_at, updated_at, revoked_at | Unique (tenant_id, user_id, client_id). Scopes are a sorted, de-duplicated set; a new grant is merged into the existing one in a single upsert so concurrent first grants lose nothing. Revoking also revokes that client's token families of the user. `resource` arrives with RFC 8707 |
 | `role`, `role_assignment` | role: id, tenant_id, org_id?, name, permissions (JSON). assignment: role_id, user_id, org_id? | RBAC (ORG-5) |
 | `organization`, `org_membership`, `org_invitation`, `org_domain`, `connection` | standard fields | 1.0 (ORG-2..4). `connection` = upstream IdP config (social/OIDC/SAML), tenant- or org-scoped, secrets encrypted |
-| `audit_event` | id, tenant_id, at, actor (user/client/admin/system + id), action, target, outcome, ip, user_agent, trace_id, details (JSON) | Append-only; retention configurable |
+| `audit_event` | id, tenant_id, at, actor (user/client/admin/system + id), action, target, outcome (success/failure), ip, user_agent, trace_id, details (JSON object) | Append-only; retention configurable (`audit_retention_days`). Tenant lifecycle events are recorded in the `system` tenant with the tenant id as target. Details never contain secrets, identifiers of failed sign-ins or SMTP error text |
 | `email_outbox` | id, tenant_id, to, template, payload (JSON), attempts, next_attempt_at, sent_at, last_error | |
-| `job_lease` | name, owner, leased_until | Background job coordination |
+| `email_template` | tenant_id, kind (verification/recovery/invitation/password_changed/recovery_code_used), subject, body_html, body_text, updated_at | Per-tenant override of the theme's email template, validated on save (§13) |
+| `smtp_settings` | tenant_id, host, port, username?, password (sealed)?, from_address, tls (starttls/implicit/none), updated_at | Per-tenant SMTP; the password is write-only in the API |
+| `job_lease` | name, owner, leased_until | Background job coordination (§14). Leases are 15 minutes and released after each run |
 | `replay_guard` | tenant_id, kind (jti/dpop/nonce), value_hash, expires_at | `private_key_jwt` assertion `jti`s; later DPoP |
 | `admin_setup_token` | token_hash, expires_at, used_at | One-time bootstrap URL (ADM-3) |
 | `self_service_token` | token_hash (PK), tenant_id, kind (verification/recovery/invitation), user_id, email, created_at, expires_at, consumed_at | Emailed one-time links, consumed atomically. Verification succeeds only while the user's email still equals `email` |
+
+0.2 also adds to `client`: `token_format`, `consent_mode`, `id_token_signed_response_alg` (unset =
+RS256) and `can_introspect`; and to `browser_session`: `ip`, `user_agent` (shown on the sessions
+page). `flow.kind` gains `settings` and `consent`.
+
+**Tenant-scoped foreign keys.** Rows that point at a user reference `(tenant_id, user_id)` →
+`user (tenant_id, id)`, so the database itself rejects a row whose user belongs to another tenant.
+SQLite has used composite keys since 0.1. On Postgres, 0.2 adds them to `credential`,
+`self_service_token`, `browser_session`, `recovery_code`, `consent_grant` and `authorization_code`.
+The last one is added `NOT VALID`: 0.1 had no user key on codes, so an upgraded database can still
+hold expired codes of deleted users. Every new or changed row is checked. Storage methods also check
+the user's tenant before inserting, which gives a clearer error.
 
 ### 6.2 Storage of secrets
 
@@ -213,7 +232,7 @@ from handler code.
 | User passwords | Argon2id PHC string |
 | Client secrets, refresh/access tokens (opaque), authorization codes, session IDs, setup and recovery tokens, API keys | SHA-256 of a 256-bit random value. The plaintext is shown once and never stored |
 | MFA recovery codes | ~80-bit random codes, formatted for typing (e.g. `XXXX-XXXX-XXXX-XXXX`), stored as HMAC-SHA-256 under a key derived from the KEK (a plain hash would be brute-forceable at this length). Shown once |
-| TOTP seeds, upstream IdP client secrets, signing private keys, SAML SP keys | AES-256-GCM with a data key derived from the **key-encryption key (KEK)** via HKDF, using the table and row ID as associated data |
+| TOTP seeds, SMTP passwords, CAPTCHA secrets, upstream IdP client secrets, signing private keys, SAML SP keys | AES-256-GCM with a data key derived from the **key-encryption key (KEK)** via HKDF, using the table and row ID as associated data |
 | Email outbox payloads (contain single-use links) | Sealed with the KEK envelope (AES-256-GCM, purpose `anvilid/outbox-payload/v1`, tenant ID as associated data) when the email is created; opened only by the outbox worker immediately before rendering. A payload that cannot be opened is never sent |
 
 **KEK source:** the `ANVILID_KEK` env var or a key file. In zero-config dev mode the binary generates
@@ -231,16 +250,19 @@ aggregate**. There is no generic transaction handle:
 #[async_trait]
 pub trait Storage: Send + Sync + 'static {
     fn tenants(&self) -> &dyn TenantRepo;
-    fn users(&self) -> &dyn UserRepo;          // users, password credentials, self-service tokens
+    fn users(&self) -> &dyn UserRepo;          // users, credentials (password, passkey, TOTP, recovery codes), self-service tokens
     fn clients(&self) -> &dyn ClientRepo;
     fn keys(&self) -> &dyn KeyRepo;
     fn sessions(&self) -> &dyn SessionRepo;
     fn flows(&self) -> &dyn FlowRepo;
-    fn grants(&self) -> &dyn GrantRepo;        // authorization requests, codes, families, refresh tokens, replay guards
+    fn grants(&self) -> &dyn GrantRepo;        // authorization requests, codes, families, refresh and opaque access tokens, consent, replay guards
     fn setup(&self) -> &dyn SetupRepo;         // installation-wide bootstrap
     fn outbox(&self) -> &dyn OutboxRepo;
+    fn audit(&self) -> &dyn AuditRepo;         // 0.2: append, query, retention purge
+    fn mail_settings(&self) -> &dyn MailSettingsRepo; // 0.2: email templates, SMTP settings
+    fn jobs(&self) -> &dyn JobRepo;            // 0.2: job leases
     async fn purge_expired(&self, now: OffsetDateTime) -> Result<u64, StorageError>;
-    // later: audit(), jobs(), orgs(), connections(), roles(), …
+    // later: orgs(), connections(), roles(), …
 }
 ```
 
@@ -252,7 +274,22 @@ method that the shared contract suite tests on both backends. The atomic methods
 `GrantRepo::create_code` (family + code), `consume_code`, `rotate_refresh`, `record_jti`,
 `UserRepo::create` (user + password + token + email), `delete`, `issue_self_service_token`,
 `complete_verification`, `complete_recovery`, `ClientRepo::delete` (client + family revocation),
-`SetupRepo::install` and `SetupRepo::complete_setup`.
+`SetupRepo::install` and `SetupRepo::complete_setup`. 0.2 adds `UserRepo::create_totp`
+(seed + recovery codes), `UserRepo::consume_recovery_code` (with the "code used" notice in the same
+transaction), the passkey counter compare-and-swap, `GrantRepo::upsert_consent`/`revoke_consent`
+(revoke also revokes that client's families of the user), `SessionRepo::revoke_with_families`, `KeyRepo::promote` (retire the
+active key and activate the next one; returns `false` for stale ids), `FlowRepo::swap_state`
+(compare-and-swap of a flow's state, used to consume a pending passkey challenge or TOTP secret
+exactly once), `JobRepo::try_lease` and `UserRepo::complete_recovery` with an optional
+`RecoveryNotice`.
+
+**Audit events are written after the commit, not inside the intent transaction.** Intent methods
+take no audit rows. The service appends the event right after the state change commits; an append
+failure is returned to the caller (and logged), but the committed change stays. Folding audit rows
+into every intent method was considered and rejected: it would widen every atomic method's
+signature for a record that is not needed for correctness. The one exception to "audit failure is
+returned" is `admin_setup_completed`: the setup secret is shown once, so setup succeeds and the
+failure is logged.
 
 Repository methods express **intent**, not generic CRUD. The security-critical ones are atomic by
 contract:
@@ -283,12 +320,23 @@ contract:
 ### 7.3 Migrations
 
 - Each storage crate's `migrations/` directory (`crates/anvil-storage-sqlite/migrations/`, `crates/anvil-storage-postgres/migrations/`) is embedded with `sqlx::migrate!` and run at
-  startup (can be disabled with `--no-migrate`). They are guarded by an advisory lock (Postgres) or
-  the exclusive file lock (SQLite).
+  startup (can be disabled with `--no-migrate`). On Postgres the check and the run share one
+  connection holding sqlx's advisory lock. SQLite has no cross-process migration lock; `serve`
+  holds the exclusive `serve.lock` on the data directory, and a concurrent `anvilid migrate` can at
+  worst find nothing left to apply.
+- **Destructive-migration guard (0.2).** A migration named `NNNN_destructive_*.sql` is refused at
+  startup unless `--allow-destructive-migrations` (`ANVILID_ALLOW_DESTRUCTIVE_MIGRATIONS`) is set.
+  The pending set is computed without writing anything, so a refusal leaves the database
+  untouched.
+- **Migration lint (0.2).** `scripts/check-migrations.sh` (in `just ci`) fails if a released
+  migration changed (sha256 manifest `scripts/released-migrations.sha256`, extended at every
+  release) or if an unreleased migration contains destructive SQL without the `destructive` name or
+  the reviewed `-- anvil:non-destructive-rebuild` annotation (used by SQLite table rebuilds that
+  copy every row, e.g. 0004).
 - Migrations are forward-only and **expand/contract**: a release never drops or renames a column that
   the previous minor release still reads. Destructive cleanups happen one minor release later.
 - CI test: create a database with release N-1's migrations and data fixtures, upgrade to N, run the
-  contract suite.
+  contract suite (`tests/upgrade.rs` in both storage crates; 0.1 → 0.2 keeps every row).
 
 ### 7.4 Expiry and cleanup
 
@@ -305,19 +353,30 @@ replay guards).
   registration metadata (`id_token_signed_response_alg`).
 - `anvil-jose` builds JOSE headers and JWKs itself rather than relying on jsonwebtoken's types,
   because jsonwebtoken cannot express the fully-specified `Ed25519` algorithm name (RFC 9864). It
-  uses jsonwebtoken / aws-lc-rs only for the signature operations. Whether to also accept or emit the
-  legacy `EdDSA` name for interoperability with older relying parties is decided in Phase 3.
+  uses jsonwebtoken / aws-lc-rs only for the signature operations. **Decided in 0.2:** Ed25519 is
+  emitted and accepted only as `Ed25519`; the legacy `EdDSA` name is neither emitted nor accepted.
+  ES256 and Ed25519 are opt-in per tenant (`settings.signing_algs`); RS256 is always enabled.
+  Disabling an algorithm that a client uses as `id_token_signed_response_alg` is refused with the
+  affected client ids. `id_token_hint` is verified against the tenant's enabled algorithms.
 - How 0.1 uses jsonwebtoken: only `jsonwebtoken::crypto::{sign, verify}` (aws-lc-rs backend,
   `use_pem`). `anvil-jose` serialises the header and claims, splits and base64url-decodes compact
   JWS itself, and checks `alg` against a per-call allow-list before any key is used (`none` and
   HMAC algorithms are never accepted). aws-lc-rs exports RSA private keys only as PKCS#8, so the key
   is wrapped once at load time in a `PRIVATE KEY` PEM for jsonwebtoken. JWKs and RFC 7638 thumbprints
   are computed in-crate. In 0.1 ID tokens and access tokens are signed with RS256 only (advertised in
-  discovery); `private_key_jwt` client assertions may use RS256, PS256 or ES256.
+  discovery); `private_key_jwt` client assertions may use RS256, PS256 or ES256. Since 0.2 ID tokens
+  use the client's `id_token_signed_response_alg` among the tenant's enabled algorithms, and discovery
+  lists exactly those.
 - Lifecycle: `next` (published in JWKS, not yet signing) → `active` (signing) → `retired` (published
-  until every token signed with it has expired) → deleted. Rotation runs as a scheduled job (default
-  every 90 days) and on demand (`anvilid keys rotate`). The `next` key is published at least one
-  JWKS cache lifetime before activation.
+  until every token signed with it has expired) → deleted. Rotation runs as a scheduled job (checked
+  hourly under a job lease) and on demand (`anvilid keys rotate [--tenant slug] [--alg RS256|ES256|Ed25519]
+  [--immediate]`). As built in 0.2: rotation period 90 days (`key_rotation_days`, 1–3650);
+  the `next` key is prepublished min(7 days, period/2) and never less than the JWKS cache lifetime
+  before activation; `/jwks` is served with `Cache-Control: max-age=3600` and an ETag (304 on
+  `If-None-Match`); a retired key stays published for 1 h 5 min (the longest token lifetime, ID token
+  1 h, plus 5 min skew). `--immediate` retires the old key at once (compromise response); without
+  it the call is idempotent and returns the existing `next` key. Concurrent rotation runs promote
+  exactly once.
 - `kid` = RFC 7638 JWK thumbprint.
 - Only one key is `active` per (tenant, alg) at a time, enforced with a partial unique index.
 
@@ -333,6 +392,23 @@ replay guards).
 
 - `sub` is the user's UUID by default (a pairwise identifier option comes later).
 - The issuer is the tenant issuer URL (§12). It is computed in exactly one place.
+- **Access token audience (0.2):** `aud` = the client id until RFC 8707 resource indicators ship
+  (0.3). The token family is referenced by the `fid` claim.
+- **Opaque access tokens** are stored as SHA-256 hashes in `access_token`; JWT access tokens are not
+  stored.
+- **Introspection (RFC 7662):** only confidential clients may call `/introspect` (public clients get
+  `invalid_client`). A client sees its own tokens; a client with `can_introspect` sees every token of
+  its tenant. Anything else (another client's token without the flag, another tenant's, expired,
+  revoked, consumed, garbage) is `{"active": false}`.
+- **Revocation (RFC 7009):** revoking a refresh token or an access token with a family revokes the
+  whole family; an opaque token is also revoked itself. Revoking another client's token answers 200
+  and changes nothing (no oracle); `can_introspect` never grants revocation. JWT client-credentials
+  access tokens have no family and nothing server-side, so `/revoke` answers
+  `unsupported_token_type` for them; opaque client-credentials tokens can be revoked. Public clients
+  may revoke their own tokens.
+- **`amr`/`acr` (0.2):** password `["pwd"]`; password + TOTP or recovery code `["pwd","otp","mfa"]`;
+  passkey `["hwk"|"swk","user","mfa"]` (`swk` when the passkey is backup-eligible). MFA sign-ins
+  carry `acr` `urn:anvilid:acr:mfa`.
 
 ## 9. Flow engine (login, registration, recovery, consent)
 
@@ -355,6 +431,19 @@ Login flow:
   expire after 15 minutes.
 - The authorization request is stored separately (`authorization_request`). The login flow refers to
   it, so login, MFA and consent don't have to carry OAuth parameters through every form.
+- **As built in 0.2:** the login engine runs password, passkey (discoverable, usernameless) and the
+  second factor (TOTP or recovery code, required when the user has TOTP enrolled). Passkey sign-in
+  satisfies MFA and skips the second factor. The second-factor page is rendered as the answer to the
+  password POST, and a KEK-sealed `factor_token` names the user for the per-user throttle (the flow
+  state still decides).
+- **Consent is its own small state machine** (`FlowKind::Consent`, `flow/consent.rs`), not a step of
+  the login engine as the diagram suggests. It reuses the flow binding (cookie + CSRF) and lifetime.
+  Allow stores the grant and continues the authorization in-process; Deny answers `access_denied`
+  to the client. `prompt=none` without a covering grant is `consent_required`; `prompt=consent`
+  forces the screen. Clients with `consent_mode = skip_first_party` never see it.
+- **Settings flows** (account security, sessions, connected apps) are created and advanced by the
+  account services directly, bound to the owning user. Credential changes require a sign-in within
+  the last 15 minutes; signing out sessions and revoking app grants need only the binding.
 
 ## 10. HTTP surface
 
@@ -391,6 +480,16 @@ advertises only what is built: `response_types_supported: ["code"]`, `response_m
 "profile", "email", "address", "phone"]`. A refresh token is issued when the client is registered for
 the `refresh_token` grant. The other rows arrive with their milestones.
 
+**Added in 0.2:** `/introspect` and `/revoke` (client-authenticated; discovery advertises
+`introspection_endpoint_auth_methods_supported` without `none`, and
+`revocation_endpoint_auth_methods_supported` as the token endpoint list including `none`),
+`response_mode=form_post` (`response_modes_supported: ["query", "form_post"]`; the auto-submitting
+page has a CSP whose `form-action` allows only the redirect URI's origin, and works without
+JavaScript), `id_token_signing_alg_values_supported` = the tenant's enabled algorithms. Request
+objects are not supported (`request_parameter_supported: false`); a rejected request object is
+answered with `request_not_supported` through the response mode it asked for (exactly `form_post`,
+otherwise query) when the redirect URI is valid. `request_uri` is never fetched.
+
 ### 10.2 Built-in UI and flows
 
 `/ui/login`, `/ui/registration`, `/ui/recovery`, `/ui/verification`, `/ui/consent`, `/ui/account/*`,
@@ -400,6 +499,13 @@ plus `/ui/assets/*` (hashed, immutable static files). The headless API mirrors t
 0.1 ships `/ui/login`, `/ui/registration`, `/ui/recovery` and `/ui/verification`, the installation
 setup page `/setup?token=…` (installation-level, see §13) and hashed assets under `/assets/*`. Every UI
 POST carries `?flow={id}` and the flow's `csrf_token`; a successful credential POST answers 303.
+
+0.2 adds `/ui/login/passkey` (+ `/options`), the second-factor step (`/ui/login/second-factor`
+redirects to `/ui/login` on GET; the page is the answer to the password POST), `/ui/consent`,
+`/ui/account/security` (passkeys, TOTP, recovery codes), `/ui/account/sessions` and
+`/ui/account/apps`. Account pages send `Cache-Control: no-store`. Pages load only self-hosted
+scripts (`webauthn.js` for passkeys, `form_post.js`); every flow still works without JavaScript
+except the passkey ceremony itself.
 
 ### 10.3 Management API
 
@@ -416,10 +522,24 @@ POST carries `?flow={id}` and the flow's `csrf_token`; a successful credential P
   `admin:clients:write` token cannot mint itself more privileges. Tokens of deleted clients stop
   working immediately. Errors are RFC 9457 problem JSON. The OpenAPI document is committed as
   `docs/openapi/admin-v1.json` and drift-checked in CI (`just openapi-update` regenerates it).
+- Added in 0.2 (all under `/api/admin/v1/tenants/{slug}`): `audit-events` (filters, cursor
+  paging with `after`/`next_cursor`), `sessions` (list, revoke one; per user list and revoke all),
+  `users/{id}/credentials` (list, remove; passwords cannot be removed), `email-templates[/{kind}]`
+  (theme default, override with validation errors that carry a line, reset), `smtp` (password
+  write-only) and `smtp/test`. Client options gained `token_format`, `consent_mode`,
+  `id_token_signed_response_alg` and `can_introspect`; tenant `settings` PATCH is field-wise and
+  covers `signing_algs` and `captcha` (secret write-only; needs the tenants write scope). Every new
+  route has a resource scope: `admin:audit:read`, `admin:sessions:{read|write}`,
+  `admin:settings:{read|write}` (email templates, SMTP), credentials under `admin:users:{read|write}`
+  (or `admin:read`/`admin:write`); `security_admin_v02.rs` proves each is enforced. Every admin write is
+  audited with the admin actor (token `sub`).
 - Installation-level administration (managing tenants) lives in a dedicated `system` tenant, so admin
   authentication uses the same machinery as everything else.
 - The admin console SPA (`/console/`) is a public OAuth client of the `system` tenant and only calls
-  this API.
+  this API. As built in 0.2: the client is `anvil-console`, reconciled with the public URL at every
+  start (no off switch in 0.2). Users of the `system` tenant are the administrators until RBAC
+  (0.4); registration in the `system` tenant is always disabled, and clients of other tenants can
+  never obtain admin scopes. Sign-out revokes the console's tokens at `/t/system/revoke`.
 
 ### 10.4 How frontend assets ship in the binary
 
@@ -436,7 +556,14 @@ POST carries `?flow={id}` and the flow's `csrf_token`; a successful credential P
   copy.
 - **Builds without Node:** if `admin-ui/dist` is missing, `cargo build` embeds a placeholder page that
   explains how to build the console. CI and release builds always build the console first and fail if
-  it is missing.
+  it is missing (`scripts/check-console-embedded.sh` also checks each release binary).
+- **As built in 0.2:** `/console` redirects (308) to `/console/`. The console is mounted on the
+  outer router (installation-wide, works before installation; `/t/{slug}/console/` is a 404).
+  Files under `assets/` are `public, max-age=31536000, immutable`; `index.html` and other files are
+  `no-cache`. The ETag is per encoding variant, with `Vary: Accept-Encoding`. Paths without an
+  extension fall back to `index.html`; missing paths with an extension are 404. CSP:
+  `default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:;
+  frame-ancestors 'none'; base-uri 'none'` (the console needs no inline script or style).
 
 ### 10.5 Operational endpoints (installation-wide)
 
@@ -452,10 +579,12 @@ listener).
 | Client authentication | One `ClientAuthenticator`. Constant-time comparison (`subtle`) of hashed secrets. `private_key_jwt`: `aud` must equal the issuer, `exp` ≤ 5 min, `jti` recorded in `replay_guard` |
 | CSRF | Synchronizer token per flow plus `Sec-Fetch-Site`/`Origin` checks on every state-changing browser request. Fetch-Metadata rules for unsafe methods: (1) if `Sec-Fetch-Site` is present, only `same-origin` or `none` pass; (2) otherwise, if `Origin` is present, it must equal the public origin or the tenant's host origin; (3) if neither header is present the request passes this layer (non-browser clients, older browsers) and the synchronizer token alone decides. The layer fails closed if the allowed origins are unknown. Exempt: `/token` and `/api/admin/*` (client-authenticated, no cookies) and `POST /authorize` (cross-site by design) |
 | Cookies | `__Host-` prefix, `Secure`, `HttpOnly`, `SameSite=Lax` (session) or `Strict` (flow). Dev mode on `http://localhost` drops the `__Host-`/`Secure` requirements with a warning |
-| Rate limiting | One keyed limiter (`anvil-cache`) with route classes: `auth` (per IP + per account identifier), `token` (per client + per IP), `admin`, `default`. Account lockout uses progressive delays, not permanent locks (prevents trivial denial of service) |
-| Brute-force on secrets | Argon2 verification runs on a bounded pool; login attempts against unknown users perform a dummy hash (constant-time behavior) |
-| Response headers | Strict CSP (`script-src 'self'`, no inline scripts), `frame-ancestors 'none'` by default, HSTS when HTTPS, `Referrer-Policy: no-referrer` on auth pages |
-| SSRF | Any server-side fetch of a client-supplied URL (JWKS URI, client metadata document, back-channel logout, webhooks) goes through a guarded client: HTTPS only (except configured dev allow-list), private/loopback/link-local ranges blocked after DNS resolution, size and time limits |
+| Rate limiting | One keyed limiter (`anvil-cache`, GCRA) with route classes and default quotas: `auth` (POSTs under `/ui/login`, `/ui/registration`, `/ui/recovery` and `/setup`: 10/min per IP, burst 5), `token` (`/token`, `/introspect`, `/revoke`: 50/s per IP, plus 100/s per claimed client id), `admin` (20/s per IP), `default` (50/s per IP). `/health/*`, `/healthz` and `/assets/*` are never limited. All quotas are configurable (§13); `rate_limit_enabled = false` switches the limiter off with a warning. A request without a peer address gets a generic 500, never an invented address. 429 answers carry `Retry-After` (whole seconds, at least 1) and the shape of their surface: OAuth JSON `invalid_request`/`too many requests` with `no-store`, admin problem JSON `urn:anvilid:problem:too_many_requests`, or the themed error page `too_many_requests` |
+| Brute-force on secrets | Argon2 verification runs on a bounded pool; login attempts against unknown users perform a dummy hash (constant-time behavior). **Two tiers (0.2):** a strict key (tenant + identifier + IP) allows 5 free failures, then locks progressively (1 s doubling, capped at 15 min; success clears it); a loose key (tenant + identifier, any IP) counts failures per hour and never locks: over the threshold it requires a CAPTCHA when the tenant has one, otherwise it delays. Nobody can lock an account out from arbitrary IPs. Known and unknown identifiers behave identically, the identifier is never logged or audited (`rate_limit_lockout` records key kind and seconds only). The second factor is throttled per user, passkey failures per IP |
+| CAPTCHA (0.2) | Optional per tenant (Turnstile or hCaptcha), shown only when the loose tier asks for it. Verification fails closed (HTTP error, timeout, malformed or oversized body, redirects; https endpoints only). The widget is a third-party script by the operator's choice: the page with the widget gets a CSP that allows the provider, every other page keeps `script-src 'self'`. A CAPTCHA can conflict with WCAG 2.2 SC 3.3.8 (accessible authentication); operators enabling it accept that trade-off |
+| Trusted proxies (0.2) | The client IP comes from the TCP peer unless the peer is in `trusted_proxies`. Then the configured header (`X-Forwarded-For` or `Forwarded`, never both) is walked right to left, skipping trusted hops, and the first untrusted entry is the client; an unparsable entry stops the walk (the last trusted hop is used), at most 32 hops. IPv4-mapped IPv6 is normalised. Forwarded proto/host never change the issuer or cookie mode (`public_url` decides) |
+| Response headers | Strict CSP (`script-src 'self'`, no inline scripts), `frame-ancestors 'none'` by default, HSTS when HTTPS, `Referrer-Policy: no-referrer` on auth pages. Exceptions are per page and narrow: the `form_post` page adds `form-action <redirect origin>`; the CAPTCHA page allows its provider |
+| SSRF | 0.2 fetches no client-supplied URL (no `jwks_uri`, no `request_uri`); the CAPTCHA verifier calls only the provider's https endpoint. Any server-side fetch of a client-supplied URL (JWKS URI, client metadata document, back-channel logout, webhooks) goes through a guarded client: HTTPS only (except configured dev allow-list), private/loopback/link-local ranges blocked after DNS resolution, size and time limits |
 | Secret hygiene | Secrets wrapped in `secrecy` types (no `Debug`/log output); `zeroize` on drop for key material |
 | Test code | No test-only branches in production code; test fakes implement the traits inside `#[cfg(test)]` or test crates only |
 
@@ -507,24 +636,41 @@ listener).
   (before any KEK is generated), so a second `serve` on the same directory fails with a clear error.
 - **Trusted proxies:** `ANVILID_TRUSTED_PROXIES` (CIDRs) controls whether `X-Forwarded-*`/`Forwarded`
   headers are honored. Default: none (headers ignored), except loopback in dev mode.
+- **Keys added in 0.2:** `trusted_proxies` (CIDRs or single IPs, comma-separated or a TOML array;
+  an explicit empty value trusts none even in dev mode; errors name the key and entry position,
+  never the value), `trusted_proxy_header` (`x-forwarded-for` | `forwarded`), `rate_limit_enabled`
+  (default true), `rate_limit_auth_per_minute` (10, burst n/2), `rate_limit_token_per_second` (50),
+  `rate_limit_token_client_per_second` (100), `rate_limit_admin_per_second` (20),
+  `rate_limit_default_per_second` (50; a quota of 0 is rejected), `key_rotation_days` (90, 1–3650),
+  `audit_retention_days` (365, 0 = keep forever, up to 36500) and `allow_destructive_migrations`
+  (default false, §7.3). Brute-force backoff parameters keep their built-in defaults.
+- **Startup reconciliation (0.2):** after installation the binary reconciles the console client
+  with `public_url`, then ensures every tenant has an active key for each enabled algorithm.
+- **Audit stream:** audit events are written to the database and mirrored on stdout as one raw
+  JSON object per line (never on stderr), independent of `RUST_LOG`.
+- **Email templates (0.2):** per-tenant overrides are checked on save (syntax, unknown variables
+  against the kind's variable contract, no include/extends) and render with a fuel limit; the outbox
+  worker uses tenant SMTP, then installation SMTP.
 - **CLI commands:** `serve`, `migrate`, `config show|validate`, `admin setup-url` (new bootstrap URL
   for recovery), `keys rotate`, `backup create|restore` (SQLite), `export`/`import` (tenant YAML).
-  0.1 ships `serve`, `migrate`, `config show|validate` and `admin setup-url`; the others arrive with
-  their milestones.
+  0.1 ships `serve`, `migrate`, `config show|validate` and `admin setup-url`; 0.2 adds `keys rotate`;
+  the others arrive with their milestones.
 
 ## 14. Background jobs
 
 An in-process scheduler runs periodic jobs, each guarded by a `job_lease` row so only one node runs a
-job at a time on Postgres:
+job at a time on Postgres. As built in 0.2: leases last 15 minutes and are released after each run;
+jobs are idempotent, so a run longer than its lease can only cause duplicate work. Each node starts
+its schedule with a small random delay.
 
 | Job | Interval |
 |---|---|
-| Expired-row cleanup | 5 min |
-| Signing-key rotation check | 1 h |
+| Expired-row cleanup | 5 min (0.1) |
+| Signing-key rotation check | 1 h (0.2) |
 | Email outbox delivery | continuous (polling with backoff) |
 | Back-channel logout delivery | event-driven, with retry |
 | Webhook delivery (0.4) | event-driven, with retry |
-| Audit log retention | daily |
+| Audit log retention | daily (0.2; not scheduled when `audit_retention_days = 0`) |
 
 ## 15. Observability
 
@@ -566,9 +712,14 @@ properties, documented (user docs + OpenAPI where relevant), conformance suite s
 
 - **Every PR:** `cargo fmt --check`, `cargo clippy -D warnings`, `cargo deny check`, unit + contract
   (SQLite and Postgres) + integration + security tests, dependency-rule check (§4), OpenAPI drift
-  check, `sqlx` offline metadata check.
-- **Main branch:** everything above plus conformance suite, Playwright e2e, upgrade test, musl
-  release build with binary-size and idle-memory report.
+  check, `sqlx` offline metadata check, migration lint (§7.3), admin console type check against the
+  OpenAPI document and build.
+- **Main branch:** everything above plus conformance suite (Basic, Config and Form Post OP plans
+  via `tests/conformance/run.sh all`), Playwright e2e on SQLite and Postgres (incl. passkey with a
+  virtual authenticator, TOTP, consent, sessions, console, axe), upgrade test, musl release build
+  with the embedded console, binary-size and idle-memory report.
+- `just ci` runs the same Rust gates plus `migrations-check`, `security-tests` and `console-check`
+  locally.
 - **Release:** tag-triggered `release.yml` (linux musl amd64/arm64 and macOS archives with SHA-256
   checksums, multi-arch container image on ghcr.io, build provenance attestations; see
   `docs/RELEASING.md`). Still to come: Windows builds, SBOM, changelog generated from conventional

@@ -308,7 +308,7 @@ keys. An **organization** is a group of users *inside* a tenant: a customer comp
 | Release | Theme | Headline scope |
 |---|---|---|
 | **0.1 "First login"** | Minimum credible OIDC provider | Auth code + PKCE, refresh rotation, client credentials, discovery/JWKS/UserInfo, password login, registration, recovery, built-in UI, bootstrap admin, management API, SQLite and Postgres |
-| **0.2 "Secure by default"** | Hardening and modern auth | Passkeys, TOTP, introspection/revocation, consent, sessions, brute-force protection, audit log, ES256/EdDSA, email templates |
+| **0.2 "Secure by default"** | Hardening and modern auth | Passkeys, TOTP, introspection/revocation, consent, sessions, brute-force protection, audit log, ES256/Ed25519, email templates |
 | **0.3 "Real-world logins"** | Federation and polish | Social login, account linking, MFA policy, logout profiles, theming, i18n, account page, resource indicators |
 | **0.4 "Operate it"** | Operators and integrators | Multi-tenant console, RBAC, webhooks, declarative config, DCR, MCP authorization basics |
 | **1.0 "Credible for business"** | B2B and certification | Organizations, per-org SAML/OIDC SSO, home-realm discovery, password-hash import, PAR, headless flow API, OpenID certification, external security review |
