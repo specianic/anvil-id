@@ -1,7 +1,14 @@
-//! Upstream identity providers: presets, claim extraction and linking decisions (AUTH-07,
-//! AUTH-11). Pure logic; outbound HTTP goes through `ports::UpstreamClient`.
+//! Upstream identity providers: presets, ID-token validation, claim normalisation and linking
+//! decisions (AUTH-07, AUTH-11).
 //!
-//! Pre-declared by plan 04-01; filled in by plan 04-07.
+//! Pure logic only (research Pattern 5): the outbound adapter moves bytes through
+//! `ports::UpstreamClient` and the upstream service orchestrates ports; every security property
+//! (issuer rules, alg allow-list, audience, nonce, email trust, auto-link) lives here.
+//!
+//! - [`providers`]: presets and [`providers::resolve`], authorization URL, Apple client-secret
+//!   claims.
+//! - [`claims`]: [`claims::validate_id_token`] and the `normalise_*` functions.
+//! - [`linking`]: [`linking::link_decision`].
 
 pub mod claims;
 pub mod linking;
