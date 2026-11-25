@@ -4,13 +4,13 @@ milestone: v1.0
 milestone_name: milestone
 status: verifying
 stopped_at: Completed 02-10-PLAN.md
-last_updated: "2026-11-25T02:08:37.655Z"
+last_updated: "2026-11-25T02:09:06.992Z"
 last_activity: "2026-11-25 — Completed 01-08 (phase gate: CI green on GitHub, spike verdicts, stack confirmed)"
 progress:
   total_phases: 7
   completed_phases: 1
   total_plans: 29
-  completed_plans: 16
+  completed_plans: 17
   percent: 53
 ---
 
@@ -66,6 +66,7 @@ Progress: [█████░░░░░] 53%
 | Phase 02 P07 | 20min | 2 tasks | 5 files |
 | Phase 02 P10 | 20min | 2 tasks | 5 files |
 | Phase 02 P08 | 30min | 2 tasks | 5 files |
+| Phase 02 P09 | 25min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -116,6 +117,10 @@ Recent decisions affecting current work:
 - [Phase 02]: All client-credential failures share one invalid_client description (CoreError::description returns the reason); grant/token failures likewise one description per class
 - [Phase 02]: validate_refresh passes a consumed token from the right client to rotate_refresh (reuse detection) regardless of scope; wrong client rejected before consume
 - [Phase 02]: Code exchange/refresh require an existing Active user; codes without challenge refused for public or require_pkce clients
+- [Phase 02]: Flow engine style: transition(state,input,FlowEnv) plans effects; FlowService runs them; first Failure -> on_failure(state, pending) renders a form (no further I/O)
+- [Phase 02]: FlowOutcome::Restarted(StartedFlow) for expired/unknown flows (new flow cookie + flow.expired)
+- [Phase 02]: password_changed notice enqueued via OutboxRepo::enqueue after complete_recovery (recipient unknown until token consumed); port refinement raised
+- [Phase 02]: require_verified_email honoured: unverified login -> login.email_not_verified after correct password; registration -> registration.check_email
 
 ### Pending Todos
 
