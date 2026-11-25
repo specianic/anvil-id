@@ -7,13 +7,13 @@ current_phase_name: release 0 3 real world logins
 current_plan: Not started
 status: planning
 stopped_at: "Completed 03-34-PLAN.md (Phase 3 gap closure: single base64 implementation)"
-last_updated: "2026-11-25T15:31:00.000Z"
+last_updated: "2026-11-25T15:35:40.663Z"
 last_activity: 2026-11-25
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 98
-  completed_plans: 72
+  completed_plans: 73
   percent: 100
 ---
 
@@ -128,6 +128,7 @@ Phase 3 plans 03-01 through 03-34 are all complete (34/34 summaries); v0.2.0 is 
 | Phase 04 P08 | 25min | 1 tasks | 3 files |
 | Phase 04 P09 | 25min | 1 tasks | 1 files |
 | Phase 04 P07 | 25min | 1 tasks | 4 files |
+| Phase 04 P04 | 20min | 3 tasks | 75 files |
 
 ## Accumulated Context
 
@@ -286,6 +287,8 @@ Recent decisions affecting current work:
 - [Phase 04]: 04-09: theme_stylesheet re-validates token syntax and custom CSS (Result<ThemeCss, ThemeError>); custom CSS = allow-listed at-rules/functions + case-insensitive deny-list in raw and comment/whitespace-free views; light colours without dark variant pin the full light palette in the dark media block
 - [Phase 04]: 04-07: upstream rules are pure (upstream::{providers,claims,linking}); UpstreamTokenError adds UnknownKey (refresh JWKS once) and HostedDomain; Microsoft tid must be canonical lowercase UUID and is checked on every Microsoft token; issuer override => Exact rule (Microsoft override with {tenantid} stays template); Apple user JSON gives names only
 - [Phase 04]: 04-07: email_verified is AND-ed with connection trust (Microsoft never trusted) at normalisation; link_decision: existing link wins, auto-link only verified+trusted upstream + verified local + auto_link + not Microsoft, candidate hidden when upstream unverified
+- [Phase 04]: 04-04: SQLite 0005 widens flow/self_service_token/email_template CHECKs with in-transaction rebuilds (no inbound FKs); identity_link uses a composite (tenant_id, connection_id) FK
+- [Phase 04]: 04-04: SQLite revoking intents enqueue logout deliveries for the ids their own UPDATE ... RETURNING revoked; rp_session recorded via INSERT OR IGNORE ... SELECT FROM browser_session; purge drops deliveries past give_up_at
 
 ### Pending Todos
 
