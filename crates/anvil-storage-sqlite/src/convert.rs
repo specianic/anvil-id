@@ -54,7 +54,10 @@ pub(crate) fn opt_blob_to_hash(
 }
 
 /// Value → JSON TEXT.
-pub(crate) fn to_json<T: Serialize + ?Sized>(value: &T, what: &str) -> Result<String, StorageError> {
+pub(crate) fn to_json<T: Serialize + ?Sized>(
+    value: &T,
+    what: &str,
+) -> Result<String, StorageError> {
     serde_json::to_string(value)
         .map_err(|e| StorageError::Backend(format!("encoding {what} as JSON: {e}").into()))
 }
@@ -62,6 +65,14 @@ pub(crate) fn to_json<T: Serialize + ?Sized>(value: &T, what: &str) -> Result<St
 /// JSON TEXT → value. Undecodable JSON is corrupt data.
 pub(crate) fn from_json<T: DeserializeOwned>(text: &str, what: &str) -> Result<T, StorageError> {
     serde_json::from_str(text).map_err(|e| StorageError::Corrupt(format!("{what}: {e}")))
+}
+
+/// Optional JSON TEXT → optional value.
+pub(crate) fn opt_from_json<T: DeserializeOwned>(
+    text: Option<&str>,
+    what: &str,
+) -> Result<Option<T>, StorageError> {
+    text.map(|t| from_json(t, what)).transpose()
 }
 
 /// Stored enum name → enum, through the model's `parse` function. Unknown names are corrupt.

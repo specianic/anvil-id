@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO self_service_token\n             (token_hash, tenant_id, kind, user_id, email, created_at, expires_at, consumed_at)\n         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "73d4b75f06460f72dfe84aa44caa29c1c49867a4b14fd673174ea19f79f7f815"
+}

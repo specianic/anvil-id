@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM flow WHERE tenant_id = ?1 AND id = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "3880e9d859d08c0cd71ddd4024462aa63af806aa414d2b9044d433520bb5ba6f"
+}

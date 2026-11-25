@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT user_id AS \"user_id!: uuid::Uuid\", secret AS \"secret!\",\n                      created_at AS \"created_at!\", updated_at AS \"updated_at!\"\n                 FROM credential WHERE tenant_id = ?1 AND user_id = ?2 AND kind = ?3",
+  "describe": {
+    "columns": [
+      {
+        "name": "user_id!: uuid::Uuid",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "credential",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "name": "secret!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "credential",
+            "name": "secret"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "credential",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "updated_at!",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "credential",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "b965f3539ff872e7e3009da5463c91c2ac7b5773cdaa4b0d58b5d1ae04876223"
+}

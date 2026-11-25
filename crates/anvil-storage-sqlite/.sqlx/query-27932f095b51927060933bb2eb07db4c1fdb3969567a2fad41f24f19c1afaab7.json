@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM token_family WHERE rowid IN\n               (SELECT rowid FROM token_family f\n                 WHERE f.absolute_expires_at <= ?1\n                   AND NOT EXISTS (SELECT 1 FROM authorization_code c\n                                    WHERE c.token_family_id = f.id AND c.expires_at > ?1)\n                 LIMIT ?2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "27932f095b51927060933bb2eb07db4c1fdb3969567a2fad41f24f19c1afaab7"
+}

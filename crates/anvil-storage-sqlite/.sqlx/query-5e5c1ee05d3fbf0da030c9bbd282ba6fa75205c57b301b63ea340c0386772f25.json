@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO replay_guard (tenant_id, kind, value_hash, expires_at)\n             VALUES (?1, ?2, ?3, ?4)\n             ON CONFLICT (tenant_id, kind, value_hash)\n             DO UPDATE SET expires_at = excluded.expires_at\n                     WHERE replay_guard.expires_at <= ?5",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "5e5c1ee05d3fbf0da030c9bbd282ba6fa75205c57b301b63ea340c0386772f25"
+}

@@ -1,0 +1,110 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT token_hash AS \"token_hash!\", tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      family_id AS \"family_id!: uuid::Uuid\", parent_hash AS \"parent_hash?\",\n                      scope AS \"scope!\", created_at AS \"created_at!\", expires_at AS \"expires_at!\",\n                      consumed_at AS \"consumed_at?\"\n                 FROM refresh_token WHERE tenant_id = ?1 AND token_hash = ?2",
+  "describe": {
+    "columns": [
+      {
+        "name": "token_hash!",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "refresh_token",
+            "name": "token_hash"
+          }
+        }
+      },
+      {
+        "name": "tenant_id!: uuid::Uuid",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "refresh_token",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "name": "family_id!: uuid::Uuid",
+        "ordinal": 2,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "refresh_token",
+            "name": "family_id"
+          }
+        }
+      },
+      {
+        "name": "parent_hash?",
+        "ordinal": 3,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "refresh_token",
+            "name": "parent_hash"
+          }
+        }
+      },
+      {
+        "name": "scope!",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "refresh_token",
+            "name": "scope"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "refresh_token",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "expires_at!",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "refresh_token",
+            "name": "expires_at"
+          }
+        }
+      },
+      {
+        "name": "consumed_at?",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "refresh_token",
+            "name": "consumed_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "8903d7fe9632dc8e7ee27cb158fcaaa3a1fb1722c3cfeca7a34ada1ae3384650"
+}

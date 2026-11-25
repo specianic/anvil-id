@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM browser_session WHERE rowid IN\n               (SELECT rowid FROM browser_session\n                 WHERE expires_at <= ?1 OR idle_expires_at <= ?1 LIMIT ?2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "f4eb3c927ec3950b9901754748e7640a88cc394adfb7a0b1186ff621585957bb"
+}

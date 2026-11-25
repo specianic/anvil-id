@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM flow WHERE rowid IN\n               (SELECT rowid FROM flow WHERE expires_at <= ?1 LIMIT ?2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "ace1c2915b2138dbe8a3aa4768473f8497cb990dd149ec0b2c5d91cdaa105a39"
+}

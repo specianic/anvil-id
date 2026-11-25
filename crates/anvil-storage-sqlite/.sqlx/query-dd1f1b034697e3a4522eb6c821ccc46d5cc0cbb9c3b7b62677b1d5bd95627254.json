@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE token_family SET revoked_at = ?3, revoked_reason = ?4\n          WHERE tenant_id = ?1 AND id = ?2 AND revoked_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "dd1f1b034697e3a4522eb6c821ccc46d5cc0cbb9c3b7b62677b1d5bd95627254"
+}

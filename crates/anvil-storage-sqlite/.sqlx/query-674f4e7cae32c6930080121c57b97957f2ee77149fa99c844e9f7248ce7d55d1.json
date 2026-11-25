@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM user WHERE tenant_id = ?1 AND id = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "674f4e7cae32c6930080121c57b97957f2ee77149fa99c844e9f7248ce7d55d1"
+}

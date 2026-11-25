@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT consumed_at AS \"consumed_at?\", family_id AS \"family_id!: uuid::Uuid\"\n                 FROM refresh_token WHERE token_hash = ?1 AND tenant_id = ?2",
+  "describe": {
+    "columns": [
+      {
+        "name": "consumed_at?",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "refresh_token",
+            "name": "consumed_at"
+          }
+        }
+      },
+      {
+        "name": "family_id!: uuid::Uuid",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "refresh_token",
+            "name": "family_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true,
+      false
+    ]
+  },
+  "hash": "47346e50ccdbb2925451cea17f2adf0832b92378eab14c927de6883b9d381d42"
+}

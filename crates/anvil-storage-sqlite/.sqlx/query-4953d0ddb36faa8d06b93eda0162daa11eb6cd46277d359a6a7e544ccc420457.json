@@ -1,0 +1,122 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id AS \"id!: uuid::Uuid\", tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      kind AS \"kind!\", state AS \"state!\", csrf_hash AS \"csrf_hash!\",\n                      cookie_hash AS \"cookie_hash!\",\n                      auth_request_id AS \"auth_request_id?: uuid::Uuid\",\n                      created_at AS \"created_at!\", expires_at AS \"expires_at!\"\n                 FROM flow WHERE tenant_id = ?1 AND id = ?2 AND expires_at > ?3",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: uuid::Uuid",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "flow",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "tenant_id!: uuid::Uuid",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "flow",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "name": "kind!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "flow",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "name": "state!",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "flow",
+            "name": "state"
+          }
+        }
+      },
+      {
+        "name": "csrf_hash!",
+        "ordinal": 4,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "flow",
+            "name": "csrf_hash"
+          }
+        }
+      },
+      {
+        "name": "cookie_hash!",
+        "ordinal": 5,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "flow",
+            "name": "cookie_hash"
+          }
+        }
+      },
+      {
+        "name": "auth_request_id?: uuid::Uuid",
+        "ordinal": 6,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "flow",
+            "name": "auth_request_id"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "flow",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "expires_at!",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "flow",
+            "name": "expires_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "4953d0ddb36faa8d06b93eda0162daa11eb6cd46277d359a6a7e544ccc420457"
+}

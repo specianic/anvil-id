@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM replay_guard WHERE rowid IN\n               (SELECT rowid FROM replay_guard WHERE expires_at <= ?1 LIMIT ?2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "d1fe07e391f46a581576c89c0deb224b826ce866562409fd933698aa24839169"
+}

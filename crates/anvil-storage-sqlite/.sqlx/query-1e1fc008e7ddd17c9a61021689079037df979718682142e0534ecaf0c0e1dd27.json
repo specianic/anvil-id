@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM authorization_request WHERE tenant_id = ?1 AND id = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "1e1fc008e7ddd17c9a61021689079037df979718682142e0534ecaf0c0e1dd27"
+}

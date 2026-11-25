@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO browser_session\n                 (id, tenant_id, user_id, token_hash, auth_time, acr, amr, created_at,\n                  last_seen_at, expires_at, idle_expires_at, revoked_at)\n             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9, ?10, NULL)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 10
+    },
+    "nullable": []
+  },
+  "hash": "01ef5e122c6db9a1e446a2b14dae32532ca81813e1489acbed20ec184a55020d"
+}

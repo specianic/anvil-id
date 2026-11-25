@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM email_outbox WHERE rowid IN\n               (SELECT rowid FROM email_outbox\n                 WHERE sent_at IS NOT NULL OR expires_at <= ?1 LIMIT ?2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "ed8c5f0f08e30854fb455c5d71efe16270026e4069600fc04ff8820f213dc2bc"
+}

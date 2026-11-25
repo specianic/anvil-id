@@ -7,7 +7,9 @@ use anvil_core::ports::{OutboxRepo, StorageError};
 use sqlx::{SqliteConnection, SqlitePool};
 use time::OffsetDateTime;
 
-use crate::convert::{from_json, i64_to_u32, map_err, ms_to_odt, odt_to_ms, opt_ms_to_odt, to_json};
+use crate::convert::{
+    from_json, i64_to_u32, map_err, ms_to_odt, odt_to_ms, opt_ms_to_odt, to_json,
+};
 
 #[derive(Debug, Clone)]
 pub(crate) struct SqliteOutbox {

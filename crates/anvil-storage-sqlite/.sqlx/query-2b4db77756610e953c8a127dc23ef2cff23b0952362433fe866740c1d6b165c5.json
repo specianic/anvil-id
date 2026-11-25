@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE self_service_token SET consumed_at = ?3\n            WHERE token_hash = ?1 AND tenant_id = ?2 AND kind IN (?4, ?5)\n              AND consumed_at IS NULL AND expires_at > ?3\n        RETURNING user_id AS \"user_id!: uuid::Uuid\", email AS \"email!\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "user_id!: uuid::Uuid",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "self_service_token",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "name": "email!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "self_service_token",
+            "name": "email"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "2b4db77756610e953c8a127dc23ef2cff23b0952362433fe866740c1d6b165c5"
+}

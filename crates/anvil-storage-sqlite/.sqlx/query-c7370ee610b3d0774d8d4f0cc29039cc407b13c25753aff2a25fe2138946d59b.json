@@ -1,0 +1,134 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id AS \"id!: uuid::Uuid\", tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      email AS \"email!\", email_verified AS \"email_verified!: bool\",\n                      username AS \"username?\", claims AS \"claims!\", status AS \"status!\",\n                      created_at AS \"created_at!\", updated_at AS \"updated_at!\",\n                      last_login_at AS \"last_login_at?\"\n                 FROM user WHERE tenant_id = ?1 AND email = ?2",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: uuid::Uuid",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "user",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "tenant_id!: uuid::Uuid",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "user",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "name": "email!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "user",
+            "name": "email"
+          }
+        }
+      },
+      {
+        "name": "email_verified!: bool",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "user",
+            "name": "email_verified"
+          }
+        }
+      },
+      {
+        "name": "username?",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "user",
+            "name": "username"
+          }
+        }
+      },
+      {
+        "name": "claims!",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "user",
+            "name": "claims"
+          }
+        }
+      },
+      {
+        "name": "status!",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "user",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "user",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "updated_at!",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "user",
+            "name": "updated_at"
+          }
+        }
+      },
+      {
+        "name": "last_login_at?",
+        "ordinal": 9,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "user",
+            "name": "last_login_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "c7370ee610b3d0774d8d4f0cc29039cc407b13c25753aff2a25fe2138946d59b"
+}

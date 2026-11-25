@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM authorization_request WHERE rowid IN\n               (SELECT rowid FROM authorization_request WHERE expires_at <= ?1 LIMIT ?2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "28a2807a05719de16dfc763e80d9266a405a31cd1ddf5efd6ff476d32aa85caa"
+}
