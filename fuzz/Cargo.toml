@@ -19,7 +19,7 @@ anvil-jose = { path = "../crates/anvil-jose" }
 arbitrary = { version = "1.5", features = ["derive"] }
 base64 = "0.23.1"
 libfuzzer-sys = "0.4.13"
-serde_json = "1"
+serde_json = { version = "1", features = ["float_roundtrip"] }
 time = "0.3.55"
 url = "2"
 

@@ -251,6 +251,19 @@ mod tests {
     }
 
     #[test]
+    fn float_claims_round_trip_exactly() {
+        // Fuzz finding (jwt_decode): without serde_json's float_roundtrip feature, a large
+        // integer literal parsed to f64 came back one ulp off after sign + verify.
+        let raw = format!("{{\"x\": 24442{}}}", "2".repeat(48));
+        let claims: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(&raw).unwrap();
+        let k = rsa(Alg::RS256);
+        let t = k.signer.sign_jwt(None, &claims).unwrap();
+        let v = verify_jwt(&t, &set(&[&k.jwk]), ALL).unwrap();
+        assert_eq!(v.claims, claims);
+    }
+
+    #[test]
     fn hs256_alg_confusion_rejected() {
         // Classic confusion: HMAC with the RSA public key (modulus bytes) as the secret.
         let k = rsa(Alg::RS256);
