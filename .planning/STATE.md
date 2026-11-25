@@ -7,13 +7,13 @@ current_phase_name: release 0 3 real world logins
 current_plan: Not started
 status: planning
 stopped_at: "Completed 03-34-PLAN.md (Phase 3 gap closure: single base64 implementation)"
-last_updated: "2026-11-25T15:16:48.515Z"
+last_updated: "2026-11-25T15:25:40.740Z"
 last_activity: 2026-11-25
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 98
-  completed_plans: 68
+  completed_plans: 69
   percent: 100
 ---
 
@@ -124,6 +124,7 @@ Phase 3 plans 03-01 through 03-34 are all complete (34/34 summaries); v0.2.0 is 
 | Phase 04 P03 | 25min | 2 tasks | 8 files |
 | Phase 04 P02 | 50min | 3 tasks | 29 files |
 | Phase 04 P01 | 31min | 3 tasks | 97 files |
+| Phase 04 P10 | 25min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -274,6 +275,8 @@ Recent decisions affecting current work:
 - [Phase 04]: 04-01: Backends refuse Phase 4 values they cannot store yet (client fields, resource, logout flows, email_change tokens) with Unsupported until 04-04/04-05; 32 new contract tests fail only with Unsupported
 - [Phase 04]: 04-01: anvil_jose::pem is the only PEM parser (strict single PRIVATE KEY block); email codes hashed HMAC(derive_key anvilid/email-otp/v1, flow_id||0x00||code)
 - [Phase 04]: 04-01: New EmailKinds (login_code, email_change, email_changed) have no template contract until 04-15 (explicit error via has_contract)
+- [Phase 04]: 04-10: Conformance callback leaf is RSA-2048 signed by a per-run P-256 CA (suite nginx has an ECDHE-RSA-only listener); anvilid reaches it via ANVILID_OUTBOUND_CA_FILE + ANVILID_OUTBOUND_ALLOW_CIDRS=127.0.0.1/32
+- [Phase 04]: 04-10: Logout browser contract is URL-based: confirm page under /ui/logout*, signed-out page not under /ui/logout*, errors under the tenant base URL
 
 ### Pending Todos
 
