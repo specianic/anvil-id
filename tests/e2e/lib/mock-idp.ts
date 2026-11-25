@@ -8,7 +8,8 @@
 //           FIRST authorization per subject only, a `user` JSON field to redirect_uri),
 //           /auth/token (client_secret is an ES256 JWT signed with the key whose public JWK the
 //           test passes in; aud must be this mock's base URL), /auth/keys (JWKS). ID tokens are
-//           ES256 with `email_verified` and `is_private_email` as STRINGS ("true"/"false").
+//           RS256, like the real provider's (AnvilID's Apple preset accepts RS256 only), with
+//           `email_verified` and `is_private_email` as STRINGS ("true"/"false").
 //           No discovery document, as with the real provider.
 //   github  GitHub-like OAuth2 provider: /login/oauth/authorize (optional PKCE S256),
 //           /login/oauth/access_token (JSON only with `Accept: application/json`, form-encoded
@@ -125,7 +126,7 @@ export function mockIdpRedirectUri(anvilUrl: string, tenant: string, slug: strin
 }
 
 // ---------------------------------------------------------------------------
-// JOSE helpers (ES256 only, IEEE P1363 signatures).
+// JOSE helpers (ES256 with IEEE P1363 signatures for client secrets, RS256 for ID tokens).
 
 export function b64url(data: Buffer | string): string {
   return Buffer.from(data).toString('base64url');
@@ -163,6 +164,21 @@ export function decodeJwt(token: string): DecodedJwt {
   const claims = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8')) as unknown;
   if (!isObject(header) || !isObject(claims)) throw new Error('JWS header/payload is not an object');
   return { header, claims, signingInput: `${parts[0]}.${parts[1]}`, signature: Buffer.from(parts[2], 'base64url') };
+}
+
+/** Signs an RS256 JWT (header {alg, kid}) with an RSA private key. */
+export function signRs256Jwt(privateKey: KeyObject, kid: string, claims: Record<string, unknown>): string {
+  const input = `${b64url(JSON.stringify({ alg: 'RS256', kid }))}.${b64url(JSON.stringify(claims))}`;
+  return `${input}.${b64url(sign('sha256', Buffer.from(input), privateKey))}`;
+}
+
+/** Verifies an RS256 JWS against a public JWK; returns the decoded token or throws. */
+export function verifyRs256Jwt(token: string, jwk: Jwk): DecodedJwt {
+  const decoded = decodeJwt(token);
+  if (decoded.header.alg !== 'RS256') throw new Error('alg is not RS256');
+  const key = createPublicKey({ key: jwk, format: 'jwk' });
+  if (!verify('sha256', Buffer.from(decoded.signingInput), key, decoded.signature)) throw new Error('bad signature');
+  return decoded;
 }
 
 /** Verifies an ES256 JWS against a public JWK; returns the decoded token or throws. */
@@ -307,10 +323,11 @@ export async function startMockIdp(opts: MockIdpOptions): Promise<MockIdp> {
   const appleUserSent = new Set<string>();
   let selected: MockUser = users[0];
 
-  // Signing key for ID tokens (Apple-like). Generated per start, held in memory only.
-  const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+  // Signing key for ID tokens (Apple-like, RS256 as the real provider). Generated per start, held
+  // in memory only.
+  const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
   const signingKid = `mock-${randomBytes(6).toString('hex')}`;
-  const publicJwk = { ...publicKey.export({ format: 'jwk' }), kid: signingKid, use: 'sig', alg: 'ES256' } as Jwk;
+  const publicJwk = { ...publicKey.export({ format: 'jwk' }), kid: signingKid, use: 'sig', alg: 'RS256' } as Jwk;
   const jwks = { keys: [publicJwk] };
 
   let baseUrl = '';
@@ -345,7 +362,7 @@ export async function startMockIdp(opts: MockIdpOptions): Promise<MockIdp> {
       ...extra,
     };
     if (nonce !== undefined) claims.nonce = nonce;
-    return signEs256Jwt(privateKey, signingKid, claims);
+    return signRs256Jwt(privateKey, signingKid, claims);
   };
 
   // ---- Apple-like -------------------------------------------------------------------------------

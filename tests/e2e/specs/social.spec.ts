@@ -91,6 +91,10 @@ test('AnvilID as a generic OIDC upstream (second tenant)', async ({ page, browse
       issuer: upstream.issuer,
       client_id: upstream.clientId,
       scopes: ['openid', 'profile', 'email'],
+      // AnvilID (like any provider following OIDC Core 5.4) returns the scope claims (email) from
+      // UserInfo when it issues an access token, not in the ID token: without this the sign-in
+      // fails with `email_missing`.
+      fetch_userinfo: true,
     },
     secret: upstream.clientSecret,
   });

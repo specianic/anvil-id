@@ -7,7 +7,7 @@ import { request as httpRequest, createServer, type IncomingMessage, type Server
 import type { AddressInfo } from 'node:net';
 import { createHash, randomBytes } from 'node:crypto';
 import { expect, test } from '@playwright/test';
-import { decodeJwt, mockIdpRedirectUri, startMockIdp, verifyEs256Jwt, type Jwk, type MockIdp } from '../lib/mock-idp';
+import { decodeJwt, mockIdpRedirectUri, startMockIdp, verifyRs256Jwt, type Jwk, type MockIdp } from '../lib/mock-idp';
 import { appleClientSecret, appleKeyPair } from '../lib/upstream';
 
 interface Delivery {
@@ -134,7 +134,7 @@ test.describe('apple-like mock', () => {
     return { status: res.status, body: (await res.json()) as Record<string, unknown> };
   }
 
-  test('form_post callback, ES256 ID token with string email_verified, user JSON only once', async ({ page }) => {
+  test('form_post callback, RS256 ID token with string email_verified, user JSON only once', async ({ page }) => {
     const user = idp.users[0];
     const first = await authorize(page, 'nonce-1', 'state-1');
     expect(first.method).toBe('POST');
@@ -153,8 +153,8 @@ test.describe('apple-like mock', () => {
     const kid = decodeJwt(idToken).header.kid;
     const jwk = jwks.keys.find((k) => (k as { kid?: string }).kid === kid);
     expect(jwk).toBeTruthy();
-    const { header, claims } = verifyEs256Jwt(idToken, jwk!);
-    expect(header.alg).toBe('ES256');
+    const { header, claims } = verifyRs256Jwt(idToken, jwk!);
+    expect(header.alg).toBe('RS256');
     expect(claims.iss).toBe(idp.url);
     expect(claims.aud).toBe(clientId);
     expect(claims.sub).toBe(user.sub);
