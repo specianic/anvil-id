@@ -19,15 +19,15 @@ Source of truth for wording and detail: [docs/PRD.md](../docs/PRD.md) §8–9. I
 
 ### OAuth 2.1 / OpenID Connect server
 
-- [ ] **OIDC-01**: A client can complete authorization code flow with PKCE; only S256 is accepted; PKCE is required by default and only confidential clients may opt out (nonce then stays optional, per OIDC Core; public clients never opt out) [0.1]
-- [ ] **OIDC-02**: Redirect URIs are matched exactly (loopback port flexibility only for native apps); invalid redirects show an error page and never redirect [0.1]
-- [ ] **OIDC-03**: Authorization codes are single-use, ≤60 s, bound to client/redirect/PKCE; reuse revokes the tokens issued from that code [0.1]
-- [ ] **OIDC-04**: Clients authenticate with client_secret_basic, client_secret_post, private_key_jwt (aud = issuer, jti replay rejected) or none; secrets hashed, compared in constant time [0.1]
-- [ ] **OIDC-05**: Refresh tokens rotate on every use; reuse revokes the whole token family [0.1]
-- [ ] **OIDC-06**: A client can obtain tokens with the client credentials grant [0.1]
-- [ ] **OIDC-07**: ID tokens are signed with the active key (kid set) and carry nonce, at_hash, auth_time, acr/amr [0.1]
-- [ ] **OIDC-08**: Relying parties can discover the provider (OIDC discovery + RFC 8414 metadata) and fetch a JWKS that reflects key rotation with overlap [0.1]
-- [ ] **OIDC-09**: A client can call UserInfo and receive scope-based claims [0.1]
+- [x] **OIDC-01**: A client can complete authorization code flow with PKCE; only S256 is accepted; PKCE is required by default and only confidential clients may opt out (nonce then stays optional, per OIDC Core; public clients never opt out) [0.1]
+- [x] **OIDC-02**: Redirect URIs are matched exactly (loopback port flexibility only for native apps); invalid redirects show an error page and never redirect [0.1]
+- [x] **OIDC-03**: Authorization codes are single-use, ≤60 s, bound to client/redirect/PKCE; reuse revokes the tokens issued from that code [0.1]
+- [x] **OIDC-04**: Clients authenticate with client_secret_basic, client_secret_post, private_key_jwt (aud = issuer, jti replay rejected) or none; secrets hashed, compared in constant time [0.1]
+- [x] **OIDC-05**: Refresh tokens rotate on every use; reuse revokes the whole token family [0.1]
+- [x] **OIDC-06**: A client can obtain tokens with the client credentials grant [0.1]
+- [x] **OIDC-07**: ID tokens are signed with the active key (kid set) and carry nonce, at_hash, auth_time, acr/amr [0.1]
+- [x] **OIDC-08**: Relying parties can discover the provider (OIDC discovery + RFC 8414 metadata) and fetch a JWKS that reflects key rotation with overlap [0.1]
+- [x] **OIDC-09**: A client can call UserInfo and receive scope-based claims [0.1]
 - [ ] **OIDC-10**: Resource servers can introspect (RFC 7662) and clients can revoke (RFC 7009) tokens [0.2]
 - [ ] **OIDC-11**: Tokens can be signed with RS256, ES256 or Ed25519 [0.2]
 - [ ] **OIDC-12**: RPs can log users out via RP-initiated logout and receive back-channel logout notifications [0.3]
@@ -38,14 +38,14 @@ Source of truth for wording and detail: [docs/PRD.md](../docs/PRD.md) §8–9. I
 - [ ] **OIDC-17**: Clients can register dynamically (RFC 7591/7592) under an admin policy: disabled / allow-listed / open [0.4]
 - [ ] **OIDC-18**: Clients can use pushed authorization requests (RFC 9126) [1.0]
 - [ ] **OIDC-23**: The OpenID conformance suite passes in CI for Basic OP, Config OP, Form Post, RP-Initiated Logout and Back-Channel Logout; certification filed [1.0]
-- [ ] **OIDC-24**: Authorization responses include the `iss` parameter (RFC 9207) [0.1]
+- [x] **OIDC-24**: Authorization responses include the `iss` parameter (RFC 9207) [0.1]
 - [ ] **OIDC-25**: Authorization responses support `query` and `form_post` response modes [0.2]
 
 ### Authentication and self-service
 
-- [ ] **AUTH-01**: User can log in with a password (Argon2id, policy, optional breached-password check) [0.1]
-- [ ] **AUTH-02**: User can self-register (can be disabled or invite-only) and verify their email [0.1]
-- [ ] **AUTH-03**: User can recover their account by email without revealing whether an account exists [0.1]
+- [x] **AUTH-01**: User can log in with a password (Argon2id, policy, optional breached-password check) [0.1]
+- [x] **AUTH-02**: User can self-register (can be disabled or invite-only) and verify their email [0.1]
+- [x] **AUTH-03**: User can recover their account by email without revealing whether an account exists [0.1]
 - [ ] **AUTH-04**: User can register and log in with passkeys, including usernameless; clone detection via signature counter [0.2]
 - [ ] **AUTH-05**: User can enroll TOTP with recovery codes and use it as a second factor [0.2]
 - [ ] **AUTH-06**: User can log in with email OTP or magic link [0.3]
@@ -59,7 +59,7 @@ Source of truth for wording and detail: [docs/PRD.md](../docs/PRD.md) §8–9. I
 
 ### Login UI and branding
 
-- [ ] **UI-01**: Login, registration, recovery, consent, MFA and account pages are served by the binary with no external assets [0.1]
+- [x] **UI-01**: Login, registration, recovery, consent, MFA and account pages are served by the binary with no external assets [0.1]
 - [ ] **UI-02**: Login pages meet WCAG 2.2 AA, are responsive, and the password flow works without JavaScript [0.2]
 - [ ] **UI-03**: Admin can theme pages (logo, colors, fonts, radius, custom CSS) live from the console, with per-tenant/org/client overrides [0.3]
 - [ ] **UI-04**: Pages are translated, with language chosen from ui_locales or the browser [0.3]
@@ -76,9 +76,9 @@ Source of truth for wording and detail: [docs/PRD.md](../docs/PRD.md) §8–9. I
 
 ### Administration, API and operations
 
-- [ ] **ADM-01**: Every console action is available through an OpenAPI 3.1 management API authenticated with OAuth tokens and fine-grained admin scopes [0.1]
+- [x] **ADM-01**: Every console action is available through an OpenAPI 3.1 management API authenticated with OAuth tokens and fine-grained admin scopes [0.1]
 - [ ] **ADM-02**: Admin can manage tenants, users, clients, organizations, connections, branding, keys, sessions and the audit log from the console [0.2–1.0]
-- [ ] **ADM-03**: On an empty database the operator gets a one-time setup URL to create the first admin; there are no default credentials [0.1]
+- [x] **ADM-03**: On an empty database the operator gets a one-time setup URL to create the first admin; there are no default credentials [0.1]
 - [ ] **ADM-04**: Every security-relevant event and admin action is audited, queryable in the console and streamable as JSON [0.2]
 - [ ] **ADM-05**: Integrators receive signed, retried webhooks for user and session lifecycle events [0.4]
 - [ ] **ADM-06**: Operator can export and idempotently apply a tenant's configuration as YAML [0.4]
@@ -95,10 +95,10 @@ Source of truth for wording and detail: [docs/PRD.md](../docs/PRD.md) §8–9. I
 ### Operations (PRD §9.1)
 
 - [ ] **OPS-01**: Operator can download one static binary (linux amd64/arm64, macOS) or a container image under 50 MB
-- [ ] **OPS-02**: AnvilID runs on embedded SQLite by default and on PostgreSQL for production, with no other required dependency
+- [x] **OPS-02**: AnvilID runs on embedded SQLite by default and on PostgreSQL for production, with no other required dependency
 - [ ] **OPS-03**: Operator can run multiple stateless instances on one Postgres without extra coordination services
 - [ ] **OPS-04**: Migrations run automatically, are tested between consecutive minor versions, and are never destructive without an explicit flag
-- [ ] **OPS-05**: Operator can start with zero configuration; in production only the public URL is expected
+- [x] **OPS-05**: Operator can start with zero configuration; in production only the public URL is expected
 - [ ] **OPS-06**: AnvilID behaves correctly behind reverse proxies via trusted-proxy configuration
 - [ ] **OPS-07**: Operator can back up and restore online (SQLite snapshot; Postgres guidance)
 - [ ] **OPS-08**: Operator can monitor health endpoints, Prometheus metrics, OpenTelemetry traces and structured JSON logs
@@ -106,21 +106,21 @@ Source of truth for wording and detail: [docs/PRD.md](../docs/PRD.md) §8–9. I
 
 ### Security (PRD §9.2)
 
-- [ ] **SEC-01**: Defaults follow RFC 9700 and OAuth 2.1
+- [x] **SEC-01**: Defaults follow RFC 9700 and OAuth 2.1
 - [ ] **SEC-02**: Signing keys are generated at first start, encrypted at rest with a KEK, and rotated on schedule with overlap
 - [ ] **SEC-03**: All secrets are stored hashed; TOTP seeds and upstream IdP secrets are encrypted
-- [ ] **SEC-04**: Browser endpoints have CSRF protection, hardened cookies and a strict CSP
+- [x] **SEC-04**: Browser endpoints have CSRF protection, hardened cookies and a strict CSP
 - [ ] **SEC-05**: Authentication and token endpoints are rate limited by default
-- [ ] **SEC-06**: Release builds contain no test-only behavior
-- [ ] **SEC-07**: CI audits dependencies and fuzzes JWT and authorization-request parsers
+- [x] **SEC-06**: Release builds contain no test-only behavior
+- [x] **SEC-07**: CI audits dependencies and fuzzes JWT and authorization-request parsers
 - [ ] **SEC-08**: The project publishes a security policy; an external security review is completed before 1.0
 
 ### Quality (PRD §9.3, §6.3)
 
-- [ ] **QUAL-01**: Each security requirement has an automated negative test proving bad input is rejected
-- [ ] **QUAL-02**: The same test suite runs against SQLite and Postgres
+- [x] **QUAL-01**: Each security requirement has an automated negative test proving bad input is rejected
+- [x] **QUAL-02**: The same test suite runs against SQLite and Postgres
 - [ ] **QUAL-03**: Public APIs are versioned; breaking changes only in major versions
-- [ ] **QUAL-04**: Zero-config `docker run` → OIDC login in a sample app takes ≤ 2 minutes (scripted check)
+- [x] **QUAL-04**: Zero-config `docker run` → OIDC login in a sample app takes ≤ 2 minutes (scripted check)
 - [ ] **QUAL-05**: Idle memory < 100 MB; token endpoint ≥ 1,000 req/s at p99 < 50 ms on 4 vCPU with Postgres
 
 ## v2 Requirements (after 1.0)
@@ -174,15 +174,15 @@ Which phases cover which requirements. Updated during roadmap creation.
 | FND-03 | Phase 1 | Complete |
 | FND-04 | Phase 1 | Complete |
 | FND-05 | Phase 1 | Complete |
-| OIDC-01 | Phase 2 | Pending |
-| OIDC-02 | Phase 2 | Pending |
-| OIDC-03 | Phase 2 | Pending |
-| OIDC-04 | Phase 2 | Pending |
-| OIDC-05 | Phase 2 | Pending |
-| OIDC-06 | Phase 2 | Pending |
-| OIDC-07 | Phase 2 | Pending |
-| OIDC-08 | Phase 2 | Pending |
-| OIDC-09 | Phase 2 | Pending |
+| OIDC-01 | Phase 2 | Complete |
+| OIDC-02 | Phase 2 | Complete |
+| OIDC-03 | Phase 2 | Complete |
+| OIDC-04 | Phase 2 | Complete |
+| OIDC-05 | Phase 2 | Complete |
+| OIDC-06 | Phase 2 | Complete |
+| OIDC-07 | Phase 2 | Complete |
+| OIDC-08 | Phase 2 | Complete |
+| OIDC-09 | Phase 2 | Complete |
 | OIDC-10 | Phase 3 | Pending |
 | OIDC-11 | Phase 3 | Pending |
 | OIDC-12 | Phase 4 | Pending |
@@ -193,11 +193,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | OIDC-17 | Phase 5 | Pending |
 | OIDC-18 | Phase 7 | Pending |
 | OIDC-23 | Phase 7 | Pending |
-| OIDC-24 | Phase 2 | Pending |
+| OIDC-24 | Phase 2 | Complete |
 | OIDC-25 | Phase 3 | Pending |
-| AUTH-01 | Phase 2 | Pending |
-| AUTH-02 | Phase 2 | Pending |
-| AUTH-03 | Phase 2 | Pending |
+| AUTH-01 | Phase 2 | Complete |
+| AUTH-02 | Phase 2 | Complete |
+| AUTH-03 | Phase 2 | Complete |
 | AUTH-04 | Phase 3 | Pending |
 | AUTH-05 | Phase 3 | Pending |
 | AUTH-06 | Phase 4 | Pending |
@@ -208,7 +208,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | AUTH-11 | Phase 4 | Pending |
 | AUTH-13 | Phase 4 | Pending |
 | AUTH-14 | Phase 5 | Pending |
-| UI-01 | Phase 2 | Pending |
+| UI-01 | Phase 2 | Complete |
 | UI-02 | Phase 3 | Pending |
 | UI-03 | Phase 4 | Pending |
 | UI-04 | Phase 4 | Pending |
@@ -219,9 +219,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ORG-03 | Phase 6 | Pending |
 | ORG-04 | Phase 6 | Pending |
 | ORG-05 | Phase 5 | Pending |
-| ADM-01 | Phase 2 | Pending |
+| ADM-01 | Phase 2 | Complete |
 | ADM-02 | Phase 6 | Pending |
-| ADM-03 | Phase 2 | Pending |
+| ADM-03 | Phase 2 | Complete |
 | ADM-04 | Phase 3 | Pending |
 | ADM-05 | Phase 5 | Pending |
 | ADM-06 | Phase 5 | Pending |
@@ -232,26 +232,26 @@ Which phases cover which requirements. Updated during roadmap creation.
 | AGT-02 | Phase 5 | Pending |
 | AGT-03 | Phase 7 | Pending |
 | OPS-01 | Phase 2 | Pending |
-| OPS-02 | Phase 2 | Pending |
+| OPS-02 | Phase 2 | Complete |
 | OPS-03 | Phase 5 | Pending |
 | OPS-04 | Phase 3 | Pending |
-| OPS-05 | Phase 2 | Pending |
+| OPS-05 | Phase 2 | Complete |
 | OPS-06 | Phase 3 | Pending |
 | OPS-07 | Phase 5 | Pending |
 | OPS-08 | Phase 5 | Pending |
 | OPS-09 | Phase 5 | Pending |
-| SEC-01 | Phase 2 | Pending |
+| SEC-01 | Phase 2 | Complete |
 | SEC-02 | Phase 3 | Pending |
 | SEC-03 | Phase 4 | Pending |
-| SEC-04 | Phase 2 | Pending |
+| SEC-04 | Phase 2 | Complete |
 | SEC-05 | Phase 3 | Pending |
-| SEC-06 | Phase 2 | Pending |
-| SEC-07 | Phase 2 | Pending |
+| SEC-06 | Phase 2 | Complete |
+| SEC-07 | Phase 2 | Complete |
 | SEC-08 | Phase 7 | Pending |
-| QUAL-01 | Phase 2 | Pending |
-| QUAL-02 | Phase 2 | Pending |
+| QUAL-01 | Phase 2 | Complete |
+| QUAL-02 | Phase 2 | Complete |
 | QUAL-03 | Phase 7 | Pending |
-| QUAL-04 | Phase 2 | Pending |
+| QUAL-04 | Phase 2 | Complete |
 | QUAL-05 | Phase 5 | Pending |
 
 **Partial pull-ins:**
