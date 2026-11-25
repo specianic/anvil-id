@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT consumed_at, token_family_id\n               FROM authorization_code\n              WHERE tenant_id = $1 AND code_hash = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "consumed_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "authorization_code",
+            "name": "consumed_at"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "token_family_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "authorization_code",
+            "name": "token_family_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "dcd12df0ddf0d09f79e172b9e3ad55a82b2bd2b0d561f37e78ddcedc69ce34f8"
+}
