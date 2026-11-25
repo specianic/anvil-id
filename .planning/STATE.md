@@ -6,15 +6,15 @@ current_phase: 03
 current_phase_name: release 0 2 secure by default
 current_plan: Not started
 status: planning
-stopped_at: Completed 03-25-PLAN.md
-last_updated: "2026-11-25T08:33:45.589Z"
+stopped_at: Completed 03-31-PLAN.md
+last_updated: "2026-11-25T08:36:42.366Z"
 last_activity: 2026-11-25
 progress:
   total_phases: 7
   completed_phases: 2
   total_plans: 62
-  completed_plans: 60
-  percent: 92
+  completed_plans: 61
+  percent: 98
 ---
 
 # Project State
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 **Status:** Ready to plan
 **Last Activity:** 2026-11-25
 **Last Activity Description:** Phase 2 complete, transitioned to Phase 03
-**Progress:** [█████████░] 92%
+**Progress:** [██████████] 98%
 
 Phase 2 plans 02-01 through 02-22 are all complete (22/22 summaries). Next: Phase 2 verification, then Phase 3.
 
@@ -117,6 +117,7 @@ Phase 2 plans 02-01 through 02-22 are all complete (22/22 summaries). Next: Phas
 | Phase 03 P27 | 35min | 2 tasks | 11 files |
 | Phase 03 P28 | 50min | 2 tasks | 6 files |
 | Phase 03 P25 | 75min | 2 tasks | 20 files |
+| Phase 03 P31 | 15min | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -256,6 +257,7 @@ Recent decisions affecting current work:
 - [Phase 03]: 03-28: conformance instance raises only the Auth login quota (ANVILID_RATE_LIMIT_AUTH_PER_MINUTE=600); the default 10/min caused the 429s in CI run 45574616586; expected-failures stays []
 - [Phase 03]: 03-25: e2e run.sh builds admin-ui then a release anvilid so the tested binary embeds the console; console sign-in after an explicit sign-out sends prompt=login
 - [Phase 03]: 03-25: console CSP (script-src/style-src 'self') needs no relaxation; console spec reports no violations
+- [Phase 03]: 03-31: request_not_supported delivered via outer response_mode/state, else the unverified request object's (form_post only; >8 KiB/malformed -> outer params); request_uri never fetched
 
 ### Pending Todos
 
@@ -265,10 +267,9 @@ None yet.
 
 - [Phase 6]: Decision D4 (pure-Rust SAML XML-DSig vs alternatives) must be resolved before M5; SAML stays experimental until it passes a signature-wrapping attack corpus
 - [Phase 4]: Social login exit criterion requires testing against real providers in a staging environment (provider app registrations needed)
-- [Phase 3]: 03-28 Form Post OP oidcc-unsigned-request-object fails (request_not_supported delivered via query; response_mode only inside the unsupported request object); needs a product decision (discovery request_object_signing_alg_values_supported or error delivery mode)
 
 ## Session Continuity
 
-Last session: 2026-11-25T08:33:45.586Z
-Stopped at: Completed 03-25-PLAN.md
+Last session: 2026-11-25T08:36:42.307Z
+Stopped at: Completed 03-31-PLAN.md
 Resume file: None

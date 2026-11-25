@@ -134,6 +134,7 @@ Plans:
 - [ ] 03-28-PLAN.md — Conformance: Form Post OP plan in CI; Basic/Config re-run with consent-free clients (wave 6)
 - [ ] 03-29-PLAN.md — Phase gate: security-test map, `just ci`, release console check, migration pinning, docs sync, push + CI green (checkpoint) (wave 7)
 - [x] 03-30-PLAN.md — Gap closure: account_security audit filtering, password-changed notice inside the recovery transaction (worker fills `email` from recipient) (wave 4)
+- [x] 03-31-PLAN.md — Gap closure: deliver request_not_supported via the requested response mode (outer, else from the unverified request object) (wave 6)
 
 ### Phase 4: Release 0.3 "Real-world logins"
 **Goal**: AnvilID handles the login journeys real products need: social and passwordless sign-in, safe account linking, MFA policy and step-up, standard logout, and branded, translated pages
