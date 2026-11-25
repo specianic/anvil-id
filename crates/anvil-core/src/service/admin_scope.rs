@@ -2,7 +2,8 @@
 //!
 //! - `admin:read` grants read access to every resource; `admin:write` grants read and write access
 //!   to every resource.
-//! - `admin:{tenants|clients|users}:read` grants read access to that resource only;
+//! - `admin:{tenants|clients|users|sessions|audit|settings}:read` grants read access to that
+//!   resource only;
 //!   `admin:{resource}:write` grants read and write access to that resource only.
 //!
 //! The admin API (02-16) checks every route with [`scope_satisfies`] and lists
@@ -25,6 +26,12 @@ pub const ALL_ADMIN_SCOPES: &[&str] = &[
     "admin:clients:write",
     "admin:users:read",
     "admin:users:write",
+    "admin:sessions:read",
+    "admin:sessions:write",
+    "admin:audit:read",
+    "admin:audit:write",
+    "admin:settings:read",
+    "admin:settings:write",
 ];
 
 /// A management resource.
@@ -33,6 +40,12 @@ pub enum Resource {
     Tenants,
     Clients,
     Users,
+    /// User sessions (list, revoke).
+    Sessions,
+    /// The audit log.
+    Audit,
+    /// Tenant settings managed apart from the tenant record (signing keys, CAPTCHA, email).
+    Settings,
 }
 
 impl Resource {
@@ -42,6 +55,9 @@ impl Resource {
             Self::Tenants => "tenants",
             Self::Clients => "clients",
             Self::Users => "users",
+            Self::Sessions => "sessions",
+            Self::Audit => "audit",
+            Self::Settings => "settings",
         }
     }
 }
@@ -85,7 +101,14 @@ pub fn is_admin_scope(token: &str) -> bool {
 mod tests {
     use super::*;
 
-    const RESOURCES: [Resource; 3] = [Resource::Tenants, Resource::Clients, Resource::Users];
+    const RESOURCES: [Resource; 6] = [
+        Resource::Tenants,
+        Resource::Clients,
+        Resource::Users,
+        Resource::Sessions,
+        Resource::Audit,
+        Resource::Settings,
+    ];
 
     fn scope(s: &str) -> Scope {
         Scope::parse(s).unwrap()
@@ -114,7 +137,7 @@ mod tests {
         let s = scope("admin:users:write");
         assert!(scope_satisfies(&s, Resource::Users, Access::Read));
         assert!(scope_satisfies(&s, Resource::Users, Access::Write));
-        for r in [Resource::Tenants, Resource::Clients] {
+        for r in RESOURCES.into_iter().filter(|r| *r != Resource::Users) {
             assert!(!scope_satisfies(&s, r, Access::Read));
             assert!(!scope_satisfies(&s, r, Access::Write));
         }
@@ -156,7 +179,10 @@ mod tests {
                 assert!(is_admin_scope(&resource_scope(r, a)));
             }
         }
-        assert_eq!(ALL_ADMIN_SCOPES.len(), 8);
+        assert_eq!(ALL_ADMIN_SCOPES.len(), 2 + 2 * RESOURCES.len());
+        assert!(is_admin_scope("admin:sessions:write"));
+        assert!(is_admin_scope("admin:audit:read"));
+        assert!(is_admin_scope("admin:settings:write"));
         assert!(!is_admin_scope("openid"));
     }
 }

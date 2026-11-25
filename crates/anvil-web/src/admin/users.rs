@@ -12,6 +12,7 @@ use super::auth::{
     AdminAuth, AdminJson, AdminQuery, AdminResult, created, json, no_content, page_request,
 };
 use super::dto::{CreateUser, ListQuery, Problem, UpdateUser, UserList, UserView};
+use crate::request_context::AuditContext;
 use crate::state::AppState;
 
 /// Checks the scope for `access` and resolves the tenant.
@@ -91,6 +92,7 @@ pub(crate) async fn list_users(
 pub(crate) async fn create_user(
     auth: AdminAuth,
     State(state): State<AppState>,
+    AuditContext(ctx): AuditContext,
     Path(slug): Path<String>,
     AdminJson(body): AdminJson<CreateUser>,
 ) -> AdminResult<Response> {
@@ -98,7 +100,7 @@ pub(crate) async fn create_user(
     let issuer = state.admin_issuer_of(&tenant);
     let user = state
         .admin_users()
-        .create(&tenant, &issuer, body.into())
+        .create(&tenant, &issuer, body.into(), auth.actor(), &ctx)
         .await?;
     let location = format!("/api/admin/v1/tenants/{}/users/{}", tenant.slug, user.id);
     Ok(created(&location, &UserView::from(user)))
@@ -164,13 +166,14 @@ pub(crate) async fn get_user(
 pub(crate) async fn update_user(
     auth: AdminAuth,
     State(state): State<AppState>,
+    AuditContext(ctx): AuditContext,
     Path((slug, id)): Path<(String, String)>,
     AdminJson(body): AdminJson<UpdateUser>,
 ) -> AdminResult<Response> {
     let tenant = authorize(&state, &auth, &slug, Access::Write).await?;
     let user = state
         .admin_users()
-        .update(tenant.id, user_id(&id)?, body.into())
+        .update(tenant.id, user_id(&id)?, body.into(), auth.actor(), &ctx)
         .await?;
     Ok(json(StatusCode::OK, &UserView::from(user)))
 }
@@ -199,9 +202,13 @@ pub(crate) async fn update_user(
 pub(crate) async fn delete_user(
     auth: AdminAuth,
     State(state): State<AppState>,
+    AuditContext(ctx): AuditContext,
     Path((slug, id)): Path<(String, String)>,
 ) -> AdminResult<Response> {
     let tenant = authorize(&state, &auth, &slug, Access::Write).await?;
-    state.admin_users().delete(tenant.id, user_id(&id)?).await?;
+    state
+        .admin_users()
+        .delete(tenant.id, user_id(&id)?, auth.actor(), &ctx)
+        .await?;
     Ok(no_content())
 }

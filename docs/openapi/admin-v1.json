@@ -2338,9 +2338,15 @@
           "clientCredentials": {
             "tokenUrl": "/t/system/token",
             "scopes": {
+              "admin:audit:read": "Read audit",
+              "admin:audit:write": "Read and write audit",
               "admin:clients:read": "Read clients",
               "admin:clients:write": "Read and write clients",
               "admin:read": "Read tenants, clients and users",
+              "admin:sessions:read": "Read sessions",
+              "admin:sessions:write": "Read and write sessions",
+              "admin:settings:read": "Read settings",
+              "admin:settings:write": "Read and write settings",
               "admin:tenants:read": "Read tenants",
               "admin:tenants:write": "Read and write tenants",
               "admin:users:read": "Read users",

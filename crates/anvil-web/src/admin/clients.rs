@@ -6,6 +6,7 @@
 
 use anvil_core::model::{SYSTEM_TENANT_SLUG, Tenant};
 use anvil_core::service::admin_scope::{Access, Resource};
+use anvil_core::service::client::{ClientOptions, ClientOptionsPatch};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::Response;
@@ -17,6 +18,7 @@ use super::auth::{
 use super::dto::{
     ClientList, ClientSecretView, ClientView, CreateClient, ListQuery, Problem, UpdateClient,
 };
+use crate::request_context::AuditContext;
 use crate::state::AppState;
 
 /// Checks the scope for `access` and resolves the tenant.
@@ -91,11 +93,23 @@ pub(crate) async fn list_clients(
 pub(crate) async fn create_client(
     auth: AdminAuth,
     State(state): State<AppState>,
+    AuditContext(ctx): AuditContext,
     Path(slug): Path<String>,
     AdminJson(body): AdminJson<CreateClient>,
 ) -> AdminResult<Response> {
     let tenant = authorize(&state, &auth, &slug, Access::Write).await?;
-    let created_client = state.admin_clients().create(tenant.id, body.into()).await?;
+    // The 0.2 client options get wire fields in 03-23; until then registrations use the
+    // secure defaults.
+    let created_client = state
+        .admin_clients()
+        .create(
+            &tenant,
+            body.into(),
+            ClientOptions::default(),
+            auth.actor(),
+            &ctx,
+        )
+        .await?;
     let mut view = ClientView::from(created_client.client);
     view.client_secret = created_client
         .client_secret
@@ -166,13 +180,21 @@ pub(crate) async fn get_client(
 pub(crate) async fn update_client(
     auth: AdminAuth,
     State(state): State<AppState>,
+    AuditContext(ctx): AuditContext,
     Path((slug, client_id)): Path<(String, String)>,
     AdminJson(body): AdminJson<UpdateClient>,
 ) -> AdminResult<Response> {
     let tenant = authorize(&state, &auth, &slug, Access::Write).await?;
     let client = state
         .admin_clients()
-        .update(tenant.id, &client_id, body.into())
+        .update(
+            &tenant,
+            &client_id,
+            body.into(),
+            ClientOptionsPatch::default(),
+            auth.actor(),
+            &ctx,
+        )
         .await?;
     Ok(json(StatusCode::OK, &ClientView::from(client)))
 }
@@ -201,10 +223,14 @@ pub(crate) async fn update_client(
 pub(crate) async fn delete_client(
     auth: AdminAuth,
     State(state): State<AppState>,
+    AuditContext(ctx): AuditContext,
     Path((slug, client_id)): Path<(String, String)>,
 ) -> AdminResult<Response> {
     let tenant = authorize(&state, &auth, &slug, Access::Write).await?;
-    state.admin_clients().delete(tenant.id, &client_id).await?;
+    state
+        .admin_clients()
+        .delete(tenant.id, &client_id, auth.actor(), &ctx)
+        .await?;
     Ok(no_content())
 }
 
@@ -233,12 +259,13 @@ pub(crate) async fn delete_client(
 pub(crate) async fn rotate_client_secret(
     auth: AdminAuth,
     State(state): State<AppState>,
+    AuditContext(ctx): AuditContext,
     Path((slug, client_id)): Path<(String, String)>,
 ) -> AdminResult<Response> {
     let tenant = authorize(&state, &auth, &slug, Access::Write).await?;
     let secret = state
         .admin_clients()
-        .rotate_secret(tenant.id, &client_id)
+        .rotate_secret(tenant.id, &client_id, auth.actor(), &ctx)
         .await?;
     Ok(json(
         StatusCode::OK,

@@ -2,21 +2,36 @@
 //!
 //! [`seal_new_key`] is the single place where a new signing key is generated and sealed with the
 //! KEK. Bootstrap, tenant creation and key rotation all go through it.
+//!
+//! Tenant settings: [`normalize_signing_algs`] accepts `RS256`, `ES256` and `Ed25519` and always
+//! keeps RS256; enabling an algorithm generates its active key at once
+//! ([`KeyRotationService::ensure_tenant`]). CAPTCHA secrets enter as plaintext
+//! ([`CaptchaChange`]) and are stored sealed only ([`seal_captcha_secret`]).
+//!
+//! Every mutating [`TenantService`] method takes the acting administrator and the request context
+//! and records exactly one audit event (`tenant_created`, `tenant_updated`, `tenant_deleted`) in
+//! the **system** tenant (a deleted tenant's own log is gone with it), target = the tenant id.
+//! Failed calls record nothing; details list changed field names, never values or secrets.
 
 use std::sync::Arc;
 
 use anvil_jose::Kek;
+use anvil_jose::encoding::b64url;
 use anvil_jose::keys::Alg;
+use secrecy::{ExposeSecret as _, SecretString};
 use time::OffsetDateTime;
 
 use crate::clock::Clock;
 use crate::error::CoreError;
 use crate::model::{
-    DEFAULT_TENANT_SLUG, KeyState, NewSigningKey, NewTenant, Page, PageRequest,
-    SIGNING_KEY_PURPOSE, SYSTEM_TENANT_SLUG, SigningKeyId, Tenant, TenantId, TenantSettings,
-    TenantUpdate, signing_key_aad,
+    AuditAction, AuditActor, AuditDetails, AuditOutcome, CAPTCHA_SECRET_PURPOSE, CaptchaProvider,
+    CaptchaSettings, DEFAULT_SIGNING_ALG, DEFAULT_TENANT_SLUG, KeyState, NewSigningKey, NewTenant,
+    Page, PageRequest, RequestContext, SIGNING_KEY_PURPOSE, SYSTEM_TENANT_SLUG, SigningKeyId,
+    Tenant, TenantId, TenantSettings, TenantUpdate, signing_key_aad,
 };
 use crate::ports::{Storage, StorageError};
+use crate::service::audit::AuditService;
+use crate::service::key_rotation::{KeyRotationService, RotationPolicy};
 
 /// Default page size for management listings.
 pub const DEFAULT_PAGE_LIMIT: u32 = 50;
@@ -172,6 +187,127 @@ fn validate_host(host: &str) -> Result<String, CoreError> {
     }
 }
 
+/// Signing algorithms a tenant may enable.
+pub const SUPPORTED_SIGNING_ALGS: &[&str] = &["RS256", "ES256", "Ed25519"];
+
+/// Validates and normalises a tenant's signing algorithms: each must be one of
+/// [`SUPPORTED_SIGNING_ALGS`] (exact, case-sensitive); the result starts with RS256 (always
+/// enabled) followed by the others in the given order, without duplicates.
+pub fn normalize_signing_algs(algs: &[String]) -> Result<Vec<String>, CoreError> {
+    let mut out = vec![DEFAULT_SIGNING_ALG.to_owned()];
+    for alg in algs {
+        if !SUPPORTED_SIGNING_ALGS.contains(&alg.as_str()) {
+            return Err(CoreError::Validation {
+                field: "signing_algs",
+                message: format!(
+                    "unsupported signing algorithm {alg:?} (use RS256, ES256 or Ed25519)"
+                ),
+            });
+        }
+        if !out.contains(alg) {
+            out.push(alg.clone());
+        }
+    }
+    Ok(out)
+}
+
+/// Maximum length of a CAPTCHA site key or secret.
+pub const MAX_CAPTCHA_VALUE_LEN: usize = 512;
+
+/// CAPTCHA configuration as an administrator supplies it (plaintext secret).
+#[derive(Debug, Clone)]
+pub struct CaptchaInput {
+    pub provider: CaptchaProvider,
+    pub site_key: String,
+    pub secret: SecretString,
+}
+
+/// A CAPTCHA settings change.
+#[derive(Debug, Clone)]
+pub enum CaptchaChange {
+    /// Enable (or replace) CAPTCHA; the secret is sealed before it is stored.
+    Set(CaptchaInput),
+    /// Disable CAPTCHA and drop the sealed secret.
+    Clear,
+}
+
+/// Validates `input` and seals its secret with the KEK (purpose [`CAPTCHA_SECRET_PURPOSE`], AAD =
+/// tenant id bytes, base64url), the form the CAPTCHA verifier opens.
+pub fn seal_captcha_secret(
+    kek: &Kek,
+    tenant: TenantId,
+    input: &CaptchaInput,
+) -> Result<CaptchaSettings, CoreError> {
+    let site_key = input.site_key.trim();
+    let ok = |v: &str| {
+        !v.is_empty()
+            && v.chars().count() <= MAX_CAPTCHA_VALUE_LEN
+            && !v.chars().any(|c| c.is_control() || c.is_whitespace())
+    };
+    if !ok(site_key) {
+        return Err(validation(
+            "captcha.site_key",
+            "must be 1-512 characters without whitespace",
+        ));
+    }
+    let secret = input.secret.expose_secret().trim();
+    if !ok(secret) {
+        return Err(validation(
+            "captcha.secret",
+            "must be 1-512 characters without whitespace",
+        ));
+    }
+    let sealed = kek
+        .seal(
+            CAPTCHA_SECRET_PURPOSE,
+            tenant.0.as_bytes(),
+            secret.as_bytes(),
+        )
+        .map_err(|e| CoreError::Internal(format!("CAPTCHA secret sealing failed: {e}")))?;
+    Ok(CaptchaSettings {
+        provider: input.provider,
+        site_key: site_key.to_owned(),
+        secret_sealed: b64url(&sealed),
+    })
+}
+
+/// The settings a tenant update stores: `requested` (if any) with normalised signing algorithms,
+/// the current CAPTCHA settings carried over, then `captcha` applied. A sealed CAPTCHA value in
+/// `requested` that differs from the current one is refused (secrets enter only as plaintext
+/// through [`CaptchaChange`]). Returns `None` when nothing in the settings changes.
+pub fn plan_settings(
+    kek: &Kek,
+    tenant: &Tenant,
+    requested: Option<TenantSettings>,
+    captcha: Option<&CaptchaChange>,
+) -> Result<Option<TenantSettings>, CoreError> {
+    if requested.is_none() && captcha.is_none() {
+        return Ok(None);
+    }
+    let mut settings = match requested {
+        Some(mut s) => {
+            if s.captcha.is_some() && s.captcha != tenant.settings.captcha {
+                return Err(validation(
+                    "captcha",
+                    "set CAPTCHA with its plaintext secret, not a sealed value",
+                ));
+            }
+            s.signing_algs = normalize_signing_algs(&s.signing_algs)?;
+            s.captcha = tenant.settings.captcha.clone();
+            s
+        }
+        None => tenant.settings.clone(),
+    };
+    match captcha {
+        None => {}
+        Some(CaptchaChange::Clear) => settings.captcha = None,
+        Some(CaptchaChange::Set(input)) => {
+            settings.captcha = Some(seal_captcha_secret(kek, tenant.id, input)?);
+        }
+    }
+    Ok(Some(settings))
+}
+
 fn map_conflict(e: StorageError) -> CoreError {
     match e {
         StorageError::Conflict(_) => CoreError::Conflict("slug or host already in use".to_owned()),
@@ -205,22 +341,78 @@ pub struct TenantService {
 }
 
 impl TenantService {
-    /// Creates a tenant and its active RS256 signing key.
+    fn audit(&self) -> AuditService {
+        AuditService {
+            storage: self.storage.clone(),
+            clock: self.clock.clone(),
+        }
+    }
+
+    fn key_rotation(&self) -> KeyRotationService {
+        KeyRotationService {
+            storage: self.storage.clone(),
+            kek: self.kek.clone(),
+            clock: self.clock.clone(),
+            policy: RotationPolicy::default(),
+        }
+    }
+
+    /// Records a tenant event in the system tenant (target = the tenant id).
+    async fn record(
+        &self,
+        actor: AuditActor,
+        action: AuditAction,
+        tenant: TenantId,
+        ctx: &RequestContext,
+        details: AuditDetails,
+    ) -> Result<(), CoreError> {
+        let system = self.get(SYSTEM_TENANT_SLUG).await.map_err(|e| match e {
+            CoreError::NotFound => CoreError::Internal("the system tenant is missing".into()),
+            other => other,
+        })?;
+        self.audit()
+            .record(
+                system.id,
+                actor,
+                action,
+                Some(tenant.to_string()),
+                AuditOutcome::Success,
+                ctx,
+                details,
+            )
+            .await
+    }
+
+    /// Creates a tenant and its active RS256 signing key, plus an active key for every other
+    /// enabled algorithm. Audited as `tenant_created`.
     ///
     /// This is a two-step write (tenant, then key) rather than one transaction. That is
     /// acceptable: a tenant without a key cannot issue tokens and is unusable, and if the key
     /// insert fails the tenant is deleted again before the error is returned.
-    pub async fn create(&self, input: NewTenantInput) -> Result<Tenant, CoreError> {
+    pub async fn create(
+        &self,
+        input: NewTenantInput,
+        actor: AuditActor,
+        ctx: &RequestContext,
+    ) -> Result<Tenant, CoreError> {
         validate_new_slug(&input.slug)?;
         let display_name = validate_display_name(&input.display_name)?;
         let host = input.host.as_deref().map(validate_host).transpose()?;
+        let mut settings = input.settings;
+        if settings.captcha.is_some() {
+            return Err(validation(
+                "captcha",
+                "set CAPTCHA with its plaintext secret after the tenant exists",
+            ));
+        }
+        settings.signing_algs = normalize_signing_algs(&settings.signing_algs)?;
         let now = self.clock.now();
         let new = NewTenant {
             id: TenantId::new_v7(),
             slug: input.slug,
             display_name,
             host,
-            settings: input.settings,
+            settings,
             created_at: now,
         };
         // Generate the key before writing anything so a crypto failure leaves no tenant behind.
@@ -238,6 +430,17 @@ impl TenantService {
                 "signing key insert failed for new tenant: {e}"
             )));
         }
+        if tenant.settings.effective_signing_algs().len() > 1 {
+            self.key_rotation().ensure_tenant(&tenant).await?;
+        }
+        self.record(
+            actor,
+            AuditAction::TenantCreated,
+            tenant.id,
+            ctx,
+            AuditDetails::empty(),
+        )
+        .await?;
         Ok(tenant)
     }
 
@@ -253,40 +456,93 @@ impl TenantService {
         Ok(self.storage.tenants().list(admin_page(page)).await?)
     }
 
-    pub async fn update(&self, slug: &str, patch: TenantPatch) -> Result<Tenant, CoreError> {
+    /// Applies a patch and an optional CAPTCHA change ([`plan_settings`]). When settings change,
+    /// every enabled signing algorithm gets an active key before this returns
+    /// ([`KeyRotationService::ensure_tenant`]). Audited as `tenant_updated` with the changed
+    /// field names.
+    pub async fn update(
+        &self,
+        slug: &str,
+        patch: TenantPatch,
+        captcha: Option<CaptchaChange>,
+        actor: AuditActor,
+        ctx: &RequestContext,
+    ) -> Result<Tenant, CoreError> {
         let tenant = self.get(slug).await?;
-        let update = TenantUpdate {
-            display_name: patch
-                .display_name
-                .as_deref()
-                .map(validate_display_name)
-                .transpose()?,
-            host: match patch.host {
-                None => None,
-                Some(None) => Some(None),
-                Some(Some(h)) => Some(Some(validate_host(&h)?)),
-            },
-            settings: patch.settings,
+        let mut fields: Vec<&'static str> = Vec::new();
+        if patch.display_name.is_some() {
+            fields.push("display_name");
+        }
+        if patch.host.is_some() {
+            fields.push("host");
+        }
+        if patch.settings.is_some() {
+            fields.push("settings");
+        }
+        if captcha.is_some() {
+            fields.push("captcha");
+        }
+        let display_name = patch
+            .display_name
+            .as_deref()
+            .map(validate_display_name)
+            .transpose()?;
+        let host = match patch.host {
+            None => None,
+            Some(None) => Some(None),
+            Some(Some(h)) => Some(Some(validate_host(&h)?)),
         };
-        self.storage
+        let settings = plan_settings(&self.kek, &tenant, patch.settings, captcha.as_ref())?;
+        let settings_changed = settings.is_some();
+        let update = TenantUpdate {
+            display_name,
+            host,
+            settings,
+        };
+        let updated = self
+            .storage
             .tenants()
             .update(tenant.id, &update)
             .await
             .map_err(map_conflict)?
-            .ok_or(CoreError::NotFound)
+            .ok_or(CoreError::NotFound)?;
+        if settings_changed {
+            self.key_rotation().ensure_tenant(&updated).await?;
+        }
+        self.record(
+            actor,
+            AuditAction::TenantUpdated,
+            updated.id,
+            ctx,
+            AuditDetails::fields(&fields),
+        )
+        .await?;
+        Ok(updated)
     }
 
-    /// Deletes a tenant and everything in it. The bootstrap tenants are `Forbidden`.
-    pub async fn delete(&self, slug: &str) -> Result<(), CoreError> {
+    /// Deletes a tenant and everything in it. The bootstrap tenants are `Forbidden`. Audited as
+    /// `tenant_deleted` (in the system tenant).
+    pub async fn delete(
+        &self,
+        slug: &str,
+        actor: AuditActor,
+        ctx: &RequestContext,
+    ) -> Result<(), CoreError> {
         if is_protected_slug(slug) {
             return Err(CoreError::Forbidden);
         }
         let tenant = self.get(slug).await?;
-        if self.storage.tenants().delete(tenant.id).await? {
-            Ok(())
-        } else {
-            Err(CoreError::NotFound)
+        if !self.storage.tenants().delete(tenant.id).await? {
+            return Err(CoreError::NotFound);
         }
+        self.record(
+            actor,
+            AuditAction::TenantDeleted,
+            tenant.id,
+            ctx,
+            AuditDetails::empty(),
+        )
+        .await
     }
 }
 
@@ -417,6 +673,154 @@ mod tests {
         assert!(validate_display_name("   ").is_err());
         assert!(validate_display_name(&"x".repeat(201)).is_err());
         assert!(validate_display_name("a\u{0}b").is_err());
+    }
+
+    fn tenant_with(settings: TenantSettings) -> Tenant {
+        Tenant {
+            id: TenantId::new_v7(),
+            slug: "acme".into(),
+            display_name: "Acme".into(),
+            host: None,
+            settings,
+            created_at: OffsetDateTime::UNIX_EPOCH,
+        }
+    }
+
+    fn strings(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    fn captcha_input(secret: &str) -> CaptchaInput {
+        CaptchaInput {
+            provider: CaptchaProvider::Turnstile,
+            site_key: "0x-site".into(),
+            secret: SecretString::from(secret.to_owned()),
+        }
+    }
+
+    #[test]
+    fn signing_algs_force_rs256_and_reject_unknown() {
+        assert_eq!(
+            normalize_signing_algs(&strings(&["ES256"])).unwrap(),
+            strings(&["RS256", "ES256"])
+        );
+        assert_eq!(
+            normalize_signing_algs(&strings(&["Ed25519", "RS256", "Ed25519", "ES256"])).unwrap(),
+            strings(&["RS256", "Ed25519", "ES256"])
+        );
+        assert_eq!(normalize_signing_algs(&[]).unwrap(), strings(&["RS256"]));
+        for bad in ["HS256", "none", "EdDSA", "es256", "PS256", ""] {
+            assert!(
+                matches!(
+                    normalize_signing_algs(&strings(&["ES256", bad])),
+                    Err(CoreError::Validation {
+                        field: "signing_algs",
+                        ..
+                    })
+                ),
+                "{bad:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn captcha_secret_is_sealed_with_the_tenant_aad() {
+        let kek = Kek::generate();
+        let tenant = TenantId::new_v7();
+        let c = seal_captcha_secret(&kek, tenant, &captcha_input("0x-secret")).unwrap();
+        assert_eq!(c.provider, CaptchaProvider::Turnstile);
+        assert_eq!(c.site_key, "0x-site");
+        assert!(!c.secret_sealed.contains("0x-secret"));
+        let sealed = anvil_jose::encoding::b64url_decode(&c.secret_sealed).unwrap();
+        let plain = kek
+            .open(CAPTCHA_SECRET_PURPOSE, tenant.0.as_bytes(), &sealed)
+            .unwrap();
+        assert_eq!(plain.as_slice(), b"0x-secret");
+        // Bound to the tenant.
+        assert!(
+            kek.open(
+                CAPTCHA_SECRET_PURPOSE,
+                TenantId::new_v7().0.as_bytes(),
+                &sealed
+            )
+            .is_err()
+        );
+        for (site, secret, field) in [
+            ("", "s", "captcha.site_key"),
+            ("a b", "s", "captcha.site_key"),
+            ("site", "", "captcha.secret"),
+            ("site", "a\nb", "captcha.secret"),
+        ] {
+            let input = CaptchaInput {
+                site_key: site.into(),
+                ..captcha_input(secret)
+            };
+            assert!(
+                matches!(
+                    seal_captcha_secret(&kek, tenant, &input),
+                    Err(CoreError::Validation { field: f, .. }) if f == field
+                ),
+                "{site:?}/{secret:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn plan_settings_set_clear_and_carry_over() {
+        let kek = Kek::generate();
+        let t = tenant_with(TenantSettings::default());
+        assert_eq!(plan_settings(&kek, &t, None, None).unwrap(), None);
+
+        // Set: sealed, other settings untouched.
+        let set = CaptchaChange::Set(captcha_input("0x-secret"));
+        let s = plan_settings(&kek, &t, None, Some(&set)).unwrap().unwrap();
+        let captcha = s.captcha.clone().expect("captcha set");
+        assert_eq!(s.signing_algs, t.settings.signing_algs);
+
+        // A settings patch keeps the current CAPTCHA and normalises algorithms.
+        let with_captcha = tenant_with(s.clone());
+        let requested = TenantSettings {
+            signing_algs: strings(&["ES256"]),
+            ..TenantSettings::default()
+        };
+        let s2 = plan_settings(&kek, &with_captcha, Some(requested), None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(s2.captcha.as_ref(), Some(&captcha));
+        assert_eq!(s2.signing_algs, strings(&["RS256", "ES256"]));
+
+        // Clear.
+        let s3 = plan_settings(&kek, &with_captcha, None, Some(&CaptchaChange::Clear))
+            .unwrap()
+            .unwrap();
+        assert_eq!(s3.captcha, None);
+
+        // An injected sealed value is refused; unknown algorithms too.
+        let forged = TenantSettings {
+            captcha: Some(CaptchaSettings {
+                secret_sealed: "AAAA".into(),
+                ..captcha.clone()
+            }),
+            ..TenantSettings::default()
+        };
+        assert!(matches!(
+            plan_settings(&kek, &with_captcha, Some(forged), None),
+            Err(CoreError::Validation {
+                field: "captcha",
+                ..
+            })
+        ));
+        let hs = TenantSettings {
+            signing_algs: strings(&["HS256"]),
+            ..TenantSettings::default()
+        };
+        assert!(matches!(
+            plan_settings(&kek, &t, Some(hs), None),
+            Err(CoreError::Validation {
+                field: "signing_algs",
+                ..
+            })
+        ));
     }
 
     #[test]

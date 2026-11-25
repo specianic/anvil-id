@@ -3,6 +3,13 @@
 //! [`validate_client`] holds every registration rule: redirect URIs (through the injected
 //! [`RedirectValidator`]), the PKCE rule (only confidential clients may opt out), auth-method and
 //! grant consistency, and the inline-JWKS rules for `private_key_jwt`.
+//! [`validate_client_options`] checks the 0.2 client options (token format, consent mode, ID-token
+//! signing algorithm, tenant-wide introspection) against the client and its tenant.
+//!
+//! Every mutating [`ClientService`] method takes the acting administrator and the request context
+//! and records exactly one audit event after the change commits (`client_created`,
+//! `client_updated`, `client_deleted`, `client_secret_rotated`). Failed calls record nothing.
+//! Audit details never carry a secret: updates list the changed field names only.
 
 use std::sync::Arc;
 
@@ -13,10 +20,12 @@ use secrecy::SecretString;
 use crate::clock::Clock;
 use crate::error::CoreError;
 use crate::model::{
-    ApplicationType, Client, ClientAuthMethod, ClientId, ClientType, ClientUpdate, GrantType,
-    NewClient, Page, PageRequest, Scope, SecretHash, TenantId,
+    ApplicationType, AuditAction, AuditActor, AuditDetails, AuditOutcome, Client, ClientAuthMethod,
+    ClientId, ClientType, ClientUpdate, ConsentMode, GrantType, NewClient, Page, PageRequest,
+    RequestContext, Scope, SecretHash, Tenant, TenantId, TenantSettings, TokenFormat,
 };
 use crate::ports::{Storage, StorageError};
+use crate::service::audit::AuditService;
 use crate::service::tenant::{MAX_DISPLAY_NAME_LEN, admin_page};
 
 /// Validates one redirect URI for an application type. Wired to
@@ -57,6 +66,29 @@ pub struct ClientPatch {
     pub scopes: Option<Vec<String>>,
     pub require_pkce: Option<bool>,
     pub jwks: Option<Option<String>>,
+}
+
+/// The 0.2 client options. Kept apart from [`ClientInput`] so registrations written before 0.2
+/// keep their shape; `Default` is the secure default (JWT access tokens, consent required, RS256
+/// ID tokens, no tenant-wide introspection).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ClientOptions {
+    pub token_format: TokenFormat,
+    pub consent_mode: ConsentMode,
+    /// ID-token signing algorithm; `None` = RS256. Must be enabled for the tenant.
+    pub id_token_signed_response_alg: Option<String>,
+    /// May introspect any token of the tenant. Confidential clients only.
+    pub can_introspect: bool,
+}
+
+/// Partial update of [`ClientOptions`]. `id_token_signed_response_alg: Some(None)` resets the
+/// algorithm to RS256.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ClientOptionsPatch {
+    pub token_format: Option<TokenFormat>,
+    pub consent_mode: Option<ConsentMode>,
+    pub id_token_signed_response_alg: Option<Option<String>>,
+    pub can_introspect: Option<bool>,
 }
 
 /// A created client. `client_secret` is the plaintext secret, returned exactly once and only for
@@ -207,6 +239,65 @@ pub fn validate_client(
     Ok(())
 }
 
+/// Checks the 0.2 options of a registration against its tenant: the ID-token algorithm must be
+/// one the tenant has enabled ([`TenantSettings::effective_signing_algs`]), and only confidential
+/// clients may introspect tenant-wide. Token format and consent mode are enums, so any value is
+/// valid here (unknown strings are rejected when the wire value is parsed).
+pub fn validate_client_options(
+    input: &ClientInput,
+    options: &ClientOptions,
+    settings: &TenantSettings,
+) -> Result<(), CoreError> {
+    if let Some(alg) = &options.id_token_signed_response_alg
+        && !settings.effective_signing_algs().contains(alg)
+    {
+        return Err(invalid(
+            "id_token_signed_response_alg",
+            format!("{alg:?} is not enabled for this tenant"),
+        ));
+    }
+    if options.can_introspect && input.client_type != ClientType::Confidential {
+        return Err(invalid(
+            "can_introspect",
+            "only confidential clients may introspect tokens",
+        ));
+    }
+    Ok(())
+}
+
+fn options_of(client: &Client) -> ClientOptions {
+    ClientOptions {
+        token_format: client.token_format,
+        consent_mode: client.consent_mode,
+        id_token_signed_response_alg: client.id_token_signed_response_alg.clone(),
+        can_introspect: client.can_introspect,
+    }
+}
+
+/// Names of the fields a client update changes (for the audit event; never values).
+fn changed_fields(patch: &ClientPatch, options: &ClientOptionsPatch) -> Vec<&'static str> {
+    let mut f = Vec::new();
+    let mut push = |set: bool, name: &'static str| {
+        if set {
+            f.push(name);
+        }
+    };
+    push(patch.name.is_some(), "name");
+    push(patch.redirect_uris.is_some(), "redirect_uris");
+    push(patch.grant_types.is_some(), "grant_types");
+    push(patch.scopes.is_some(), "scopes");
+    push(patch.require_pkce.is_some(), "require_pkce");
+    push(patch.jwks.is_some(), "jwks");
+    push(options.token_format.is_some(), "token_format");
+    push(options.consent_mode.is_some(), "consent_mode");
+    push(
+        options.id_token_signed_response_alg.is_some(),
+        "id_token_signed_response_alg",
+    );
+    push(options.can_introspect.is_some(), "can_introspect");
+    f
+}
+
 fn normalized_grants(grants: &[GrantType]) -> Vec<GrantType> {
     let mut g = grants.to_vec();
     g.sort();
@@ -237,13 +328,47 @@ pub struct ClientService {
 }
 
 impl ClientService {
-    /// Validates and registers a client. Secret-based clients get a new secret, returned once.
-    pub async fn create(
+    fn audit(&self) -> AuditService {
+        AuditService {
+            storage: self.storage.clone(),
+            clock: self.clock.clone(),
+        }
+    }
+
+    async fn record(
         &self,
         tenant: TenantId,
+        actor: AuditActor,
+        action: AuditAction,
+        client_id: &str,
+        ctx: &RequestContext,
+        details: AuditDetails,
+    ) -> Result<(), CoreError> {
+        self.audit()
+            .record(
+                tenant,
+                actor,
+                action,
+                Some(client_id.to_owned()),
+                AuditOutcome::Success,
+                ctx,
+                details,
+            )
+            .await
+    }
+
+    /// Validates and registers a client in `tenant`. Secret-based clients get a new secret,
+    /// returned once. Audited as `client_created` (target = client_id).
+    pub async fn create(
+        &self,
+        tenant: &Tenant,
         input: ClientInput,
+        options: ClientOptions,
+        actor: AuditActor,
+        ctx: &RequestContext,
     ) -> Result<CreatedClient, CoreError> {
         validate_client(&input, self.redirect_validator)?;
+        validate_client_options(&input, &options, &tenant.settings)?;
         let (secret, hash) = if uses_secret(input.auth_method) {
             let (s, h) = new_client_secret();
             (Some(s), Some(h))
@@ -265,19 +390,19 @@ impl ClientService {
             scopes: normalized_list(&input.scopes),
             require_pkce: input.require_pkce.unwrap_or(true),
             created_at: now,
-            token_format: crate::model::TokenFormat::Jwt,
-            consent_mode: crate::model::ConsentMode::Required,
-            id_token_signed_response_alg: None,
-            can_introspect: false,
+            token_format: options.token_format,
+            consent_mode: options.consent_mode,
+            id_token_signed_response_alg: options.id_token_signed_response_alg,
+            can_introspect: options.can_introspect,
         };
         // A client_id collision is astronomically unlikely; retry once with a fresh id.
-        let client = match self.storage.clients().create(tenant, &new).await {
+        let client = match self.storage.clients().create(tenant.id, &new).await {
             Err(StorageError::Conflict(_)) => {
                 new.id = ClientId::new_v7();
                 new.client_id = new_client_id();
                 self.storage
                     .clients()
-                    .create(tenant, &new)
+                    .create(tenant.id, &new)
                     .await
                     .map_err(|e| match e {
                         StorageError::Conflict(_) => {
@@ -288,6 +413,15 @@ impl ClientService {
             }
             other => other?,
         };
+        self.record(
+            tenant.id,
+            actor,
+            AuditAction::ClientCreated,
+            &client.client_id,
+            ctx,
+            AuditDetails::empty(),
+        )
+        .await?;
         Ok(CreatedClient {
             client,
             client_secret: secret,
@@ -314,14 +448,19 @@ impl ClientService {
             .await?)
     }
 
-    /// Applies a patch. The merged registration is re-validated with the same rules as create.
+    /// Applies a patch. The merged registration and options are re-validated with the same rules
+    /// as create (so an ID-token algorithm the tenant no longer enables must be changed with the
+    /// next update). Audited as `client_updated` with the changed field names.
     pub async fn update(
         &self,
-        tenant: TenantId,
+        tenant: &Tenant,
         client_id: &str,
         patch: ClientPatch,
+        options: ClientOptionsPatch,
+        actor: AuditActor,
+        ctx: &RequestContext,
     ) -> Result<Client, CoreError> {
-        let current = self.get(tenant, client_id).await?;
+        let current = self.get(tenant.id, client_id).await?;
         let merged = ClientInput {
             name: patch.name.clone().unwrap_or_else(|| current.name.clone()),
             client_type: current.client_type,
@@ -347,6 +486,21 @@ impl ClientService {
             jwks_uri: None,
         };
         validate_client(&merged, self.redirect_validator)?;
+        let mut merged_options = options_of(&current);
+        if let Some(f) = options.token_format {
+            merged_options.token_format = f;
+        }
+        if let Some(m) = options.consent_mode {
+            merged_options.consent_mode = m;
+        }
+        if let Some(a) = &options.id_token_signed_response_alg {
+            merged_options.id_token_signed_response_alg = a.clone();
+        }
+        if let Some(i) = options.can_introspect {
+            merged_options.can_introspect = i;
+        }
+        validate_client_options(&merged, &merged_options, &tenant.settings)?;
+        let fields = changed_fields(&patch, &options);
         let update = ClientUpdate {
             name: patch.name.map(|n| n.trim().to_owned()),
             redirect_uris: patch.redirect_uris.as_deref().map(normalized_list),
@@ -354,21 +508,37 @@ impl ClientService {
             scopes: patch.scopes.as_deref().map(normalized_list),
             require_pkce: patch.require_pkce,
             jwks: patch.jwks,
-            ..ClientUpdate::default()
+            token_format: options.token_format,
+            consent_mode: options.consent_mode,
+            id_token_signed_response_alg: options.id_token_signed_response_alg.clone(),
+            can_introspect: options.can_introspect,
         };
-        self.storage
+        let client = self
+            .storage
             .clients()
-            .update(tenant, client_id, &update, self.clock.now())
+            .update(tenant.id, client_id, &update, self.clock.now())
             .await?
-            .ok_or(CoreError::NotFound)
+            .ok_or(CoreError::NotFound)?;
+        self.record(
+            tenant.id,
+            actor,
+            AuditAction::ClientUpdated,
+            client_id,
+            ctx,
+            AuditDetails::fields(&fields),
+        )
+        .await?;
+        Ok(client)
     }
 
     /// Replaces the secret of a secret-based client. The new secret is returned once; the old
-    /// one stops working immediately.
+    /// one stops working immediately. Audited as `client_secret_rotated` (no secret in details).
     pub async fn rotate_secret(
         &self,
         tenant: TenantId,
         client_id: &str,
+        actor: AuditActor,
+        ctx: &RequestContext,
     ) -> Result<SecretString, CoreError> {
         let current = self.get(tenant, client_id).await?;
         if !uses_secret(current.auth_method) {
@@ -378,25 +548,47 @@ impl ClientService {
             ));
         }
         let (secret, hash) = new_client_secret();
-        if self
+        if !self
             .storage
             .clients()
             .set_secret_hash(tenant, client_id, Some(hash), self.clock.now())
             .await?
         {
-            Ok(secret)
-        } else {
-            Err(CoreError::NotFound)
+            return Err(CoreError::NotFound);
         }
+        self.record(
+            tenant,
+            actor,
+            AuditAction::ClientSecretRotated,
+            client_id,
+            ctx,
+            AuditDetails::empty(),
+        )
+        .await?;
+        Ok(secret)
     }
 
-    /// Deletes the client; its token families are revoked by the repository.
-    pub async fn delete(&self, tenant: TenantId, client_id: &str) -> Result<(), CoreError> {
-        if self.storage.clients().delete(tenant, client_id).await? {
-            Ok(())
-        } else {
-            Err(CoreError::NotFound)
+    /// Deletes the client; its token families are revoked by the repository. Audited as
+    /// `client_deleted`.
+    pub async fn delete(
+        &self,
+        tenant: TenantId,
+        client_id: &str,
+        actor: AuditActor,
+        ctx: &RequestContext,
+    ) -> Result<(), CoreError> {
+        if !self.storage.clients().delete(tenant, client_id).await? {
+            return Err(CoreError::NotFound);
         }
+        self.record(
+            tenant,
+            actor,
+            AuditAction::ClientDeleted,
+            client_id,
+            ctx,
+            AuditDetails::empty(),
+        )
+        .await
     }
 }
 
@@ -660,6 +852,120 @@ mod tests {
         assert!(uses_secret(ClientAuthMethod::ClientSecretPost));
         assert!(!uses_secret(ClientAuthMethod::PrivateKeyJwt));
         assert!(!uses_secret(ClientAuthMethod::None));
+    }
+
+    fn settings(algs: &[&str]) -> TenantSettings {
+        TenantSettings {
+            signing_algs: algs.iter().map(|a| (*a).to_owned()).collect(),
+            ..TenantSettings::default()
+        }
+    }
+
+    fn opts_field(r: Result<(), CoreError>) -> &'static str {
+        field_of(r)
+    }
+
+    #[test]
+    fn id_token_alg_must_be_enabled_for_the_tenant() {
+        let es256 = ClientOptions {
+            id_token_signed_response_alg: Some("ES256".into()),
+            ..ClientOptions::default()
+        };
+        assert_eq!(
+            opts_field(validate_client_options(
+                &confidential(),
+                &es256,
+                &settings(&["RS256"])
+            )),
+            "id_token_signed_response_alg"
+        );
+        assert!(
+            validate_client_options(&confidential(), &es256, &settings(&["RS256", "ES256"]))
+                .is_ok()
+        );
+        // RS256 is always enabled, even when the stored list omits it.
+        let rs256 = ClientOptions {
+            id_token_signed_response_alg: Some("RS256".into()),
+            ..ClientOptions::default()
+        };
+        assert!(validate_client_options(&confidential(), &rs256, &settings(&["ES256"])).is_ok());
+        // Unknown / wrongly cased names are never enabled.
+        for bad in ["HS256", "none", "es256", "EdDSA"] {
+            let o = ClientOptions {
+                id_token_signed_response_alg: Some(bad.into()),
+                ..ClientOptions::default()
+            };
+            assert_eq!(
+                opts_field(validate_client_options(
+                    &confidential(),
+                    &o,
+                    &settings(&["RS256", "ES256", "Ed25519"])
+                )),
+                "id_token_signed_response_alg",
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_confidential_clients_may_introspect() {
+        let o = ClientOptions {
+            can_introspect: true,
+            ..ClientOptions::default()
+        };
+        assert_eq!(
+            opts_field(validate_client_options(
+                &public(),
+                &o,
+                &TenantSettings::default()
+            )),
+            "can_introspect"
+        );
+        assert!(validate_client_options(&confidential(), &o, &TenantSettings::default()).is_ok());
+    }
+
+    #[test]
+    fn option_defaults_are_secure() {
+        let d = ClientOptions::default();
+        assert_eq!(d.token_format, TokenFormat::Jwt);
+        assert_eq!(d.consent_mode, ConsentMode::Required);
+        assert_eq!(d.id_token_signed_response_alg, None);
+        assert!(!d.can_introspect);
+        assert!(validate_client_options(&public(), &d, &TenantSettings::default()).is_ok());
+        for f in [TokenFormat::Jwt, TokenFormat::Opaque] {
+            for m in [ConsentMode::Required, ConsentMode::SkipFirstParty] {
+                let o = ClientOptions {
+                    token_format: f,
+                    consent_mode: m,
+                    ..ClientOptions::default()
+                };
+                assert!(validate_client_options(&public(), &o, &TenantSettings::default()).is_ok());
+            }
+        }
+    }
+
+    #[test]
+    fn changed_fields_list_names_only() {
+        let patch = ClientPatch {
+            name: Some("x".into()),
+            jwks: Some(None),
+            ..ClientPatch::default()
+        };
+        let opts = ClientOptionsPatch {
+            id_token_signed_response_alg: Some(None),
+            can_introspect: Some(true),
+            ..ClientOptionsPatch::default()
+        };
+        assert_eq!(
+            changed_fields(&patch, &opts),
+            vec![
+                "name",
+                "jwks",
+                "id_token_signed_response_alg",
+                "can_introspect"
+            ]
+        );
+        assert!(changed_fields(&ClientPatch::default(), &ClientOptionsPatch::default()).is_empty());
     }
 
     #[test]

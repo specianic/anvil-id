@@ -3,6 +3,11 @@
 //! An admin creates a user either with a password (the password policy applies; hashing goes
 //! through the [`PasswordHasher`] port) or with `invite: true`, which issues an `Invitation`
 //! self-service token and enqueues the `invitation` email in the same transaction as the user.
+//!
+//! Every mutating [`UserService`] method takes the acting administrator and the request context
+//! and records exactly one audit event in the user's tenant (`user_created`, `user_updated`,
+//! `user_deleted`, target = user id) after the change commits. Failed calls record nothing;
+//! details hold changed field names only (never the email, password or claims).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -15,12 +20,14 @@ use time::{Duration, OffsetDateTime};
 use crate::clock::Clock;
 use crate::error::CoreError;
 use crate::model::{
-    NewEmail, NewPasswordCredential, NewSelfServiceToken, NewUser, OutboxId, Page, PageRequest,
-    SecretHash, SelfServiceKind, StandardClaims, Tenant, TenantId, User, UserId, UserStatus,
-    UserUpdate, normalize_email, seal_payload,
+    AuditAction, AuditActor, AuditDetails, AuditOutcome, NewEmail, NewPasswordCredential,
+    NewSelfServiceToken, NewUser, OutboxId, Page, PageRequest, RequestContext, SecretHash,
+    SelfServiceKind, StandardClaims, Tenant, TenantId, User, UserId, UserStatus, UserUpdate,
+    normalize_email, seal_payload,
 };
 use crate::policy::{PasswordPolicy, check_password};
 use crate::ports::{PasswordHasher, Storage, StorageError};
+use crate::service::audit::AuditService;
 use crate::service::tenant::admin_page;
 
 /// Lifetime of an invitation link.
@@ -192,6 +199,20 @@ pub fn build_user_plan(
     })
 }
 
+/// Names of the fields a user update changes (for the audit event; never values).
+fn changed_fields(patch: &UserPatch) -> Vec<&'static str> {
+    [
+        (patch.email.is_some(), "email"),
+        (patch.email_verified.is_some(), "email_verified"),
+        (patch.username.is_some(), "username"),
+        (patch.claims.is_some(), "claims"),
+        (patch.status.is_some(), "status"),
+    ]
+    .into_iter()
+    .filter_map(|(set, name)| set.then_some(name))
+    .collect()
+}
+
 fn map_conflict(e: StorageError) -> CoreError {
     match e {
         StorageError::Conflict(_) => {
@@ -212,13 +233,41 @@ pub struct UserService {
 }
 
 impl UserService {
+    async fn record(
+        &self,
+        tenant: TenantId,
+        actor: AuditActor,
+        action: AuditAction,
+        user: UserId,
+        ctx: &RequestContext,
+        details: AuditDetails,
+    ) -> Result<(), CoreError> {
+        AuditService {
+            storage: self.storage.clone(),
+            clock: self.clock.clone(),
+        }
+        .record(
+            tenant,
+            actor,
+            action,
+            Some(user.to_string()),
+            AuditOutcome::Success,
+            ctx,
+            details,
+        )
+        .await
+    }
+
     /// Creates a user with a password or an invitation. `issuer` is the tenant's issuer (the
-    /// invitation link base).
+    /// invitation link base). Audited as `user_created` (details: `reason` = `invitation` or
+    /// `password_set`).
     pub async fn create(
         &self,
         tenant: &Tenant,
         issuer: &str,
         input: UserInput,
+        actor: AuditActor,
+        ctx: &RequestContext,
     ) -> Result<User, CoreError> {
         let now = self.clock.now();
         let plan = build_user_plan(&self.kek, now, tenant, issuer, &self.policy, input)?;
@@ -233,11 +282,27 @@ impl UserService {
             Some(inv) => (Some(&inv.token), Some(&inv.email)),
             None => (None, None),
         };
-        self.storage
+        let user = self
+            .storage
             .users()
             .create(tenant.id, &plan.user, credential.as_ref(), token, email)
             .await
-            .map_err(map_conflict)
+            .map_err(map_conflict)?;
+        let how = if plan.invitation.is_some() {
+            "invitation"
+        } else {
+            "password_set"
+        };
+        self.record(
+            tenant.id,
+            actor,
+            AuditAction::UserCreated,
+            user.id,
+            ctx,
+            AuditDetails::reason(how),
+        )
+        .await?;
+        Ok(user)
     }
 
     pub async fn get(&self, tenant: TenantId, id: UserId) -> Result<User, CoreError> {
@@ -252,13 +317,17 @@ impl UserService {
         Ok(self.storage.users().list(tenant, admin_page(page)).await?)
     }
 
-    /// Applies a patch (including block/unblock through `status`).
+    /// Applies a patch (including block/unblock through `status`). Audited as `user_updated`
+    /// with the changed field names.
     pub async fn update(
         &self,
         tenant: TenantId,
         id: UserId,
         patch: UserPatch,
+        actor: AuditActor,
+        ctx: &RequestContext,
     ) -> Result<User, CoreError> {
+        let fields = changed_fields(&patch);
         let update = UserUpdate {
             email: patch.email.as_deref().map(normalize_email).transpose()?,
             email_verified: patch.email_verified,
@@ -270,22 +339,46 @@ impl UserService {
             claims: patch.claims,
             status: patch.status,
         };
-        self.storage
+        let user = self
+            .storage
             .users()
             .update(tenant, id, &update, self.clock.now())
             .await
             .map_err(map_conflict)?
-            .ok_or(CoreError::NotFound)
+            .ok_or(CoreError::NotFound)?;
+        self.record(
+            tenant,
+            actor,
+            AuditAction::UserUpdated,
+            id,
+            ctx,
+            AuditDetails::fields(&fields),
+        )
+        .await?;
+        Ok(user)
     }
 
     /// Deletes the user; the repository removes credentials, sessions and tokens and revokes
-    /// token families.
-    pub async fn delete(&self, tenant: TenantId, id: UserId) -> Result<(), CoreError> {
-        if self.storage.users().delete(tenant, id).await? {
-            Ok(())
-        } else {
-            Err(CoreError::NotFound)
+    /// token families. Audited as `user_deleted`.
+    pub async fn delete(
+        &self,
+        tenant: TenantId,
+        id: UserId,
+        actor: AuditActor,
+        ctx: &RequestContext,
+    ) -> Result<(), CoreError> {
+        if !self.storage.users().delete(tenant, id).await? {
+            return Err(CoreError::NotFound);
         }
+        self.record(
+            tenant,
+            actor,
+            AuditAction::UserDeleted,
+            id,
+            ctx,
+            AuditDetails::empty(),
+        )
+        .await
     }
 }
 
@@ -403,5 +496,17 @@ mod tests {
         assert_eq!(payload["expires_in"], "7 days");
         assert_eq!(payload["email"], "alice@example.com");
         assert_eq!(payload.len(), 4);
+    }
+
+    #[test]
+    fn changed_fields_name_only_what_the_patch_sets() {
+        assert!(changed_fields(&UserPatch::default()).is_empty());
+        let p = UserPatch {
+            email: Some("x@example.com".into()),
+            status: Some(UserStatus::Blocked),
+            username: Some(None),
+            ..UserPatch::default()
+        };
+        assert_eq!(changed_fields(&p), vec!["email", "username", "status"]);
     }
 }

@@ -13,7 +13,7 @@
 //! browser CSRF layer does not apply.
 
 use anvil_core::error::CoreError;
-use anvil_core::model::{SYSTEM_TENANT_SLUG, TenantBase, issuer};
+use anvil_core::model::{AuditActor, SYSTEM_TENANT_SLUG, TenantBase, issuer};
 use anvil_core::oauth::redirect::validate_redirect_uri;
 use anvil_core::service::admin_scope::{ADMIN_WRITE, Access, Resource, scope_satisfies};
 use anvil_core::service::client::ClientService;
@@ -164,6 +164,12 @@ pub(crate) struct AdminAuth {
 }
 
 impl AdminAuth {
+    /// The audit actor of this caller: kind `admin`, id = the token subject (the client id for
+    /// client-credentials tokens, the administrator's user id for console tokens).
+    pub(crate) fn actor(&self) -> AuditActor {
+        AuditActor::admin(&self.claims.sub)
+    }
+
     /// Demands the admin scope for `access` on `resource` (403 `insufficient_scope` otherwise).
     pub(crate) fn require(&self, resource: Resource, access: Access) -> AdminResult<()> {
         if scope_satisfies(&self.claims.scope, resource, access) {

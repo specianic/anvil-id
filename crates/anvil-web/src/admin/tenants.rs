@@ -9,6 +9,7 @@ use super::auth::{
     AdminAuth, AdminJson, AdminQuery, AdminResult, created, json, no_content, page_request,
 };
 use super::dto::{CreateTenant, ListQuery, Problem, TenantList, TenantView, UpdateTenant};
+use crate::request_context::AuditContext;
 use crate::state::AppState;
 
 /// List tenants.
@@ -63,10 +64,14 @@ pub(crate) async fn list_tenants(
 pub(crate) async fn create_tenant(
     auth: AdminAuth,
     State(state): State<AppState>,
+    AuditContext(ctx): AuditContext,
     AdminJson(body): AdminJson<CreateTenant>,
 ) -> AdminResult<Response> {
     auth.require(Resource::Tenants, Access::Write)?;
-    let tenant = state.admin_tenants().create(body.into()).await?;
+    let tenant = state
+        .admin_tenants()
+        .create(body.into(), auth.actor(), &ctx)
+        .await?;
     let location = format!("/api/admin/v1/tenants/{}", tenant.slug);
     Ok(created(&location, &TenantView::from(tenant)))
 }
@@ -125,11 +130,16 @@ pub(crate) async fn get_tenant(
 pub(crate) async fn update_tenant(
     auth: AdminAuth,
     State(state): State<AppState>,
+    AuditContext(ctx): AuditContext,
     Path(slug): Path<String>,
     AdminJson(body): AdminJson<UpdateTenant>,
 ) -> AdminResult<Response> {
     auth.require(Resource::Tenants, Access::Write)?;
-    let tenant = state.admin_tenants().update(&slug, body.into()).await?;
+    // CAPTCHA changes get a wire field in 03-23.
+    let tenant = state
+        .admin_tenants()
+        .update(&slug, body.into(), None, auth.actor(), &ctx)
+        .await?;
     Ok(json(StatusCode::OK, &TenantView::from(tenant)))
 }
 
@@ -154,9 +164,13 @@ pub(crate) async fn update_tenant(
 pub(crate) async fn delete_tenant(
     auth: AdminAuth,
     State(state): State<AppState>,
+    AuditContext(ctx): AuditContext,
     Path(slug): Path<String>,
 ) -> AdminResult<Response> {
     auth.require(Resource::Tenants, Access::Write)?;
-    state.admin_tenants().delete(&slug).await?;
+    state
+        .admin_tenants()
+        .delete(&slug, auth.actor(), &ctx)
+        .await?;
     Ok(no_content())
 }
