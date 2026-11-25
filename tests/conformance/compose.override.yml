@@ -4,6 +4,26 @@ services:
   server:
     extra_hosts:
       - "host.docker.internal:host-gateway"
+  # Serve the suite's public name (localhost.emobix.co.uk) with the per-run leaf certificate that run.sh
+  # generates (signed by a throwaway CA that anvilid trusts via ANVILID_OUTBOUND_CA_FILE), instead of
+  # the image's self-signed CN=localhost certificate. anvilid then delivers back-channel logout
+  # tokens to the suite with full TLS verification. Paths from the suite's nginx/Dockerfile
+  # (release-v5.3.5). The defaults only keep `docker compose config` working without run.sh;
+  # create_host_path: false makes `up` fail instead of creating directories when they are missing.
+  nginx:
+    volumes:
+      - type: bind
+        source: ${ANVIL_CALLBACK_CERT:-/nonexistent/anvil-callback-leaf.pem}
+        target: /etc/ssl/certs/nginx-selfsigned.crt
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${ANVIL_CALLBACK_KEY:-/nonexistent/anvil-callback-leaf.key}
+        target: /etc/ssl/private/nginx-selfsigned.key
+        read_only: true
+        bind:
+          create_host_path: false
   # Replace the upstream ./mongo/data bind mount (same target, so compose overrides it) with a named
   # volume: `compose down -v` then deletes it, every run starts with an empty database, and no
   # root-owned files are left in ./suite.

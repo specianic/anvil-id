@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
-# Runs the OpenID conformance suite (Basic OP, Config OP and Form Post OP) against a freshly started
-# anvilid over TLS.
+# Runs the OpenID conformance suite (Basic OP, Config OP and Form Post OP; RP-Initiated and Back-Channel
+# Logout on request) against a freshly started anvilid over TLS.
 #
-# Usage: tests/conformance/run.sh [basic|config|formpost|all]   (default: all)
+# Usage: tests/conformance/run.sh [basic|config|formpost|logout|backchannel|all]   (default: all)
+#        `all` = basic + config + formpost; the logout plans join it once they pass (04-23).
 #
 # Local runs and CI run this same script (`just conformance`). It:
 #   1. fetches the suite's scripts + prebuilt compose file at the pinned tag into ./suite,
-#   2. starts the suite (prebuilt images, same tag) with docker compose,
+#   2. generates a throwaway CA + leaf certificate for the suite's nginx (localhost.emobix.co.uk) and
+#      starts the suite (prebuilt images, same tag) with docker compose,
 #   3. generates a throwaway self-signed P-256 certificate in $RESULTS_DIR/tmp and starts a fresh
 #      anvilid (new temporary data dir) on the built-in TLS listener at 0.0.0.0:$ANVILID_PORT with
-#      public URL https://host.docker.internal:$ANVILID_PORT,
+#      public URL https://host.docker.internal:$ANVILID_PORT; anvilid trusts the callback CA and may
+#      reach 127.0.0.1 through its outbound (SSRF) guard, for back-channel logout delivery,
 #   4. provisions it through /setup and the admin API (setup.sh), which writes the suite config,
 #   5. runs the selected plans through the suite's own run-test-plan.py with the expected-skips and
 #      expected-failures files, exporting results to $RESULTS_DIR,
@@ -37,6 +40,13 @@ BASIC_PLAN="oidcc-basic-certification-test-plan[server_metadata=discovery][clien
 CONFIG_PLAN="oidcc-config-certification-test-plan"
 # The Basic plan's module list with response_mode=form_post (suite: OIDCCFormPostBasicTestPlan).
 FORMPOST_PLAN="oidcc-formpost-basic-certification-test-plan[server_metadata=discovery][client_registration=static_client]"
+# Logout plans (suite: OIDCCRpInitiatedLogoutTestPlan, OIDCCBackchannelRpInitiatedLogoutTestPlan). The
+# variant string is not confirmed against a passing run yet, so both are overridable.
+LOGOUT_PLAN="${LOGOUT_PLAN:-oidcc-rp-initiated-logout-certification-test-plan[response_type=code][client_registration=static_client]}"
+BACKCHANNEL_PLAN="${BACKCHANNEL_PLAN:-oidcc-backchannel-rp-initiated-logout-certification-test-plan[response_type=code][client_registration=static_client]}"
+# Host name of the suite's nginx as seen from the host. It resolves to 127.0.0.1, which is why anvilid
+# gets ANVILID_OUTBOUND_ALLOW_CIDRS=127.0.0.1/32 below (back-channel logout POSTs to this host).
+CALLBACK_HOST="localhost.emobix.co.uk"
 # Login quota for the conformance instance. Rate limiting stays on, but the default Auth class
 # (10 logins per minute and IP, burst 5) is sized for humans: every suite module signs in through
 # the scripted browser, and all of them arrive from the one Docker gateway address.
@@ -46,15 +56,17 @@ PUBLIC_URL="https://host.docker.internal:${ANVILID_PORT}"
 log() { printf '[conformance] %s\n' "$*" >&2; }
 die() { log "ERROR: $*"; exit 2; }
 
-[[ $# -le 1 ]] || die "usage: run.sh [basic|config|formpost|all]"
+[[ $# -le 1 ]] || die "usage: run.sh [basic|config|formpost|logout|backchannel|all]"
 SELECTION="${1:-all}"
 PLAN_ARGS=()
 case "$SELECTION" in
   basic) PLAN_NAMES=("$BASIC_PLAN") ;;
   config) PLAN_NAMES=("$CONFIG_PLAN") ;;
   formpost) PLAN_NAMES=("$FORMPOST_PLAN") ;;
+  logout) PLAN_NAMES=("$LOGOUT_PLAN") ;;
+  backchannel) PLAN_NAMES=("$BACKCHANNEL_PLAN") ;;
   all) PLAN_NAMES=("$BASIC_PLAN" "$CONFIG_PLAN" "$FORMPOST_PLAN") ;;
-  *) die "unknown plan selection '$SELECTION' (expected basic, config, formpost or all)" ;;
+  *) die "unknown plan selection '$SELECTION' (expected basic, config, formpost, logout, backchannel or all)" ;;
 esac
 
 [[ -f Cargo.toml && -d tests/conformance ]] || die "run from the repository root"
@@ -70,6 +82,51 @@ TMP_DIR="$RESULTS_DIR/tmp"
 CFG="$TMP_DIR/anvilid-oidcc.json"
 rm -rf "$TMP_DIR"
 mkdir -m 700 "$TMP_DIR"
+
+# Throwaway CA + leaf for the suite's nginx, written to $TMP_DIR (deleted by cleanup):
+#   callback-ca.pem / callback-ca.key       P-256 CA, 1 day, basicConstraints CA:TRUE
+#   callback-leaf.pem / callback-leaf.key   RSA-2048 leaf for $CALLBACK_HOST (SAN DNS, serverAuth,
+#                                           CA:FALSE), signed by the CA
+# A CA + leaf rather than one self-signed certificate: webpki rejects a CA certificate used as an
+# end-entity certificate. RSA for the leaf because the suite's nginx.conf pins ECDHE-RSA ciphers on one
+# of its listeners. Self-contained (no log/die) so it can be tested on its own.
+gen_callback_cert() {
+  local d="$TMP_DIR" host="${CALLBACK_HOST:-localhost.emobix.co.uk}"
+  [[ -n "$d" && -d "$d" ]] || { printf 'gen_callback_cert: TMP_DIR is not a directory\n' >&2; return 1; }
+  cat > "$d/callback-cert.cnf" <<EOF || return 1
+[req]
+distinguished_name = dn
+prompt = no
+[dn]
+CN = anvilid conformance callback CA
+[leaf_dn]
+CN = $host
+[ca_ext]
+basicConstraints = critical,CA:TRUE
+keyUsage = critical,keyCertSign,cRLSign
+subjectKeyIdentifier = hash
+[leaf_ext]
+basicConstraints = critical,CA:FALSE
+keyUsage = critical,digitalSignature,keyEncipherment
+extendedKeyUsage = serverAuth
+subjectAltName = DNS:$host
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid
+EOF
+  openssl req -x509 -config "$d/callback-cert.cnf" -extensions ca_ext \
+    -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 1 \
+    -keyout "$d/callback-ca.key" -out "$d/callback-ca.pem" 2>/dev/null || return 1
+  openssl req -new -config "$d/callback-cert.cnf" -subj "/CN=$host" -newkey rsa:2048 -nodes \
+    -keyout "$d/callback-leaf.key" -out "$d/callback-leaf.csr" 2>/dev/null || return 1
+  openssl x509 -req -in "$d/callback-leaf.csr" -CA "$d/callback-ca.pem" -CAkey "$d/callback-ca.key" \
+    -set_serial "0x$(openssl rand -hex 16)" -days 1 -sha256 \
+    -extfile "$d/callback-cert.cnf" -extensions leaf_ext -out "$d/callback-leaf.pem" 2>/dev/null || return 1
+  rm -f "$d/callback-leaf.csr" "$d/callback-cert.cnf"
+  chmod 600 "$d/callback-ca.key" "$d/callback-ca.pem" "$d/callback-leaf.key" "$d/callback-leaf.pem" || return 1
+  # Fail fast: the chain anvilid will verify (leaf for $host issued by the CA) must verify here.
+  openssl verify -CAfile "$d/callback-ca.pem" -purpose sslserver -verify_hostname "$host" \
+    "$d/callback-leaf.pem" >/dev/null || { printf 'gen_callback_cert: leaf does not verify\n' >&2; return 1; }
+}
 
 compose() {
   IMAGE_TAG="$CONFORMANCE_TAG" docker compose -p "$COMPOSE_PROJECT" \
@@ -102,6 +159,7 @@ fi
 # --- Cleanup (registered before anything is started) ------------------------------------------------
 ANVILID_PID=""
 ANVILID_DATA=""
+# shellcheck disable=SC2329 # invoked through `trap cleanup EXIT` (newer shellcheck does not see it)
 cleanup() {
   local rc=$?
   set +e
@@ -125,6 +183,14 @@ cleanup() {
 trap cleanup EXIT
 
 # --- 3. Start the suite -----------------------------------------------------------------------------
+# Callback certificate first: compose mounts the leaf into nginx at container start.
+gen_callback_cert || die "could not generate the callback CA and leaf certificate"
+TMP_ABS=$(cd "$TMP_DIR" && pwd)
+# Read by compose.override.yml (mounted read-only over the nginx certificate paths).
+export ANVIL_CALLBACK_CERT="$TMP_ABS/callback-leaf.pem"
+export ANVIL_CALLBACK_KEY="$TMP_ABS/callback-leaf.key"
+CALLBACK_CA="$TMP_ABS/callback-ca.pem"
+
 log "starting conformance suite (images $CONFORMANCE_TAG)"
 compose up -d
 
@@ -139,8 +205,12 @@ openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 2 \
 ANVILID_DATA=$(mktemp -d)
 # Binary invocation: keep on ONE line.
 ANVILID_ARGS=(serve --listen "0.0.0.0:$ANVILID_PORT" --public-url "$PUBLIC_URL" --tls-cert "$TMP_DIR/tls.crt" --tls-key "$TMP_DIR/tls.key" --data-dir "$ANVILID_DATA" --breach-check off)
-log "starting $ANVILID_BIN ${ANVILID_ARGS[*]} (ANVILID_RATE_LIMIT_AUTH_PER_MINUTE=$CONFORMANCE_AUTH_PER_MINUTE)"
+log "starting $ANVILID_BIN ${ANVILID_ARGS[*]} (ANVILID_RATE_LIMIT_AUTH_PER_MINUTE=$CONFORMANCE_AUTH_PER_MINUTE ANVILID_OUTBOUND_CA_FILE=$CALLBACK_CA ANVILID_OUTBOUND_ALLOW_CIDRS=127.0.0.1/32)"
+# Outbound settings (operator config, same for every selection): trust the callback CA in addition to
+# the system roots, and let the SSRF guard reach 127.0.0.1 ($CALLBACK_HOST). TLS verification stays on.
 ANVILID_RATE_LIMIT_AUTH_PER_MINUTE="$CONFORMANCE_AUTH_PER_MINUTE" \
+ANVILID_OUTBOUND_CA_FILE="$CALLBACK_CA" \
+ANVILID_OUTBOUND_ALLOW_CIDRS="127.0.0.1/32" \
   "$ANVILID_BIN" "${ANVILID_ARGS[@]}" > "$RESULTS_DIR/anvilid.log" 2>&1 &
 ANVILID_PID=$!
 
@@ -174,10 +244,10 @@ fi
 "$SUITE_DIR/.venv/bin/python3" -m pip install --quiet --disable-pip-version-check \
   -r "$SUITE_DIR/scripts/requirements.txt"
 
-# The reviewed skip is a Basic/Form Post module. The Config plan has none, and run-test-plan.py fails
-# on unused skip entries, so a Config-only run checks against an empty skip list.
+# The reviewed skip is a Basic/Form Post module. The Config and logout plans have none, and
+# run-test-plan.py fails on unused skip entries, so those runs check against an empty skip list.
 SKIPS_FILE="$EXPECTED_SKIPS"
-if [[ "$SELECTION" == "config" ]]; then
+if [[ "$SELECTION" == "config" || "$SELECTION" == "logout" || "$SELECTION" == "backchannel" ]]; then
   SKIPS_FILE="$TMP_DIR/no-skips.json"
   printf '[]\n' > "$SKIPS_FILE"
 fi
