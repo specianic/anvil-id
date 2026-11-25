@@ -71,6 +71,18 @@
 //! link (`flow::upstream::PendingLink`) links the waiting identity to the account signed in to
 //! there, right before the session is created (`service::upstream::confirm_link`).
 //!
+//! # Email code and magic link (AUTH-06)
+//!
+//! [`Effect::SendEmailCode`] does the same work for every address (lookup, a fresh code and link
+//! token, their hashes stored in the flow with a compare-and-swap) and enqueues the sealed
+//! `login_code` email only for an active user; the page is the same either way.
+//! [`Effect::VerifyEmailCode`] checks the code against the stored HMAC and stores the verdict with
+//! a compare-and-swap (a right code clears the code and the link, so it works once; the fifth
+//! wrong code invalidates both). The magic link goes through [`FlowService::email_link`]: bound to
+//! the browser by the flow cookie (a POST without it consumes nothing), consumed like a code, and
+//! continued like an upstream sign-in (a second factor or enrolment goes on in a fresh flow). Email
+//! sign-in is `[otp]` with the pwd `acr`; the effective MFA policy then applies.
+//!
 //! # Audit
 //!
 //! `login_succeeded`, `login_failed`, `second_factor_failed`, `passkey_clone_suspected`,
@@ -82,6 +94,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 
 use anvil_jose::Kek;
+use anvil_jose::email_code::generate_email_code;
 use anvil_jose::encoding::{ct_eq, random_token, secret_hash};
 use anvil_jose::otp::{TotpSecret, check_code};
 use anvil_jose::recovery_code::{normalize_recovery_code, recovery_code_hash};
@@ -97,6 +110,7 @@ use super::authorize::mfa_context;
 use super::session::{NewSessionCookie, SessionService};
 use super::upstream::confirm_link;
 use crate::error::CoreError;
+use crate::flow::email_code::{self, Check, EmailCodeState};
 use crate::flow::engine::{
     AfterPrimary, Effect, EmailKind, Failure, FlowEnv, FlowInput, FlowState, LoginState, LoginStep,
     SecondFactorMethods, SessionAuth, after_primary_auth, enroll_required, on_failure,
@@ -228,6 +242,20 @@ pub enum AuthAttempt {
     PasskeySucceeded {
         user: UserId,
     },
+    /// A sign-in email was requested (sent, or for an unknown address pretended). `subject` is the
+    /// rate-limit subject of its code (`flow::email_code::limit_subject`): the user, or a keyed
+    /// pseudo id for an address without an account.
+    EmailCodeSent {
+        subject: UserId,
+    },
+    /// A wrong email code.
+    EmailCodeFailed {
+        subject: UserId,
+    },
+    /// A right email code (`subject` is the user).
+    EmailCodeSucceeded {
+        subject: UserId,
+    },
 }
 
 /// SHA-256 of a normalised login identifier (the rate-limit key; never stored or logged).
@@ -263,6 +291,20 @@ pub(crate) enum UpstreamPrimary {
     },
     /// A second factor or enrolment is needed: set the new flow's cookie and render its form.
     Continue(StartedFlow),
+}
+
+/// Result of [`FlowService::email_link`].
+#[derive(Debug)]
+pub enum EmailLinkOutcome {
+    /// Signed in (`FlowOutcome::SignedIn`), or the flow had expired (`FlowOutcome::Restarted`).
+    Done(FlowOutcome),
+    /// A second factor or enrolment is needed: set the new flow's cookie and render its form.
+    /// `factor_user` and `totp` are set as for a step-up start.
+    Continue(StartedFlow),
+    /// The POST came without this flow's cookie (another browser): nothing was consumed.
+    OtherBrowser,
+    /// The link is used, expired, invalidated or wrong: nothing changed. Message key.
+    Rejected(&'static str),
 }
 
 /// Why a submission does not match its flow.
@@ -411,6 +453,8 @@ struct Exec<'a> {
     passkey_backup_eligible: bool,
     /// Recovery codes of a second factor enrolled in this submission.
     recovery_codes: Vec<SecretString>,
+    /// The submitted CSRF token (binds forms an effect renders itself).
+    csrf_token: &'a str,
 }
 
 enum Loaded {
@@ -424,6 +468,7 @@ impl FlowService {
             registration: cx.tenant.settings.registration,
             require_verified_email: cx.tenant.settings.require_verified_email,
             policy: self.policy,
+            email_code: email_code_enabled(cx.tenant),
         }
     }
 
@@ -672,6 +717,7 @@ impl FlowService {
             method: "password",
             passkey_backup_eligible: false,
             recovery_codes: Vec::new(),
+            csrf_token,
         };
 
         while let Some(effect) = queue.pop_front() {
@@ -692,20 +738,24 @@ impl FlowService {
                         self.render(cx, &flow, csrf_token, &state, form).await?
                     }
                     Step::SecondFactor(methods) => {
-                        let (FlowState::Login(s), Some(user)) = (state, exec.subject.take()) else {
+                        let (FlowState::Login(mut s), Some(user)) = (state, exec.subject.take())
+                        else {
                             return Err(CoreError::Internal(
                                 "second factor outside a login with an established user".into(),
                             ));
                         };
+                        email_primary(&mut s, exec.method);
                         let (state, form) = second_factor_required(s, user.id, methods);
                         self.render(cx, &flow, csrf_token, &state, form).await?
                     }
                     Step::Enroll => {
-                        let (FlowState::Login(s), Some(user)) = (state, exec.subject.take()) else {
+                        let (FlowState::Login(mut s), Some(user)) = (state, exec.subject.take())
+                        else {
                             return Err(CoreError::Internal(
                                 "enrolment outside a login with an established user".into(),
                             ));
                         };
+                        email_primary(&mut s, exec.method);
                         let pending =
                             seal_pending_totp(&self.kek, flow.id, &PendingSecret::generate())?;
                         let (state, form) = enroll_required(s, user.id, pending);
@@ -912,9 +962,6 @@ impl FlowService {
         user: &User,
         current_session: Option<SessionId>,
     ) -> Result<UpstreamPrimary, CoreError> {
-        let tenant = cx.tenant.id;
-        let methods = self.second_factor_methods(tenant, user.id).await?;
-        let (policy, acr) = self.flow_mfa(cx, flow).await?;
         let state = LoginState {
             federated: true,
             upstream: None,
@@ -923,9 +970,42 @@ impl FlowService {
             passkey_challenge: None,
             ..state
         };
+        self.primary_without_form(
+            cx,
+            flow,
+            state,
+            user,
+            current_session,
+            SessionAuth::Federated,
+            "upstream",
+        )
+        .await
+    }
+
+    /// After a primary authentication that arrived without the flow's CSRF token (upstream
+    /// callback, magic link): applies the MFA policy of the flow's authorization request and signs
+    /// in with `auth`, or continues in a fresh flow at the second-factor or enrolment step. `state`
+    /// already carries the primary-method flag the second factor's session auth follows.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the primary method's session auth and audit name travel with the flow"
+    )]
+    async fn primary_without_form(
+        &self,
+        cx: &FlowContext<'_>,
+        flow: &Flow,
+        state: LoginState,
+        user: &User,
+        current_session: Option<SessionId>,
+        auth: SessionAuth,
+        method: &'static str,
+    ) -> Result<UpstreamPrimary, CoreError> {
+        let tenant = cx.tenant.id;
+        let methods = self.second_factor_methods(tenant, user.id).await?;
+        let (policy, acr) = self.flow_mfa(cx, flow).await?;
         match after_primary_auth(policy, acr, methods) {
             AfterPrimary::SignIn => {
-                let (acr, amr) = session_acr_amr(SessionAuth::Federated, false);
+                let (acr, amr) = session_acr_amr(auth, false);
                 let replaces = self.switch_session(cx, current_session, user.id).await?;
                 let cookie = self
                     .sessions()
@@ -941,7 +1021,7 @@ impl FlowService {
                     AuditAction::LoginSucceeded,
                     user.id,
                     AuditOutcome::Success,
-                    AuditDetails::login("upstream"),
+                    AuditDetails::login(method),
                 )
                 .await?;
                 Ok(UpstreamPrimary::SignedIn {
@@ -969,6 +1049,265 @@ impl FlowService {
                 Ok(UpstreamPrimary::Continue(started))
             }
         }
+    }
+
+    /// The magic link of a sign-in email was posted (`POST /ui/login/email-link?flow=`, module
+    /// docs). `cookie_token` is the flow cookie (absent in another browser), `csrf_token` the link
+    /// page's token (`flow::email_code::link_csrf`). Errors: `Forbidden` (the flow cookie matches
+    /// but the CSRF token does not).
+    pub async fn email_link(
+        &self,
+        cx: &FlowContext<'_>,
+        flow_id: FlowId,
+        cookie_token: Option<&str>,
+        csrf_token: &str,
+        token: &str,
+        current_session: Option<SessionId>,
+    ) -> Result<EmailLinkOutcome, CoreError> {
+        let tenant = cx.tenant.id;
+        let now = self.clock.now();
+        let Some(flow) = self.storage.flows().get(tenant, flow_id, now).await? else {
+            let outcome = self.restart(cx, FlowKind::Login, None).await?;
+            return Ok(EmailLinkOutcome::Done(outcome));
+        };
+        if flow.kind != FlowKind::Login {
+            return Ok(EmailLinkOutcome::Rejected(email_code::LINK_INVALID));
+        }
+        if flow.expires_at <= now {
+            let outcome = self
+                .restart(cx, FlowKind::Login, flow.auth_request_id)
+                .await?;
+            return Ok(EmailLinkOutcome::Done(outcome));
+        }
+        // Same browser: the flow cookie (SameSite=Strict, sent on the page's own POST).
+        let same_browser =
+            cookie_token.is_some_and(|c| ct_eq(&secret_hash(c), flow.cookie_hash.as_bytes()));
+        if !same_browser {
+            return Ok(EmailLinkOutcome::OtherBrowser);
+        }
+        let expected = email_code::link_csrf(&self.kek, flow.id, token);
+        if !ct_eq(expected.as_bytes(), csrf_token.as_bytes()) {
+            return Err(CoreError::Forbidden);
+        }
+        if !email_code_enabled(cx.tenant) {
+            return Ok(EmailLinkOutcome::Rejected(email_code::LINK_INVALID));
+        }
+        let state: FlowState = serde_json::from_str(&flow.state)
+            .map_err(|e| CoreError::Internal(format!("corrupt flow state: {e}")))?;
+        let (state, effects) = transition(
+            state,
+            FlowInput::EmailLink {
+                token: token.to_owned(),
+            },
+            &self.env(cx),
+        );
+        let (FlowState::Login(s), Some(Effect::ConsumeEmailLink { .. })) = (state, effects.first())
+        else {
+            return Ok(EmailLinkOutcome::Rejected(email_code::LINK_INVALID));
+        };
+        let Some(ec) = s.email_code.as_deref() else {
+            return Ok(EmailLinkOutcome::Rejected(email_code::LINK_INVALID));
+        };
+        let (check, next) = email_code::check_link(ec, email_code::link_hash(token), now);
+        if check != Check::Accepted {
+            return Ok(EmailLinkOutcome::Rejected(email_code::LINK_INVALID));
+        }
+        let mut consumed = s.clone();
+        consumed.email_code = Some(Box::new(next));
+        if !self
+            .storage
+            .flows()
+            .swap_state(
+                tenant,
+                flow.id,
+                &flow.state,
+                &encode_state(&FlowState::Login(consumed))?,
+                now,
+            )
+            .await?
+        {
+            return Ok(EmailLinkOutcome::Rejected(email_code::LINK_INVALID));
+        }
+        let user = match ec.user_id {
+            Some(u) => self.second_factor_user(tenant, u).await?,
+            None => None,
+        };
+        let Some(user) = user else {
+            self.audit_login_failed(cx, ec.user_id, AuditDetails::login("magic_link"))
+                .await?;
+            return Ok(EmailLinkOutcome::Rejected(email_code::LINK_INVALID));
+        };
+        let state = LoginState {
+            email_primary: true,
+            email_code: None,
+            passkey_challenge: None,
+            ..s
+        };
+        Ok(
+            match self
+                .primary_without_form(
+                    cx,
+                    &flow,
+                    state,
+                    &user,
+                    current_session,
+                    SessionAuth::EmailCode,
+                    "magic_link",
+                )
+                .await?
+            {
+                UpstreamPrimary::SignedIn {
+                    cookie,
+                    continue_to,
+                } => EmailLinkOutcome::Done(FlowOutcome::SignedIn {
+                    cookie,
+                    continue_to,
+                    recovery_codes: Vec::new(),
+                }),
+                UpstreamPrimary::Continue(started) => EmailLinkOutcome::Continue(started),
+            },
+        )
+    }
+
+    /// [`Effect::SendEmailCode`]: see the module docs.
+    async fn send_email_code(
+        &self,
+        cx: &FlowContext<'_>,
+        exec: &mut Exec<'_>,
+        email: &str,
+    ) -> Result<Step, CoreError> {
+        let tenant = cx.tenant.id;
+        let now = self.clock.now();
+        let flow = exec.flow;
+        let FlowState::Login(mut s) = decode_state(exec.state_json)? else {
+            return Err(CoreError::Internal("email code outside a login".into()));
+        };
+        // The same work for every address: lookup, code, link token, both hashes.
+        let user = self
+            .storage
+            .users()
+            .get_by_email(tenant, email)
+            .await?
+            .filter(|u| u.status == UserStatus::Active);
+        let code = generate_email_code();
+        let token = random_token();
+        let code_hash = email_code::code_hash(&self.kek, flow.id, &code)
+            .ok_or_else(|| CoreError::Internal("generated email code is malformed".into()))?;
+        let next = EmailCodeState::issue(
+            s.email_code.as_deref(),
+            email,
+            user.as_ref().map(|u| u.id),
+            code_hash,
+            email_code::link_hash(&token),
+            now,
+        );
+        s.step = LoginStep::EmailCode;
+        s.passkey_challenge = None;
+        s.email_code = Some(Box::new(next));
+        let json = encode_state(&FlowState::Login(s))?;
+        if !self
+            .storage
+            .flows()
+            .swap_state(tenant, flow.id, &flow.state, &json, now)
+            .await?
+        {
+            let f = email_code::form(vec![FormMessage::error("flow.invalid_input")]);
+            return Ok(Step::Done(Box::new(FlowOutcome::Render(bind_form(
+                f,
+                cx,
+                flow.id,
+                exec.csrf_token,
+            )))));
+        }
+        if let Some(user) = &user {
+            let mail = login_code_email(&self.kek, cx, flow.id, &user.email, &code, &token, now)?;
+            self.storage.outbox().enqueue(tenant, &mail).await?;
+            self.audit_user(
+                cx,
+                AuditAction::EmailCodeSent,
+                user.id,
+                AuditOutcome::Success,
+                AuditDetails::empty(),
+            )
+            .await?;
+        }
+        exec.attempt = Some(AuthAttempt::EmailCodeSent {
+            subject: email_code::limit_subject(
+                &self.kek,
+                tenant,
+                email,
+                user.as_ref().map(|u| u.id),
+            ),
+        });
+        Ok(Step::Done(Box::new(FlowOutcome::Render(bind_form(
+            email_code::sent_form(),
+            cx,
+            flow.id,
+            exec.csrf_token,
+        )))))
+    }
+
+    /// [`Effect::VerifyEmailCode`]: see the module docs.
+    async fn verify_email_code(
+        &self,
+        cx: &FlowContext<'_>,
+        exec: &mut Exec<'_>,
+        code: &SecretString,
+    ) -> Result<Step, CoreError> {
+        let tenant = cx.tenant.id;
+        let now = self.clock.now();
+        let flow = exec.flow;
+        let FlowState::Login(s) = decode_state(&flow.state)? else {
+            return Err(CoreError::Internal("email code outside a login".into()));
+        };
+        let Some(ec) = s.email_code.as_deref() else {
+            return Err(CoreError::Internal("email code step without a code".into()));
+        };
+        let subject = email_code::limit_subject(&self.kek, tenant, &ec.email, ec.user_id);
+        let presented = email_code::code_hash(&self.kek, flow.id, code.expose_secret());
+        let (check, next) = email_code::check_code(ec, presented, now);
+        let mut stored = s.clone();
+        stored.email_code = Some(Box::new(next));
+        let changed = matches!(check, Check::Accepted | Check::Wrong { .. });
+        let won = changed
+            && self
+                .storage
+                .flows()
+                .swap_state(
+                    tenant,
+                    flow.id,
+                    &flow.state,
+                    &encode_state(&FlowState::Login(stored))?,
+                    now,
+                )
+                .await?;
+        let user = match (check, won, ec.user_id) {
+            (Check::Accepted, true, Some(u)) => self.second_factor_user(tenant, u).await?,
+            _ => None,
+        };
+        if let Some(user) = user {
+            exec.attempt = Some(AuthAttempt::EmailCodeSucceeded { subject: user.id });
+            exec.method = "email_code";
+            exec.subject = Some(user);
+            return Ok(Step::Continue);
+        }
+        // Not signed in: a wrong code (or one that lost the race) counts as a failed attempt.
+        let key = match check {
+            Check::Accepted => email_code::INVALIDATED,
+            other => email_code::failure_key(other),
+        };
+        if matches!(check, Check::Wrong { .. } | Check::Accepted) {
+            exec.attempt = Some(AuthAttempt::EmailCodeFailed { subject });
+            self.audit_login_failed(cx, ec.user_id, AuditDetails::login("email_code"))
+                .await?;
+        }
+        let f = email_code::form(vec![FormMessage::error(key)]);
+        Ok(Step::Done(Box::new(FlowOutcome::Render(bind_form(
+            f,
+            cx,
+            flow.id,
+            exec.csrf_token,
+        )))))
     }
 
     /// The second factors `user` can use at the second-factor step.
@@ -1299,6 +1638,11 @@ impl FlowService {
                     recovery_codes: std::mem::take(&mut exec.recovery_codes),
                 })))
             }
+            Effect::SendEmailCode { email } => self.send_email_code(cx, exec, email).await,
+            Effect::VerifyEmailCode { code } => self.verify_email_code(cx, exec, code).await,
+            Effect::ConsumeEmailLink { .. } => Err(CoreError::Internal(
+                "ConsumeEmailLink runs only through email_link".into(),
+            )),
             Effect::IssueRecovery { email } => {
                 // Same lookup whether or not the account exists; the caller always shows
                 // `recovery.sent`.
@@ -1800,6 +2144,57 @@ fn recovery_code_used_email(
         created_at: now,
         expires_at: now + NOTICE_EMAIL_TTL,
     })
+}
+
+/// Whether email code / magic-link sign-in is enabled for the tenant (either setting; the email
+/// always carries both the code and the link).
+pub fn email_code_enabled(tenant: &Tenant) -> bool {
+    tenant.settings.email_otp || tenant.settings.magic_link
+}
+
+/// Marks a login whose primary authentication was an email code or link (its second factor then
+/// ends in `[otp, mfa]`) and drops the used code.
+fn email_primary(state: &mut LoginState, method: &str) {
+    if method == "email_code" || method == "magic_link" {
+        state.email_primary = true;
+        state.email_code = None;
+    }
+}
+
+/// The `login_code` email (payload `tenant_name`, `code`, `link`, `expires_minutes`, sealed: it
+/// carries the code and the link token).
+fn login_code_email(
+    kek: &Kek,
+    cx: &FlowContext<'_>,
+    flow: FlowId,
+    to: &str,
+    code: &str,
+    token: &str,
+    now: OffsetDateTime,
+) -> Result<NewEmail, CoreError> {
+    let mut payload = BTreeMap::new();
+    payload.insert("tenant_name".to_owned(), cx.tenant.display_name.clone());
+    payload.insert("code".to_owned(), code.to_owned());
+    payload.insert(
+        "link".to_owned(),
+        format!("{}/login/email-link?flow={flow}&token={token}", cx.ui_base),
+    );
+    payload.insert(
+        "expires_minutes".to_owned(),
+        email_code::EMAIL_CODE_TTL.whole_minutes().to_string(),
+    );
+    Ok(NewEmail {
+        id: OutboxId::new_v7(),
+        to: to.to_owned(),
+        template: "login_code".to_owned(),
+        payload: seal_payload(kek, cx.tenant.id, &payload)?,
+        created_at: now,
+        expires_at: now + email_code::EMAIL_CODE_TTL,
+    })
+}
+
+fn decode_state(json: &str) -> Result<FlowState, CoreError> {
+    serde_json::from_str(json).map_err(|e| CoreError::Internal(format!("corrupt flow state: {e}")))
 }
 
 /// Flow kinds whose state is a [`FlowState`] run by this service.

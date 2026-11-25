@@ -31,6 +31,12 @@
 //! [`LoginState::step_up_session`] set. Success then ends in [`Effect::UpgradeSession`] (the
 //! session is upgraded in place) instead of [`Effect::CreateSession`].
 //!
+//! # Email code and magic link (AUTH-06)
+//!
+//! [`LoginStep::EmailCode`] (`flow::email_code`): a sign-in email was requested; the code or the
+//! link signs in with `amr = [otp]` (single factor), then the MFA policy applies as after a
+//! password, and a second factor after it ends in [`SessionAuth::EmailCodeSecondFactor`].
+//!
 //! Inputs that do not belong to the current step re-render the step's form with
 //! `flow.invalid_input` and plan no effects.
 //!
@@ -43,6 +49,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::email_code::{self, EmailCodeState};
 use super::engine::{
     Effect, Failure, FlowEnv, FlowState, SessionAuth, error, field, form as build_form,
     password_field, secret,
@@ -91,6 +98,13 @@ pub struct LoginState {
     /// factor ends in [`SessionAuth::FederatedSecondFactor`].
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub federated: bool,
+    /// A requested sign-in email (`flow::email_code`): hashes of the code and the link only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email_code: Option<Box<EmailCodeState>>,
+    /// The primary authentication was an email code or link (`amr` `otp`, not `pwd`): a second
+    /// factor ends in [`SessionAuth::EmailCodeSecondFactor`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub email_primary: bool,
 }
 
 /// Where the login stands.
@@ -107,6 +121,8 @@ pub enum LoginStep {
     },
     /// The policy requires a second factor `user_id` does not have: enrol one first.
     Enroll { user_id: UserId },
+    /// A sign-in email was requested ([`LoginState::email_code`]): enter its code or open its link.
+    EmailCode,
 }
 
 /// What follows a successful primary authentication.
@@ -222,6 +238,7 @@ fn finish(state: &LoginState) -> Effect {
             auth: SessionAuth::SecondFactor,
         },
         None if state.federated => Effect::CreateSession(SessionAuth::FederatedSecondFactor),
+        None if state.email_primary => Effect::CreateSession(SessionAuth::EmailCodeSecondFactor),
         None => Effect::CreateSession(SessionAuth::SecondFactor),
     }
 }
@@ -329,7 +346,7 @@ pub fn link_confirmation(link: PendingLink) -> (FlowState, FormDescription) {
     (FlowState::Login(state), f)
 }
 
-fn invalid_input(state: LoginState) -> (FlowState, Vec<Effect>) {
+pub(super) fn invalid_input(state: LoginState) -> (FlowState, Vec<Effect>) {
     let f = current_form(&state, vec![error("flow.invalid_input")]);
     (FlowState::Login(state), vec![Effect::Render(f)])
 }
@@ -359,6 +376,13 @@ pub(super) fn on_failure(state: &LoginState, failure: Failure) -> FormDescriptio
             };
             enroll_form(vec![error(key)])
         }
+        LoginStep::EmailCode => {
+            let key = match failure {
+                Failure::Overloaded => "service.overloaded",
+                _ => email_code::WRONG,
+            };
+            email_code::form(vec![error(key)])
+        }
     }
 }
 
@@ -368,6 +392,7 @@ pub(super) fn current_form(state: &LoginState, messages: Vec<FormMessage>) -> Fo
         LoginStep::Identify => form(state, messages),
         LoginStep::SecondFactor { methods, .. } => second_factor_form(methods, messages),
         LoginStep::Enroll { .. } => enroll_form(messages),
+        LoginStep::EmailCode => email_code::form(messages),
     }
 }
 
@@ -574,6 +599,50 @@ mod tests {
             !serde_json::to_string(&LoginState::default())
                 .unwrap()
                 .contains("federated")
+        );
+    }
+
+    #[test]
+    fn second_factor_after_email_code_signs_in_with_otp_mfa_never_pwd() {
+        let (_, mut state) = second_factor_state(BOTH);
+        state.email_primary = true;
+        for (_, effects) in [
+            totp(state.clone(), "123456".into()),
+            recovery_code(state.clone(), "abcd".into()),
+        ] {
+            assert!(matches!(
+                effects.last(),
+                Some(Effect::CreateSession(SessionAuth::EmailCodeSecondFactor))
+            ));
+        }
+        // The email step's form follows the step; password input there is invalid.
+        let s = LoginState {
+            step: LoginStep::EmailCode,
+            ..LoginState::default()
+        };
+        assert_eq!(
+            current_form(&s, Vec::new()).id,
+            email_code::EMAIL_CODE_FORM_ID
+        );
+        let (_, effects) = engine_transition(
+            FlowState::Login(s.clone()),
+            FlowInput::Login {
+                identifier: "alice@example.com".into(),
+                password: PW.into(),
+            },
+            &env(),
+        );
+        let f = rendered(&effects);
+        assert_eq!(f.id, email_code::EMAIL_CODE_FORM_ID);
+        assert_eq!(all_keys(f), vec!["flow.invalid_input"]);
+        assert_eq!(
+            all_keys(&on_failure(&s, Failure::Overloaded)),
+            vec!["service.overloaded"]
+        );
+        assert!(
+            !serde_json::to_string(&LoginState::default())
+                .unwrap()
+                .contains("email")
         );
     }
 

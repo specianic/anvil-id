@@ -61,6 +61,7 @@ use anvil_core::service::account::TotpEnrolment;
 use anvil_core::service::audit::AuditService;
 use anvil_core::service::flow::{
     AuthAttempt, FlowContext, FlowOutcome, FlowService, StartedFlow, SubmitResult, bind_form,
+    email_code_enabled,
 };
 use anvil_core::service::session::SessionService;
 use axum::Router;
@@ -359,6 +360,7 @@ fn posted_login_form(
         registration: tenant.tenant.settings.registration,
         require_verified_email: tenant.tenant.settings.require_verified_email,
         policy: state.config().password_policy,
+        email_code: email_code_enabled(&tenant.tenant),
     };
     let (_, form) = FlowState::initial(FlowKind::Login, None, &env)?;
     let base = ui_base(tenant);

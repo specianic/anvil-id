@@ -40,7 +40,7 @@ pub use super::recovery::RecoveryState;
 pub use super::registration::RegistrationState;
 pub use super::setup::SetupState;
 pub use super::verification::VerificationState;
-use super::{login, recovery, registration, setup, verification};
+use super::{email_code, login, recovery, registration, setup, verification};
 use crate::error::CoreError;
 use crate::model::{
     ACR_MFA, ACR_PWD, AMR_FED, AMR_HWK, AMR_MFA, AMR_OTP, AMR_PWD, AMR_SWK, AMR_USER, FlowKind,
@@ -59,6 +59,8 @@ pub struct FlowEnv {
     pub registration: RegistrationMode,
     pub require_verified_email: bool,
     pub policy: PasswordPolicy,
+    /// Email code / magic-link sign-in is enabled (tenant `email_otp` or `magic_link`).
+    pub email_code: bool,
 }
 
 impl Default for FlowEnv {
@@ -67,6 +69,7 @@ impl Default for FlowEnv {
             registration: RegistrationMode::Open,
             require_verified_email: false,
             policy: PasswordPolicy::default(),
+            email_code: false,
         }
     }
 }
@@ -169,6 +172,19 @@ pub enum FlowInput {
     RecoveryCode {
         code: String,
     },
+    /// Send a sign-in email (login, identify step) to `email`; `None` sends a new code to the
+    /// address of the current one (email step).
+    EmailCodeRequest {
+        email: Option<String>,
+    },
+    /// The code from the sign-in email (login, email step).
+    EmailCode {
+        code: String,
+    },
+    /// The token of the magic link (login, email step; through `FlowService::email_link`).
+    EmailLink {
+        token: String,
+    },
 }
 
 impl FlowInput {
@@ -179,7 +195,10 @@ impl FlowInput {
             | Self::PasskeyOptions
             | Self::PasskeyAssertion { .. }
             | Self::Totp { .. }
-            | Self::RecoveryCode { .. } => FlowKind::Login,
+            | Self::RecoveryCode { .. }
+            | Self::EmailCodeRequest { .. }
+            | Self::EmailCode { .. }
+            | Self::EmailLink { .. } => FlowKind::Login,
             Self::Register { .. } => FlowKind::Registration,
             Self::ConfirmVerification { .. } => FlowKind::Verification,
             Self::RequestRecovery { .. } | Self::ResetPassword { .. } => FlowKind::Recovery,
@@ -232,6 +251,18 @@ impl std::fmt::Debug for FlowInput {
                 .debug_struct("RecoveryCode")
                 .field("code", &REDACTED)
                 .finish(),
+            Self::EmailCodeRequest { email } => f
+                .debug_struct("EmailCodeRequest")
+                .field("email", email)
+                .finish(),
+            Self::EmailCode { .. } => f
+                .debug_struct("EmailCode")
+                .field("code", &REDACTED)
+                .finish(),
+            Self::EmailLink { .. } => f
+                .debug_struct("EmailLink")
+                .field("token", &REDACTED)
+                .finish(),
         }
     }
 }
@@ -250,12 +281,17 @@ pub enum SessionAuth {
     Federated,
     /// An upstream identity provider, then a TOTP code or a recovery code.
     FederatedSecondFactor,
+    /// An emailed one-time code or magic link (`flow::email_code`): single factor.
+    EmailCode,
+    /// An emailed code or link, then a TOTP code or a recovery code.
+    EmailCodeSecondFactor,
 }
 
 /// `(acr, amr)` of a session: password `[pwd]` + pwd ACR; password plus TOTP or recovery code
 /// `[pwd, otp, mfa]` + MFA ACR; passkey `[hwk|swk, user, mfa]` + MFA ACR, `swk` when the
 /// passkey is backup eligible (synced), `hwk` otherwise; upstream provider `[fed]` + pwd ACR
-/// (single factor), plus a second factor `[fed, otp, mfa]` + MFA ACR.
+/// (single factor), plus a second factor `[fed, otp, mfa]` + MFA ACR; emailed code or link `[otp]`
+/// + pwd ACR (single factor, RFC 8176 `otp`), plus a second factor `[otp, mfa]` + MFA ACR.
 pub fn session_acr_amr(
     auth: SessionAuth,
     passkey_backup_eligible: bool,
@@ -274,6 +310,8 @@ pub fn session_acr_amr(
         }
         SessionAuth::Federated => (ACR_PWD, v(&[AMR_FED])),
         SessionAuth::FederatedSecondFactor => (ACR_MFA, v(&[AMR_FED, AMR_OTP, AMR_MFA])),
+        SessionAuth::EmailCode => (ACR_PWD, v(&[AMR_OTP])),
+        SessionAuth::EmailCodeSecondFactor => (ACR_MFA, v(&[AMR_OTP, AMR_MFA])),
     }
 }
 
@@ -370,6 +408,17 @@ pub enum Effect {
         session: SessionId,
         auth: SessionAuth,
     },
+    /// Terminal (`flow::email_code`): look the address up, generate a code and a link token, store
+    /// their hashes in the login state (compare-and-swap; the login moves to the email step) and,
+    /// only for an active user, enqueue the sealed `login_code` email. Renders the same "check your
+    /// email" form either way.
+    SendEmailCode { email: String },
+    /// Check the code against the stored hash (compare-and-swap: a right code clears the code and
+    /// the link, a wrong one counts an attempt). Establishes the user. A code that does not sign in
+    /// answers the email form with its message itself (no [`Failure`]).
+    VerifyEmailCode { code: SecretString },
+    /// Check the magic-link token like [`Effect::VerifyEmailCode`] (no attempt counting).
+    ConsumeEmailLink { token: SecretString },
     /// Look the address up; if an active user has it, issue a recovery token and email it.
     /// Never fails visibly: the outcome is the same whether or not the account exists.
     IssueRecovery { email: String },
@@ -440,6 +489,18 @@ impl std::fmt::Debug for Effect {
                 .field("session", session)
                 .field("auth", auth)
                 .finish(),
+            Self::SendEmailCode { email } => f
+                .debug_struct("SendEmailCode")
+                .field("email", email)
+                .finish(),
+            Self::VerifyEmailCode { .. } => f
+                .debug_struct("VerifyEmailCode")
+                .field("code", &REDACTED)
+                .finish(),
+            Self::ConsumeEmailLink { .. } => f
+                .debug_struct("ConsumeEmailLink")
+                .field("token", &REDACTED)
+                .finish(),
             Self::IssueRecovery { email } => f
                 .debug_struct("IssueRecovery")
                 .field("email", email)
@@ -497,6 +558,11 @@ pub fn transition(state: FlowState, input: FlowInput, env: &FlowEnv) -> (FlowSta
         }
         (FlowState::Login(s), FlowInput::Totp { code }) => login::totp(s, code),
         (FlowState::Login(s), FlowInput::RecoveryCode { code }) => login::recovery_code(s, code),
+        (FlowState::Login(s), FlowInput::EmailCodeRequest { email }) => {
+            email_code::request(s, email, env)
+        }
+        (FlowState::Login(s), FlowInput::EmailCode { code }) => email_code::verify(s, code),
+        (FlowState::Login(s), FlowInput::EmailLink { token }) => email_code::link(s, token),
         (
             FlowState::Registration(s),
             FlowInput::Register {
@@ -670,8 +736,9 @@ pub(super) fn secret(s: String) -> SecretString {
 pub(crate) mod test_support {
     use super::super::form::{FieldKind, FormDescription};
 
-    pub const IDS: [&str; 8] = [
+    pub const IDS: [&str; 9] = [
         "login",
+        "email-code",
         "second-factor",
         "mfa-enroll",
         "registration",
@@ -775,6 +842,12 @@ mod tests {
             FlowInput::PasskeyAssertion {
                 response_json: "{\"secret\":1}".into(),
             },
+            FlowInput::EmailCode {
+                code: "secret-123456".into(),
+            },
+            FlowInput::EmailLink {
+                token: "secret-token".into(),
+            },
         ];
         for i in &inputs {
             let d = format!("{i:?}");
@@ -819,6 +892,12 @@ mod tests {
             Effect::FinishPasskey {
                 response_json: "{\"secret\":1}".into(),
                 challenge: "challenge-secret".into(),
+            },
+            Effect::VerifyEmailCode {
+                code: secret("secret-123456".into()),
+            },
+            Effect::ConsumeEmailLink {
+                token: secret("secret-token".into()),
             },
         ];
         for e in &effects {
@@ -898,6 +977,11 @@ mod tests {
         let (acr, amr) = upgraded_acr_amr(&fed, SessionAuth::SecondFactor, false);
         assert_eq!(acr, ACR_MFA);
         assert_eq!(amr, vec![AMR_FED, AMR_OTP, AMR_MFA]);
+        // An email-code session stepped up gains mfa only.
+        let otp = vec![AMR_OTP.to_owned()];
+        let (acr, amr) = upgraded_acr_amr(&otp, SessionAuth::SecondFactor, false);
+        assert_eq!(acr, ACR_MFA);
+        assert_eq!(amr, vec![AMR_OTP, AMR_MFA]);
     }
 
     #[test]
@@ -926,6 +1010,15 @@ mod tests {
         assert_eq!(
             session_acr_amr(SessionAuth::FederatedSecondFactor, false),
             (ACR_MFA, s(&["fed", "otp", "mfa"]))
+        );
+        // Email sign-in is single factor and never claims mfa.
+        assert_eq!(
+            session_acr_amr(SessionAuth::EmailCode, false),
+            (ACR_PWD, s(&["otp"]))
+        );
+        assert_eq!(
+            session_acr_amr(SessionAuth::EmailCodeSecondFactor, false),
+            (ACR_MFA, s(&["otp", "mfa"]))
         );
     }
 
