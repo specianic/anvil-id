@@ -14,7 +14,9 @@
 # The setup URL is printed to the logs on first start. Data (SQLite, KEK) lives in /data;
 # mount a volume there to keep it across container restarts.
 
-ARG TARGETARCH=amd64
+# Set by BuildKit from the target platform. Do not give it a default: a default overrides the
+# BuildKit value and every platform would get the amd64 binary.
+ARG TARGETARCH
 
 FROM scratch AS bin-amd64
 COPY target/x86_64-unknown-linux-musl/release/anvilid /anvilid
