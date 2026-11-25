@@ -6,14 +6,14 @@ current_phase: 2
 current_phase_name: Release 0.1 "First login" (M1)
 current_plan: 22
 status: verifying
-stopped_at: Completed 03-01-PLAN.md
-last_updated: "2026-11-25T05:42:52.485Z"
+stopped_at: Completed 03-04-PLAN.md
+last_updated: "2026-11-25T05:44:31.497Z"
 last_activity: 2026-11-25
 progress:
   total_phases: 7
   completed_phases: 1
   total_plans: 60
-  completed_plans: 32
+  completed_plans: 33
   percent: 51
 ---
 
@@ -90,6 +90,7 @@ Phase 2 plans 02-01 through 02-22 are all complete (22/22 summaries). Next: Phas
 | Phase 02 P21 | 80min | 3 tasks | 10 files |
 | Phase 03 P03 | 40min | 2 tasks | 37 files |
 | Phase 03 P01 | 13min | 3 tasks | 16 files |
+| Phase 03 P04 | 55min | 2 tasks | 15 files |
 
 ## Accumulated Context
 
@@ -177,6 +178,9 @@ Recent decisions affecting current work:
 - [Phase 03]: 03-01: deny.toml rsa allowed only via crypto-glue; RUSTSEC-2023-0071 ignored (rsa 0.10.0 fix unreachable via crypto-glue 0.2.2); MPL-2.0 per-crate exceptions (webauthn-rs crates, crypto-glue, option-ext)
 - [Phase 03]: 03-01: verify_op_token stays RS256-only; verify_op_token_algs takes an explicit allow-list
 - [Phase 03]: 03-01: Kek::derive_key uses HKDF salt anvilid/derive/v1 so peppers never equal AEAD data keys; recovery codes peppered with info anvilid/recovery-code/v1
+- [Phase 03]: 03-04: run.sh takes optional spec args after the backend (run.sh sqlite specs/x.spec.ts); default list includes a11y/keyboard/nojs/fixtures, both Playwright projects (chromium, nojs)
+- [Phase 03]: 03-04: e2e specs needing an RP spawn examples/node-rp themselves on a free port; nojs specs are named nojs*.spec.ts
+- [Phase 03]: 03-04: theme has --anvil-input-border (3:1) and focus ring #1d4ed8 / dark #a9c0ff; optional fields labelled (optional)
 
 ### Pending Todos
 
@@ -189,6 +193,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-25T05:42:52.483Z
-Stopped at: Completed 03-01-PLAN.md
+Last session: 2026-11-25T05:44:31.495Z
+Stopped at: Completed 03-04-PLAN.md
 Resume file: None
