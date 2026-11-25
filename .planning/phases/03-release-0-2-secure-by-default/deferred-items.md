@@ -24,3 +24,23 @@ Out-of-scope discoveries logged by executors (not fixed by the plan that found t
   applies `form-action` to redirects that follow the POST, so an RP callback that immediately redirects
   to a *different* origin would be blocked. Same-origin callback redirects are unaffected. Revisit if
   the 03-28 Form Post conformance run or RP reports show problems.
+
+## From 03-13 (rate limiting on by default)
+
+The route-class rate-limit layer now runs on every request, so two pre-existing test harness gaps
+fail 9 anvil-web tests. Both fixes are in files outside 03-13's files_modified:
+
+- `tests/ui_helpers/mod.rs` `OwnApp::send` inserts no `ConnectInfo`. The rate-limit layer resolves
+  the client IP for every classified request and answers the generic 500 of `MissingPeerAddress`
+  when the peer is missing (it never invents an address). Failing: `security_csp`
+  (`every_ui_page_has_the_strict_headers_and_no_external_references`), `security_enumeration`
+  (both tests), `security_setup` (5 of 7: `fresh_install_has_no_users_and_no_default_credentials`,
+  `concurrent_submissions_complete_setup_exactly_once`,
+  `valid_token_shows_the_form_invalid_token_is_403_without_a_form`, `expired_token_is_refused`,
+  `setup_creates_the_admin_and_a_working_management_client_once`). Fix: in `OwnApp::send`, insert
+  `ConnectInfo(support::DEFAULT_PEER)` unless one is set (same as `support::TestApp::send`).
+- `tests/flow_recovery.rs` `recovery_resets_the_password_revokes_sessions_and_is_single_use` makes
+  6 auth-class POSTs (registration, login, recovery, reset, login with the old password, login with
+  the new one) from one peer with no clock movement. The 6th exceeds the default auth burst of 5 and
+  gets 429 (as SEC-05 requires). Fix: `app.clock().advance(Duration::from_secs(60))` before the
+  final logins, or send them with `send_from` from another peer.

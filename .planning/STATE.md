@@ -6,14 +6,14 @@ current_phase: 03
 current_phase_name: release 0 2 secure by default
 current_plan: Not started
 status: planning
-stopped_at: Completed 03-15-PLAN.md
-last_updated: "2026-11-25T06:54:21.327Z"
+stopped_at: Completed 03-13-PLAN.md
+last_updated: "2026-11-25T06:57:23.496Z"
 last_activity: 2026-11-25
 progress:
   total_phases: 7
   completed_phases: 2
   total_plans: 60
-  completed_plans: 42
+  completed_plans: 44
   percent: 51
 ---
 
@@ -100,6 +100,7 @@ Phase 2 plans 02-01 through 02-22 are all complete (22/22 summaries). Next: Phas
 | Phase 03 P11 | 25min | 2 tasks | 10 files |
 | Phase 03 P10 | 40min | 2 tasks | 8 files |
 | Phase 03 P15 | 55min | 2 tasks | 12 files |
+| Phase 03 P13 | 50min | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -206,6 +207,8 @@ Recent decisions affecting current work:
 - [Phase 03]: 03-15: one minijinja environment factory (strict undefined, .html autoescape, fuel 50k; defaults use <10%); tenant overrides render loader-less; unknown variables rejected statically against the per-kind contract (recovery_code_used = tenant_name, remaining)
 - [Phase 03]: 03-15: outbox worker always runs; transport = tenant SMTP (SmtpTransportFactory, KEK-opened password, cached by updated_at), else installation smtp_url, else 'no SMTP configured' with backoff; SMTP password sealed/opened only via service::mail_settings::{seal_smtp_password, smtp_connection}
 - [Phase 03]: 03-15: TemplateIssue messages prefixed with subject|body_html|body_text; MailSettingsService.put_template returns TemplateError::Invalid{field,line,message}; test sends audited with outcome only (no SMTP text/recipient)
+- [Phase 03]: 03-13: rate-limit layer inside the tenant-routed service; classified requests without ConnectInfo get the MissingPeerAddress 500; 429 shapes per surface via the single too_many_requests builder
+- [Phase 03]: 03-13: per-client token limit keys on the claimed client_id (bounded by the per-IP check first); record_attempt(state, tenant, ctx, keys, success) audits rate_limit_lockout on lock transitions
 
 ### Pending Todos
 
@@ -218,6 +221,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-25T06:56:00.000Z
-Stopped at: Completed 03-15-PLAN.md
+Last session: 2026-11-25T06:57:23.494Z
+Stopped at: Completed 03-13-PLAN.md
 Resume file: None

@@ -116,7 +116,7 @@ Plans:
 - [x] 03-10-PLAN.md — Rotation planner + KeyRotationService, per-client ID-token alg, JWKS cache headers (wave 3)
 - [x] 03-11-PLAN.md — form_post response mode via one core response builder (wave 3)
 - [ ] 03-12-PLAN.md — Core login flow: usernameless passkey, TOTP/recovery second factor, attempts, audit, transactional recovery notice (wave 3)
-- [ ] 03-13-PLAN.md — Limiter wiring: route-class layer on by default, per-client token limit, brute-force helpers, CAPTCHA (wave 3)
+- [x] 03-13-PLAN.md — Limiter wiring: route-class layer on by default, per-client token limit, brute-force helpers, CAPTCHA (wave 3)
 - [ ] 03-14-PLAN.md — Account security: passkey registration, TOTP enrolment + recovery codes, removal (wave 3)
 - [x] 03-15-PLAN.md — Tenant email templates (fuel, compile check) + per-tenant SMTP + synchronous test send (wave 3)
 - [ ] 03-16-PLAN.md — Destructive-migration guard + flag, 0.1→0.2 upgrade tests on both backends, migration lint/immutability (wave 3)
@@ -190,7 +190,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 |-------|----------------|--------|-----------|
 | 1. Foundations and Spikes (M0) | 8/8 | Complete    | 2026-11-25 |
 | 2. Release 0.1 "First login" | 23/23 | Complete    | 2026-11-25 |
-| 3. Release 0.2 "Secure by default" | 11/29 | In Progress|  |
+| 3. Release 0.2 "Secure by default" | 13/29 | In Progress|  |
 | 4. Release 0.3 "Real-world logins" | 0/TBD | Not started | - |
 | 5. Release 0.4 "Operate it" | 0/TBD | Not started | - |
 | 6. Release 1.0 (Organizations and SSO) | 0/TBD | Not started | - |
