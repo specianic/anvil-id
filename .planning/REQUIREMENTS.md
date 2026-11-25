@@ -43,7 +43,7 @@ Source of truth for wording and detail: [docs/PRD.md](../docs/PRD.md) §8–9. I
 
 ### Authentication and self-service
 
-- [ ] **AUTH-01**: User can log in with a password (Argon2id, policy, optional breached-password check) [0.1]
+- [x] **AUTH-01**: User can log in with a password (Argon2id, policy, optional breached-password check) [0.1]
 - [x] **AUTH-02**: User can self-register (can be disabled or invite-only) and verify their email [0.1]
 - [x] **AUTH-03**: User can recover their account by email without revealing whether an account exists [0.1]
 - [ ] **AUTH-04**: User can register and log in with passkeys, including usernameless; clone detection via signature counter [0.2]
@@ -59,7 +59,7 @@ Source of truth for wording and detail: [docs/PRD.md](../docs/PRD.md) §8–9. I
 
 ### Login UI and branding
 
-- [ ] **UI-01**: Login, registration, recovery, consent, MFA and account pages are served by the binary with no external assets [0.1]
+- [x] **UI-01**: Login, registration, recovery, consent, MFA and account pages are served by the binary with no external assets [0.1]
 - [ ] **UI-02**: Login pages meet WCAG 2.2 AA, are responsive, and the password flow works without JavaScript [0.2]
 - [ ] **UI-03**: Admin can theme pages (logo, colors, fonts, radius, custom CSS) live from the console, with per-tenant/org/client overrides [0.3]
 - [ ] **UI-04**: Pages are translated, with language chosen from ui_locales or the browser [0.3]
@@ -109,7 +109,7 @@ Source of truth for wording and detail: [docs/PRD.md](../docs/PRD.md) §8–9. I
 - [x] **SEC-01**: Defaults follow RFC 9700 and OAuth 2.1
 - [ ] **SEC-02**: Signing keys are generated at first start, encrypted at rest with a KEK, and rotated on schedule with overlap
 - [ ] **SEC-03**: All secrets are stored hashed; TOTP seeds and upstream IdP secrets are encrypted
-- [ ] **SEC-04**: Browser endpoints have CSRF protection, hardened cookies and a strict CSP
+- [x] **SEC-04**: Browser endpoints have CSRF protection, hardened cookies and a strict CSP
 - [ ] **SEC-05**: Authentication and token endpoints are rate limited by default
 - [ ] **SEC-06**: Release builds contain no test-only behavior
 - [ ] **SEC-07**: CI audits dependencies and fuzzes JWT and authorization-request parsers
@@ -195,7 +195,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | OIDC-23 | Phase 7 | Pending |
 | OIDC-24 | Phase 2 | Complete |
 | OIDC-25 | Phase 3 | Pending |
-| AUTH-01 | Phase 2 | Pending |
+| AUTH-01 | Phase 2 | Complete |
 | AUTH-02 | Phase 2 | Complete |
 | AUTH-03 | Phase 2 | Complete |
 | AUTH-04 | Phase 3 | Pending |
@@ -208,7 +208,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | AUTH-11 | Phase 4 | Pending |
 | AUTH-13 | Phase 4 | Pending |
 | AUTH-14 | Phase 5 | Pending |
-| UI-01 | Phase 2 | Pending |
+| UI-01 | Phase 2 | Complete |
 | UI-02 | Phase 3 | Pending |
 | UI-03 | Phase 4 | Pending |
 | UI-04 | Phase 4 | Pending |
@@ -243,7 +243,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SEC-01 | Phase 2 | Complete |
 | SEC-02 | Phase 3 | Pending |
 | SEC-03 | Phase 4 | Pending |
-| SEC-04 | Phase 2 | Pending |
+| SEC-04 | Phase 2 | Complete |
 | SEC-05 | Phase 3 | Pending |
 | SEC-06 | Phase 2 | Pending |
 | SEC-07 | Phase 2 | Pending |
