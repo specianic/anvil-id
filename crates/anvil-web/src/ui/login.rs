@@ -50,7 +50,7 @@ use anvil_cache::limiter::Decision;
 use anvil_core::error::CoreError;
 use anvil_core::flow::engine::{FlowEnv, FlowInput, FlowState};
 use anvil_core::flow::form::{FormDescription, FormMessage, MessageLevel};
-use anvil_core::flow::login::{ENROLL_FORM_ID, SECOND_FACTOR_FORM_ID};
+use anvil_core::flow::login::{ENROLL_FORM_ID, SECOND_FACTOR_FORM_ID, UPSTREAM_LINK_FORM_ID};
 use anvil_core::model::{
     ActorKind, AuditAction, AuditActor, AuditDetails, AuditOutcome, AuthRequestId, BrowserSession,
     CaptchaSettings, FlowId, FlowKind, RegistrationMode, RequestContext, SessionId, UserId,
@@ -174,6 +174,7 @@ async fn show(
             .factor_user
             .and_then(|user| factor_token(&state, &tenant, started.flow_id, user)),
         totp: started.totp.as_ref(),
+        upstream: super::upstream::upstream_buttons(&state, &tenant, &loc, &started.form).await,
         ..Extras::default()
     };
     started_response_with(
@@ -331,6 +332,9 @@ async fn submit(
             extras.factor_token = factor_token(&state, &tenant, flow_id, user);
         }
         _ => {}
+    }
+    if let FlowOutcome::Render(form) = &result.outcome {
+        extras.upstream = super::upstream::upstream_buttons(&state, &tenant, &loc, form).await;
     }
     outcome_response_with(&state, &tenant, &loc, result.outcome, &extras)
 }
@@ -496,7 +500,7 @@ async fn verify_captcha(
 
 /// The second-factor binding token for `user` in `flow` (see [`super::mfa`]); `None` (logged)
 /// if sealing fails, in which case the second-factor POST restarts the sign-in.
-fn factor_token(
+pub(super) fn factor_token(
     state: &AppState,
     tenant: &ResolvedTenant,
     flow: FlowId,
@@ -783,6 +787,7 @@ pub(super) fn form_status(form: &FormDescription) -> StatusCode {
 pub(super) fn form_template(form_id: &str) -> (&'static str, &'static str) {
     match form_id {
         "login" => ("login.html", "title.login"),
+        UPSTREAM_LINK_FORM_ID => ("upstream_link.html", "title.upstream_link"),
         SECOND_FACTOR_FORM_ID => ("second_factor.html", "title.second_factor"),
         ENROLL_FORM_ID => ("mfa_enroll.html", "title.mfa_enroll"),
         "registration" => ("registration.html", "title.registration"),
@@ -872,6 +877,8 @@ pub(super) struct Extras<'a> {
     pub(super) factor_token: Option<String>,
     /// The pending authenticator-app secret of the enrolment form.
     pub(super) totp: Option<&'a TotpEnrolment>,
+    /// Upstream sign-in buttons of the sign-in form ([`super::upstream::upstream_buttons`]).
+    pub(super) upstream: Vec<super::upstream::UpstreamButton>,
 }
 
 /// URLs of the passkey sign-in form (webauthn.js `data-options-url` and form action).
@@ -889,7 +896,7 @@ struct CaptchaView {
 }
 
 /// The flow id of a bound form (`…?flow={id}` action, possibly followed by more parameters).
-fn flow_of(form: &FormDescription) -> Option<FlowId> {
+pub(super) fn flow_of(form: &FormDescription) -> Option<FlowId> {
     let (_, rest) = form.action.rsplit_once("?flow=")?;
     let id = rest.split('&').next().unwrap_or_default();
     uuid::Uuid::parse_str(id).ok().map(FlowId)
@@ -925,7 +932,7 @@ pub(super) fn render_tenant_form_with(
     let mut qr_svg = None;
     let mut secret_groups = None;
     match (form.id.as_str(), flow_of(&form)) {
-        ("login", Some(flow)) => {
+        ("login" | UPSTREAM_LINK_FORM_ID, Some(flow)) => {
             if tenant_relying_party(tenant).is_ok() {
                 passkey = Some(PasskeyView {
                     options_url: format!("{base}/login/passkey/options?flow={flow}"),
@@ -964,6 +971,7 @@ pub(super) fn render_tenant_form_with(
         enroll => qr_svg.is_some(),
         qr_svg => qr_svg,
         secret_groups => secret_groups,
+        upstream => Value::from(Serde(&extras.upstream)),
     };
     let mut resp = render_page(state, Some(tenant), loc, template, ctx, status, jar);
     let csp = match (captcha, &passkey) {
@@ -1062,7 +1070,34 @@ fn started_response_with(
     status: StatusCode,
     extras: &Extras<'_>,
 ) -> Response {
-    let jar = CookieJar::new().add(
+    started_response_in(
+        state,
+        tenant,
+        loc,
+        started,
+        request,
+        status,
+        extras,
+        CookieJar::new(),
+    )
+}
+
+/// [`started_response_with`] adding the flow cookie to `jar` (which may carry other cookies).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "page renderer threads the request's locale and binding"
+)]
+pub(super) fn started_response_in(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    loc: &Locale,
+    started: &StartedFlow,
+    request: Option<AuthRequestId>,
+    status: StatusCode,
+    extras: &Extras<'_>,
+    jar: CookieJar,
+) -> Response {
+    let jar = jar.add(
         state
             .cookies()
             .flow_cookie(&tenant.tenant, started.cookie_token.expose_secret()),
@@ -1154,7 +1189,7 @@ async fn current_session(
 }
 
 /// The caller's active session (from the session cookie), if any.
-async fn current_browser_session(
+pub(super) async fn current_browser_session(
     state: &AppState,
     tenant: &ResolvedTenant,
     jar: &CookieJar,
@@ -1242,7 +1277,7 @@ pub(super) async fn submit_flow(
 /// After a sign-in or step-up: continue the authorization request (303) or show the signed-in
 /// page. Recovery codes of a second factor enrolled in the flow are shown once first, with a
 /// link that continues.
-fn signed_in_response(
+pub(super) fn signed_in_response(
     state: &AppState,
     tenant: &ResolvedTenant,
     loc: &Locale,
@@ -1319,9 +1354,9 @@ pub(super) fn outcome_response_with(
         ),
         FlowOutcome::Enroll { form, totp } => {
             let extras = Extras {
-                captcha: None,
                 factor_token: extras.factor_token.clone(),
                 totp: Some(&totp),
+                ..Extras::default()
             };
             render_tenant_form_with(
                 state,

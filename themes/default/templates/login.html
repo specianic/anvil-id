@@ -6,6 +6,9 @@
       without JavaScript show only the password form.
     - `captcha` ({provider, site_key} or none): the brute-force gate asks for a CAPTCHA; the widget
       is rendered inside the password form so its response is posted with it.
+    - `upstream` (list of {slug, name, action}): one button per enabled upstream connection, each
+      in its own form posting the CSRF token to the upstream start route (no JavaScript needed).
+      Selectors: form `upstream-{slug}-form`, button `upstream-{slug}` (`data-connection` = slug).
     The password form is written out here (instead of forms.render) so the CAPTCHA widget can sit
     inside it; its markup matches form.html. -#}
 {% block heading %}{{ t("title.login") }}{% endblock %}
@@ -36,6 +39,16 @@
 </form>
 {% else %}
 {{ forms.render(form, t("login.submit")) }}
+{% endif %}{% if upstream %}
+<div class="anvil-upstream" role="group" aria-label="{{ t("upstream.group_label") }}">
+<p class="anvil-muted">{{ t("upstream.or") }}</p>
+{% for c in upstream %}
+<form id="upstream-{{ c.slug }}-form" method="post" action="{{ c.action }}">
+<input type="hidden" name="csrf_token" value="{{ form.csrf_token }}">
+<button type="submit" id="upstream-{{ c.slug }}" class="anvil-secondary" data-connection="{{ c.slug }}">{{ t("upstream.continue_with", provider=c.name) }}</button>
+</form>
+{% endfor %}
+</div>
 {% endif %}
 {% if passkey %}
 <form id="login-passkey" class="anvil-passkey" method="post" action="{{ passkey.action }}" data-webauthn="authenticate" data-options-url="{{ passkey.options_url }}" data-webauthn-msg-cancelled="{{ t("login.webauthn.cancelled") }}" data-webauthn-msg-failed="{{ t("login.webauthn.failed") }}">

@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% import "form.html" as forms %}
+{#- Link confirmation (AUTH-11): an upstream sign-in found an existing account it may not link
+    automatically. The user signs in to the existing account (password, or the passkey form) to
+    connect the provider; any required second factor follows as usual. Variables besides `page`
+    and `form` (form id `upstream-link`, fields `identifier` and `password`; the first message,
+    `upstream.link_explain`, names the provider; the identifier is prefilled only when the
+    matching account may be revealed): `passkey` (as on the sign-in page). Selectors: form
+    `upstream-link`, button `upstream-link-submit`, link `link-cancel` (back to the sign-in page,
+    nothing is linked). -#}
+{% block heading %}{{ t("title.upstream_link") }}{% endblock %}
+{% block content %}
+{{ forms.render(form, t("upstream.link_submit")) }}
+{% if passkey %}
+<form id="login-passkey" class="anvil-passkey" method="post" action="{{ passkey.action }}" data-webauthn="authenticate" data-options-url="{{ passkey.options_url }}" data-webauthn-msg-cancelled="{{ t("login.webauthn.cancelled") }}" data-webauthn-msg-failed="{{ t("login.webauthn.failed") }}">
+<input type="hidden" name="csrf_token" value="{{ form.csrf_token }}">
+<input type="hidden" name="response" value="">
+<button type="button" id="login-passkey-submit" class="anvil-secondary" data-webauthn-trigger hidden>{{ t("login.passkey_button") }}</button>
+<p id="login-passkey-status" class="anvil-muted" data-webauthn-status aria-live="polite"></p>
+</form>
+<script src="{{ page.asset_base }}/webauthn.js" defer></script>
+{% endif %}
+{% if page.links.login %}
+<nav class="anvil-links" aria-label="{{ t("nav.other_options") }}">
+<a id="link-cancel" href="{{ page.links.login }}">{{ t("upstream.link_cancel") }}</a>
+</nav>
+{% endif %}
+{% endblock %}

@@ -4,6 +4,11 @@
 //! |---|---|---|
 //! | session | `__Host-anvil_session_{t}`, Secure, HttpOnly, SameSite=Lax, Path=/ | `anvil_session_{t}`, HttpOnly, SameSite=Lax, Path=/ |
 //! | flow | `__Host-anvil_flow_{t}`, Secure, HttpOnly, SameSite=Strict, Path=/ | `anvil_flow_{t}`, HttpOnly, SameSite=Strict, Path=/ |
+//! | upstream binding | `__Host-anvil_upstream_{t}`, Secure, HttpOnly, SameSite=Lax, Path=/, Max-Age=600 | `anvil_upstream_{t}`, HttpOnly, SameSite=Lax, Path=/, Max-Age=600 |
+//!
+//! The upstream binding cookie ties an upstream sign-in to the browser that started it. It is
+//! SameSite=Lax because the provider returns with a cross-site top-level navigation, on which the
+//! Strict flow cookie is not sent.
 //!
 //! `{t}` is the tenant short id (first 12 hex characters of the tenant UUID): path-based tenants
 //! share one host, and `__Host-` cookies cannot be scoped by path, so the tenant is part of the
@@ -48,6 +53,11 @@ impl CookiePolicy {
         format!("{}anvil_flow_{}", self.prefix(), short_id(t))
     }
 
+    /// Name of the upstream sign-in binding cookie.
+    pub fn upstream_name(&self, t: &Tenant) -> String {
+        format!("{}anvil_upstream_{}", self.prefix(), short_id(t))
+    }
+
     fn build(&self, name: String, value: String, same_site: SameSite) -> Cookie<'static> {
         Cookie::build((name, value))
             .http_only(true)
@@ -72,6 +82,23 @@ impl CookiePolicy {
     /// Removes the flow cookie (empty value, `Max-Age=0`).
     pub fn clear_flow(&self, t: &Tenant) -> Cookie<'static> {
         let mut c = self.build(self.flow_name(t), String::new(), SameSite::Strict);
+        c.set_max_age(Duration::ZERO);
+        c
+    }
+
+    /// Upstream sign-in binding cookie (SameSite=Lax so the provider's return carries it; 10
+    /// minutes, the lifetime of a started upstream sign-in).
+    pub fn upstream_binding_cookie(&self, t: &Tenant, value: &str) -> Cookie<'static> {
+        let mut c = self.build(self.upstream_name(t), value.to_owned(), SameSite::Lax);
+        c.set_max_age(Duration::seconds(
+            anvil_core::flow::upstream::UPSTREAM_TTL.whole_seconds(),
+        ));
+        c
+    }
+
+    /// Removes the upstream binding cookie (empty value, `Max-Age=0`).
+    pub fn clear_upstream_binding(&self, t: &Tenant) -> Cookie<'static> {
+        let mut c = self.build(self.upstream_name(t), String::new(), SameSite::Lax);
         c.set_max_age(Duration::ZERO);
         c
     }
@@ -142,6 +169,26 @@ mod tests {
         assert_ne!(f.secure(), Some(true));
         assert_eq!(f.same_site(), Some(SameSite::Strict));
         assert!(!f.to_string().contains("Secure"));
+    }
+
+    #[test]
+    fn upstream_binding_cookie_is_lax_short_lived_and_host_prefixed() {
+        let p = CookiePolicy::new(true);
+        let t = tenant();
+        let c = p.upstream_binding_cookie(&t, "v");
+        assert_eq!(c.name(), "__Host-anvil_upstream_0192f0c47a1b");
+        assert_eq!(c.same_site(), Some(SameSite::Lax));
+        assert_eq!(c.secure(), Some(true));
+        assert_eq!(c.http_only(), Some(true));
+        assert_eq!(c.path(), Some("/"));
+        assert_eq!(c.domain(), None);
+        assert_eq!(c.max_age(), Some(Duration::seconds(600)));
+        let cleared = p.clear_upstream_binding(&t);
+        assert_eq!(cleared.max_age(), Some(Duration::ZERO));
+        assert_eq!(cleared.value(), "");
+        let dev = CookiePolicy::new(false).upstream_binding_cookie(&t, "v");
+        assert_eq!(dev.name(), "anvil_upstream_0192f0c47a1b");
+        assert_ne!(dev.secure(), Some(true));
     }
 
     #[test]
