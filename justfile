@@ -105,6 +105,12 @@ security-tests:
 security-tests-selftest:
     scripts/check-security-tests.sh --self-test
 
+# Released migrations unchanged (sha256 manifest) and no unmarked destructive SQL (plan 03-16),
+# then the checker's self-test.
+migrations-check:
+    scripts/check-migrations.sh
+    scripts/check-migrations.sh --self-test
+
 # Regenerate the committed OpenAPI document (plan 02-16).
 openapi-update:
     UPDATE_OPENAPI=1 cargo test -p anvil-web --test openapi_drift

@@ -29,6 +29,10 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: just
+      # Released migrations immutable (sha256 manifest), unreleased destructive SQL marked; then
+      # the negative self-test (plan 03-16).
+      - name: Migration lint
+        run: scripts/check-migrations.sh && scripts/check-migrations.sh --self-test
       - run: just fmt-check lint
 
   deny:
