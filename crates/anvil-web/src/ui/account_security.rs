@@ -202,8 +202,6 @@ fn flow_url(tenant: &ResolvedTenant, path: &str, flow: FlowId) -> String {
     tenant.ui_url(&format!("{path}?flow={flow}"))
 }
 
-
-
 #[derive(Serialize)]
 struct CredentialRow {
     id: String,
@@ -722,7 +720,6 @@ mod tests {
         assert_eq!(grouped("ABCDEFGHIJ"), "ABCD EFGH IJ");
         assert_eq!(grouped(""), "");
     }
-
 
     #[test]
     fn account_csp_only_adds_self_script_and_connect() {

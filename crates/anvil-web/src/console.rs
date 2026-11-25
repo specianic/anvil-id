@@ -191,7 +191,6 @@ fn accepts(accept: &str, coding: &str) -> bool {
     explicit.or(wildcard).is_some_and(|q| q > 0.0)
 }
 
-
 fn csp() -> (header::HeaderName, HeaderValue) {
     (
         header::CONTENT_SECURITY_POLICY,
@@ -392,7 +391,6 @@ mod tests {
         assert_eq!(negotiate(true, true, Some("BR")), Brotli);
         assert_eq!(negotiate(true, true, Some("br; q=0.000")), Identity);
     }
-
 
     #[test]
     fn csp_is_strict() {

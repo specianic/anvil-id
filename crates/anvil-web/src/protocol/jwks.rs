@@ -32,7 +32,6 @@ impl AppState {
     }
 }
 
-
 async fn jwks(
     State(state): State<AppState>,
     tenant: ResolvedTenant,

@@ -64,11 +64,9 @@ fn is_safe_path(path: &str) -> bool {
             .all(|seg| !seg.is_empty() && seg != "." && seg != "..")
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     #[test]
     fn rejects_unsafe_paths() {

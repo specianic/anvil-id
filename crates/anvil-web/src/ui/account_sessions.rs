@@ -146,8 +146,6 @@ fn device_label(user_agent: Option<&str>) -> String {
     short
 }
 
-
-
 fn flow_url(tenant: &ResolvedTenant, path: &str, flow: FlowId) -> String {
     tenant.ui_url(&format!("{path}?flow={flow}"))
 }
@@ -460,7 +458,6 @@ mod tests {
         let wide = "é".repeat(100);
         assert_eq!(device_label(Some(&wide)).chars().count(), DEVICE_MAX_CHARS);
     }
-
 
     #[test]
     fn flow_expired_has_page_text() {
