@@ -1,0 +1,8 @@
+# Per-crate sqlx configuration: this crate's query macros are checked against the database named
+# by ANVIL_PG_DATABASE_URL (never the global DATABASE_URL), and offline metadata lives in this
+# crate's .sqlx/ directory.
+[common]
+database-url-var = "ANVIL_PG_DATABASE_URL"
+
+[macros.preferred-crates]
+date-time = "time"
