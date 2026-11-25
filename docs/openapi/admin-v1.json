@@ -615,6 +615,601 @@
         ]
       }
     },
+    "/api/admin/v1/tenants/{slug}/branding": {
+      "get": {
+        "tags": [
+          "branding"
+        ],
+        "summary": "Get the tenant's branding (`customized: false` when it inherits).",
+        "operationId": "getTenantBranding",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The branding",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrandingView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:settings:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:settings:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "branding"
+        ],
+        "summary": "Set the tenant's theme tokens and custom CSS (the logo is kept). Contrast below 4.5:1 is returned as warnings, below 3:1 refused.",
+        "operationId": "putTenantBranding",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutBranding"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The stored branding with contrast warnings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrandingView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:settings:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "branding"
+        ],
+        "summary": "Remove the tenant's branding (back to the inherited theme).",
+        "operationId": "deleteTenantBranding",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant (or no branding)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:settings:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/branding/logo": {
+      "put": {
+        "tags": [
+          "branding"
+        ],
+        "summary": "Set the tenant's logo (PNG, JPEG or WebP, at most 256 KiB, standard base64; SVG is refused).",
+        "operationId": "putTenantBrandingLogo",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutBrandingLogo"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The branding with the new logo",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrandingView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:settings:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "branding"
+        ],
+        "summary": "Remove the tenant's logo.",
+        "operationId": "deleteTenantBrandingLogo",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The branding without logo",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrandingView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant (or no logo)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:settings:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/branding/preview": {
+      "post": {
+        "tags": [
+          "branding"
+        ],
+        "summary": "Store a tenant's preview draft and get a 15-minute preview URL (same origin, `/t/{slug}/ui/preview?token=…`).",
+        "operationId": "previewTenantBranding",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutBranding"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The preview token and URL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrandingPreview"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:settings:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/branding/publish": {
+      "post": {
+        "tags": [
+          "branding"
+        ],
+        "summary": "Publish a tenant's preview draft (identified by its preview token) as the live branding.",
+        "operationId": "publishTenantBranding",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishBranding"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The published branding",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrandingView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant (or unknown, expired or other-scope preview token)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:settings:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
     "/api/admin/v1/tenants/{slug}/clients": {
       "get": {
         "tags": [
@@ -1089,6 +1684,664 @@
           {
             "oauth2": [
               "admin:clients:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/clients/{client_id}/branding": {
+      "get": {
+        "tags": [
+          "branding"
+        ],
+        "summary": "Get the client's branding (`customized: false` when it inherits).",
+        "operationId": "getClientBranding",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "client_id",
+            "in": "path",
+            "description": "Client id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The branding",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrandingView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or client",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:settings:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:settings:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "branding"
+        ],
+        "summary": "Set the client's theme tokens and custom CSS (the logo is kept). Contrast below 4.5:1 is returned as warnings, below 3:1 refused.",
+        "operationId": "putClientBranding",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "client_id",
+            "in": "path",
+            "description": "Client id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutBranding"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The stored branding with contrast warnings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrandingView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or client",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:settings:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "branding"
+        ],
+        "summary": "Remove the client's branding (back to the inherited theme).",
+        "operationId": "deleteClientBranding",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "client_id",
+            "in": "path",
+            "description": "Client id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or client (or no branding)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:settings:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/clients/{client_id}/branding/logo": {
+      "put": {
+        "tags": [
+          "branding"
+        ],
+        "summary": "Set the client's logo (PNG, JPEG or WebP, at most 256 KiB, standard base64; SVG is refused).",
+        "operationId": "putClientBrandingLogo",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "client_id",
+            "in": "path",
+            "description": "Client id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutBrandingLogo"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The branding with the new logo",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrandingView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or client",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:settings:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "branding"
+        ],
+        "summary": "Remove the client's logo.",
+        "operationId": "deleteClientBrandingLogo",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "client_id",
+            "in": "path",
+            "description": "Client id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The branding without logo",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrandingView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or client (or no logo)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:settings:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/clients/{client_id}/branding/preview": {
+      "post": {
+        "tags": [
+          "branding"
+        ],
+        "summary": "Store a client's preview draft and get a 15-minute preview URL (same origin, `/t/{slug}/ui/preview?token=…`).",
+        "operationId": "previewClientBranding",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "client_id",
+            "in": "path",
+            "description": "Client id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutBranding"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The preview token and URL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrandingPreview"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or client",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:settings:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/clients/{client_id}/branding/publish": {
+      "post": {
+        "tags": [
+          "branding"
+        ],
+        "summary": "Publish a client's preview draft (identified by its preview token) as the live branding.",
+        "operationId": "publishClientBranding",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "client_id",
+            "in": "path",
+            "description": "Client id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishBranding"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The published branding",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrandingView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or client (or unknown, expired or other-scope preview token)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:settings:write"
             ]
           },
           {
@@ -3772,6 +5025,92 @@
           "failure"
         ]
       },
+      "BrandingPreview": {
+        "type": "object",
+        "description": "A stored preview draft.",
+        "required": [
+          "token",
+          "preview_url",
+          "expires_at",
+          "warnings"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": "string",
+            "description": "RFC 3339; the token stops working after this (15 minutes)."
+          },
+          "preview_url": {
+            "type": "string",
+            "description": "Same-origin path of the preview page: `/t/{slug}/ui/preview?token=…`. Only this page\nmay be framed, and only by the same origin."
+          },
+          "token": {
+            "type": "string",
+            "description": "The preview token (also needed to publish this draft)."
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ThemeWarningDto"
+            }
+          }
+        }
+      },
+      "BrandingView": {
+        "type": "object",
+        "description": "The branding of a scope.",
+        "required": [
+          "scope",
+          "customized",
+          "tokens",
+          "warnings"
+        ],
+        "properties": {
+          "client_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The client of a client scope."
+          },
+          "custom_css": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "customized": {
+            "type": "boolean",
+            "description": "`false` when the scope has no branding of its own (it inherits; tokens are empty)."
+          },
+          "logo_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Same-origin path of the scope's own logo (`/t/{slug}/theme/logo/{sha256}`), if any."
+          },
+          "scope": {
+            "type": "string",
+            "description": "`tenant` or `client`."
+          },
+          "tokens": {
+            "$ref": "#/components/schemas/ThemeTokensDto"
+          },
+          "updated_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ThemeWarningDto"
+            },
+            "description": "Contrast warnings of the stored tokens."
+          }
+        }
+      },
       "CaptchaInput": {
         "type": "object",
         "description": "CAPTCHA configuration as written by an administrator. The secret is sealed before it is\nstored and is never returned.",
@@ -4847,6 +6186,51 @@
           }
         }
       },
+      "PublishBranding": {
+        "type": "object",
+        "description": "Publishes a preview draft.",
+        "required": [
+          "token"
+        ],
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "The preview token returned by the preview operation of the same scope."
+          }
+        },
+        "additionalProperties": false
+      },
+      "PutBranding": {
+        "type": "object",
+        "description": "Tokens and custom CSS (live `PUT` and preview drafts).",
+        "properties": {
+          "custom_css": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Custom CSS (at most 32 KiB; no `@import`, `url(`, backslashes or other constructs outside\nthe allow-list). Absent, `null` or blank = none."
+          },
+          "tokens": {
+            "$ref": "#/components/schemas/ThemeTokensDto"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PutBrandingLogo": {
+        "type": "object",
+        "description": "A logo upload.",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "string",
+            "description": "The image bytes in standard base64 (RFC 4648 §4, padded): PNG, JPEG or WebP, at most\n256 KiB decoded."
+          }
+        },
+        "additionalProperties": false
+      },
       "PutConnectionSecret": {
         "type": "object",
         "description": "Body of `PUT …/connections/{id}/secret`: a new secret, or `null` to remove it. The field is\nrequired.",
@@ -5533,6 +6917,159 @@
           }
         }
       },
+      "ThemeColorsDto": {
+        "type": "object",
+        "description": "Theme colours (`#rgb`, `#rrggbb` or `#rrggbbaa`); absent or `null` = theme default.",
+        "properties": {
+          "bg": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Page background.",
+            "default": null
+          },
+          "border": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "danger": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "focus": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "muted": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "primary": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "primary_text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Text on `primary` (buttons).",
+            "default": null
+          },
+          "surface": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Card / form background.",
+            "default": null
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          }
+        },
+        "additionalProperties": false
+      },
+      "ThemeTokensDto": {
+        "type": "object",
+        "description": "Design tokens of a branding scope.",
+        "properties": {
+          "colors": {
+            "$ref": "#/components/schemas/ThemeColorsDto",
+            "default": {
+              "bg": null,
+              "border": null,
+              "danger": null,
+              "focus": null,
+              "muted": null,
+              "primary": null,
+              "primary_text": null,
+              "surface": null,
+              "text": null
+            }
+          },
+          "colors_dark": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ThemeColorsDto",
+                "description": "Colours for `prefers-color-scheme: dark`; `null` = derived from the light set."
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "font_family": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "System font stack (letters, digits, spaces, commas, hyphens, quotes; 1-200 characters).",
+            "default": null
+          },
+          "radius_px": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Corner radius in px (0-32).",
+            "default": null,
+            "maximum": 32,
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "ThemeWarningDto": {
+        "type": "object",
+        "description": "A contrast between 3:1 and 4.5:1 (accepted, shown to the admin).",
+        "required": [
+          "scheme",
+          "pair",
+          "ratio",
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "pair": {
+            "type": "string",
+            "description": "`text_on_background`, `text_on_surface` or `primary_text`."
+          },
+          "ratio": {
+            "type": "number",
+            "format": "double",
+            "description": "The contrast ratio (x:1)."
+          },
+          "scheme": {
+            "type": "string",
+            "description": "`light` or `dark`."
+          }
+        }
+      },
       "TokenFormat": {
         "type": "string",
         "description": "Format of the access tokens issued to a client.",
@@ -5922,6 +7459,10 @@
     {
       "name": "connections",
       "description": "Upstream identity providers (social, OIDC, OAuth2) of a tenant"
+    },
+    {
+      "name": "branding",
+      "description": "Theme tokens, custom CSS, logo and live preview of a tenant or client"
     }
   ]
 }

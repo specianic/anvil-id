@@ -23,12 +23,11 @@ mod theme;
 pub mod ui;
 
 use axum::Router;
-use axum::extract::{DefaultBodyLimit, State};
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::Response;
 use axum::routing::get;
 use tower::ServiceBuilder;
-use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::trace::TraceLayer;
 
@@ -83,8 +82,8 @@ pub fn router(state: AppState) -> Router {
             headers,
             layers::security_headers::security_headers,
         ))
-        .layer(DefaultBodyLimit::max(BODY_LIMIT))
-        .layer(RequestBodyLimitLayer::new(BODY_LIMIT))
+        // BODY_LIMIT everywhere; only the admin logo upload gets its larger limit (UI-03).
+        .layer(axum::middleware::from_fn(admin::branding::body_limit))
         .layer(TraceLayer::new_for_http())
         .layer(PropagateRequestIdLayer::x_request_id())
         .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))

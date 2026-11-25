@@ -9,7 +9,7 @@
 
 mod audit;
 mod auth;
-mod branding;
+pub(crate) mod branding;
 mod clients;
 mod connections;
 pub mod dto;
@@ -117,6 +117,10 @@ fn base_document() -> OpenApi {
                 "connections",
                 "Upstream identity providers (social, OIDC, OAuth2) of a tenant",
             ),
+            tag(
+                "branding",
+                "Theme tokens, custom CSS, logo and live preview of a tenant or client",
+            ),
         ]))
         .build()
 }
@@ -174,6 +178,28 @@ fn api_router() -> OpenApiRouter<AppState> {
             connections::delete_connection
         ))
         .routes(routes!(connections::put_connection_secret))
+        .routes(routes!(
+            branding::get_tenant_branding,
+            branding::put_tenant_branding,
+            branding::delete_tenant_branding
+        ))
+        .routes(routes!(
+            branding::put_tenant_branding_logo,
+            branding::delete_tenant_branding_logo
+        ))
+        .routes(routes!(branding::preview_tenant_branding))
+        .routes(routes!(branding::publish_tenant_branding))
+        .routes(routes!(
+            branding::get_client_branding,
+            branding::put_client_branding,
+            branding::delete_client_branding
+        ))
+        .routes(routes!(
+            branding::put_client_branding_logo,
+            branding::delete_client_branding_logo
+        ))
+        .routes(routes!(branding::preview_client_branding))
+        .routes(routes!(branding::publish_client_branding))
 }
 
 /// Management API routes, including the served OpenAPI document.

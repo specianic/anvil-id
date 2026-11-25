@@ -41,6 +41,7 @@ Every page receives `page`:
 | `page.tenant_name` | string or null | Display name of the tenant |
 | `page.dev_mode` | bool | Renders the "Development mode: not for production use" banner |
 | `page.asset_base` | string | `/assets` or `/t/{slug}/assets`; the stylesheet is `{asset_base}/anvil.css` |
+| `page.theme_css` | string or null | Tenant pages: the generated theme stylesheet `{tenant_base}/theme/theme.css` (plus `?flow={id}` on flow pages, `?preview={token}` on the preview), linked after `anvil.css`; it also styles the `.anvil-logo` element (hidden without a logo). Null on installation pages |
 | `page.links.login` | string or null | Link to the sign-in page; omitted when null |
 | `page.links.registration` | string or null | Link to self-registration; omitted when null |
 | `page.links.recovery` | string or null | Link to password recovery; omitted when null |

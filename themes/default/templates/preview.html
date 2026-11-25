@@ -1,0 +1,45 @@
+{#- Theme preview (plan 04-18), framed by the console editor. Variables besides `page`
+    (whose theme_css is the draft stylesheet): none. Static sample markup with the classes of the
+    real sign-in and consent pages; buttons are type="button" and forms have no action, so nothing
+    can be submitted. Selectors: preview-banner, preview-login, preview-consent. -#}
+{% extends "base.html" %}
+{% block heading %}{{ t("title.preview") }}{% endblock %}
+{% block content %}
+<p class="anvil-dev-banner" role="status" id="preview-banner">{{ t("preview.banner") }}</p>
+<section id="preview-login" aria-labelledby="preview-login-heading">
+<h2 id="preview-login-heading">{{ t("preview.login_heading") }}</h2>
+<form id="preview-login-form" novalidate>
+<div class="anvil-field">
+<label for="preview-identifier">{{ t("field.email") }}</label>
+<input id="preview-identifier" type="email" value="ada@example.test" autocomplete="off">
+</div>
+<div class="anvil-field anvil-field-invalid">
+<label for="preview-password">{{ t("field.password") }}</label>
+<input id="preview-password" type="password" aria-invalid="true" aria-describedby="preview-password-msg" autocomplete="off">
+<p class="anvil-message anvil-message-error" id="preview-password-msg">{{ t("field.password") }}</p>
+</div>
+<button type="button" id="preview-login-submit">{{ t("login.submit") }}</button>
+</form>
+<nav class="anvil-links" aria-label="{{ t("nav.account_help") }}">
+<a href="#preview-login">{{ t("login.forgot_password") }}</a>
+</nav>
+</section>
+<section id="preview-consent" aria-labelledby="preview-consent-heading">
+<h2 id="preview-consent-heading">{{ t("preview.consent_heading") }}</h2>
+<form id="preview-consent-form">
+<fieldset class="anvil-consent-scopes">
+<legend><strong>{{ t("preview.sample_app") }}</strong> {{ t("consent.would_like_to") }}</legend>
+<ul class="anvil-scope-list">
+<li>{{ t("scope.openid") }}</li>
+<li>{{ t("scope.profile") }}</li>
+<li>{{ t("scope.email") }}</li>
+</ul>
+</fieldset>
+<p class="anvil-muted">{{ t("consent.note") }}</p>
+<div class="anvil-actions">
+<button type="button" id="preview-consent-allow">{{ t("consent.allow") }}</button>
+<button type="button" id="preview-consent-deny" class="anvil-secondary">{{ t("consent.deny") }}</button>
+</div>
+</form>
+</section>
+{% endblock %}

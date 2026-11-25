@@ -64,6 +64,77 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/tenants/{slug}/branding": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get the tenant's branding (`customized: false` when it inherits). */
+        get: operations["getTenantBranding"];
+        /** Set the tenant's theme tokens and custom CSS (the logo is kept). Contrast below 4.5:1 is returned as warnings, below 3:1 refused. */
+        put: operations["putTenantBranding"];
+        post?: never;
+        /** Remove the tenant's branding (back to the inherited theme). */
+        delete: operations["deleteTenantBranding"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/branding/logo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set the tenant's logo (PNG, JPEG or WebP, at most 256 KiB, standard base64; SVG is refused). */
+        put: operations["putTenantBrandingLogo"];
+        post?: never;
+        /** Remove the tenant's logo. */
+        delete: operations["deleteTenantBrandingLogo"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/branding/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Store a tenant's preview draft and get a 15-minute preview URL (same origin, `/t/{slug}/ui/preview?token=…`). */
+        post: operations["previewTenantBranding"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/branding/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Publish a tenant's preview draft (identified by its preview token) as the live branding. */
+        post: operations["publishTenantBranding"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/tenants/{slug}/clients": {
         parameters: {
             query?: never;
@@ -102,6 +173,77 @@ export interface paths {
          *     tenant's enabled algorithms) is validated again.
          */
         patch: operations["updateClient"];
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/clients/{client_id}/branding": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get the client's branding (`customized: false` when it inherits). */
+        get: operations["getClientBranding"];
+        /** Set the client's theme tokens and custom CSS (the logo is kept). Contrast below 4.5:1 is returned as warnings, below 3:1 refused. */
+        put: operations["putClientBranding"];
+        post?: never;
+        /** Remove the client's branding (back to the inherited theme). */
+        delete: operations["deleteClientBranding"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/clients/{client_id}/branding/logo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set the client's logo (PNG, JPEG or WebP, at most 256 KiB, standard base64; SVG is refused). */
+        put: operations["putClientBrandingLogo"];
+        post?: never;
+        /** Remove the client's logo. */
+        delete: operations["deleteClientBrandingLogo"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/clients/{client_id}/branding/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Store a client's preview draft and get a 15-minute preview URL (same origin, `/t/{slug}/ui/preview?token=…`). */
+        post: operations["previewClientBranding"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/clients/{client_id}/branding/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Publish a client's preview draft (identified by its preview token) as the live branding. */
+        post: operations["publishClientBranding"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/admin/v1/tenants/{slug}/clients/{client_id}/secret": {
@@ -469,6 +611,35 @@ export interface components {
          * @enum {string}
          */
         AuditOutcome: "success" | "failure";
+        /** @description A stored preview draft. */
+        BrandingPreview: {
+            /** @description RFC 3339; the token stops working after this (15 minutes). */
+            expires_at: string;
+            /**
+             * @description Same-origin path of the preview page: `/t/{slug}/ui/preview?token=…`. Only this page
+             *     may be framed, and only by the same origin.
+             */
+            preview_url: string;
+            /** @description The preview token (also needed to publish this draft). */
+            token: string;
+            warnings: components["schemas"]["ThemeWarningDto"][];
+        };
+        /** @description The branding of a scope. */
+        BrandingView: {
+            /** @description The client of a client scope. */
+            client_id?: string | null;
+            custom_css?: string | null;
+            /** @description `false` when the scope has no branding of its own (it inherits; tokens are empty). */
+            customized: boolean;
+            /** @description Same-origin path of the scope's own logo (`/t/{slug}/theme/logo/{sha256}`), if any. */
+            logo_url?: string | null;
+            /** @description `tenant` or `client`. */
+            scope: string;
+            tokens: components["schemas"]["ThemeTokensDto"];
+            updated_at?: string | null;
+            /** @description Contrast warnings of the stored tokens. */
+            warnings: components["schemas"]["ThemeWarningDto"][];
+        };
         /**
          * @description CAPTCHA configuration as written by an administrator. The secret is sealed before it is
          *     stored and is never returned.
@@ -861,6 +1032,28 @@ export interface components {
             /** @description `urn:anvilid:problem:{code}`. */
             type: string;
         };
+        /** @description Publishes a preview draft. */
+        PublishBranding: {
+            /** @description The preview token returned by the preview operation of the same scope. */
+            token: string;
+        };
+        /** @description Tokens and custom CSS (live `PUT` and preview drafts). */
+        PutBranding: {
+            /**
+             * @description Custom CSS (at most 32 KiB; no `@import`, `url(`, backslashes or other constructs outside
+             *     the allow-list). Absent, `null` or blank = none.
+             */
+            custom_css?: string | null;
+            tokens?: components["schemas"]["ThemeTokensDto"];
+        };
+        /** @description A logo upload. */
+        PutBrandingLogo: {
+            /**
+             * @description The image bytes in standard base64 (RFC 4648 §4, padded): PNG, JPEG or WebP, at most
+             *     256 KiB decoded.
+             */
+            data: string;
+        };
         /**
          * @description Body of `PUT …/connections/{id}/secret`: a new secret, or `null` to remove it. The field is
          *     required.
@@ -1095,6 +1288,79 @@ export interface components {
             settings: components["schemas"]["TenantSettings"];
             /** @description Immutable; path-based issuers are `{public_url}/t/{slug}`. */
             slug: string;
+        };
+        /** @description Theme colours (`#rgb`, `#rrggbb` or `#rrggbbaa`); absent or `null` = theme default. */
+        ThemeColorsDto: {
+            /**
+             * @description Page background.
+             * @default null
+             */
+            bg: string | null;
+            /** @default null */
+            border: string | null;
+            /** @default null */
+            danger: string | null;
+            /** @default null */
+            focus: string | null;
+            /** @default null */
+            muted: string | null;
+            /** @default null */
+            primary: string | null;
+            /**
+             * @description Text on `primary` (buttons).
+             * @default null
+             */
+            primary_text: string | null;
+            /**
+             * @description Card / form background.
+             * @default null
+             */
+            surface: string | null;
+            /** @default null */
+            text: string | null;
+        };
+        /** @description Design tokens of a branding scope. */
+        ThemeTokensDto: {
+            /**
+             * @default {
+             *       "bg": null,
+             *       "border": null,
+             *       "danger": null,
+             *       "focus": null,
+             *       "muted": null,
+             *       "primary": null,
+             *       "primary_text": null,
+             *       "surface": null,
+             *       "text": null
+             *     }
+             */
+            colors: components["schemas"]["ThemeColorsDto"];
+            /** @default null */
+            colors_dark: components["schemas"]["ThemeColorsDto"] | null;
+            /**
+             * @description System font stack (letters, digits, spaces, commas, hyphens, quotes; 1-200 characters).
+             * @default null
+             */
+            font_family: string | null;
+            /**
+             * Format: int32
+             * @description Corner radius in px (0-32).
+             * @default null
+             */
+            radius_px: number | null;
+        };
+        /** @description A contrast between 3:1 and 4.5:1 (accepted, shown to the admin). */
+        ThemeWarningDto: {
+            message: string;
+            /** @description `text_on_background`, `text_on_surface` or `primary_text`. */
+            pair: string;
+            /**
+             * Format: double
+             * @description The contrast ratio (x:1).
+             */
+            ratio: number;
+            /** @description `light` or `dark`. */
+            scheme: string;
         };
         /**
          * @description Format of the access tokens issued to a client.
@@ -1555,6 +1821,406 @@ export interface operations {
             };
         };
     };
+    getTenantBranding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The branding */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrandingView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    putTenantBranding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutBranding"];
+            };
+        };
+        responses: {
+            /** @description The stored branding with contrast warnings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrandingView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    deleteTenantBranding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant (or no branding) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    putTenantBrandingLogo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutBrandingLogo"];
+            };
+        };
+        responses: {
+            /** @description The branding with the new logo */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrandingView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    deleteTenantBrandingLogo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The branding without logo */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrandingView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant (or no logo) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    previewTenantBranding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutBranding"];
+            };
+        };
+        responses: {
+            /** @description The preview token and URL */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrandingPreview"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    publishTenantBranding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PublishBranding"];
+            };
+        };
+        responses: {
+            /** @description The published branding */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrandingView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant (or unknown, expired or other-scope preview token) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     listClients: {
         parameters: {
             query?: {
@@ -1832,6 +2498,420 @@ export interface operations {
                 };
             };
             /** @description Unknown tenant or client */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getClientBranding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Client id */
+                client_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The branding */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrandingView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or client */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    putClientBranding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Client id */
+                client_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutBranding"];
+            };
+        };
+        responses: {
+            /** @description The stored branding with contrast warnings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrandingView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or client */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    deleteClientBranding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Client id */
+                client_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or client (or no branding) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    putClientBrandingLogo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Client id */
+                client_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutBrandingLogo"];
+            };
+        };
+        responses: {
+            /** @description The branding with the new logo */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrandingView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or client */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    deleteClientBrandingLogo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Client id */
+                client_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The branding without logo */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrandingView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or client (or no logo) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    previewClientBranding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Client id */
+                client_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutBranding"];
+            };
+        };
+        responses: {
+            /** @description The preview token and URL */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrandingPreview"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or client */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    publishClientBranding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Client id */
+                client_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PublishBranding"];
+            };
+        };
+        responses: {
+            /** @description The published branding */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrandingView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or client (or unknown, expired or other-scope preview token) */
             404: {
                 headers: {
                     [name: string]: unknown;
