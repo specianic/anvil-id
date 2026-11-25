@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% import "form.html" as forms %}
+{% block heading %}Reset your password{% endblock %}
+{% block content %}
+<p class="anvil-lead">Enter the email address for your account. If it is registered, we will send you a link to reset your password.</p>
+{{ forms.render(form, "Send reset link") }}
+{% if page.links.login %}
+<nav class="anvil-links" aria-label="Account help">
+<a id="link-login" href="{{ page.links.login }}">Back to sign in</a>
+</nav>
+{% endif %}
+{% endblock %}

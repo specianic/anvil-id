@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{#- The sentences below are a stable contract (see themes/default/README.md). Snapshot tests, the
+    conformance configuration and the e2e suite match on them. Do not reword them. -#}
+{% block heading %}{{ heading or "Something went wrong" }}{% endblock %}
+{% block content %}
+<p class="anvil-error-text" id="error-message" data-error-key="{{ error_key }}" role="alert">
+{%- if error_key == "redirect_uri_mismatch" -%}
+The redirect URI in this request is not registered for this client.
+{%- elif error_key == "unknown_client" -%}
+This application is not registered.
+{%- elif error_key == "invalid_request" -%}
+The sign-in request is invalid.
+{%- elif error_key == "flow_expired" -%}
+This sign-in attempt expired. Please start again.
+{%- elif error_key == "csrf" -%}
+This form submission could not be verified. Please try again.
+{%- elif error_key == "not_found" -%}
+Page not found.
+{%- else -%}
+Something went wrong.
+{%- endif -%}
+</p>
+{% if detail %}<p class="anvil-muted" id="error-detail">{{ detail }}</p>{% endif %}
+{% if status %}<p class="anvil-muted anvil-status">Error {{ status }}</p>{% endif %}
+{% if page.links.login and error_key in ["flow_expired", "csrf"] %}
+<nav class="anvil-links" aria-label="Next steps">
+<a id="link-login" href="{{ page.links.login }}">Start again</a>
+</nav>
+{% endif %}
+{% endblock %}

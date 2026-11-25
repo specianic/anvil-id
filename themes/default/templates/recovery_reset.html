@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% import "form.html" as forms %}
+{% block heading %}Choose a new password{% endblock %}
+{% block content %}
+{#- The recovery token is a hidden field of the form and is consumed only when this form is submitted. -#}
+{{ forms.render(form, "Set new password") }}
+{% endblock %}

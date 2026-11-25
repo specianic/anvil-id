@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block heading %}Setup complete{% endblock %}
+{% block content %}
+<p class="anvil-lead">The administrator account <strong id="admin-email">{{ admin_email }}</strong> has been created.</p>
+<div class="anvil-callout anvil-callout-warning" role="note">
+<p><strong>Copy these credentials now.</strong> The client secret is shown only once and cannot be displayed again.</p>
+</div>
+<dl class="anvil-credentials">
+<dt>Management client ID</dt>
+<dd><code id="mgmt-client-id">{{ mgmt_client_id }}</code></dd>
+<dt>Management client secret</dt>
+<dd><code id="mgmt-client-secret">{{ mgmt_client_secret }}</code></dd>
+<dt>Token endpoint</dt>
+<dd><code id="token-endpoint">{{ token_endpoint }}</code></dd>
+<dt>Admin API base</dt>
+<dd><code id="admin-api-base">{{ admin_api_base }}</code></dd>
+</dl>
+<p class="anvil-muted">Use the client ID and secret with the client credentials grant at the token endpoint to call the admin API.</p>
+{% endblock %}

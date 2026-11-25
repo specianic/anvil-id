@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>{% block title %}{{ page.title }}{% endblock %}{% if page.tenant_name %} · {{ page.tenant_name }}{% endif %}</title>
+<link rel="stylesheet" href="{{ page.asset_base }}/anvil.css">
+</head>
+<body>
+{% if page.dev_mode %}
+<div class="anvil-dev-banner" role="status" id="dev-mode-banner">Development mode: not for production use</div>
+{% endif %}
+<main id="main" aria-labelledby="page-heading">
+{% if page.tenant_name %}<p class="anvil-tenant">{{ page.tenant_name }}</p>{% endif %}
+<h1 id="page-heading">{% block heading %}{{ page.title }}{% endblock %}</h1>
+{% block content %}{% endblock %}
+</main>
+</body>
+</html>

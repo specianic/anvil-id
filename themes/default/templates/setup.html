@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% import "form.html" as forms %}
+{% block heading %}Set up AnvilID{% endblock %}
+{% block content %}
+<p class="anvil-lead">Create the first administrator account. You will use it to sign in to the admin console.</p>
+{{ forms.render(form, "Create administrator") }}
+{% endblock %}

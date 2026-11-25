@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% import "form.html" as forms %}
+{% block heading %}Sign in{% endblock %}
+{% block content %}
+{{ forms.render(form, "Sign in") }}
+{% if page.links.recovery or page.links.registration %}
+<nav class="anvil-links" aria-label="Account help">
+{% if page.links.recovery %}<a id="link-recovery" href="{{ page.links.recovery }}">Forgot your password?</a>{% endif %}
+{% if page.links.registration %}<a id="link-registration" href="{{ page.links.registration }}">Create an account</a>{% endif %}
+</nav>
+{% endif %}
+{% endblock %}
