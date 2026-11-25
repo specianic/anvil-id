@@ -99,3 +99,13 @@ fail 9 anvil-web tests. Both fixes are in files outside 03-13's files_modified:
   (`anvil-secondary`, `anvil-table` with `data-label` cells, `anvil-disclosure`, `anvil-qr`,
   `anvil-recovery-codes`, `anvil-secret`, `anvil-actions`, `anvil-account-nav`) and the
   `too_many_requests` error sentence.
+
+## From 03-34
+
+- `fuzz/fuzz_targets/client_assertion.rs` (separate fuzz workspace, own Cargo.lock) still calls
+  `base64::engine::general_purpose::STANDARD` for its Basic header; switch it to
+  `anvil_jose::encoding::b64std`, drop `base64` from `fuzz/Cargo.toml` and extend the
+  check-deps.sh base64 scan from `crates/` to `fuzz/`. Not in 03-34's file list.
+- `cargo build --workspace` (without dev-deps) warns that `anvil-storage` does not use
+  `anvil-core`: the crate's only code is behind the `contract` feature. Pre-existing; make
+  `anvil-core` optional under that feature (`contract = ["dep:tokio", "dep:anvil-core"]`).

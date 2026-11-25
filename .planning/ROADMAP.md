@@ -137,6 +137,7 @@ Plans:
 - [x] 03-31-PLAN.md — Gap closure: deliver request_not_supported via the requested response mode (outer, else from the unverified request object) (wave 6)
 - [x] 03-32-PLAN.md — Gap closure: SQLite uses the shared anvil-jose base64url; Postgres composite (tenant_id, user_id) FKs on every user-owned table (wave 7)
 - [x] 03-33-PLAN.md — Gap closure: dedupe ETag/If-None-Match and date helpers, reuse audit request context, anvil-core tokio test runtime, flexible Turnstile width, release `artifact-metadata: write` (wave 7)
+- [x] 03-34-PLAN.md — Gap closure: single base64 implementation (anvil_jose::encoding b64std/b64url) + check-deps guard; anvil-cache tokio, unused `anvilid` workspace dep, stale flow-engine doc (wave 8)
 
 ### Phase 4: Release 0.3 "Real-world logins"
 **Goal**: AnvilID handles the login journeys real products need: social and passwordless sign-in, safe account linking, MFA policy and step-up, standard logout, and branded, translated pages
@@ -194,7 +195,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 |-------|----------------|--------|-----------|
 | 1. Foundations and Spikes (M0) | 8/8 | Complete    | 2026-11-25 |
 | 2. Release 0.1 "First login" | 23/23 | Complete    | 2026-11-25 |
-| 3. Release 0.2 "Secure by default" | 33/33 | Complete    | 2026-11-25 |
+| 3. Release 0.2 "Secure by default" | 34/34 | Complete    | 2026-11-25 |
 | 4. Release 0.3 "Real-world logins" | 0/TBD | Not started | - |
 | 5. Release 0.4 "Operate it" | 0/TBD | Not started | - |
 | 6. Release 1.0 (Organizations and SSO) | 0/TBD | Not started | - |
