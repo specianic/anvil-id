@@ -187,7 +187,7 @@ check_source() {
 # older target/debug/deps layout, from the last `unittests` binary (cargo lists a crate's lib/main
 # unit tests before its integration tests).
 list_tests() {
-  (cd "$ROOT" && cargo test --workspace --locked -- --list 2>&1) | awk '
+  (cd "$ROOT" && cargo test --workspace --locked --color never -- --list 2>&1) | awk '
     /^[[:space:]]+Running / {
       key = $2
       bin = $NF; gsub(/[()]/, "", bin)

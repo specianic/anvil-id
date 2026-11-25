@@ -43,8 +43,9 @@ BASE="http://127.0.0.1:$PORT"
 mkdir -p "$WORK/run" "$WORK/data"
 cd "$WORK/run" # empty directory: nothing to serve from disk
 
-"$BIN" serve --listen "127.0.0.1:$PORT" --issuer "$BASE" \
-    --database-url "sqlite://$WORK/data/anvil.db?mode=rwc" >"$WORK/anvilid.log" 2>&1 &
+# Zero-config SQLite in a temp data dir; loopback public URL (dev mode); no breach-check traffic.
+"$BIN" serve --listen "127.0.0.1:$PORT" --public-url "$BASE" --data-dir "$WORK/data" \
+    --breach-check off >"$WORK/anvilid.log" 2>&1 &
 PID=$!
 
 for _ in $(seq 1 100); do
