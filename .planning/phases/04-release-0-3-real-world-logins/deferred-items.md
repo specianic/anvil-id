@@ -23,3 +23,4 @@
 - Linked accounts (04-25): after Connect, `ui/upstream.rs` `outcome_page` still shows the `upstream.linked` message; make it a 303 to `/ui/account/linked` and update the assertion in `upstream_login.rs::account_page_link_connects_the_signed_in_user`.
 - Linked accounts (04-25): the last-sign-in-method guard counts tenant email_otp/magic_link as a remaining method even when the user's email is unverified. Require a verified email for that to count (and confirm 04-24 only offers email sign-in for verified emails).
 - Linked accounts (04-25): the guard is check-then-delete; two concurrent unlinks of different links could both pass and leave no sign-in method. Needs an atomic storage intent in both backends.
+- Email sign-in (04-24): either tenant toggle (email_otp or magic_link) enables both code and link, because the login_code template always contains both. Either rename to one setting or let the template omit one; decide before 0.3 docs.
