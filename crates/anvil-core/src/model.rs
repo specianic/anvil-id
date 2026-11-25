@@ -45,7 +45,12 @@ pub struct InvalidLength {
 impl CodeHash {
     /// Builds a hash from a slice, rejecting any slice that is not exactly 32 bytes long.
     pub fn from_slice(bytes: &[u8]) -> Result<Self, InvalidLength> {
-        unimplemented!("RED: {bytes:?}")
+        <[u8; 32]>::try_from(bytes)
+            .map(Self)
+            .map_err(|_| InvalidLength {
+                expected: 32,
+                actual: bytes.len(),
+            })
     }
 
     /// The raw 32 hash bytes.
@@ -114,7 +119,9 @@ pub struct AuthorizationCode {
 /// truncate timestamps with this function before persisting them so a stored value round-trips
 /// unchanged on every backend.
 pub fn truncate_to_ms(t: OffsetDateTime) -> OffsetDateTime {
-    unimplemented!("RED: {t}")
+    let millis = t.millisecond();
+    t.replace_millisecond(millis)
+        .expect("a millisecond value read from a valid timestamp is always in range")
 }
 
 #[cfg(test)]

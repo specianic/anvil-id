@@ -51,6 +51,10 @@ pub trait GrantRepo: Send + Sync {
 }
 
 /// Result of [`GrantRepo::consume_code`].
+#[expect(
+    clippy::large_enum_variant,
+    reason = "returned by value once per token request; boxing would only add an allocation"
+)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConsumeOutcome {
     /// This call consumed the code.
@@ -74,4 +78,27 @@ pub enum StorageError {
     /// Any other backend failure (connection, I/O, driver error).
     #[error("storage backend error: {0}")]
     Backend(#[source] Box<dyn std::error::Error + Send + Sync>),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The ports are used as trait objects (`&dyn TenantRepo`, `Arc<dyn Storage>`), so they must
+    /// stay dyn-compatible. This fails to compile if a change breaks that.
+    #[test]
+    fn ports_are_dyn_compatible_and_thread_safe() {
+        fn assert_send_sync<T: ?Sized + Send + Sync>() {}
+        assert_send_sync::<dyn Storage>();
+        assert_send_sync::<dyn TenantRepo>();
+        assert_send_sync::<dyn GrantRepo>();
+        assert_send_sync::<StorageError>();
+    }
+
+    #[test]
+    fn storage_error_keeps_backend_source() {
+        let err = StorageError::Backend("connection reset".into());
+        assert_eq!(err.to_string(), "storage backend error: connection reset");
+        assert!(std::error::Error::source(&err).is_some());
+    }
 }
