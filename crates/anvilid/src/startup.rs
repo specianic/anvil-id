@@ -178,6 +178,7 @@ pub async fn start(cfg: &Config) -> anyhow::Result<Started> {
     app_config.theme_dir = cfg.theme_dir.clone();
     app_config.password_policy = policy;
     app_config.insecure_http = cfg.insecure_http;
+    app_config.installation_smtp = cfg.smtp_url.is_some();
     app_config.trusted_proxies = cfg.trusted_proxies.clone();
     app_config.rate_limits = cfg.rate_limits.clone();
     // Outbound (SSRF guard): an explicit allow-list replaces the dev-mode loopback default;

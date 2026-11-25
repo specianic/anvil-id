@@ -37,6 +37,9 @@ pub struct AppConfig {
     /// https destinations otherwise. The binary replaces `allow_cidrs` with an explicit
     /// `outbound_allow_cidrs`.
     pub outbound: OutboundPolicy,
+    /// Whether the installation SMTP transport (`smtp_url`) is configured. Tenants without SMTP
+    /// settings of their own can enable email sign-in (codes, magic links) only when it is.
+    pub installation_smtp: bool,
 }
 
 impl AppConfig {
@@ -56,6 +59,7 @@ impl AppConfig {
             rate_limits: LimiterConfig::default(),
             captcha_endpoints: CaptchaEndpoints::default(),
             outbound,
+            installation_smtp: false,
         }
     }
 
