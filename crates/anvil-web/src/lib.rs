@@ -46,7 +46,12 @@ pub const BODY_LIMIT: usize = 64 * 1024;
 /// before routing and can rewrite `/t/{slug}/…` paths. Protocol, UI and admin modules contribute
 /// their routes through their own `routes()` functions.
 pub fn app(config: AppConfig, deps: AppDeps) -> Result<Router, WebError> {
-    let state = AppState::new(config, deps)?;
+    Ok(router(AppState::new(config, deps)?))
+}
+
+/// [`app`] over an existing state, for callers that also need the state (the binary hands
+/// [`AppState::logout_wake`] and [`AppState::outbound_arc`] to the back-channel logout worker).
+pub fn router(state: AppState) -> Router {
     let inner = Router::new()
         .merge(protocol::routes())
         .merge(ui::routes())
@@ -70,7 +75,7 @@ pub fn app(config: AppConfig, deps: AppDeps) -> Result<Router, WebError> {
     let headers = layers::security_headers::SecurityHeaders {
         hsts: state.config().is_https(),
     };
-    Ok(Router::new()
+    Router::new()
         // Installation-wide, outside tenant resolution: `/t/{slug}/console/` is not the console.
         .merge(console::routes())
         .fallback_service(tenant_routed)
@@ -82,7 +87,7 @@ pub fn app(config: AppConfig, deps: AppDeps) -> Result<Router, WebError> {
         .layer(RequestBodyLimitLayer::new(BODY_LIMIT))
         .layer(TraceLayer::new_for_http())
         .layer(PropagateRequestIdLayer::x_request_id())
-        .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid)))
+        .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
 }
 
 async fn not_found(State(state): State<AppState>, tenant: Option<ResolvedTenant>) -> Response {

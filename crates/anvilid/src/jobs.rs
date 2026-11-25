@@ -9,6 +9,9 @@
 //! - **The outbox worker** runs continuously on every node (rows are claimed individually). It
 //!   always runs: tenants with their own SMTP settings get mail even when the installation SMTP
 //!   (`smtp_url`) is not configured.
+//! - **The back-channel logout worker** ([`spawn_logout_worker`]) runs continuously on every node.
+//!   No job lease is needed: each delivery row is leased when claimed, so nodes never deliver the
+//!   same row twice. Logouts wake it immediately; otherwise it polls.
 //!
 //! Everything stops when the shutdown channel flips.
 //!
@@ -28,6 +31,7 @@ use anvil_core::service::key_rotation::{KeyRotationService, RotationPolicy};
 use anvil_jose::Kek;
 use anvil_mail::worker::SmtpTransportFactory;
 use anvil_mail::{EmailRenderer, MailTransport, OutboxWorker, SmtpTransport, StorageOutbox};
+use anvil_web::adapters::backchannel::LogoutDeliveryWorker;
 use anyhow::Context;
 use secrecy::{ExposeSecret, SecretString};
 use tokio::sync::watch;
@@ -343,4 +347,15 @@ pub fn spawn(
     tracing::info!("outbox worker started");
     jobs.spawn(worker.run(stopped(shutdown.clone())));
     Ok(jobs)
+}
+
+/// Spawns the back-channel logout delivery worker into `jobs`; it stops when the shutdown
+/// channel flips.
+pub fn spawn_logout_worker(
+    jobs: &mut JoinSet<()>,
+    worker: LogoutDeliveryWorker,
+    shutdown: &watch::Receiver<bool>,
+) {
+    tracing::info!("back-channel logout worker started");
+    jobs.spawn(worker.run(stopped(shutdown.clone())));
 }

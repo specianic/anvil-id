@@ -277,6 +277,7 @@ async fn serve(cfg: &Config) -> anyhow::Result<()> {
         &started.kek,
         &stop_rx,
     )?;
+    jobs::spawn_logout_worker(&mut jobs, started.logout_worker, &stop_rx);
     let signal_tx = Arc::clone(&stop_tx);
     tokio::spawn(async move {
         shutdown_signal().await;

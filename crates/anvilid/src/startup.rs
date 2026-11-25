@@ -11,8 +11,9 @@ use anvil_core::ports::{Clock, PasswordHasher, Storage};
 use anvil_core::service::bootstrap::{BootstrapService, InstallResult};
 use anvil_core::service::key_rotation::KeyRotationService;
 use anvil_jose::Kek;
+use anvil_web::adapters::backchannel::LogoutDeliveryWorker;
 use anvil_web::adapters::{Argon2Pool, OutboundClient, breach_checker_with};
-use anvil_web::{AppConfig, AppDeps};
+use anvil_web::{AppConfig, AppDeps, AppState};
 use anyhow::{Context, bail};
 use axum::Router;
 use secrecy::{ExposeSecret, SecretString};
@@ -31,6 +32,9 @@ pub struct Started {
     pub kek: Arc<Kek>,
     /// Held for the server's lifetime (SQLite only).
     pub lock: Option<ServeLock>,
+    /// The back-channel logout delivery worker, wired to the application's wake signal
+    /// (`AppState::logout_wake`) and outbound client. Spawned on every node by the jobs.
+    pub logout_worker: LogoutDeliveryWorker,
 }
 
 /// Data directory, serve lock and KEK, in that order: the lock is taken before a KEK could be
@@ -200,13 +204,26 @@ pub async fn start(cfg: &Config) -> anyhow::Result<Started> {
         breach: breach_checker_with(cfg.breach_check.clone(), outbound),
         kek: Arc::clone(&kek),
     };
-    let app = anvil_web::app(app_config, deps).context("failed to build the application")?;
+    let public_url = app_config.public_url.clone();
+    let state = AppState::new(app_config, deps).context("failed to build the application")?;
+    // Logouts wake the worker through the state's Notify; deliveries go through the state's
+    // outbound client (no second client).
+    let logout_worker = LogoutDeliveryWorker::new(
+        Arc::clone(&storage),
+        Arc::clone(&clock),
+        Arc::clone(&kek),
+        public_url,
+        state.outbound_arc(),
+        state.logout_wake(),
+    );
+    let app = anvil_web::router(state);
     Ok(Started {
         app,
         storage,
         clock,
         kek,
         lock,
+        logout_worker,
     })
 }
 
