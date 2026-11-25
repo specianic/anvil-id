@@ -48,7 +48,7 @@ Plans:
 - [x] 01-03-PLAN.md — Spike A: shared contract suite + SQLite backend + .sqlx (wave 2)
 - [x] 01-04-PLAN.md — anvil-web router (discovery, assets, 501s) + `anvilid serve` with mimalloc (wave 2)
 - [ ] 01-05-PLAN.md — Spike A: Postgres backend on testcontainers + duplication cost (wave 3)
-- [ ] 01-06-PLAN.md — Spike C: conformance harness (Config OP plan, ratchet) + conformance.yml (wave 3)
+- [x] 01-06-PLAN.md — Spike C: conformance harness (Config OP plan, ratchet) + conformance.yml (wave 3)
 - [ ] 01-07-PLAN.md — Spike B: storage wiring in anvilid, static musl build, size/RSS, release-build.yml (wave 4)
 - [ ] 01-08-PLAN.md — Phase gate: `just ci`, push + CI green (checkpoint), spike verdicts (wave 5)
 
@@ -132,7 +132,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundations and Spikes (M0) | 4/8 | In Progress|  |
+| 1. Foundations and Spikes (M0) | 5/8 | In Progress|  |
 | 2. Release 0.1 "First login" | 0/TBD | Not started | - |
 | 3. Release 0.2 "Secure by default" | 0/TBD | Not started | - |
 | 4. Release 0.3 "Real-world logins" | 0/TBD | Not started | - |
