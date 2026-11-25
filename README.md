@@ -2,7 +2,15 @@
 
 The easiest open-source identity and access platform to self-host.
 
-> **Status: early release (0.1).** Not ready for production use.
+> **Status: early release (0.2 "Secure by default").** Not ready for production use.
+
+What works today: an OpenID Connect provider (authorization code with PKCE, refresh-token rotation,
+client credentials, `query` and `form_post` response modes, introspection and revocation, RS256 /
+ES256 / Ed25519 signing with automatic key rotation), sign-in with password, passkeys and TOTP with
+recovery codes, a consent screen, self-service account pages (passkeys, TOTP, sessions, connected
+apps), registration, email verification and recovery, rate limiting and brute-force protection with
+optional CAPTCHA, an audit log, and an admin console at `/console/` on top of the management API.
+Upgrading from 0.1: see [docs/UPGRADING.md](docs/UPGRADING.md).
 
 ## Install
 
@@ -13,7 +21,7 @@ and [docs/RELEASING.md](docs/RELEASING.md) for what is published and how to veri
 **Container image** (linux/amd64, linux/arm64, under 50 MB, runs as nonroot):
 
 ```bash
-docker run -p 8080:8080 ghcr.io/specianic/anvil-id:0.1.0
+docker run -p 8080:8080 ghcr.io/specianic/anvil-id:0.2.0
 ```
 
 Data (SQLite database and key-encryption key) lives in `/data` in the container; mount a volume
@@ -23,7 +31,7 @@ there to keep it (`-v anvilid-data:/data`).
 `x86_64-apple-darwin` as needed):
 
 ```bash
-V=0.1.0
+V=0.2.0
 T=x86_64-unknown-linux-musl
 curl -fLO "https://github.com/specianic/anvil-id/releases/download/v$V/anvilid-$V-$T.tar.gz"
 curl -fLO "https://github.com/specianic/anvil-id/releases/download/v$V/anvilid-$V-$T.tar.gz.sha256"
@@ -51,13 +59,19 @@ setup page then shows a management client id and secret for the admin API
 (`http://localhost:8080/api/admin/v1`, OpenAPI document at `/api/admin/v1/openapi.json`), which
 are shown only once.
 
+The admin console is at `http://localhost:8080/console/`: sign in with the administrator you just
+created to manage clients, users, sessions, email templates and SMTP, and to search the audit log. Users manage
+their own passkeys, TOTP, sessions and connected apps at `/ui/account/security`.
+
 The binary (`anvilid serve`, or `cargo run -p anvilid -- serve` from source) listens on
 `127.0.0.1:8080` and keeps its SQLite database and key-encryption key in `./anvilid-data/`. In the
 container the data lives in `/data`; mount a volume there to keep it.
 
 This runs in development mode (plain http on localhost; pages show a banner). For anything else set
 `--public-url https://…` and use the built-in TLS listener (`--tls-cert`, `--tls-key`) or a TLS
-proxy. `anvilid config show` lists every setting and where its value comes from.
+proxy. Behind a proxy, set `--trusted-proxies` to its addresses so rate limits see the real client
+IP. Passkeys need the public URL to be a host name (not an IP address). `anvilid config show` lists
+every setting and where its value comes from.
 
 ### Sample application
 
@@ -75,6 +89,7 @@ Planning documents:
 
 - [docs/PRD.md](docs/PRD.md) — product requirements
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — architecture & implementation specification
+- [docs/UPGRADING.md](docs/UPGRADING.md) — upgrade notes
 
 ## Development
 
@@ -92,6 +107,8 @@ Planning documents:
 
   Do not pass `--locked` here.
 - Docker, for the Postgres tests and the OpenID conformance suite.
+- Node.js 22.12 or newer, for the admin console (`just console-build` builds it into
+  `admin-ui/dist`, which release builds embed).
 
 ### The one command
 
@@ -99,8 +116,9 @@ Planning documents:
 just ci
 ```
 
-This runs formatting, clippy, cargo-deny, the crate dependency-rule check and the full test suite on
-both storage backends. CI runs the same recipes.
+This runs formatting, clippy, cargo-deny, the crate dependency-rule check, the migration lint, the
+full test suite on both storage backends, the security-test map and the admin console type check
+(needs Node.js 22.12 or newer). CI runs the same recipes.
 
 Other recipes (`just --list` shows all of them):
 

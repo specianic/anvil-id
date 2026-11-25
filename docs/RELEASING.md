@@ -19,7 +19,8 @@ For a tag `vX.Y.Z` the workflow publishes:
 | Build provenance attestations for every archive and the image | GitHub attestations |
 
 Each archive contains the `anvilid` binary, `LICENSE` and `README.md` in a directory named after
-the archive. Linux binaries are built natively per architecture in the official Rust Alpine image
+the archive. Every binary embeds the admin console: the workflow builds `admin-ui` once, and a build
+whose binary does not contain it fails (`scripts/check-console-embedded.sh`). Linux binaries are built natively per architecture in the official Rust Alpine image
 (`scripts/build-musl.sh`) and asserted to be statically linked. The container image is the Linux
 binary on distroless `static-debian13:nonroot`. Before anything is pushed, each architecture's
 image must be under 50 MB, run as `nonroot`, and pass a zero-configuration smoke test
@@ -33,6 +34,16 @@ Tags with a suffix (`v0.2.0-rc.1`) produce a GitHub prerelease and do not move `
 2. Set `version` in `crates/anvilid/Cargo.toml` to the release version, run `cargo check` so
    `Cargo.lock` records it, and commit both. The workflow refuses a tag that does not match this
    version, so `anvilid --version` always reports the release it came from.
+   In the same commit, pin the release's new migrations of both backends so they become immutable
+   (`scripts/check-migrations.sh` fails on any later edit):
+
+   ```bash
+   sha256sum crates/anvil-storage-sqlite/migrations/NNNN_*.sql \
+             crates/anvil-storage-postgres/migrations/NNNN_*.sql >> scripts/released-migrations.sha256
+   scripts/check-migrations.sh
+   ```
+
+   Add upgrade notes for the release to [`docs/UPGRADING.md`](UPGRADING.md).
 3. Optional dry run: run the `release` workflow manually (`gh workflow run release.yml --ref main`).
    It builds and packages every target and runs the image gate, but pushes, attests and releases
    nothing.
@@ -45,7 +56,8 @@ Tags with a suffix (`v0.2.0-rc.1`) produce a GitHub prerelease and do not move `
    ```
 
 5. Check the result: `gh release view vX.Y.Z` lists four archives and four `.sha256` files, and
-   `docker pull ghcr.io/specianic/anvil-id:X.Y.Z` works without logging in.
+   `docker pull ghcr.io/specianic/anvil-id:X.Y.Z` works without logging in. (Anonymous pulls need
+   the ghcr.io package to be public; that is a one-time package setting, not part of the workflow.)
 
 If the run fails before the GitHub Release is created (the release job runs last), fix the cause,
 delete the tag locally and remotely (`git tag -d vX.Y.Z && git push origin :refs/tags/vX.Y.Z`) and
