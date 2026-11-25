@@ -129,7 +129,7 @@ Plans:
 - [x] 03-23-PLAN.md — Management API 0.2: sessions, credentials, audit query, email templates/SMTP, new fields, OpenAPI (wave 5)
 - [x] 03-24-PLAN.md — Binary wiring: proxy/rate-limit/rotation/retention config, leased jobs, `keys rotate`, audit JSON to stdout (wave 5)
 - [ ] 03-25-PLAN.md — Console pages (sessions, audit, email/SMTP, user tabs, client editing) + console e2e with axe (wave 6)
-- [ ] 03-26-PLAN.md — E2E: passkeys (usernameless, clone rollback, negatives) and TOTP/recovery codes (wave 6)
+- [x] 03-26-PLAN.md — E2E: passkeys (usernameless, clone rollback, negatives) and TOTP/recovery codes (wave 6)
 - [ ] 03-27-PLAN.md — E2E: consent + sessions; full axe/no-JS/keyboard audit of Phase 3 pages (wave 6)
 - [ ] 03-28-PLAN.md — Conformance: Form Post OP plan in CI; Basic/Config re-run with consent-free clients (wave 6)
 - [ ] 03-29-PLAN.md — Phase gate: security-test map, `just ci`, release console check, migration pinning, docs sync, push + CI green (checkpoint) (wave 7)
@@ -191,7 +191,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 |-------|----------------|--------|-----------|
 | 1. Foundations and Spikes (M0) | 8/8 | Complete    | 2026-11-25 |
 | 2. Release 0.1 "First login" | 23/23 | Complete    | 2026-11-25 |
-| 3. Release 0.2 "Secure by default" | 13/29 | In Progress|  |
+| 3. Release 0.2 "Secure by default" | 26/30 | In Progress|  |
 | 4. Release 0.3 "Real-world logins" | 0/TBD | Not started | - |
 | 5. Release 0.4 "Operate it" | 0/TBD | Not started | - |
 | 6. Release 1.0 (Organizations and SSO) | 0/TBD | Not started | - |
