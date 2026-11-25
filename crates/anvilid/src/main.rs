@@ -1,5 +1,7 @@
 //! The `anvilid` binary: CLI entry point and wiring of concrete adapters.
 
+mod storage;
+
 use std::net::SocketAddr;
 
 use anvil_web::WebConfig;
@@ -32,6 +34,11 @@ struct ServeArgs {
     /// Public issuer URL; endpoint URLs in the discovery document are derived from it.
     #[arg(long, env = "ANVILID_ISSUER")]
     issuer: url::Url,
+
+    /// Database URL: `sqlite://<path>?mode=rwc`, `sqlite::memory:` or `postgres://...`.
+    /// Required: there is no implicit default database.
+    #[arg(long, env = "ANVILID_DATABASE_URL", hide_env_values = true)]
+    database_url: String,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -65,6 +72,9 @@ fn validate_issuer(issuer: &url::Url) -> anyhow::Result<()> {
 #[tokio::main(flavor = "multi_thread")]
 async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     validate_issuer(&args.issuer)?;
+
+    // Held for the server's lifetime; M1 passes it into the web state.
+    let _storage = storage::open_storage(&args.database_url).await?;
 
     let listener = tokio::net::TcpListener::bind(args.listen)
         .await

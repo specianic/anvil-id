@@ -94,7 +94,7 @@ compose up -d
 
 # --- 4. Start a fresh anvilid -------------------------------------------------------------------------
 # Binary invocation: keep on ONE line (plan 07 appends --database-url here).
-ANVILID_ARGS=(serve --listen "0.0.0.0:$ANVILID_PORT" --issuer "http://host.docker.internal:$ANVILID_PORT")
+ANVILID_ARGS=(serve --listen "0.0.0.0:$ANVILID_PORT" --issuer "http://host.docker.internal:$ANVILID_PORT" --database-url "sqlite::memory:")
 log "starting $ANVILID_BIN ${ANVILID_ARGS[*]}"
 "$ANVILID_BIN" "${ANVILID_ARGS[@]}" > "$RESULTS_DIR/anvilid.log" 2>&1 &
 ANVILID_PID=$!

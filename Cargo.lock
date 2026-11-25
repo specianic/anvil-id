@@ -160,11 +160,15 @@ dependencies = [
 name = "anvilid"
 version = "0.0.0"
 dependencies = [
+ "anvil-core",
+ "anvil-storage-postgres",
+ "anvil-storage-sqlite",
  "anvil-web",
  "anyhow",
  "axum",
  "clap",
  "mimalloc",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

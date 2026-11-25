@@ -14,6 +14,9 @@ name = "anvilid"
 path = "src/main.rs"
 
 [dependencies]
+anvil-core.workspace = true
+anvil-storage-postgres.workspace = true
+anvil-storage-sqlite.workspace = true
 anvil-web.workspace = true
 anyhow.workspace = true
 axum.workspace = true
@@ -23,3 +26,6 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 url.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
