@@ -112,4 +112,16 @@ impl FlowRepo for SqliteFlows {
         .map_err(map_err)?;
         Ok(done.rows_affected() > 0)
     }
+
+    // TRANSITIONAL(03-05): Phase 3 methods, implemented with the 0003 migration.
+    async fn swap_state(
+        &self,
+        _tenant: TenantId,
+        _id: FlowId,
+        _expected: &str,
+        _new: &str,
+        _now: OffsetDateTime,
+    ) -> Result<bool, StorageError> {
+        crate::pending::unsupported("FlowRepo::swap_state")
+    }
 }

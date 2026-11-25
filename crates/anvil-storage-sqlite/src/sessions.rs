@@ -1,7 +1,7 @@
 //! `SessionRepo` on SQLite.
 
 use anvil_core::model::{
-    BrowserSession, NewBrowserSession, SecretHash, SessionId, TenantId, UserId,
+    BrowserSession, NewBrowserSession, Page, PageRequest, SecretHash, SessionId, TenantId, UserId,
 };
 use anvil_core::ports::{SessionRepo, StorageError};
 use sqlx::SqlitePool;
@@ -151,5 +151,51 @@ impl SessionRepo for SqliteSessions {
         .await
         .map_err(map_err)?;
         Ok(done.rows_affected() > 0)
+    }
+
+    // TRANSITIONAL(03-05): Phase 3 methods, implemented with the 0003 migration.
+    async fn get(
+        &self,
+        _tenant: TenantId,
+        _id: SessionId,
+    ) -> Result<Option<BrowserSession>, StorageError> {
+        crate::pending::unsupported("SessionRepo::get")
+    }
+
+    async fn list_for_user(
+        &self,
+        _tenant: TenantId,
+        _user: UserId,
+        _now: OffsetDateTime,
+    ) -> Result<Vec<BrowserSession>, StorageError> {
+        crate::pending::unsupported("SessionRepo::list_for_user")
+    }
+
+    async fn list(
+        &self,
+        _tenant: TenantId,
+        _now: OffsetDateTime,
+        _page: PageRequest,
+    ) -> Result<Page<BrowserSession>, StorageError> {
+        crate::pending::unsupported("SessionRepo::list")
+    }
+
+    async fn revoke_with_families(
+        &self,
+        _tenant: TenantId,
+        _id: SessionId,
+        _now: OffsetDateTime,
+    ) -> Result<bool, StorageError> {
+        crate::pending::unsupported("SessionRepo::revoke_with_families")
+    }
+
+    async fn revoke_all_for_user(
+        &self,
+        _tenant: TenantId,
+        _user: UserId,
+        _except: Option<SessionId>,
+        _now: OffsetDateTime,
+    ) -> Result<u64, StorageError> {
+        crate::pending::unsupported("SessionRepo::revoke_all_for_user")
     }
 }

@@ -13,8 +13,9 @@
 //!
 //! - Every method that touches tenant data takes a [`TenantId`] and only ever sees rows of that
 //!   tenant; a row of another tenant behaves exactly like a missing row. The exceptions are
-//!   tenant resolution (`TenantRepo::get_by_slug` / `get_by_host` / `list`), [`SetupRepo`]
-//!   (installation-wide) and the outbox worker methods (`claim_due`, `mark_sent`, `mark_failed`).
+//!   tenant resolution (`TenantRepo::get_by_slug` / `get_by_host` / `list`), [`SetupRepo`] and
+//!   [`JobRepo`] (installation-wide), the outbox worker methods (`claim_due`, `mark_sent`,
+//!   `mark_failed`) and audit retention ([`AuditRepo::purge_before`]).
 //! - Uniqueness is enforced by unique indexes and reported as [`StorageError::Conflict`]; never
 //!   check-then-insert.
 //! - Timestamps are passed in by callers (millisecond precision, see
@@ -23,18 +24,22 @@
 
 use std::time::Duration;
 
+use secrecy::SecretString;
 use time::OffsetDateTime;
 
 pub use crate::clock::{Clock, SystemClock};
 use crate::error::CoreError;
 use crate::model::{
-    AuthRequestId, AuthorizationCode, AuthorizationRequest, BrowserSession, Client, ClientUpdate,
-    CodeHash, Flow, FlowId, InstallPlan, NewAuthorizationCode, NewAuthorizationRequest,
-    NewBrowserSession, NewClient, NewEmail, NewFlow, NewPasswordCredential, NewRefreshToken,
-    NewSelfServiceToken, NewSetupToken, NewSigningKey, NewTenant, NewTokenFamily, NewUser,
-    OutboxEmail, OutboxId, Page, PageRequest, PasswordCredential, RefreshToken, ReplayKind,
-    RevokeReason, SecretHash, SessionId, SigningKey, Tenant, TenantId, TenantUpdate, TokenFamily,
-    TokenFamilyId, User, UserId, UserUpdate,
+    AccessTokenRecord, AuditEvent, AuditQuery, AuthRequestId, AuthorizationCode,
+    AuthorizationRequest, BrowserSession, Client, ClientUpdate, CodeHash, ConsentGrant,
+    CounterOutcome, CredentialId, CredentialSummary, EmailKind, EmailTemplate, Flow, FlowId,
+    InstallPlan, NewAccessToken, NewAuditEvent, NewAuthorizationCode, NewAuthorizationRequest,
+    NewBrowserSession, NewClient, NewConsent, NewEmail, NewFlow, NewPasskey, NewPasswordCredential,
+    NewRefreshToken, NewSelfServiceToken, NewSetupToken, NewSigningKey, NewTenant, NewTokenFamily,
+    NewTotp, NewUser, OutboxEmail, OutboxId, Page, PageRequest, PasskeyCredential,
+    PasswordCredential, RecoveryCodeHash, RecoveryNotice, RefreshToken, ReplayKind, RevokeReason,
+    SecretHash, SessionId, SigningKey, SigningKeyId, SmtpSettings, SmtpTls, Tenant, TenantId,
+    TenantUpdate, TokenFamily, TokenFamilyId, TotpCredential, User, UserId, UserUpdate,
 };
 
 /// Entry point to all repositories of one storage backend.
@@ -49,10 +54,14 @@ pub trait Storage: Send + Sync + 'static {
     fn grants(&self) -> &dyn GrantRepo;
     fn setup(&self) -> &dyn SetupRepo;
     fn outbox(&self) -> &dyn OutboxRepo;
+    fn audit(&self) -> &dyn AuditRepo;
+    fn mail_settings(&self) -> &dyn MailSettingsRepo;
+    fn jobs(&self) -> &dyn JobRepo;
 
     /// Batch-deletes expired rows across all tenants: authorization codes, authorization
-    /// requests, flows, browser sessions, refresh tokens, replay guards, self-service tokens and
-    /// setup tokens with `expires_at <= now`, plus sent or expired outbox emails. Never deletes a
+    /// requests, flows, browser sessions, refresh tokens, opaque access tokens, replay guards,
+    /// self-service tokens and setup tokens with `expires_at <= now`, plus sent or expired outbox
+    /// emails. Never deletes a
     /// row that is still usable at `now`. Consumed codes and refresh tokens are kept until they
     /// expire, so code and refresh-token reuse detection keeps working. Returns the number of
     /// rows deleted.
@@ -179,8 +188,9 @@ pub trait UserRepo: Send + Sync {
 
     /// In one transaction: atomically consumes a `Recovery` or `Invitation` token, upserts the
     /// password to `new_phc`, sets `email_verified = true`, revokes every browser session and
-    /// every token family of the user (reason `UserRecovery`), and enqueues `notice` if given.
-    /// `None` (and nothing changed) if the token is unknown, of another kind, consumed or
+    /// every token family of the user (reason `UserRecovery`), and, if given, enqueues `notice`
+    /// addressed to the consumed token's `email` ([`RecoveryNotice::to_email`]). `None` (and
+    /// nothing changed, no email enqueued) if the token is unknown, of another kind, consumed or
     /// expired. Exactly one concurrent caller can get `Some`.
     async fn complete_recovery(
         &self,
@@ -188,8 +198,122 @@ pub trait UserRepo: Send + Sync {
         token_hash: &SecretHash,
         new_phc: &str,
         now: OffsetDateTime,
-        notice: Option<&NewEmail>,
+        notice: Option<&RecoveryNotice>,
     ) -> Result<Option<User>, StorageError>;
+
+    /// Every credential of the user (password, passkeys, TOTP) as summaries, oldest first.
+    async fn list_credentials(
+        &self,
+        tenant: TenantId,
+        user: UserId,
+    ) -> Result<Vec<CredentialSummary>, StorageError>;
+
+    /// Stores a passkey for `user`. `Conflict` if `passkey.credential_id` is already registered
+    /// anywhere in the tenant (to this or another user): a WebAuthn credential id must never be
+    /// bound to two accounts. Conflict on the row id as well.
+    async fn create_passkey(
+        &self,
+        tenant: TenantId,
+        user: UserId,
+        passkey: &NewPasskey,
+    ) -> Result<(), StorageError>;
+
+    /// The user's passkeys, oldest first.
+    async fn passkeys(
+        &self,
+        tenant: TenantId,
+        user: UserId,
+    ) -> Result<Vec<PasskeyCredential>, StorageError>;
+
+    /// Lookup by WebAuthn credential id (discoverable sign-in: the user is not known yet).
+    async fn find_passkey(
+        &self,
+        tenant: TenantId,
+        credential_id: &[u8],
+    ) -> Result<Option<PasskeyCredential>, StorageError>;
+
+    /// Records a successful assertion with a **single conditional UPDATE**: stores
+    /// `passkey_json`, `counter` and `last_used_at = now` iff `counter > stored counter`, or
+    /// `counter == 0` and the stored counter is 0 (authenticators without a counter).
+    /// Otherwise (counter went backwards or repeated: possible clone; or unknown id) nothing
+    /// changes and `Stale` is returned. Concurrent updates never move the counter backwards.
+    async fn update_passkey(
+        &self,
+        tenant: TenantId,
+        id: CredentialId,
+        passkey_json: &str,
+        counter: u32,
+        now: OffsetDateTime,
+    ) -> Result<CounterOutcome, StorageError>;
+
+    /// The user's TOTP credential, if enrolled.
+    async fn totp(
+        &self,
+        tenant: TenantId,
+        user: UserId,
+    ) -> Result<Option<TotpCredential>, StorageError>;
+
+    /// In **one transaction**: inserts the TOTP credential (`Conflict` if the user already has
+    /// one; then nothing changes) and replaces the user's recovery-code set with `codes`.
+    async fn create_totp(
+        &self,
+        tenant: TenantId,
+        user: UserId,
+        totp: &NewTotp,
+        codes: &[RecoveryCodeHash],
+        now: OffsetDateTime,
+    ) -> Result<(), StorageError>;
+
+    /// Accepts TOTP time step `step` with a **single conditional UPDATE**
+    /// (`... WHERE last_step IS NULL OR last_step < step`), also setting `last_used_at = now`.
+    /// `Stale` if the step (or a later one) was already accepted or the user has no TOTP, so a
+    /// code is accepted at most once even under concurrency.
+    async fn advance_totp_step(
+        &self,
+        tenant: TenantId,
+        user: UserId,
+        step: u64,
+        now: OffsetDateTime,
+    ) -> Result<CounterOutcome, StorageError>;
+
+    /// Deletes one passkey or TOTP credential of `user`. Deleting the TOTP credential also
+    /// deletes the user's recovery codes in the same transaction. Passwords cannot be deleted
+    /// through this method. `false` if no such credential of this user exists.
+    async fn delete_credential(
+        &self,
+        tenant: TenantId,
+        user: UserId,
+        id: CredentialId,
+    ) -> Result<bool, StorageError>;
+
+    /// Replaces the user's recovery-code set (old codes stop working) in **one transaction**.
+    async fn replace_recovery_codes(
+        &self,
+        tenant: TenantId,
+        user: UserId,
+        codes: &[RecoveryCodeHash],
+        now: OffsetDateTime,
+    ) -> Result<(), StorageError>;
+
+    /// Consumes one recovery code with a **single conditional UPDATE**
+    /// (`SET used_at = now WHERE ... AND used_at IS NULL`) and, only if that succeeded, enqueues
+    /// `notice` in the same transaction. Exactly one concurrent caller presenting the same code
+    /// gets `true`.
+    async fn consume_recovery_code(
+        &self,
+        tenant: TenantId,
+        user: UserId,
+        hash: &RecoveryCodeHash,
+        now: OffsetDateTime,
+        notice: Option<&NewEmail>,
+    ) -> Result<bool, StorageError>;
+
+    /// Number of unused recovery codes of the user.
+    async fn recovery_codes_remaining(
+        &self,
+        tenant: TenantId,
+        user: UserId,
+    ) -> Result<u32, StorageError>;
 }
 
 /// Client persistence.
@@ -246,6 +370,33 @@ pub trait KeyRepo: Send + Sync {
         tenant: TenantId,
         now: OffsetDateTime,
     ) -> Result<Vec<SigningKey>, StorageError>;
+
+    /// Every key of the tenant in any state (including expired retired keys), in id order.
+    async fn list(&self, tenant: TenantId) -> Result<Vec<SigningKey>, StorageError>;
+
+    /// Key promotion in **one transaction** of two statements, in this order (never one swapping
+    /// UPDATE, which the partial unique index on active keys would reject):
+    /// 1. if `retire = Some((id, expires_at))`: the `Active` key `id` becomes `Retired` with
+    ///    `retired_at = now` and `expires_at`;
+    /// 2. the `Next` key `activate` becomes `Active` with `activated_at = now`.
+    ///
+    /// `false` and nothing changed if `retire` is not an `Active` key or `activate` is not a
+    /// `Next` key of the tenant (stale or unknown ids). `Conflict` (nothing changed) if another
+    /// key of the same alg is still active after step 1.
+    async fn promote(
+        &self,
+        tenant: TenantId,
+        retire: Option<(SigningKeyId, OffsetDateTime)>,
+        activate: SigningKeyId,
+        now: OffsetDateTime,
+    ) -> Result<bool, StorageError>;
+
+    /// Deletes `Retired` keys with `expires_at <= now`. Returns the number deleted.
+    async fn delete_expired(
+        &self,
+        tenant: TenantId,
+        now: OffsetDateTime,
+    ) -> Result<u64, StorageError>;
 }
 
 /// Browser session persistence.
@@ -284,6 +435,51 @@ pub trait SessionRepo: Send + Sync {
         id: SessionId,
         now: OffsetDateTime,
     ) -> Result<bool, StorageError>;
+
+    /// The session by id in any state (revoked or expired included); callers check the state.
+    async fn get(
+        &self,
+        tenant: TenantId,
+        id: SessionId,
+    ) -> Result<Option<BrowserSession>, StorageError>;
+
+    /// The user's active sessions (not revoked, both expiries `> now`), newest first.
+    async fn list_for_user(
+        &self,
+        tenant: TenantId,
+        user: UserId,
+        now: OffsetDateTime,
+    ) -> Result<Vec<BrowserSession>, StorageError>;
+
+    /// Active sessions of the whole tenant (admin view), keyset-paginated in id order.
+    async fn list(
+        &self,
+        tenant: TenantId,
+        now: OffsetDateTime,
+        page: PageRequest,
+    ) -> Result<Page<BrowserSession>, StorageError>;
+
+    /// In **one transaction**: revokes the session (as [`SessionRepo::revoke`]) and every token
+    /// family with `session_id = id` (reason `SessionRevoked`; already revoked families keep
+    /// their first reason). `false` (nothing changed) if the session is unknown or already
+    /// revoked.
+    async fn revoke_with_families(
+        &self,
+        tenant: TenantId,
+        id: SessionId,
+        now: OffsetDateTime,
+    ) -> Result<bool, StorageError>;
+
+    /// In **one transaction**: revokes every unrevoked session of `user` except `except`, and the
+    /// token families of those sessions (reason `SessionRevoked`). Returns the number of sessions
+    /// revoked.
+    async fn revoke_all_for_user(
+        &self,
+        tenant: TenantId,
+        user: UserId,
+        except: Option<SessionId>,
+        now: OffsetDateTime,
+    ) -> Result<u64, StorageError>;
 }
 
 /// Self-service flow persistence.
@@ -309,6 +505,19 @@ pub trait FlowRepo: Send + Sync {
     ) -> Result<bool, StorageError>;
 
     async fn delete(&self, tenant: TenantId, id: FlowId) -> Result<bool, StorageError>;
+
+    /// Compare-and-swap of the opaque state: a single `UPDATE ... SET state = new WHERE state =
+    /// expected AND expires_at > now`. `false` if the flow is missing, expired or its state is no
+    /// longer `expected`. Makes WebAuthn challenges and TOTP enrolment single-use: of concurrent
+    /// callers with the same `expected`, exactly one gets `true`.
+    async fn swap_state(
+        &self,
+        tenant: TenantId,
+        id: FlowId,
+        expected: &str,
+        new: &str,
+        now: OffsetDateTime,
+    ) -> Result<bool, StorageError>;
 }
 
 /// Authorization requests, codes, token families, refresh tokens and replay guards.
@@ -416,6 +625,74 @@ pub trait GrantRepo: Send + Sync {
         expires_at: OffsetDateTime,
         now: OffsetDateTime,
     ) -> Result<JtiOutcome, StorageError>;
+
+    /// Stores a token family without a code (client credentials). `Conflict` on a duplicate id.
+    async fn create_family(
+        &self,
+        tenant: TenantId,
+        family: &NewTokenFamily,
+    ) -> Result<(), StorageError>;
+
+    /// Stores an opaque access token. `Conflict` on a duplicate hash.
+    async fn create_access_token(
+        &self,
+        tenant: TenantId,
+        token: &NewAccessToken,
+    ) -> Result<(), StorageError>;
+
+    /// Read-only lookup in any state (expired, revoked, revoked family) with its family if it
+    /// has one; callers decide validity (introspection, revocation, UserInfo).
+    async fn find_access_token(
+        &self,
+        tenant: TenantId,
+        token_hash: &SecretHash,
+    ) -> Result<Option<(AccessTokenRecord, Option<TokenFamily>)>, StorageError>;
+
+    /// Sets `revoked_at = now` on an unrevoked access token. `false` if unknown or already
+    /// revoked.
+    async fn revoke_access_token(
+        &self,
+        tenant: TenantId,
+        token_hash: &SecretHash,
+        now: OffsetDateTime,
+    ) -> Result<bool, StorageError>;
+
+    /// The active (unrevoked) consent of `user` for `client_id`.
+    async fn consent(
+        &self,
+        tenant: TenantId,
+        user: UserId,
+        client_id: &str,
+    ) -> Result<Option<ConsentGrant>, StorageError>;
+
+    /// The user's active consents, in client id order.
+    async fn list_consents(
+        &self,
+        tenant: TenantId,
+        user: UserId,
+    ) -> Result<Vec<ConsentGrant>, StorageError>;
+
+    /// Grants `consent.scopes` to (user, client) in one statement or transaction: creates the
+    /// grant (with `consent.id`), or merges the scopes into the existing one (union, sorted) and
+    /// sets `updated_at = now`. A revoked grant is re-activated with exactly the new scopes.
+    /// Returns the stored grant.
+    async fn upsert_consent(
+        &self,
+        tenant: TenantId,
+        consent: &NewConsent,
+        now: OffsetDateTime,
+    ) -> Result<ConsentGrant, StorageError>;
+
+    /// In **one transaction**: revokes the active consent of (user, client) and every unrevoked
+    /// token family of that user and client (reason `ConsentRevoked`). `false` (nothing
+    /// changed) if there is no active consent.
+    async fn revoke_consent(
+        &self,
+        tenant: TenantId,
+        user: UserId,
+        client_id: &str,
+        now: OffsetDateTime,
+    ) -> Result<bool, StorageError>;
 }
 
 /// First-start installation and setup (installation-wide; no tenant parameter).
@@ -487,6 +764,83 @@ pub trait OutboxRepo: Send + Sync {
         error: &str,
         next_attempt_at: OffsetDateTime,
     ) -> Result<bool, StorageError>;
+}
+
+/// Append-only audit log.
+#[async_trait::async_trait]
+pub trait AuditRepo: Send + Sync {
+    /// Appends an event. `Conflict` on a duplicate id. Events are never updated.
+    async fn append(&self, tenant: TenantId, event: &NewAuditEvent) -> Result<(), StorageError>;
+
+    /// Events of one tenant matching every set filter of `query`, newest first (id descending),
+    /// at most `query.limit` items (callers normalise the limit). `query.before` is the cursor:
+    /// only events with a smaller id. `next_cursor` is the id of the last item iff more follow.
+    async fn query(
+        &self,
+        tenant: TenantId,
+        query: &AuditQuery,
+    ) -> Result<Page<AuditEvent>, StorageError>;
+
+    /// Retention, installation-wide: deletes every event with `at < cutoff`. Returns the number
+    /// deleted.
+    async fn purge_before(&self, cutoff: OffsetDateTime) -> Result<u64, StorageError>;
+}
+
+/// Per-tenant email template overrides and SMTP settings.
+#[async_trait::async_trait]
+pub trait MailSettingsRepo: Send + Sync {
+    /// The tenant's override for `kind`, if any.
+    async fn template(
+        &self,
+        tenant: TenantId,
+        kind: EmailKind,
+    ) -> Result<Option<EmailTemplate>, StorageError>;
+
+    /// Every override of the tenant, in kind-name order.
+    async fn list_templates(&self, tenant: TenantId) -> Result<Vec<EmailTemplate>, StorageError>;
+
+    /// Inserts or replaces the override for `template.kind`.
+    async fn put_template(
+        &self,
+        tenant: TenantId,
+        template: &EmailTemplate,
+    ) -> Result<(), StorageError>;
+
+    /// Removes the override (back to the theme default). `false` if there was none.
+    async fn delete_template(
+        &self,
+        tenant: TenantId,
+        kind: EmailKind,
+    ) -> Result<bool, StorageError>;
+
+    /// The tenant's SMTP settings, if any.
+    async fn smtp(&self, tenant: TenantId) -> Result<Option<SmtpSettings>, StorageError>;
+
+    /// Inserts or replaces the tenant's SMTP settings.
+    async fn put_smtp(&self, tenant: TenantId, settings: &SmtpSettings)
+    -> Result<(), StorageError>;
+
+    /// Removes the tenant's SMTP settings (back to the installation SMTP). `false` if none.
+    async fn delete_smtp(&self, tenant: TenantId) -> Result<bool, StorageError>;
+}
+
+/// Installation-wide leases for background jobs, so one node runs a job at a time.
+#[async_trait::async_trait]
+pub trait JobRepo: Send + Sync {
+    /// Takes or renews the lease of job `name` for `owner` until `until`, in one statement:
+    /// succeeds if no lease exists, the existing lease expired (`until <= now`) or `owner`
+    /// already holds it. `false` while another owner holds an unexpired lease. Of concurrent
+    /// callers for a free job, exactly one gets `true`.
+    async fn try_lease(
+        &self,
+        name: &str,
+        owner: &str,
+        until: OffsetDateTime,
+        now: OffsetDateTime,
+    ) -> Result<bool, StorageError>;
+
+    /// Releases the lease if `owner` holds it. `false` otherwise.
+    async fn release(&self, name: &str, owner: &str) -> Result<bool, StorageError>;
 }
 
 /// Result of [`GrantRepo::consume_code`].
@@ -588,6 +942,146 @@ pub trait BreachChecker: Send + Sync {
     async fn is_breached(&self, password: &str) -> Result<bool, CoreError>;
 }
 
+/// Receives every recorded audit event as one JSON line (the stdout mirror). Installed once per
+/// process with [`crate::service::audit::install_mirror`]; the binary's implementation emits
+/// `tracing::info!(target: "audit", event = %json)` (the core has no logging dependency).
+pub trait AuditMirror: Send + Sync {
+    fn emit(&self, event_json: &str);
+}
+
+/// WebAuthn relying party of a tenant (computed by the web layer from the issuer).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelyingParty {
+    pub rp_id: String,
+    pub origin: String,
+    pub name: String,
+}
+
+/// The user a passkey is registered for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PasskeyUser {
+    pub id: UserId,
+    pub name: String,
+    pub display_name: String,
+}
+
+/// A WebAuthn ceremony challenge. `options_json` goes to the browser; `state_json` stays on the
+/// server (in the flow state) and is consumed exactly once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Challenge {
+    pub options_json: String,
+    pub state_json: String,
+}
+
+/// Result of a verified registration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegisteredPasskey {
+    pub credential_id: Vec<u8>,
+    pub passkey_json: String,
+    pub counter: u32,
+    pub backup_eligible: bool,
+}
+
+/// Who a discoverable assertion claims to be (before verification).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssertionIdentity {
+    pub user_id: UserId,
+    pub credential_id: Vec<u8>,
+}
+
+/// Result of a verified assertion.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedAssertion {
+    pub counter: u32,
+    pub user_verified: bool,
+    pub backup_eligible: bool,
+    /// Present when the stored passkey changed (counter, backup state) and must be saved.
+    pub updated_passkey_json: Option<String>,
+}
+
+/// Why a WebAuthn response was rejected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum PasskeyError {
+    /// Malformed, wrong challenge/origin, bad signature, unknown credential.
+    #[error("invalid passkey response")]
+    Invalid,
+    /// The signature counter went backwards: the authenticator may have been cloned.
+    #[error("possible cloned authenticator")]
+    PossibleClone,
+}
+
+/// WebAuthn ceremonies (implemented with webauthn-rs in the web layer). Synchronous: pure
+/// cryptography, no I/O.
+pub trait PasskeyCeremonies: Send + Sync {
+    /// Registration options for `user`, excluding the already registered credential ids.
+    fn start_registration(
+        &self,
+        rp: &RelyingParty,
+        user: &PasskeyUser,
+        exclude: &[Vec<u8>],
+    ) -> Result<Challenge, CoreError>;
+
+    /// Verifies a registration response against the server-side state.
+    fn finish_registration(
+        &self,
+        rp: &RelyingParty,
+        response_json: &str,
+        state_json: &str,
+    ) -> Result<RegisteredPasskey, PasskeyError>;
+
+    /// Options for a discoverable (usernameless) assertion.
+    fn start_discoverable(&self, rp: &RelyingParty) -> Result<Challenge, CoreError>;
+
+    /// Extracts the claimed user handle and credential id from an assertion response, without
+    /// verifying it.
+    fn identify(&self, response_json: &str) -> Result<AssertionIdentity, PasskeyError>;
+
+    /// Verifies a discoverable assertion against the server-side state and the stored passkey.
+    fn finish_discoverable(
+        &self,
+        rp: &RelyingParty,
+        response_json: &str,
+        state_json: &str,
+        stored_passkey_json: &str,
+    ) -> Result<VerifiedAssertion, PasskeyError>;
+}
+
+/// A template problem, reported to the administrator.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TemplateIssue {
+    pub line: Option<u32>,
+    pub message: String,
+}
+
+/// Compiles an email template override (with sample variables) before it is stored.
+pub trait EmailTemplateCheck: Send + Sync {
+    fn check(
+        &self,
+        kind: EmailKind,
+        subject: &str,
+        html: &str,
+        text: &str,
+    ) -> Result<(), TemplateIssue>;
+}
+
+/// Connection parameters for an SMTP test send, with the password opened.
+#[derive(Debug, Clone)]
+pub struct SmtpConnection {
+    pub host: String,
+    pub port: u16,
+    pub username: Option<String>,
+    pub password: Option<SecretString>,
+    pub from: String,
+    pub tls: SmtpTls,
+}
+
+/// Sends a test email with given SMTP settings (admin "send test email").
+#[async_trait::async_trait]
+pub trait SmtpTester: Send + Sync {
+    /// `Err` carries a message safe to show to the administrator (never the password).
+    async fn send_test(&self, conn: &SmtpConnection, to: &str) -> Result<(), String>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -607,6 +1101,13 @@ mod tests {
         assert_send_sync::<dyn GrantRepo>();
         assert_send_sync::<dyn SetupRepo>();
         assert_send_sync::<dyn OutboxRepo>();
+        assert_send_sync::<dyn AuditRepo>();
+        assert_send_sync::<dyn MailSettingsRepo>();
+        assert_send_sync::<dyn JobRepo>();
+        assert_send_sync::<dyn AuditMirror>();
+        assert_send_sync::<dyn PasskeyCeremonies>();
+        assert_send_sync::<dyn EmailTemplateCheck>();
+        assert_send_sync::<dyn SmtpTester>();
         assert_send_sync::<dyn Clock>();
         assert_send_sync::<dyn PasswordHasher>();
         assert_send_sync::<dyn BreachChecker>();

@@ -12,10 +12,10 @@ use anvil_core::model::{
     Client, ClientAuthMethod, ClientId, ClientType, ConsentMode, FlowId, FlowKind, GrantType,
     KeyState, NewAuthorizationCode, NewAuthorizationRequest, NewBrowserSession, NewClient,
     NewEmail, NewFlow, NewPasswordCredential, NewRefreshToken, NewSelfServiceToken, NewSetupToken,
-    NewSigningKey, NewTenant, NewTokenFamily, NewUser, OutboxId, RefreshToken, RegistrationMode,
-    RequestedClaim, SecretHash, SelfServiceKind, SessionId, SigningKeyId, StandardClaims, TenantId,
-    TenantSettings, TokenFamily, TokenFamilyId, TokenFormat, User, UserId, UserStatus,
-    truncate_to_ms,
+    NewSigningKey, NewTenant, NewTokenFamily, NewUser, OutboxId, RecoveryNotice, RefreshToken,
+    RegistrationMode, RequestedClaim, SecretHash, SelfServiceKind, SessionId, SigningKeyId,
+    StandardClaims, TenantId, TenantSettings, TokenFamily, TokenFamilyId, TokenFormat, User,
+    UserId, UserStatus, truncate_to_ms,
 };
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
@@ -177,6 +177,18 @@ pub fn new_self_service_token(
 }
 
 /// An outbox email to `to`, valid for a day.
+/// A password-changed notice for `complete_recovery` (recipient filled in by storage).
+pub fn new_recovery_notice() -> RecoveryNotice {
+    let now = now_ms();
+    RecoveryNotice {
+        id: OutboxId::new_v7(),
+        template: "password_changed".to_owned(),
+        payload: BTreeMap::from([("sealed".to_owned(), format!("sealed-{}", short()))]),
+        created_at: now,
+        expires_at: now + Duration::days(1),
+    }
+}
+
 pub fn new_email(to: &str) -> NewEmail {
     let now = now_ms();
     let mut payload = BTreeMap::new();

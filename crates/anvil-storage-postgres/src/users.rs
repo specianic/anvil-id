@@ -1,9 +1,10 @@
 //! `UserRepo` on Postgres: users, password credentials and self-service tokens.
 
 use anvil_core::model::{
-    NewEmail, NewPasswordCredential, NewSelfServiceToken, NewUser, Page, PageRequest,
-    PasswordCredential, RevokeReason, SecretHash, SelfServiceKind, TenantId, User, UserId,
-    UserStatus, UserUpdate,
+    CounterOutcome, CredentialId, CredentialSummary, NewEmail, NewPasskey, NewPasswordCredential,
+    NewSelfServiceToken, NewTotp, NewUser, Page, PageRequest, PasskeyCredential,
+    PasswordCredential, RecoveryCodeHash, RecoveryNotice, RevokeReason, SecretHash,
+    SelfServiceKind, TenantId, TotpCredential, User, UserId, UserStatus, UserUpdate,
 };
 use anvil_core::ports::{StorageError, UserRepo};
 use sqlx::PgPool;
@@ -432,7 +433,7 @@ impl UserRepo for PgUsers {
         token_hash: &SecretHash,
         new_phc: &str,
         now: OffsetDateTime,
-        notice: Option<&NewEmail>,
+        notice: Option<&RecoveryNotice>,
     ) -> Result<Option<User>, StorageError> {
         let mut tx = self.pool.begin().await.map_err(map_err)?;
         let kinds = [
@@ -496,11 +497,134 @@ impl UserRepo for PgUsers {
         .execute(&mut *tx)
         .await
         .map_err(map_err)?;
-        if let Some(e) = notice {
-            enqueue_email(&mut *tx, tenant, e).await?;
+        if let Some(notice) = notice {
+            // The recipient is the address the consumed token was sent to.
+            // TRANSITIONAL(03-06): a runtime-checked query until the consuming UPDATE returns
+            // the email (needs regenerated .sqlx metadata, done with the 0003 migration).
+            let token_email: String = sqlx::query_scalar(
+                "SELECT email FROM self_service_token WHERE tenant_id = $1 AND token_hash = $2",
+            )
+            .bind(tenant.0)
+            .bind(token_hash.as_bytes().as_slice())
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(map_err)?;
+            enqueue_email(&mut *tx, tenant, &notice.to_email(&token_email)).await?;
         }
         tx.commit().await.map_err(map_err)?;
         user.into_model().map(Some)
+    }
+
+    // TRANSITIONAL(03-06): Phase 3 methods, implemented with the 0003 migration.
+    async fn list_credentials(
+        &self,
+        _tenant: TenantId,
+        _user: UserId,
+    ) -> Result<Vec<CredentialSummary>, StorageError> {
+        crate::pending::unsupported("UserRepo::list_credentials")
+    }
+
+    async fn create_passkey(
+        &self,
+        _tenant: TenantId,
+        _user: UserId,
+        _passkey: &NewPasskey,
+    ) -> Result<(), StorageError> {
+        crate::pending::unsupported("UserRepo::create_passkey")
+    }
+
+    async fn passkeys(
+        &self,
+        _tenant: TenantId,
+        _user: UserId,
+    ) -> Result<Vec<PasskeyCredential>, StorageError> {
+        crate::pending::unsupported("UserRepo::passkeys")
+    }
+
+    async fn find_passkey(
+        &self,
+        _tenant: TenantId,
+        _credential_id: &[u8],
+    ) -> Result<Option<PasskeyCredential>, StorageError> {
+        crate::pending::unsupported("UserRepo::find_passkey")
+    }
+
+    async fn update_passkey(
+        &self,
+        _tenant: TenantId,
+        _id: CredentialId,
+        _passkey_json: &str,
+        _counter: u32,
+        _now: OffsetDateTime,
+    ) -> Result<CounterOutcome, StorageError> {
+        crate::pending::unsupported("UserRepo::update_passkey")
+    }
+
+    async fn totp(
+        &self,
+        _tenant: TenantId,
+        _user: UserId,
+    ) -> Result<Option<TotpCredential>, StorageError> {
+        crate::pending::unsupported("UserRepo::totp")
+    }
+
+    async fn create_totp(
+        &self,
+        _tenant: TenantId,
+        _user: UserId,
+        _totp: &NewTotp,
+        _codes: &[RecoveryCodeHash],
+        _now: OffsetDateTime,
+    ) -> Result<(), StorageError> {
+        crate::pending::unsupported("UserRepo::create_totp")
+    }
+
+    async fn advance_totp_step(
+        &self,
+        _tenant: TenantId,
+        _user: UserId,
+        _step: u64,
+        _now: OffsetDateTime,
+    ) -> Result<CounterOutcome, StorageError> {
+        crate::pending::unsupported("UserRepo::advance_totp_step")
+    }
+
+    async fn delete_credential(
+        &self,
+        _tenant: TenantId,
+        _user: UserId,
+        _id: CredentialId,
+    ) -> Result<bool, StorageError> {
+        crate::pending::unsupported("UserRepo::delete_credential")
+    }
+
+    async fn replace_recovery_codes(
+        &self,
+        _tenant: TenantId,
+        _user: UserId,
+        _codes: &[RecoveryCodeHash],
+        _now: OffsetDateTime,
+    ) -> Result<(), StorageError> {
+        crate::pending::unsupported("UserRepo::replace_recovery_codes")
+    }
+
+    async fn consume_recovery_code(
+        &self,
+        _tenant: TenantId,
+        _user: UserId,
+        _hash: &RecoveryCodeHash,
+        _now: OffsetDateTime,
+        _notice: Option<&NewEmail>,
+    ) -> Result<bool, StorageError> {
+        crate::pending::unsupported("UserRepo::consume_recovery_code")
+    }
+
+    async fn recovery_codes_remaining(
+        &self,
+        _tenant: TenantId,
+        _user: UserId,
+    ) -> Result<u32, StorageError> {
+        crate::pending::unsupported("UserRepo::recovery_codes_remaining")
     }
 }
 

@@ -757,7 +757,7 @@ pub async fn recovery_sets_password_verifies_email_revokes_sessions_and_families
         .issue_self_service_token(ctx.tenant, &token, None)
         .await
         .expect("issue");
-    let notice = new_email(&ctx.user.email);
+    let notice = new_recovery_notice();
     let now = now_ms();
     let recovered = users
         .complete_recovery(
@@ -814,6 +814,12 @@ pub async fn recovery_sets_password_verifies_email_revokes_sessions_and_families
         vec![notice.id],
         "recovery must enqueue the notice"
     );
+    assert_eq!(
+        claimed[0].to, ctx.user.email,
+        "the notice goes to the address the consumed token was sent to"
+    );
+    assert_eq!(claimed[0].template, notice.template);
+    assert_eq!(claimed[0].payload, notice.payload);
 
     assert_eq!(
         users

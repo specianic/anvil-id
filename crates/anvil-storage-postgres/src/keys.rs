@@ -127,4 +127,27 @@ impl KeyRepo for PgKeys {
         .map(KeyRow::into_model)
         .collect()
     }
+
+    // TRANSITIONAL(03-06): Phase 3 methods, implemented with the 0003 migration.
+    async fn list(&self, _tenant: TenantId) -> Result<Vec<SigningKey>, StorageError> {
+        crate::pending::unsupported("KeyRepo::list")
+    }
+
+    async fn promote(
+        &self,
+        _tenant: TenantId,
+        _retire: Option<(SigningKeyId, OffsetDateTime)>,
+        _activate: SigningKeyId,
+        _now: OffsetDateTime,
+    ) -> Result<bool, StorageError> {
+        crate::pending::unsupported("KeyRepo::promote")
+    }
+
+    async fn delete_expired(
+        &self,
+        _tenant: TenantId,
+        _now: OffsetDateTime,
+    ) -> Result<u64, StorageError> {
+        crate::pending::unsupported("KeyRepo::delete_expired")
+    }
 }

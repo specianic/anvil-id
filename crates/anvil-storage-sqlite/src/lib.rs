@@ -12,6 +12,7 @@ mod flows;
 mod grants;
 mod keys;
 mod outbox;
+mod pending;
 mod sessions;
 mod setup;
 mod tenants;
@@ -21,8 +22,8 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use anvil_core::ports::{
-    ClientRepo, FlowRepo, GrantRepo, KeyRepo, OutboxRepo, SessionRepo, SetupRepo, Storage,
-    StorageError, TenantRepo, UserRepo,
+    AuditRepo, ClientRepo, FlowRepo, GrantRepo, JobRepo, KeyRepo, MailSettingsRepo, OutboxRepo,
+    SessionRepo, SetupRepo, Storage, StorageError, TenantRepo, UserRepo,
 };
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
@@ -181,6 +182,16 @@ impl Storage for SqliteStorage {
     }
     fn outbox(&self) -> &dyn OutboxRepo {
         &self.outbox
+    }
+    // TRANSITIONAL: explicit Unsupported until the 0003 migration (see `pending`).
+    fn audit(&self) -> &dyn AuditRepo {
+        &pending::Pending
+    }
+    fn mail_settings(&self) -> &dyn MailSettingsRepo {
+        &pending::Pending
+    }
+    fn jobs(&self) -> &dyn JobRepo {
+        &pending::Pending
     }
 
     async fn purge_expired(&self, now: time::OffsetDateTime) -> Result<u64, StorageError> {

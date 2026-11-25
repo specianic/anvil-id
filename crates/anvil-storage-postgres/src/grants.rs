@@ -7,9 +7,10 @@
 //! `INSERT … ON CONFLICT` statements wait for the first inserter's commit.
 
 use anvil_core::model::{
-    AuthRequestId, AuthorizationCode, AuthorizationRequest, CodeHash, NewAuthorizationCode,
-    NewAuthorizationRequest, NewRefreshToken, NewTokenFamily, RefreshToken, ReplayKind,
-    RevokeReason, SecretHash, SessionId, TenantId, TokenFamily, TokenFamilyId, UserId,
+    AccessTokenRecord, AuthRequestId, AuthorizationCode, AuthorizationRequest, CodeHash,
+    ConsentGrant, NewAccessToken, NewAuthorizationCode, NewAuthorizationRequest, NewConsent,
+    NewRefreshToken, NewTokenFamily, RefreshToken, ReplayKind, RevokeReason, SecretHash, SessionId,
+    TenantId, TokenFamily, TokenFamilyId, UserId,
 };
 use anvil_core::ports::{ConsumeOutcome, GrantRepo, JtiOutcome, RotateOutcome, StorageError};
 use sqlx::PgPool;
@@ -500,5 +501,75 @@ impl GrantRepo for PgGrants {
         } else {
             JtiOutcome::Replayed
         })
+    }
+
+    // TRANSITIONAL(03-06): Phase 3 methods, implemented with the 0003 migration.
+    async fn create_family(
+        &self,
+        _tenant: TenantId,
+        _family: &NewTokenFamily,
+    ) -> Result<(), StorageError> {
+        crate::pending::unsupported("GrantRepo::create_family")
+    }
+
+    async fn create_access_token(
+        &self,
+        _tenant: TenantId,
+        _token: &NewAccessToken,
+    ) -> Result<(), StorageError> {
+        crate::pending::unsupported("GrantRepo::create_access_token")
+    }
+
+    async fn find_access_token(
+        &self,
+        _tenant: TenantId,
+        _token_hash: &SecretHash,
+    ) -> Result<Option<(AccessTokenRecord, Option<TokenFamily>)>, StorageError> {
+        crate::pending::unsupported("GrantRepo::find_access_token")
+    }
+
+    async fn revoke_access_token(
+        &self,
+        _tenant: TenantId,
+        _token_hash: &SecretHash,
+        _now: OffsetDateTime,
+    ) -> Result<bool, StorageError> {
+        crate::pending::unsupported("GrantRepo::revoke_access_token")
+    }
+
+    async fn consent(
+        &self,
+        _tenant: TenantId,
+        _user: UserId,
+        _client_id: &str,
+    ) -> Result<Option<ConsentGrant>, StorageError> {
+        crate::pending::unsupported("GrantRepo::consent")
+    }
+
+    async fn list_consents(
+        &self,
+        _tenant: TenantId,
+        _user: UserId,
+    ) -> Result<Vec<ConsentGrant>, StorageError> {
+        crate::pending::unsupported("GrantRepo::list_consents")
+    }
+
+    async fn upsert_consent(
+        &self,
+        _tenant: TenantId,
+        _consent: &NewConsent,
+        _now: OffsetDateTime,
+    ) -> Result<ConsentGrant, StorageError> {
+        crate::pending::unsupported("GrantRepo::upsert_consent")
+    }
+
+    async fn revoke_consent(
+        &self,
+        _tenant: TenantId,
+        _user: UserId,
+        _client_id: &str,
+        _now: OffsetDateTime,
+    ) -> Result<bool, StorageError> {
+        crate::pending::unsupported("GrantRepo::revoke_consent")
     }
 }
