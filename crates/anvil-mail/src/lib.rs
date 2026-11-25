@@ -4,15 +4,19 @@
 //!   operator theme directory that overrides individual files.
 //! - [`transport`]: the [`transport::MailTransport`] port and its production implementation,
 //!   [`transport::SmtpTransport`] (lettre over rustls with aws-lc-rs).
+//! - [`worker`]: the [`worker::OutboxWorker`] that drains the storage outbox with retries and
+//!   exponential backoff.
 //!
 //! Message bodies and links contain single-use tokens. Nothing in this crate logs them, and
 //! [`transport::OutgoingMail`]'s `Debug` output shows only the recipient and subject.
 
 pub mod render;
 pub mod transport;
+pub mod worker;
 
 pub use render::EmailRenderer;
 pub use transport::{MailTransport, OutgoingMail, SmtpTransport};
+pub use worker::{OutboxAccess, OutboxWorker, StorageOutbox};
 
 /// Errors of the mail subsystem. Messages never contain message bodies, links or SMTP
 /// credentials.
