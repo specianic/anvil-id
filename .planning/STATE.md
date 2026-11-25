@@ -6,14 +6,14 @@ current_phase: 2
 current_phase_name: Release 0.1 "First login" (M1)
 current_plan: 22
 status: verifying
-stopped_at: Completed 03-09-PLAN.md
-last_updated: "2026-11-25T06:19:23.564Z"
+stopped_at: Completed 03-05-PLAN.md
+last_updated: "2026-11-25T06:22:05.602Z"
 last_activity: 2026-11-25
 progress:
   total_phases: 7
   completed_phases: 1
   total_plans: 60
-  completed_plans: 36
+  completed_plans: 37
   percent: 51
 ---
 
@@ -94,6 +94,7 @@ Phase 2 plans 02-01 through 02-22 are all complete (22/22 summaries). Next: Phas
 | Phase 03 P02 | 110min | 3 tasks | 74 files |
 | Phase 03 P07 | 15min | 2 tasks | 7 files |
 | Phase 03 P09 | 15min | 2 tasks | 5 files |
+| Phase 03 P05 | 20min | 3 tasks | 18 files |
 
 ## Accumulated Context
 
@@ -190,6 +191,8 @@ Recent decisions affecting current work:
 - [Phase 03]: 03-07: one RateLimiter (anvil-cache) - governor GCRA per route class via CoreClock adapter over the core Clock; moka progressive backoff (6th failure 1 s, doubling, cap 15 min, forgotten after 2*cap); identifier-only tier never locks, escalates to CAPTCHA/delay at 50/h
 - [Phase 03]: 03-09: relying_party(tenant, issuer) returns Result (IP/non-http issuers cannot be WebAuthn RPs); finish_discoverable rejects a response whose credential id differs from the stored passkey
 - [Phase 03]: 03-09: webauthn.js contract: form[data-webauthn=register|authenticate], input[name=response], [data-webauthn-trigger] hidden until supported, [data-webauthn-status] aria-live, options via data-options-url (POST csrf_token) or application/json script
+- [Phase 03]: 03-05: SQLite 0004 rebuilds token_family as a sqlx -- no-transaction migration (foreign_keys OFF, BEGIN, copy, drop/rename, pragma_foreign_key_check count into CHECK(n=0) temp table, COMMIT, foreign_keys ON); last 0.1 migration version = 2; codes/refresh tokens preserved (unit test)
+- [Phase 03]: 03-05: SQLite credential rows have own ids (migrated passwords randomblob(16)); TOTP sealed seed as base64url in credential.secret; passkey counter and TOTP last step share credential.counter
 
 ### Pending Todos
 
@@ -202,6 +205,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-25T06:19:23.562Z
-Stopped at: Completed 03-09-PLAN.md
+Last session: 2026-11-25T06:22:05.601Z
+Stopped at: Completed 03-05-PLAN.md
 Resume file: None
