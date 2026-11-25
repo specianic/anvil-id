@@ -618,6 +618,17 @@ impl UserRepo for PgUsers {
     ) -> Result<u32, StorageError> {
         credentials::recovery_codes_remaining(&self.pool, tenant, user).await
     }
+
+    async fn complete_email_change(
+        &self,
+        _tenant: TenantId,
+        _token_hash: &SecretHash,
+        _now: OffsetDateTime,
+        _notice: Option<&RecoveryNotice>,
+    ) -> Result<Option<User>, StorageError> {
+        // TRANSITIONAL(04-05)
+        crate::pending::complete_email_change_unsupported()
+    }
 }
 
 /// Inserts or replaces the password of a user of `tenant`. `false` if the user does not exist

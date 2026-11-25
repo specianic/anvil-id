@@ -343,4 +343,17 @@ impl SessionRepo for SqliteSessions {
         tx.commit().await.map_err(map_err)?;
         Ok(revoked.len() as u64)
     }
+
+    async fn upgrade_auth(
+        &self,
+        _tenant: TenantId,
+        _id: SessionId,
+        _acr: &str,
+        _amr: &[String],
+        _auth_time: OffsetDateTime,
+        _now: OffsetDateTime,
+    ) -> Result<bool, StorageError> {
+        // TRANSITIONAL(04-04)
+        crate::pending::upgrade_auth_unsupported()
+    }
 }

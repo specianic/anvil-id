@@ -634,6 +634,17 @@ impl UserRepo for SqliteUsers {
     ) -> Result<u32, StorageError> {
         credentials::recovery_codes_remaining(&self.reader, tenant, user).await
     }
+
+    async fn complete_email_change(
+        &self,
+        _tenant: TenantId,
+        _token_hash: &SecretHash,
+        _now: OffsetDateTime,
+        _notice: Option<&RecoveryNotice>,
+    ) -> Result<Option<User>, StorageError> {
+        // TRANSITIONAL(04-04)
+        crate::pending::complete_email_change_unsupported()
+    }
 }
 
 /// Upserts the password credential of an existing user on `conn`. `false` if the user does not

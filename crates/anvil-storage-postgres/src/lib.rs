@@ -24,8 +24,9 @@ mod tenants;
 mod users;
 
 use anvil_core::ports::{
-    AuditRepo, ClientRepo, FlowRepo, GrantRepo, JobRepo, KeyRepo, MailSettingsRepo, OutboxRepo,
-    SessionRepo, SetupRepo, Storage, StorageError, TenantRepo, UserRepo,
+    AuditRepo, BrandingRepo, ClientRepo, ConnectionRepo, FlowRepo, GrantRepo, JobRepo, KeyRepo,
+    LogoutRepo, MailSettingsRepo, OutboxRepo, SessionRepo, SetupRepo, Storage, StorageError,
+    TenantRepo, UserRepo,
 };
 use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
@@ -134,6 +135,16 @@ impl Storage for PostgresStorage {
     }
     fn jobs(&self) -> &dyn JobRepo {
         &self.jobs
+    }
+    // TRANSITIONAL(04-05): the Phase 4 repositories are explicit `Unsupported` shims.
+    fn connections(&self) -> &dyn ConnectionRepo {
+        &crate::pending::PendingConnections
+    }
+    fn branding(&self) -> &dyn BrandingRepo {
+        &crate::pending::PendingBranding
+    }
+    fn logout(&self) -> &dyn LogoutRepo {
+        &crate::pending::PendingLogout
     }
 
     async fn purge_expired(&self, now: time::OffsetDateTime) -> Result<u64, StorageError> {

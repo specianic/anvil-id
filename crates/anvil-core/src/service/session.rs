@@ -583,8 +583,9 @@ mod service_tests {
     use super::*;
     use crate::model::{AuditEvent, AuditQuery, NewAuditEvent};
     use crate::ports::{
-        AuditRepo, ClientRepo, FlowRepo, GrantRepo, JobRepo, KeyRepo, MailSettingsRepo, OutboxRepo,
-        SessionRepo, SetupRepo, StorageError, TenantRepo, UserRepo,
+        AuditRepo, BrandingRepo, ClientRepo, ConnectionRepo, FlowRepo, GrantRepo, JobRepo, KeyRepo,
+        LogoutRepo, MailSettingsRepo, OutboxRepo, SessionRepo, SetupRepo, StorageError, TenantRepo,
+        UserRepo,
     };
 
     /// Runs a future whose fakes never wait (std mutexes only).
@@ -778,6 +779,17 @@ mod service_tests {
             }
             Ok(ids.len() as u64)
         }
+        async fn upgrade_auth(
+            &self,
+            _tenant: TenantId,
+            _id: SessionId,
+            _acr: &str,
+            _amr: &[String],
+            _auth_time: OffsetDateTime,
+            _now: OffsetDateTime,
+        ) -> Result<bool, StorageError> {
+            Err(StorageError::Unsupported("fake: upgrade_auth"))
+        }
     }
 
     #[async_trait::async_trait]
@@ -839,6 +851,15 @@ mod service_tests {
             unreachable!("session service tests use only sessions and audit")
         }
         fn jobs(&self) -> &dyn JobRepo {
+            unreachable!("session service tests use only sessions and audit")
+        }
+        fn connections(&self) -> &dyn ConnectionRepo {
+            unreachable!("session service tests use only sessions and audit")
+        }
+        fn branding(&self) -> &dyn BrandingRepo {
+            unreachable!("session service tests use only sessions and audit")
+        }
+        fn logout(&self) -> &dyn LogoutRepo {
             unreachable!("session service tests use only sessions and audit")
         }
         async fn purge_expired(&self, _now: OffsetDateTime) -> Result<u64, StorageError> {
