@@ -140,7 +140,9 @@ pub fn validate_new_slug(slug: &str) -> Result<(), CoreError> {
     Ok(())
 }
 
-fn validate_display_name(name: &str) -> Result<String, CoreError> {
+/// Display name rules shared by tenants and connections: trimmed, 1-200 characters, no control
+/// characters.
+pub(crate) fn validate_display_name(name: &str) -> Result<String, CoreError> {
     let name = name.trim();
     if name.is_empty() {
         return Err(validation("display_name", "is required"));
@@ -271,15 +273,73 @@ pub fn seal_captcha_secret(
     })
 }
 
+/// Longest accepted `default_locale`.
+pub const MAX_LOCALE_TAG_LEN: usize = 35;
+
+/// BCP 47 language tag syntax as accepted for `default_locale`: a 2-3 letter language subtag
+/// followed by `-`-separated subtags of 1-8 letters or digits (`en`, `de-DE`, `pt-BR`,
+/// `zh-Hant-TW`). Pages fall back to the tenant default when no requested language matches; a
+/// tag without a catalog falls back to English at render time.
+pub fn validate_locale_tag(tag: &str) -> Result<(), CoreError> {
+    let mut parts = tag.split('-');
+    let lang_ok = parts
+        .next()
+        .is_some_and(|l| (2..=3).contains(&l.len()) && l.bytes().all(|b| b.is_ascii_alphabetic()));
+    let rest_ok =
+        parts.all(|p| (1..=8).contains(&p.len()) && p.bytes().all(|b| b.is_ascii_alphanumeric()));
+    if tag.len() <= MAX_LOCALE_TAG_LEN && lang_ok && rest_ok {
+        Ok(())
+    } else {
+        Err(validation(
+            "default_locale",
+            "must be a language tag such as en, de or pt-BR",
+        ))
+    }
+}
+
+/// Checks the 0.3 settings of `new` against `current` (`None` for a new tenant): the default
+/// locale must be a language tag, and turning on `email_otp` or `magic_link` needs an SMTP
+/// transport (`smtp_available`: the tenant's own SMTP settings or the installation SMTP).
+/// Settings that are already on stay valid when SMTP goes away (sending then fails visibly in
+/// the outbox), so unrelated updates are not blocked.
+pub fn validate_phase4_settings(
+    current: Option<&TenantSettings>,
+    new: &TenantSettings,
+    smtp_available: bool,
+) -> Result<(), CoreError> {
+    validate_locale_tag(&new.default_locale)?;
+    let turned_on = |now: bool, before: Option<bool>| now && before != Some(true);
+    if !smtp_available {
+        if turned_on(new.email_otp, current.map(|c| c.email_otp)) {
+            return Err(validation(
+                "email_otp",
+                "sign-in codes by email need SMTP: configure the tenant SMTP settings or the \
+                 installation smtp_url first",
+            ));
+        }
+        if turned_on(new.magic_link, current.map(|c| c.magic_link)) {
+            return Err(validation(
+                "magic_link",
+                "magic links need SMTP: configure the tenant SMTP settings or the installation \
+                 smtp_url first",
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// The settings a tenant update stores: `requested` (if any) with normalised signing algorithms,
 /// the current CAPTCHA settings carried over, then `captcha` applied. A sealed CAPTCHA value in
 /// `requested` that differs from the current one is refused (secrets enter only as plaintext
 /// through [`CaptchaChange`]). Returns `None` when nothing in the settings changes.
+///
+/// The 0.3 settings are checked with [`validate_phase4_settings`].
 pub fn plan_settings(
     kek: &Kek,
     tenant: &Tenant,
     requested: Option<TenantSettings>,
     captcha: Option<&CaptchaChange>,
+    smtp_available: bool,
 ) -> Result<Option<TenantSettings>, CoreError> {
     if requested.is_none() && captcha.is_none() {
         return Ok(None);
@@ -293,6 +353,7 @@ pub fn plan_settings(
                 ));
             }
             s.signing_algs = normalize_signing_algs(&s.signing_algs)?;
+            validate_phase4_settings(Some(&tenant.settings), &s, smtp_available)?;
             s.captcha = tenant.settings.captcha.clone();
             s
         }
@@ -363,6 +424,9 @@ pub struct NewTenantInput {
     pub display_name: String,
     pub host: Option<String>,
     pub settings: TenantSettings,
+    /// Whether the installation SMTP (`smtp_url`) is configured; enabling `email_otp` or
+    /// `magic_link` needs it for a new tenant (which has no SMTP settings of its own yet).
+    pub installation_smtp: bool,
 }
 
 /// Partial tenant update. Slugs are immutable for every tenant (issuers derive from them), so
@@ -372,6 +436,9 @@ pub struct TenantPatch {
     pub display_name: Option<String>,
     pub host: Option<Option<String>>,
     pub settings: Option<TenantSettings>,
+    /// Whether the installation SMTP (`smtp_url`) is configured. Together with the tenant's own
+    /// SMTP settings it decides whether `email_otp` / `magic_link` may be turned on.
+    pub installation_smtp: bool,
 }
 
 /// Tenant management.
@@ -447,6 +514,7 @@ impl TenantService {
             ));
         }
         settings.signing_algs = normalize_signing_algs(&settings.signing_algs)?;
+        validate_phase4_settings(None, &settings, input.installation_smtp)?;
         let now = self.clock.now();
         let new = NewTenant {
             id: TenantId::new_v7(),
@@ -533,7 +601,21 @@ impl TenantService {
             Some(None) => Some(None),
             Some(Some(h)) => Some(Some(validate_host(&h)?)),
         };
-        let settings = plan_settings(&self.kek, &tenant, patch.settings, captcha.as_ref())?;
+        let smtp_available = patch.installation_smtp
+            || (patch.settings.is_some()
+                && self
+                    .storage
+                    .mail_settings()
+                    .smtp(tenant.id)
+                    .await?
+                    .is_some());
+        let settings = plan_settings(
+            &self.kek,
+            &tenant,
+            patch.settings,
+            captcha.as_ref(),
+            smtp_available,
+        )?;
         if let Some(new) = &settings {
             self.refuse_disabling_used_algs(&tenant, new).await?;
         }
@@ -840,11 +922,13 @@ mod tests {
     fn plan_settings_set_clear_and_carry_over() {
         let kek = Kek::generate();
         let t = tenant_with(TenantSettings::default());
-        assert_eq!(plan_settings(&kek, &t, None, None).unwrap(), None);
+        assert_eq!(plan_settings(&kek, &t, None, None, false).unwrap(), None);
 
         // Set: sealed, other settings untouched.
         let set = CaptchaChange::Set(captcha_input("0x-secret"));
-        let s = plan_settings(&kek, &t, None, Some(&set)).unwrap().unwrap();
+        let s = plan_settings(&kek, &t, None, Some(&set), false)
+            .unwrap()
+            .unwrap();
         let captcha = s.captcha.clone().expect("captcha set");
         assert_eq!(s.signing_algs, t.settings.signing_algs);
 
@@ -854,16 +938,22 @@ mod tests {
             signing_algs: strings(&["ES256"]),
             ..TenantSettings::default()
         };
-        let s2 = plan_settings(&kek, &with_captcha, Some(requested), None)
+        let s2 = plan_settings(&kek, &with_captcha, Some(requested), None, false)
             .unwrap()
             .unwrap();
         assert_eq!(s2.captcha.as_ref(), Some(&captcha));
         assert_eq!(s2.signing_algs, strings(&["RS256", "ES256"]));
 
         // Clear.
-        let s3 = plan_settings(&kek, &with_captcha, None, Some(&CaptchaChange::Clear))
-            .unwrap()
-            .unwrap();
+        let s3 = plan_settings(
+            &kek,
+            &with_captcha,
+            None,
+            Some(&CaptchaChange::Clear),
+            false,
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(s3.captcha, None);
 
         // An injected sealed value is refused; unknown algorithms too.
@@ -875,7 +965,7 @@ mod tests {
             ..TenantSettings::default()
         };
         assert!(matches!(
-            plan_settings(&kek, &with_captcha, Some(forged), None),
+            plan_settings(&kek, &with_captcha, Some(forged), None, false),
             Err(CoreError::Validation {
                 field: "captcha",
                 ..
@@ -886,7 +976,7 @@ mod tests {
             ..TenantSettings::default()
         };
         assert!(matches!(
-            plan_settings(&kek, &t, Some(hs), None),
+            plan_settings(&kek, &t, Some(hs), None, false),
             Err(CoreError::Validation {
                 field: "signing_algs",
                 ..
@@ -900,5 +990,82 @@ mod tests {
         assert_eq!(p(0), 50);
         assert_eq!(p(1), 1);
         assert_eq!(p(500), 200);
+    }
+
+    #[test]
+    fn default_locale_must_be_a_language_tag() {
+        for ok in ["en", "de", "de-DE", "pt-BR", "zh-Hant-TW", "fil"] {
+            assert!(validate_locale_tag(ok).is_ok(), "{ok}");
+        }
+        for bad in [
+            "x y", "", "e", "english", "de_DE", "de-", "-de", "de--DE", "12", "de-DE\n",
+        ] {
+            assert!(
+                matches!(
+                    validate_locale_tag(bad),
+                    Err(CoreError::Validation {
+                        field: "default_locale",
+                        ..
+                    })
+                ),
+                "{bad:?}"
+            );
+        }
+        let kek = Kek::generate();
+        let t = tenant_with(TenantSettings::default());
+        let bad = TenantSettings {
+            default_locale: "x y".into(),
+            ..TenantSettings::default()
+        };
+        assert!(plan_settings(&kek, &t, Some(bad), None, true).is_err());
+        let ok = TenantSettings {
+            default_locale: "de-DE".into(),
+            ..TenantSettings::default()
+        };
+        let s = plan_settings(&kek, &t, Some(ok), None, false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(s.default_locale, "de-DE");
+    }
+
+    #[test]
+    fn email_sign_in_needs_smtp_only_when_turned_on() {
+        let kek = Kek::generate();
+        let t = tenant_with(TenantSettings::default());
+        for (otp, link, field) in [(true, false, "email_otp"), (false, true, "magic_link")] {
+            let s = TenantSettings {
+                email_otp: otp,
+                magic_link: link,
+                ..TenantSettings::default()
+            };
+            match plan_settings(&kek, &t, Some(s.clone()), None, false) {
+                Err(CoreError::Validation { field: f, .. }) => assert_eq!(f, field),
+                other => panic!("expected a validation error, got {other:?}"),
+            }
+            assert!(plan_settings(&kek, &t, Some(s.clone()), None, true).is_ok());
+            // New tenants follow the same rule.
+            assert!(validate_phase4_settings(None, &s, false).is_err());
+            assert!(validate_phase4_settings(None, &s, true).is_ok());
+            // Already on: an unrelated change without SMTP is not blocked.
+            let on = tenant_with(s.clone());
+            let other = TenantSettings {
+                require_verified_email: true,
+                ..s
+            };
+            assert!(plan_settings(&kek, &on, Some(other), None, false).is_ok());
+        }
+        // The other 0.3 settings round-trip through a plan.
+        let s = TenantSettings {
+            mfa_policy: crate::model::MfaPolicy::Required,
+            auto_link: false,
+            upstream_registration: Some(false),
+            ..TenantSettings::default()
+        };
+        let planned = plan_settings(&kek, &t, Some(s), None, false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(planned.mfa_policy, crate::model::MfaPolicy::Required);
+        assert!(!planned.auto_link);
+        assert_eq!(planned.upstream_registration, Some(false));
     }
 }

@@ -466,6 +466,7 @@ impl From<CreateTenant> for NewTenantInput {
             display_name: c.display_name,
             host: c.host,
             settings: c.settings.into(),
+            installation_smtp: false,
         }
     }
 }
@@ -496,6 +497,7 @@ impl UpdateTenant {
                 display_name: self.display_name,
                 host: self.host,
                 settings,
+                installation_smtp: false,
             },
             captcha,
         )
@@ -660,6 +662,7 @@ impl CreateClient {
                 .clone()
                 .or(defaults.id_token_signed_response_alg),
             can_introspect: self.can_introspect.unwrap_or(defaults.can_introspect),
+            ..ClientOptions::default()
         };
         (self.into(), options)
     }
@@ -724,6 +727,7 @@ impl UpdateClient {
             consent_mode: self.consent_mode.map(Into::into),
             id_token_signed_response_alg: self.id_token_signed_response_alg,
             can_introspect: self.can_introspect,
+            ..ClientOptionsPatch::default()
         };
         let patch = ClientPatch {
             name: self.name,

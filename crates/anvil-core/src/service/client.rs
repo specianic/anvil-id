@@ -4,7 +4,11 @@
 //! [`RedirectValidator`]), the PKCE rule (only confidential clients may opt out), auth-method and
 //! grant consistency, and the inline-JWKS rules for `private_key_jwt`.
 //! [`validate_client_options`] checks the 0.2 client options (token format, consent mode, ID-token
-//! signing algorithm, tenant-wide introspection) against the client and its tenant.
+//! signing algorithm, tenant-wide introspection) against the client and its tenant, and
+//! [`validate_client_phase4`] the 0.3 options: post-logout redirect URIs (the redirect URI rules),
+//! the back-channel logout URI (absolute, no fragment, https or loopback http), allowed
+//! resource indicators (RFC 8707 rules of `oauth::resource::parse_resources`) and the client
+//! MFA policy.
 //!
 //! Every mutating [`ClientService`] method takes the acting administrator and the request context
 //! and records exactly one audit event after the change commits (`client_created`,
@@ -21,9 +25,10 @@ use crate::clock::Clock;
 use crate::error::CoreError;
 use crate::model::{
     ApplicationType, AuditAction, AuditActor, AuditDetails, AuditOutcome, Client, ClientAuthMethod,
-    ClientId, ClientType, ClientUpdate, ConsentMode, GrantType, NewClient, Page, PageRequest,
-    RequestContext, Scope, SecretHash, Tenant, TenantId, TenantSettings, TokenFormat,
+    ClientId, ClientType, ClientUpdate, ConsentMode, GrantType, MfaPolicy, NewClient, Page,
+    PageRequest, RequestContext, Scope, SecretHash, Tenant, TenantId, TenantSettings, TokenFormat,
 };
+use crate::oauth::resource::parse_resources;
 use crate::ports::{Storage, StorageError};
 use crate::service::audit::AuditService;
 use crate::service::tenant::{MAX_DISPLAY_NAME_LEN, admin_page};
@@ -79,6 +84,16 @@ pub struct ClientOptions {
     pub id_token_signed_response_alg: Option<String>,
     /// May introspect any token of the tenant. Confidential clients only.
     pub can_introspect: bool,
+    /// Where RP-initiated logout may redirect (OIDC RP-Initiated Logout); redirect URI rules.
+    pub post_logout_redirect_uris: Vec<String>,
+    /// OIDC Back-Channel Logout endpoint of the client.
+    pub backchannel_logout_uri: Option<String>,
+    /// The logout token must carry `sid`.
+    pub backchannel_logout_session_required: bool,
+    /// Resource indicators (RFC 8707) the client may request; empty = none.
+    pub allowed_resources: Vec<String>,
+    /// Client MFA policy; `None` = the tenant's. The strictest of tenant and client wins.
+    pub mfa_policy: Option<MfaPolicy>,
 }
 
 /// Partial update of [`ClientOptions`]. `id_token_signed_response_alg: Some(None)` resets the
@@ -89,6 +104,13 @@ pub struct ClientOptionsPatch {
     pub consent_mode: Option<ConsentMode>,
     pub id_token_signed_response_alg: Option<Option<String>>,
     pub can_introspect: Option<bool>,
+    pub post_logout_redirect_uris: Option<Vec<String>>,
+    /// `Some(None)` removes the back-channel logout URI.
+    pub backchannel_logout_uri: Option<Option<String>>,
+    pub backchannel_logout_session_required: Option<bool>,
+    pub allowed_resources: Option<Vec<String>>,
+    /// `Some(None)` falls back to the tenant policy.
+    pub mfa_policy: Option<Option<MfaPolicy>>,
 }
 
 /// A created client. `client_secret` is the plaintext secret, returned exactly once and only for
@@ -265,12 +287,64 @@ pub fn validate_client_options(
     Ok(())
 }
 
+/// Maximum number of allowed resource indicators per client.
+pub const MAX_ALLOWED_RESOURCES: usize = 50;
+
+/// Checks the 0.3 client options: post-logout redirect URIs follow the redirect URI rules of the
+/// client's application type; the back-channel logout URI is absolute without fragment (https,
+/// or http to a loopback host, i.e. the web redirect URI rules); allowed resources follow RFC 8707
+/// (absolute, no fragment, no query). Errors are `Validation` on the offending field.
+pub fn validate_client_phase4(
+    input: &ClientInput,
+    options: &ClientOptions,
+    redirect_validator: RedirectValidator,
+) -> Result<(), CoreError> {
+    let message_of = |e: CoreError| match e {
+        CoreError::Validation { message, .. } => message,
+        other => other.to_string(),
+    };
+    if options.post_logout_redirect_uris.len() > MAX_REDIRECT_URIS {
+        return Err(invalid(
+            "post_logout_redirect_uris",
+            "too many post-logout redirect URIs",
+        ));
+    }
+    for uri in &options.post_logout_redirect_uris {
+        redirect_validator(uri, input.application_type)
+            .map_err(|e| invalid("post_logout_redirect_uris", message_of(e)))?;
+    }
+    if let Some(uri) = &options.backchannel_logout_uri {
+        redirect_validator(uri, ApplicationType::Web).map_err(|e| {
+            invalid(
+                "backchannel_logout_uri",
+                message_of(e).replace("redirect URI", "back-channel logout URI"),
+            )
+        })?;
+    }
+    if options.allowed_resources.len() > MAX_ALLOWED_RESOURCES {
+        return Err(invalid("allowed_resources", "too many resource indicators"));
+    }
+    parse_resources(&options.allowed_resources).map_err(|e| {
+        let message = match e {
+            CoreError::InvalidTarget(m) => m,
+            other => other.to_string(),
+        };
+        invalid("allowed_resources", message)
+    })?;
+    Ok(())
+}
+
 fn options_of(client: &Client) -> ClientOptions {
     ClientOptions {
         token_format: client.token_format,
         consent_mode: client.consent_mode,
         id_token_signed_response_alg: client.id_token_signed_response_alg.clone(),
         can_introspect: client.can_introspect,
+        post_logout_redirect_uris: client.post_logout_redirect_uris.clone(),
+        backchannel_logout_uri: client.backchannel_logout_uri.clone(),
+        backchannel_logout_session_required: client.backchannel_logout_session_required,
+        allowed_resources: client.allowed_resources.clone(),
+        mfa_policy: client.mfa_policy,
     }
 }
 
@@ -295,6 +369,20 @@ fn changed_fields(patch: &ClientPatch, options: &ClientOptionsPatch) -> Vec<&'st
         "id_token_signed_response_alg",
     );
     push(options.can_introspect.is_some(), "can_introspect");
+    push(
+        options.post_logout_redirect_uris.is_some(),
+        "post_logout_redirect_uris",
+    );
+    push(
+        options.backchannel_logout_uri.is_some(),
+        "backchannel_logout_uri",
+    );
+    push(
+        options.backchannel_logout_session_required.is_some(),
+        "backchannel_logout_session_required",
+    );
+    push(options.allowed_resources.is_some(), "allowed_resources");
+    push(options.mfa_policy.is_some(), "mfa_policy");
     f
 }
 
@@ -369,6 +457,8 @@ impl ClientService {
     ) -> Result<CreatedClient, CoreError> {
         validate_client(&input, self.redirect_validator)?;
         validate_client_options(&input, &options, &tenant.settings)?;
+        validate_client_phase4(&input, &options, self.redirect_validator)?;
+        let allowed_resources = parse_resources(&options.allowed_resources)?;
         let (secret, hash) = if uses_secret(input.auth_method) {
             let (s, h) = new_client_secret();
             (Some(s), Some(h))
@@ -394,11 +484,11 @@ impl ClientService {
             consent_mode: options.consent_mode,
             id_token_signed_response_alg: options.id_token_signed_response_alg,
             can_introspect: options.can_introspect,
-            post_logout_redirect_uris: vec![],
-            backchannel_logout_uri: None,
-            backchannel_logout_session_required: false,
-            allowed_resources: vec![],
-            mfa_policy: None,
+            post_logout_redirect_uris: normalized_list(&options.post_logout_redirect_uris),
+            backchannel_logout_uri: options.backchannel_logout_uri,
+            backchannel_logout_session_required: options.backchannel_logout_session_required,
+            allowed_resources,
+            mfa_policy: options.mfa_policy,
         };
         // A client_id collision is astronomically unlikely; retry once with a fresh id.
         let client = match self.storage.clients().create(tenant.id, &new).await {
@@ -504,7 +594,23 @@ impl ClientService {
         if let Some(i) = options.can_introspect {
             merged_options.can_introspect = i;
         }
+        if let Some(u) = &options.post_logout_redirect_uris {
+            merged_options.post_logout_redirect_uris = u.clone();
+        }
+        if let Some(u) = &options.backchannel_logout_uri {
+            merged_options.backchannel_logout_uri = u.clone();
+        }
+        if let Some(r) = options.backchannel_logout_session_required {
+            merged_options.backchannel_logout_session_required = r;
+        }
+        if let Some(r) = &options.allowed_resources {
+            merged_options.allowed_resources = r.clone();
+        }
+        if let Some(m) = options.mfa_policy {
+            merged_options.mfa_policy = m;
+        }
         validate_client_options(&merged, &merged_options, &tenant.settings)?;
+        validate_client_phase4(&merged, &merged_options, self.redirect_validator)?;
         let fields = changed_fields(&patch, &options);
         let update = ClientUpdate {
             name: patch.name.map(|n| n.trim().to_owned()),
@@ -517,11 +623,18 @@ impl ClientService {
             consent_mode: options.consent_mode,
             id_token_signed_response_alg: options.id_token_signed_response_alg.clone(),
             can_introspect: options.can_introspect,
-            post_logout_redirect_uris: None,
-            backchannel_logout_uri: None,
-            backchannel_logout_session_required: None,
-            allowed_resources: None,
-            mfa_policy: None,
+            post_logout_redirect_uris: options
+                .post_logout_redirect_uris
+                .as_deref()
+                .map(normalized_list),
+            backchannel_logout_uri: options.backchannel_logout_uri.clone(),
+            backchannel_logout_session_required: options.backchannel_logout_session_required,
+            allowed_resources: options
+                .allowed_resources
+                .as_deref()
+                .map(parse_resources)
+                .transpose()?,
+            mfa_policy: options.mfa_policy,
         };
         let client = self
             .storage
@@ -992,5 +1105,115 @@ mod tests {
             normalized_list(&["b".into(), "a".into(), "b".into()]),
             vec!["b".to_owned(), "a".to_owned()]
         );
+    }
+
+    fn phase4(o: ClientOptions) -> Result<(), CoreError> {
+        validate_client_phase4(
+            &confidential(),
+            &o,
+            crate::oauth::redirect::validate_redirect_uri,
+        )
+    }
+
+    #[test]
+    fn backchannel_logout_uri_must_be_absolute_without_fragment() {
+        let with = |uri: &str| ClientOptions {
+            backchannel_logout_uri: Some(uri.into()),
+            ..ClientOptions::default()
+        };
+        for bad in [
+            "https://rp.example/bcl#frag",
+            "/logout",
+            "rp.example/logout",
+            "http://rp.example/logout",
+            "javascript:alert(1)",
+            "",
+        ] {
+            assert_eq!(
+                field_of(phase4(with(bad))),
+                "backchannel_logout_uri",
+                "{bad:?}"
+            );
+        }
+        for ok in [
+            "https://rp.example/bcl",
+            "https://rp.example/bcl?tenant=a",
+            "http://127.0.0.1:8080/bcl",
+        ] {
+            assert!(phase4(with(ok)).is_ok(), "{ok}");
+        }
+    }
+
+    #[test]
+    fn post_logout_redirect_uris_follow_redirect_rules() {
+        let with = |uri: &str| ClientOptions {
+            post_logout_redirect_uris: vec![uri.into()],
+            ..ClientOptions::default()
+        };
+        for bad in [
+            "https://rp.example/out#x",
+            "https://*.rp.example/out",
+            "relative",
+            "http://rp.example/out",
+        ] {
+            assert_eq!(
+                field_of(phase4(with(bad))),
+                "post_logout_redirect_uris",
+                "{bad:?}"
+            );
+        }
+        assert!(phase4(with("https://rp.example/out")).is_ok());
+        let many = ClientOptions {
+            post_logout_redirect_uris: (0..=MAX_REDIRECT_URIS)
+                .map(|i| format!("https://rp.example/{i}"))
+                .collect(),
+            ..ClientOptions::default()
+        };
+        assert_eq!(field_of(phase4(many)), "post_logout_redirect_uris");
+    }
+
+    #[test]
+    fn allowed_resources_follow_rfc8707() {
+        let with = |r: &str| ClientOptions {
+            allowed_resources: vec![r.into()],
+            ..ClientOptions::default()
+        };
+        for bad in [
+            "https://api.example/#frag",
+            "https://api.example/?q=1",
+            "api.example",
+            "",
+            "https://api .example",
+        ] {
+            assert_eq!(field_of(phase4(with(bad))), "allowed_resources", "{bad:?}");
+        }
+        assert!(phase4(with("https://api.example/v1")).is_ok());
+        assert!(phase4(with("urn:example:api")).is_ok());
+    }
+
+    #[test]
+    fn phase4_changed_fields() {
+        let opts = ClientOptionsPatch {
+            post_logout_redirect_uris: Some(vec![]),
+            backchannel_logout_uri: Some(None),
+            backchannel_logout_session_required: Some(true),
+            allowed_resources: Some(vec![]),
+            mfa_policy: Some(Some(MfaPolicy::Required)),
+            ..ClientOptionsPatch::default()
+        };
+        assert_eq!(
+            changed_fields(&ClientPatch::default(), &opts),
+            vec![
+                "post_logout_redirect_uris",
+                "backchannel_logout_uri",
+                "backchannel_logout_session_required",
+                "allowed_resources",
+                "mfa_policy"
+            ]
+        );
+        let d = ClientOptions::default();
+        assert!(d.post_logout_redirect_uris.is_empty() && d.allowed_resources.is_empty());
+        assert_eq!(d.backchannel_logout_uri, None);
+        assert_eq!(d.mfa_policy, None);
     }
 }
