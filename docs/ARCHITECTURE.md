@@ -307,6 +307,13 @@ replay guards).
   because jsonwebtoken cannot express the fully-specified `Ed25519` algorithm name (RFC 9864). It
   uses jsonwebtoken / aws-lc-rs only for the signature operations. Whether to also accept or emit the
   legacy `EdDSA` name for interoperability with older relying parties is decided in Phase 3.
+- How 0.1 uses jsonwebtoken: only `jsonwebtoken::crypto::{sign, verify}` (aws-lc-rs backend,
+  `use_pem`). `anvil-jose` serialises the header and claims, splits and base64url-decodes compact
+  JWS itself, and checks `alg` against a per-call allow-list before any key is used (`none` and
+  HMAC algorithms are never accepted). aws-lc-rs exports RSA private keys only as PKCS#8, so the key
+  is wrapped once at load time in a `PRIVATE KEY` PEM for jsonwebtoken. JWKs and RFC 7638 thumbprints
+  are computed in-crate. In 0.1 ID tokens and access tokens are signed with RS256 only (advertised in
+  discovery); `private_key_jwt` client assertions may use RS256, PS256 or ES256.
 - Lifecycle: `next` (published in JWKS, not yet signing) → `active` (signing) → `retired` (published
   until every token signed with it has expired) → deleted. Rotation runs as a scheduled job (default
   every 90 days) and on demand (`anvilid keys rotate`). The `next` key is published at least one
@@ -357,9 +364,10 @@ Paths below are relative to the tenant base (§12).
 
 | Path | Purpose | PRD |
 |---|---|---|
-| `GET /.well-known/openid-configuration`, `/.well-known/oauth-authorization-server` | Discovery / RFC 8414 metadata | OIDC-8 |
+| `GET /.well-known/openid-configuration`, `/.well-known/oauth-authorization-server` | Discovery / RFC 8414 metadata (see path forms below) | OIDC-8 |
 | `GET /jwks` | JSON Web Key Set | OIDC-8 |
 | `GET, POST /authorize` | Authorization endpoint | OIDC-1,2,14,16,24 |
+| `GET /authorize/continue?request={id}` | Resumes a stored authorization request after login (the UI redirects here with 303) | OIDC-1 |
 | `POST /par` | Pushed authorization requests | OIDC-18 |
 | `POST /token` | Token endpoint (all grants) | OIDC-3..6 |
 | `GET, POST /userinfo` | UserInfo | OIDC-9 |
@@ -367,11 +375,31 @@ Paths below are relative to the tenant base (§12).
 | `GET, POST /logout` | RP-initiated logout | OIDC-12 |
 | `POST /register` | Dynamic client registration (policy-controlled) | OIDC-17 |
 
+**Discovery path forms.** OpenID Connect Discovery appends the well-known suffix to the issuer
+(`{issuer}/.well-known/openid-configuration`, e.g. `/t/acme/.well-known/openid-configuration`).
+RFC 8414 §3.1 inserts it between host and path (`/.well-known/oauth-authorization-server/t/acme`).
+Both forms are served, with the same document; the tenant layer resolves the inserted form before
+`/t/{slug}` prefix matching. The issuer-relative `{issuer}/.well-known/oauth-authorization-server`
+also works.
+
+**Built in 0.1:** discovery (both forms), `/jwks`, `/authorize` (GET and POST),
+`/authorize/continue`, `/token` (`authorization_code`, `refresh_token`, `client_credentials`) and
+`/userinfo` (GET and POST; bearer in the header or the form body, never in the query). Discovery
+advertises only what is built: `response_types_supported: ["code"]`, `response_modes_supported:
+["query"]`, `prompt_values_supported: ["none", "login"]`, `code_challenge_methods_supported:
+["S256"]`, `authorization_response_iss_parameter_supported: true` and `scopes_supported: ["openid",
+"profile", "email", "address", "phone"]`. A refresh token is issued when the client is registered for
+the `refresh_token` grant. The other rows arrive with their milestones.
+
 ### 10.2 Built-in UI and flows
 
 `/ui/login`, `/ui/registration`, `/ui/recovery`, `/ui/verification`, `/ui/consent`, `/ui/account/*`,
 plus `/ui/assets/*` (hashed, immutable static files). The headless API mirrors these under
 `/api/flows/*` (1.0).
+
+0.1 ships `/ui/login`, `/ui/registration`, `/ui/recovery` and `/ui/verification`, the installation
+setup page `/setup?token=…` (installation-level, see §13) and hashed assets under `/assets/*`. Every UI
+POST carries `?flow={id}` and the flow's `csrf_token`; a successful credential POST answers 303.
 
 ### 10.3 Management API
 
@@ -380,6 +408,14 @@ plus `/ui/assets/*` (hashed, immutable static files). The headless API mirrors t
 - Authentication: OAuth access tokens issued by AnvilID itself, through client credentials (for
   automation) or the admin console's authorization code flow. Scopes: `admin:read`, `admin:write`,
   and per-resource scopes (`admin:users:write`, …).
+- As built in 0.1: the API is installation-level, mounted only at `/api/admin/v1` (not under a
+  tenant base), and accepts only access tokens of the `system` tenant (obtained at
+  `/t/system/token`). Resources: tenants, clients, users. Scopes: `admin:read` (read everything),
+  `admin:write` (read and write everything), and `admin:{tenants|clients|users}:{read|write}`
+  confined to one resource. Writing a client of the `system` tenant requires `admin:write`, so a
+  `admin:clients:write` token cannot mint itself more privileges. Tokens of deleted clients stop
+  working immediately. Errors are RFC 9457 problem JSON. The OpenAPI document is committed as
+  `docs/openapi/admin-v1.json` and drift-checked in CI (`just openapi-update` regenerates it).
 - Installation-level administration (managing tenants) lives in a dedicated `system` tenant, so admin
   authentication uses the same machinery as everything else.
 - The admin console SPA (`/console/`) is a public OAuth client of the `system` tenant and only calls
@@ -414,7 +450,7 @@ listener).
 | Redirect URI validation | Exact string match against registered URIs. The only exception is loopback redirects for native apps (any port, per RFC 8252). Validation happens **before** any redirect is issued. Invalid redirect → an error page, never a redirect |
 | PKCE | Required by default for every client (`client.require_pkce = true`); only `S256` is accepted, `plain` is rejected. Only confidential clients may set `require_pkce = false` (public clients always need PKCE); such clients may omit `nonce` as OIDC Core allows for the code flow, and the code stays bound to the client's authentication at the token endpoint. If a client sends `code_challenge` at authorization, `code_verifier` is mandatory at the token endpoint (downgrade defense) |
 | Client authentication | One `ClientAuthenticator`. Constant-time comparison (`subtle`) of hashed secrets. `private_key_jwt`: `aud` must equal the issuer, `exp` ≤ 5 min, `jti` recorded in `replay_guard` |
-| CSRF | Synchronizer token per flow plus `Sec-Fetch-Site`/`Origin` checks on every state-changing browser request |
+| CSRF | Synchronizer token per flow plus `Sec-Fetch-Site`/`Origin` checks on every state-changing browser request. Fetch-Metadata rules for unsafe methods: (1) if `Sec-Fetch-Site` is present, only `same-origin` or `none` pass; (2) otherwise, if `Origin` is present, it must equal the public origin or the tenant's host origin; (3) if neither header is present the request passes this layer (non-browser clients, older browsers) and the synchronizer token alone decides. The layer fails closed if the allowed origins are unknown. Exempt: `/token` and `/api/admin/*` (client-authenticated, no cookies) and `POST /authorize` (cross-site by design) |
 | Cookies | `__Host-` prefix, `Secure`, `HttpOnly`, `SameSite=Lax` (session) or `Strict` (flow). Dev mode on `http://localhost` drops the `__Host-`/`Secure` requirements with a warning |
 | Rate limiting | One keyed limiter (`anvil-cache`) with route classes: `auth` (per IP + per account identifier), `token` (per client + per IP), `admin`, `default`. Account lockout uses progressive delays, not permanent locks (prevents trivial denial of service) |
 | Brute-force on secrets | Argon2 verification runs on a bounded pool; login attempts against unknown users perform a dummy hash (constant-time behavior) |
@@ -439,20 +475,42 @@ listener).
 ## 13. Configuration and bootstrap
 
 - **Zero-config start:** `anvilid serve` with no configuration:
-  - Uses `./anvilid-data/` for the SQLite database, KEK and generated keys.
+  - Uses `./anvilid-data/` (mode 0700) for the SQLite database (`anvilid.db`) and the KEK file
+    (`kek`, mode 0600). Signing keys are generated into the database, sealed with the KEK.
   - Listens on `127.0.0.1:8080`, `public_url` = `http://localhost:8080` (dev mode, with a warning
-    banner in logs and UI).
+    banner in logs and UI). The container image sets `ANVILID_LISTEN=0.0.0.0:8080`.
   - On an empty database, creates the `system` and `default` tenants and prints a one-time setup
-    URL (`/setup?token=…`, valid 1 h) to create the first admin. There are **no default credentials**.
+    URL (`{public_url}/setup?token=…`, valid 1 h) to create the first admin and a management API
+    client. There are **no default credentials**. Logs go to stderr; with `log_format = json` the
+    plain `Setup URL:` line is also printed on stdout for scripts.
 - **Production minimum:** `ANVILID_PUBLIC_URL=https://id.example.com` and, for Postgres,
   `ANVILID_DATABASE_URL=postgres://…`. Everything else has a default.
-- **Precedence:** CLI flags > environment (`ANVILID_*`) > config file (`anvilid.toml`) > defaults.
-  `anvilid config show` prints the effective configuration with the source of each value (secrets
-  redacted).
+- **Precedence:** CLI flags > environment (`ANVILID_*`) > config file (`anvilid.toml`, or
+  `--config` / `ANVILID_CONFIG`) > defaults. `anvilid config show` prints the effective configuration
+  with the source of each value (secrets redacted).
+- **Keys in 0.1** (flag `--key-name`, env `ANVILID_KEY_NAME`, file `key_name`): `public_url`,
+  `listen`, `data_dir`, `database_url` (default `sqlite://{data_dir}/anvilid.db`), `kek_file`
+  (default `{data_dir}/kek`), `smtp_from`, `theme_dir`, `tls_cert` + `tls_key` (built-in TLS
+  listener), `breach_check` (`hibp` | `off`), `breach_check_url`, `no_migrate`, `insecure_http`,
+  `log_format` (`json` | `pretty`; pretty in dev mode, json otherwise). The secrets `kek` (base64,
+  32 bytes) and `smtp_url` are accepted only from the environment or the config file, never as
+  flags; `config show` redacts them and any password in `database_url`.
+- **Plain HTTP:** a `public_url` with `http://` is accepted only for a loopback host (dev mode). Any
+  other host needs `--insecure-http` (development and test setups only), which also selects dev-mode
+  cookies.
+- **KEK policy:** a configured `kek` wins; otherwise the KEK file is read if it exists. A new KEK is
+  generated only for SQLite on first start. For Postgres AnvilID never generates a KEK and never
+  creates a data directory, because every node sharing the database must use the same KEK: set
+  `ANVILID_KEK` (or provide the file) or startup fails. `anvilid admin setup-url` never generates a
+  KEK either.
+- **Single writer per data directory:** `serve` takes an exclusive lock on `{data_dir}/serve.lock`
+  (before any KEK is generated), so a second `serve` on the same directory fails with a clear error.
 - **Trusted proxies:** `ANVILID_TRUSTED_PROXIES` (CIDRs) controls whether `X-Forwarded-*`/`Forwarded`
   headers are honored. Default: none (headers ignored), except loopback in dev mode.
 - **CLI commands:** `serve`, `migrate`, `config show|validate`, `admin setup-url` (new bootstrap URL
   for recovery), `keys rotate`, `backup create|restore` (SQLite), `export`/`import` (tenant YAML).
+  0.1 ships `serve`, `migrate`, `config show|validate` and `admin setup-url`; the others arrive with
+  their milestones.
 
 ## 14. Background jobs
 
@@ -493,6 +551,13 @@ job at a time on Postgres:
 | Upgrade | Migrate N-1 → N with fixtures, then run the contract suite | CI |
 | Fuzzing | JWT/JWS parsing, authorization request parsing; later SAML and SCIM | `fuzz/`, nightly CI |
 | Performance | Token endpoint and login benchmarks against the targets in PRD §6.3 | nightly CI |
+
+**Backend matrix.** The storage contract suite always runs on SQLite (memory and file) and Postgres
+(testcontainers). The HTTP integration, security and binary tests (`anvil-web/tests`,
+`anvilid/tests`) select their backend with `ANVILID_TEST_DB=sqlite|postgres` (default `sqlite`);
+`just test` runs them on SQLite and `just test-pg` reruns them on Postgres, so QUAL-02 holds for the
+whole suite. `scripts/check-security-tests.sh` (in `just ci`) maps every §11 control to a named,
+registered test and fails if one disappears.
 
 **Definition of done for any feature:** implemented end to end, negative tests for its security
 properties, documented (user docs + OpenAPI where relevant), conformance suite still green.

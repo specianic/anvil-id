@@ -78,6 +78,9 @@ jobs:
       # the storage contract on both backends); `just test-pg` reruns web + binary tests on Postgres.
       - if: matrix.db == 'sqlite'
         run: just test
+      # QUAL-01 control -> test map (reuses the test build above), then its negative self-test.
+      - if: matrix.db == 'sqlite'
+        run: just security-tests security-tests-selftest
       - if: matrix.db == 'postgres'
         run: just test-pg
 

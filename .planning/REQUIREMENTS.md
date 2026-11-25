@@ -187,7 +187,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | OIDC-11 | Phase 3 | Pending |
 | OIDC-12 | Phase 4 | Pending |
 | OIDC-13 | Phase 3 | Pending |
-| OIDC-14 | Phase 4 | Pending |
+| OIDC-14 | Phase 4 (subset in Phase 2, see note) | Pending |
 | OIDC-15 | Phase 3 | Pending |
 | OIDC-16 | Phase 4 | Pending |
 | OIDC-17 | Phase 5 | Pending |
@@ -253,6 +253,15 @@ Which phases cover which requirements. Updated during roadmap creation.
 | QUAL-03 | Phase 7 | Pending |
 | QUAL-04 | Phase 2 | Pending |
 | QUAL-05 | Phase 5 | Pending |
+
+**Partial pull-ins:**
+- OIDC-14: per research conflict C2 (user decision), release 0.1 (Phase 2) already ships the subset the
+  OpenID Basic OP conformance plan needs: `prompt=none`, `prompt=login`, `max_age`, `id_token_hint`
+  (with `prompt=none`) and SSO session reuse; `display`, `ui_locales`, `claims_locales`, `login_hint`
+  and `acr_values` are accepted and ignored. `prompt=consent|select_account|create`, `login_hint`
+  prefill and real `acr_values` handling stay in Phase 4, which still owns OIDC-14 as a whole.
+- OIDC-01 wording was amended in Phase 2 (C1): PKCE is required by default; only confidential
+  clients may opt out, and such clients may omit `nonce`.
 
 **Coverage:**
 - v1 requirements: 84 total

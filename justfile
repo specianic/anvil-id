@@ -8,7 +8,7 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 default: ci
 
 # The single command contributors run (needs Docker for the Postgres tests).
-ci: fmt-check lint deny deps test
+ci: fmt-check lint deny deps test test-pg release-graph security-tests
 
 # Check formatting.
 fmt-check:
@@ -66,7 +66,8 @@ measure bin target:
 conformance:
     tests/conformance/run.sh
 
-# --- Phase 2 gates (release 0.1). Not part of `ci` until plan 02-21 wires them in. ---
+# --- Phase 2 gates (release 0.1). test-pg, release-graph and security-tests run in `ci`; the rest
+# need Docker images, Node or nightly and run in their own CI workflows. ---
 
 # Web and binary tests against Postgres (needs Docker).
 test-pg:
@@ -99,6 +100,10 @@ release-graph:
 # Every security control has a negative test (plan 02-21).
 security-tests:
     scripts/check-security-tests.sh
+
+# Prove the security-test map detects a missing test.
+security-tests-selftest:
+    scripts/check-security-tests.sh --self-test
 
 # Regenerate the committed OpenAPI document (plan 02-16).
 openapi-update:
