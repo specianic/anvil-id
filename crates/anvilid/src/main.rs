@@ -12,6 +12,7 @@ mod server;
 mod startup;
 mod storage;
 mod telemetry;
+mod tenant_config;
 
 use std::sync::Arc;
 
@@ -66,9 +67,25 @@ enum Command {
         #[command(subcommand)]
         cmd: BackupCommand,
     },
+    /// Declarative tenant configuration as YAML: export, plan and apply (secret references
+    /// `{env: NAME}` / `{file: path}` are resolved locally). Applies are audited.
+    Tenant {
+        #[command(subcommand)]
+        cmd: TenantCommand,
+    },
     /// Probe the local server's readiness (exit 0 ready, 1 not ready, 2 usage error); loopback
     /// only, for container health checks.
     Healthcheck(healthcheck::HealthcheckArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum TenantCommand {
+    /// Write a tenant's configuration as a YAML document (secrets are never exported).
+    Export(tenant_config::ExportArgs),
+    /// Validate a YAML document and print the plan against the stored state (changes nothing).
+    Plan(tenant_config::PlanArgs),
+    /// Print the plan, then apply it (confirmation or --yes; deletions only with --prune).
+    Apply(tenant_config::ApplyArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -143,6 +160,15 @@ fn main() -> anyhow::Result<()> {
         Command::Admin {
             cmd: AdminCommand::Recover(args),
         } => admin_recover(&load(&args.config)?, &args),
+        Command::Tenant {
+            cmd: TenantCommand::Export(args),
+        } => tenant_export(&load(&args.config)?, &args),
+        Command::Tenant {
+            cmd: TenantCommand::Plan(args),
+        } => tenant_plan(&load(&args.config)?, &args),
+        Command::Tenant {
+            cmd: TenantCommand::Apply(args),
+        } => tenant_apply(&load(&args.config)?, &args),
         Command::Healthcheck(args) => {
             let target = match &args.url {
                 Some(url) => healthcheck::target_from_url(url),
@@ -229,6 +255,24 @@ async fn keys_rotate(cfg: &Config, args: &keys::RotateArgs) -> anyhow::Result<()
 async fn admin_recover(cfg: &Config, args: &recover::RecoverArgs) -> anyhow::Result<()> {
     let _telemetry = telemetry::init_tracing(cfg.log_format, None)?;
     recover::recover(cfg, args).await
+}
+
+#[tokio::main(flavor = "multi_thread")]
+async fn tenant_export(cfg: &Config, args: &tenant_config::ExportArgs) -> anyhow::Result<()> {
+    let _telemetry = telemetry::init_tracing(cfg.log_format, None)?;
+    tenant_config::export(cfg, args).await
+}
+
+#[tokio::main(flavor = "multi_thread")]
+async fn tenant_plan(cfg: &Config, args: &tenant_config::PlanArgs) -> anyhow::Result<()> {
+    let _telemetry = telemetry::init_tracing(cfg.log_format, None)?;
+    tenant_config::plan(cfg, args).await
+}
+
+#[tokio::main(flavor = "multi_thread")]
+async fn tenant_apply(cfg: &Config, args: &tenant_config::ApplyArgs) -> anyhow::Result<()> {
+    let _telemetry = telemetry::init_tracing(cfg.log_format, None)?;
+    tenant_config::apply(cfg, args).await
 }
 
 #[tokio::main(flavor = "multi_thread")]

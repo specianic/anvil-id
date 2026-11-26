@@ -1,0 +1,412 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://anvilid.dev/schemas/tenant-config-v1.json",
+  "title": "AnvilID TenantConfig document, version 1",
+  "description": "Declarative configuration of one AnvilID tenant (docs/CONFIG-YAML.md). Objects are keyed by natural keys, never database ids. Exports carry secrets only as {configured: bool}. The CLI additionally accepts {env: NAME} and {file: path} secret references, which it resolves before the document reaches the server; the admin API accepts {configured} and {value} only. Server-side validation (redirect URI rules, schemas of attributes, template compilation, ...) goes beyond this schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "kind", "tenant"],
+  "properties": {
+    "version": { "const": 1 },
+    "kind": { "const": "TenantConfig" },
+    "tenant": { "$ref": "#/$defs/tenant" },
+    "clients": {
+      "description": "Static clients, keyed by client_id. Dynamic (RFC 7591) and Client ID Metadata Document clients are runtime state and never listed.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/client" }
+    },
+    "connections": {
+      "description": "Upstream identity providers, keyed by slug.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/connection" }
+    },
+    "branding": {
+      "description": "Tenant-wide branding (no client_id) and per-client overrides. Logos are not part of version 1.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/branding" }
+    },
+    "roles": {
+      "description": "Roles, keyed by name. Role assignments are never part of the document.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/role" }
+    },
+    "attributes": {
+      "description": "Custom user attribute definitions, keyed by name.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/attribute" }
+    },
+    "email_templates": {
+      "description": "Customized email templates, keyed by kind.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/email_template" }
+    },
+    "smtp": {
+      "description": "Tenant SMTP settings; absent or null = the installation SMTP.",
+      "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/smtp" }]
+    },
+    "webhooks": {
+      "description": "Webhook endpoints, keyed by name.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/webhook" }
+    }
+  },
+  "$defs": {
+    "secret": {
+      "description": "A secret field. {configured: true} keeps the stored value (false clears it where allowed), {value: ...} sets it. CLI only: {env: NAME} or {file: path}.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["configured"],
+          "properties": { "configured": { "type": "boolean" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["value"],
+          "properties": { "value": { "type": "string", "minLength": 1 } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["env"],
+          "properties": { "env": { "type": "string", "minLength": 1 } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["file"],
+          "properties": { "file": { "type": "string", "minLength": 1 } }
+        }
+      ]
+    },
+    "optional_secret": {
+      "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/secret" }]
+    },
+    "optional_string": { "type": ["string", "null"] },
+    "string_list": { "type": "array", "items": { "type": "string" } },
+    "mfa_policy": { "enum": ["off", "optional", "required"] },
+    "token_target": { "enum": ["access_token", "id_token", "userinfo"] },
+    "claim_rule": {
+      "type": "object",
+      "required": ["claim", "tokens"],
+      "properties": {
+        "claim": { "type": "string" },
+        "tokens": { "type": "array", "items": { "$ref": "#/$defs/token_target" } },
+        "scope": { "$ref": "#/$defs/optional_string" }
+      }
+    },
+    "optional_claim_rule": {
+      "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/claim_rule" }]
+    },
+    "tenant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["slug", "display_name"],
+      "properties": {
+        "slug": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}$" },
+        "display_name": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "host": { "$ref": "#/$defs/optional_string" },
+        "settings": { "$ref": "#/$defs/settings" }
+      }
+    },
+    "settings": {
+      "description": "Tenant settings; every field has a default. CAPTCHA is configured through the admin API and must not appear (captcha: null or absent).",
+      "type": "object",
+      "properties": {
+        "registration": { "enum": ["open", "invite_only", "disabled"] },
+        "require_verified_email": { "type": "boolean" },
+        "signing_algs": {
+          "type": "array",
+          "items": { "enum": ["RS256", "ES256", "Ed25519"] }
+        },
+        "captcha": { "type": "null" },
+        "mfa_policy": { "$ref": "#/$defs/mfa_policy" },
+        "email_otp": { "type": "boolean" },
+        "magic_link": { "type": "boolean" },
+        "auto_link": { "type": "boolean" },
+        "upstream_registration": { "type": ["boolean", "null"] },
+        "default_locale": { "type": "string" },
+        "dcr": {
+          "description": "Dynamic client registration policy; must be disabled for the system tenant.",
+          "type": "object",
+          "properties": {
+            "policy": { "enum": ["disabled", "allow_listed", "open"] },
+            "allowed_redirect_hosts": { "$ref": "#/$defs/string_list" },
+            "allowed_scopes": { "$ref": "#/$defs/string_list" },
+            "allowed_resources": { "$ref": "#/$defs/string_list" },
+            "allow_client_credentials": { "type": "boolean" },
+            "max_clients": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "cimd": {
+          "description": "Client ID Metadata Document policy; must be disabled for the system tenant.",
+          "type": "object",
+          "properties": {
+            "policy": { "enum": ["disabled", "allow_listed", "open"] },
+            "allowed_hosts": { "$ref": "#/$defs/string_list" },
+            "min_cache_secs": { "type": "integer", "minimum": 0 },
+            "max_cache_secs": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "claims": {
+          "type": "object",
+          "properties": {
+            "roles": { "$ref": "#/$defs/optional_claim_rule" },
+            "permissions": { "$ref": "#/$defs/optional_claim_rule" }
+          }
+        }
+      }
+    },
+    "client": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["client_id", "name", "client_type", "application_type", "auth_method"],
+      "properties": {
+        "client_id": { "type": "string", "pattern": "^[A-Za-z0-9._~-]{1,128}$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "client_type": { "enum": ["confidential", "public"] },
+        "application_type": { "enum": ["web", "native"] },
+        "auth_method": {
+          "enum": ["client_secret_basic", "client_secret_post", "private_key_jwt", "none"]
+        },
+        "secret": { "$ref": "#/$defs/optional_secret" },
+        "jwks": { "$ref": "#/$defs/optional_string" },
+        "redirect_uris": { "$ref": "#/$defs/string_list" },
+        "grant_types": {
+          "type": "array",
+          "items": { "enum": ["authorization_code", "refresh_token", "client_credentials"] }
+        },
+        "scopes": { "$ref": "#/$defs/string_list" },
+        "require_pkce": { "type": "boolean" },
+        "token_format": { "enum": ["jwt", "opaque"] },
+        "consent_mode": { "enum": ["required", "skip_first_party"] },
+        "id_token_signed_response_alg": { "$ref": "#/$defs/optional_string" },
+        "can_introspect": { "type": "boolean" },
+        "post_logout_redirect_uris": { "$ref": "#/$defs/string_list" },
+        "backchannel_logout_uri": { "$ref": "#/$defs/optional_string" },
+        "backchannel_logout_session_required": { "type": "boolean" },
+        "allowed_resources": { "$ref": "#/$defs/string_list" },
+        "mfa_policy": {
+          "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/mfa_policy" }]
+        }
+      }
+    },
+    "connection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["slug", "display_name", "config"],
+      "properties": {
+        "slug": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,62}$" },
+        "display_name": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "enabled": { "type": "boolean" },
+        "config": { "$ref": "#/$defs/connection_config" },
+        "secret": { "$ref": "#/$defs/optional_secret" },
+        "trust_email_verified": { "type": "boolean" }
+      }
+    },
+    "connection_config": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "provider", "client_id"],
+          "properties": {
+            "type": { "const": "social" },
+            "provider": { "enum": ["google", "apple", "microsoft", "github"] },
+            "client_id": { "type": "string" },
+            "scopes": { "$ref": "#/$defs/string_list" },
+            "endpoints": {
+              "type": "object",
+              "properties": {
+                "issuer": { "$ref": "#/$defs/optional_string" },
+                "authorization_endpoint": { "$ref": "#/$defs/optional_string" },
+                "token_endpoint": { "$ref": "#/$defs/optional_string" },
+                "userinfo_endpoint": { "$ref": "#/$defs/optional_string" },
+                "jwks_uri": { "$ref": "#/$defs/optional_string" },
+                "api_base_url": { "$ref": "#/$defs/optional_string" }
+              }
+            },
+            "microsoft_tenant": { "$ref": "#/$defs/optional_string" },
+            "allowed_tenants": { "$ref": "#/$defs/string_list" },
+            "hosted_domains": { "$ref": "#/$defs/string_list" },
+            "apple": {
+              "oneOf": [
+                { "type": "null" },
+                {
+                  "type": "object",
+                  "required": ["team_id", "key_id"],
+                  "properties": {
+                    "team_id": { "type": "string" },
+                    "key_id": { "type": "string" }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["type", "issuer", "client_id"],
+          "properties": {
+            "type": { "const": "oidc" },
+            "issuer": { "type": "string" },
+            "client_id": { "type": "string" },
+            "scopes": { "$ref": "#/$defs/string_list" },
+            "use_pkce": { "type": "boolean" },
+            "fetch_userinfo": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "authorization_endpoint",
+            "token_endpoint",
+            "userinfo_endpoint",
+            "client_id",
+            "mapping"
+          ],
+          "properties": {
+            "type": { "const": "oauth2" },
+            "authorization_endpoint": { "type": "string" },
+            "token_endpoint": { "type": "string" },
+            "userinfo_endpoint": { "type": "string" },
+            "client_id": { "type": "string" },
+            "scopes": { "$ref": "#/$defs/string_list" },
+            "use_pkce": { "type": "boolean" },
+            "mapping": {
+              "type": "object",
+              "required": ["subject"],
+              "properties": {
+                "subject": { "type": "string" },
+                "email": { "$ref": "#/$defs/optional_string" },
+                "email_verified": { "$ref": "#/$defs/optional_string" },
+                "name": { "$ref": "#/$defs/optional_string" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "theme_colors": {
+      "type": "object",
+      "properties": {
+        "primary": { "$ref": "#/$defs/optional_string" },
+        "primary_text": { "$ref": "#/$defs/optional_string" },
+        "bg": { "$ref": "#/$defs/optional_string" },
+        "surface": { "$ref": "#/$defs/optional_string" },
+        "text": { "$ref": "#/$defs/optional_string" },
+        "muted": { "$ref": "#/$defs/optional_string" },
+        "border": { "$ref": "#/$defs/optional_string" },
+        "focus": { "$ref": "#/$defs/optional_string" },
+        "danger": { "$ref": "#/$defs/optional_string" }
+      }
+    },
+    "branding": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "client_id": { "$ref": "#/$defs/optional_string" },
+        "tokens": {
+          "type": "object",
+          "properties": {
+            "colors": { "$ref": "#/$defs/theme_colors" },
+            "colors_dark": {
+              "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/theme_colors" }]
+            },
+            "font_family": { "$ref": "#/$defs/optional_string" },
+            "radius_px": { "type": ["integer", "null"], "minimum": 0, "maximum": 255 }
+          }
+        },
+        "custom_css": { "$ref": "#/$defs/optional_string" }
+      }
+    },
+    "role": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$" },
+        "description": { "type": "string", "maxLength": 500 },
+        "permissions": { "$ref": "#/$defs/string_list" }
+      }
+    },
+    "attribute": {
+      "type": "object",
+      "required": ["name", "schema"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$" },
+        "schema": {
+          "description": "JSON Schema (draft 2020-12, offline, at most 16 KiB) of the attribute's value.",
+          "type": "object"
+        },
+        "required": { "type": "boolean" },
+        "user_editable": { "type": "boolean" },
+        "claim": { "$ref": "#/$defs/optional_claim_rule" },
+        "position": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "email_template": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "subject", "body_html", "body_text"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "verification",
+            "recovery",
+            "invitation",
+            "password_changed",
+            "recovery_code_used",
+            "login_code",
+            "email_change",
+            "email_changed"
+          ]
+        },
+        "subject": { "type": "string" },
+        "body_html": { "type": "string" },
+        "body_text": { "type": "string" }
+      }
+    },
+    "smtp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["host", "port", "from", "tls"],
+      "properties": {
+        "host": { "type": "string", "minLength": 1 },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "username": { "$ref": "#/$defs/optional_string" },
+        "password": { "$ref": "#/$defs/optional_secret" },
+        "from": { "type": "string" },
+        "tls": { "enum": ["starttls", "implicit", "none"] }
+      }
+    },
+    "webhook": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "url"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$" },
+        "url": { "type": "string" },
+        "events": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "user.created",
+              "user.updated",
+              "user.deleted",
+              "user.email_verified",
+              "user.email_changed",
+              "user.password_changed",
+              "session.created",
+              "session.revoked",
+              "session.logged_out"
+            ]
+          }
+        },
+        "enabled": { "type": "boolean" },
+        "secret": { "$ref": "#/$defs/optional_secret" }
+      }
+    }
+  }
+}

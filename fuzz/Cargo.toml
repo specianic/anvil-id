@@ -67,3 +67,10 @@ path = "fuzz_targets/cimd_parse.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "tenant_config_parse"
+path = "fuzz_targets/tenant_config_parse.rs"
+test = false
+doc = false
+bench = false

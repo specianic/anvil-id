@@ -508,3 +508,112 @@ async fn a_document_creates_a_missing_tenant() {
     let body = assert_problem(&resp, 422);
     assert_eq!(body["errors"][0]["field"], "tenant.slug");
 }
+
+/// The published JSON Schema of the document.
+fn published_schema() -> Value {
+    serde_json::from_str(include_str!("../../../docs/schemas/tenant-config-v1.json"))
+        .expect("schema is JSON")
+}
+
+fn schema_validator() -> jsonschema::Validator {
+    let schema = published_schema();
+    jsonschema::draft202012::meta::validate(&schema).expect("schema is valid draft 2020-12");
+    jsonschema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .build(&schema)
+        .expect("schema compiles")
+}
+
+fn errors(v: &jsonschema::Validator, doc: &Value) -> Vec<String> {
+    v.iter_errors(doc)
+        .map(|e| format!("{}: {e}", e.instance_path()))
+        .collect()
+}
+
+#[tokio::test]
+async fn json_schema_matches_the_document_types() {
+    let app = TestApp::new().await;
+    let token = admin_token(&app, "admin:write").await;
+    let mut doc = configured_doc(&app, &token).await;
+    doc["connections"] = json!([
+        {
+            "slug": "google",
+            "display_name": "Google",
+            "config": {"type": "social", "provider": "google", "client_id": "abc.apps.example.test"},
+            "secret": {"value": "google-secret"},
+        },
+        {
+            "slug": "corp",
+            "display_name": "Corp IdP",
+            "config": {"type": "oidc", "issuer": "https://idp.example.test", "client_id": "anvil"},
+            "secret": {"value": "corp-secret"},
+            "trust_email_verified": true,
+        },
+    ]);
+    doc["branding"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"tokens": {"colors": {"primary": "#0b5fff"}}, "custom_css": ".anvil-card { border-radius: 2px; }"}));
+    let v = schema_validator();
+    // The input document (inline secrets) and the export both validate.
+    assert_eq!(errors(&v, &doc), Vec::<String>::new());
+    apply(&app, &token, "default", &doc, false).await;
+    let exported = export(&app, &token, "default").await;
+    assert_eq!(errors(&v, &exported), Vec::<String>::new());
+    let system = export(&app, &token, "system").await;
+    assert_eq!(errors(&v, &system), Vec::<String>::new());
+
+    // Every settings field the server writes is described (settings ignore unknown keys, so
+    // the schema lists them explicitly).
+    let schema = published_schema();
+    let described = &schema["$defs"]["settings"]["properties"];
+    for (key, value) in exported["tenant"]["settings"].as_object().unwrap() {
+        assert!(
+            described.get(key).is_some(),
+            "settings.{key} missing in the schema"
+        );
+        if let (Some(inner), Some(props)) = (value.as_object(), described[key].get("properties")) {
+            for k in inner.keys() {
+                assert!(
+                    props.get(k).is_some(),
+                    "settings.{key}.{k} missing in the schema"
+                );
+            }
+        }
+    }
+
+    // CLI references validate; unknown keys, other versions and malformed secrets do not.
+    let mut with_ref = exported.clone();
+    with_ref["smtp"]["password"] = json!({"env": "SMTP_PASSWORD"});
+    assert_eq!(errors(&v, &with_ref), Vec::<String>::new());
+    for (pointer, bad) in [
+        ("/bogus", json!(true)),
+        ("/version", json!(2)),
+        ("/kind", json!("Other")),
+        ("/smtp/password", json!({"configured": true, "value": "x"})),
+        ("/clients/0/extra", json!(1)),
+        ("/webhooks/0/events", json!(["test"])),
+    ] {
+        let mut d = exported.clone();
+        let (parent, key) = pointer.rsplit_once('/').unwrap();
+        let target = if parent.is_empty() {
+            &mut d
+        } else {
+            d.pointer_mut(parent).unwrap()
+        };
+        target[key] = bad;
+        assert!(!v.is_valid(&d), "{pointer} accepted");
+        // The server refuses the same documents.
+        if pointer != "/smtp/password" {
+            let resp = call(
+                &app,
+                Method::POST,
+                &format!("{API}/tenants/default/config/plan"),
+                Some(&token),
+                Some(d),
+            )
+            .await;
+            assert_problem(&resp, 422);
+        }
+    }
+}
