@@ -224,6 +224,12 @@ plans against the new state and completes the remaining changes.
 
 ## Limits
 
-- The admin API takes request bodies up to 64 KiB. Larger documents (for example several long
-  email templates) are applied with the CLI, which does not go through HTTP.
-- DCR and CIMD settings other than the system-tenant rule are checked when they are used.
+- Plan and apply over HTTP (`POST /api/admin/v1/tenants/{slug}/config/plan` and `.../apply`)
+  accept documents up to 1 MiB and answer `413` above that; every other admin API route keeps the
+  64 KiB limit. The CLI reads the file directly and has no HTTP limit.
+- Plan and apply check the DCR and CIMD settings with the same rules as the tenant API: allow-list
+  hosts are host names or IP literals, at most 100 per list and no duplicates; at most 100 allowed
+  scopes and resources; no `admin` / `admin:*` scope; `dcr.max_clients` at most 1000000; CIMD
+  cache bounds between 60 and 604800 seconds with `min_cache_secs <= max_cache_secs`; CIMD
+  `allow_listed` needs a host. The published schema encodes the per-field bounds.
+- Clients outside the `system` tenant cannot list `admin` or `admin:*` scopes.

@@ -5,10 +5,11 @@
 //! all answer exactly 413 in both cases: the form and admin JSON extractor rejections go through
 //! one shared check (`ui::login::rejection_is_too_large`). Only the two branding logo
 //! upload routes (tenant and client) accept more, up to [`LOGO_BODY_LIMIT`] (400 KiB): one byte
-//! above it is 413 there too, and a 100 KiB logo goes through.
+//! above it is 413 there too, and a 100 KiB logo goes through. The two configuration document
+//! routes (`POST …/config/plan` and `…/config/apply`) accept up to [`CONFIG_BODY_LIMIT`] (1 MiB).
 //!
-//! The route match itself (`admin::branding::is_logo_upload`) is crate-private; this test pins
-//! its effect from outside.
+//! The route matches themselves (`admin::branding::is_logo_upload`, `is_config_document`) are
+//! crate-private; this test pins their effect from outside.
 
 mod admin_support;
 mod support;
@@ -25,6 +26,9 @@ use ui_helpers::open_form;
 
 /// The logo upload limit (`admin::branding::LOGO_BODY_LIMIT`, crate-private).
 const LOGO_BODY_LIMIT: usize = 400 * 1024;
+
+/// The configuration document limit (`admin::branding::CONFIG_BODY_LIMIT`, crate-private).
+const CONFIG_BODY_LIMIT: usize = 1024 * 1024;
 
 /// The 8-byte PNG signature (the logo check sniffs it).
 const PNG_SIGNATURE: &[u8] = &[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
@@ -158,6 +162,29 @@ async fn admin_json_routes_answer_413_above_64_kib() {
         &big,
     )
     .await;
+    // A path that merely mentions "config" is not a configuration document route.
+    assert_413(
+        &app,
+        Method::PATCH,
+        &format!("{API}/tenants/config-like-slug"),
+        Some(&t),
+        JSON,
+        &big,
+    )
+    .await;
+    // Only POST gets the config limit: another method on the same path is refused up front at
+    // 64 KiB (no handler reads a streamed body there, so only the announced size is checked).
+    let resp = send(
+        &app,
+        Method::PUT,
+        &format!("{API}/tenants/default/config/apply"),
+        Some(&t),
+        JSON,
+        big.clone(),
+        true,
+    )
+    .await;
+    assert_eq!(resp.status, 413, "{}", resp.text());
     // Branding settings are not the logo route: they keep the 64 KiB limit.
     let big = json_of_len("custom_css", BODY_LIMIT + 1);
     assert_413(
@@ -246,4 +273,56 @@ async fn logo_uploads_accept_up_to_400_kib_and_no_more() {
         assert_ne!(resp.status, 413, "{route}");
         assert_eq!(resp.status, 200, "{route}: {}", resp.text());
     }
+}
+
+#[tokio::test]
+async fn config_routes_accept_up_to_1_mib_and_no_more() {
+    let app = app().await;
+    let t = admin_token(&app, "admin:read admin:write").await;
+    let routes = [
+        format!("{API}/tenants/default/config/plan"),
+        format!("{API}/tenants/default/config/apply"),
+        format!("{API}/tenants/default/config/apply?prune=true"),
+    ];
+    let at_limit = json_of_len("bogus", CONFIG_BODY_LIMIT);
+    let too_big = json_of_len("bogus", CONFIG_BODY_LIMIT + 1);
+    for route in &routes {
+        assert_413(&app, Method::POST, route, Some(&t), JSON, &too_big).await;
+        for announce in [true, false] {
+            // At the limit the body reaches the handler, which refuses the document by content.
+            let resp = send(
+                &app,
+                Method::POST,
+                route,
+                Some(&t),
+                JSON,
+                at_limit.clone(),
+                announce,
+            )
+            .await;
+            assert_ne!(resp.status, 413, "{route}: {}", resp.text());
+            assert_eq!(resp.status, 422, "{route}: {}", resp.text());
+        }
+    }
+
+    // A real document above the general limit passes the size check.
+    let resp = call(
+        &app,
+        Method::GET,
+        &format!("{API}/tenants/default/config"),
+        Some(&t),
+        None,
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let mut doc = body_json(&resp);
+    doc["roles"] = json!([{
+        "name": "editor",
+        "description": "x".repeat(65 * 1024),
+        "permissions": ["docs:write"],
+    }]);
+    let body = doc.to_string();
+    assert!(body.len() > BODY_LIMIT && body.len() < CONFIG_BODY_LIMIT);
+    let resp = send(&app, Method::POST, &routes[0], Some(&t), JSON, body, true).await;
+    assert_ne!(resp.status, 413, "{}", resp.text());
 }

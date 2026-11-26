@@ -256,6 +256,33 @@ async fn path_tenant_both_forms_are_identical() {
 }
 
 #[tokio::test]
+async fn oidc_path_insertion_serves_the_path_tenant() {
+    let app = TestApp::new().await;
+    create_acme(&app).await;
+    let a = app.get("/t/acme/.well-known/openid-configuration").await;
+    let b = app.get("/.well-known/openid-configuration/t/acme").await;
+    assert_eq!(a.status, 200);
+    assert_eq!(b.status, 200, "{}", b.text());
+    assert_eq!(json(&a), json(&b));
+    assert_eq!(json(&b)["issuer"], "https://op.test/t/acme");
+
+    // Unknown or invalid slugs are 404.
+    for path in [
+        "/.well-known/openid-configuration/t/nope",
+        "/.well-known/openid-configuration/t/",
+        "/.well-known/openid-configuration/t/acme/x",
+    ] {
+        assert_eq!(app.get(path).await.status, 404, "{path}");
+    }
+
+    // The root form still serves the default tenant.
+    let root = app.get("/.well-known/openid-configuration").await;
+    assert_eq!(root.status, 200);
+    assert_eq!(json(&root)["issuer"], app.issuer(None));
+    assert_ne!(json(&root)["issuer"], json(&b)["issuer"]);
+}
+
+#[tokio::test]
 async fn only_registered_metadata_is_published() {
     let app = TestApp::new().await;
     let doc = json(&app.get("/.well-known/openid-configuration").await);

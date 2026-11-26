@@ -1,8 +1,10 @@
 //! Tenant resolution. Runs **before** routing (it wraps the inner router as a service), so it can
 //! rewrite `/t/{slug}/…` to the tenant-relative path the routes are registered on.
 //!
-//! Order: a registered custom host → `/t/{slug}` (including the RFC 8414 inserted form
-//! `/.well-known/oauth-authorization-server/t/{slug}`) → the `default` tenant at the root.
+//! Order: a registered custom host → `/t/{slug}` (including the inserted well-known forms: RFC 8414
+//! `/.well-known/oauth-authorization-server/t/{slug}` and OIDC path insertion
+//! `/.well-known/openid-configuration/t/{slug}`, which MCP clients try) → the `default` tenant at
+//! the root.
 //! The issuer is computed once per request with [`anvil_core::model::issuer`].
 //!
 //! If the default tenant does not exist (not installed yet) root requests carry no
@@ -70,6 +72,11 @@ pub(crate) enum Target {
 }
 
 const RFC8414: &str = "/.well-known/oauth-authorization-server";
+const OIDC_DISCOVERY: &str = "/.well-known/openid-configuration";
+
+/// Well-known documents also served with the tenant path inserted after them
+/// (`{well-known}/t/{slug}`), rewritten to the tenant-relative well-known path.
+const INSERTED_WELL_KNOWN: [&str; 2] = [RFC8414, OIDC_DISCOVERY];
 
 fn valid_slug(s: &str) -> bool {
     !s.is_empty()
@@ -84,15 +91,17 @@ pub(crate) fn classify(path: &str, host_tenant: Option<&str>) -> (Target, String
     if let Some(host) = host_tenant {
         return (Target::Host(host.to_owned()), path.to_owned());
     }
-    if let Some(rest) = path
-        .strip_prefix(RFC8414)
-        .and_then(|r| r.strip_prefix("/t/"))
-    {
-        return if valid_slug(rest) {
-            (Target::Path(rest.to_owned()), RFC8414.to_owned())
-        } else {
-            (Target::Invalid, path.to_owned())
-        };
+    for well_known in INSERTED_WELL_KNOWN {
+        if let Some(rest) = path
+            .strip_prefix(well_known)
+            .and_then(|r| r.strip_prefix("/t/"))
+        {
+            return if valid_slug(rest) {
+                (Target::Path(rest.to_owned()), well_known.to_owned())
+            } else {
+                (Target::Invalid, path.to_owned())
+            };
+        }
     }
     if path == "/t" {
         return (Target::Invalid, path.to_owned());
@@ -294,6 +303,25 @@ mod tests {
             classify("/.well-known/oauth-authorization-server/t/a/b", None).0,
             Target::Invalid
         );
+    }
+
+    #[test]
+    fn oidc_inserted_path() {
+        assert_eq!(
+            classify("/.well-known/openid-configuration/t/acme", None),
+            (path("acme"), OIDC_DISCOVERY.into())
+        );
+        assert_eq!(
+            classify("/.well-known/openid-configuration", None),
+            (Target::Root, OIDC_DISCOVERY.into())
+        );
+        for bad in [
+            "/.well-known/openid-configuration/t/",
+            "/.well-known/openid-configuration/t/a/b",
+            "/.well-known/openid-configuration/t/a b",
+        ] {
+            assert_eq!(classify(bad, None).0, Target::Invalid, "{bad}");
+        }
     }
 
     #[test]

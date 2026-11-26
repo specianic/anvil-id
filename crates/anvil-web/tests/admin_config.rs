@@ -617,3 +617,68 @@ async fn json_schema_matches_the_document_types() {
         }
     }
 }
+
+#[tokio::test]
+async fn schema_encodes_registration_bounds() {
+    let app = TestApp::new().await;
+    let token = admin_token(&app, "admin:write").await;
+    let v = schema_validator();
+    let mut doc = configured_doc(&app, &token).await;
+    // A configured tenant with registration enabled still validates.
+    doc["tenant"]["settings"]["dcr"] = json!({
+        "policy": "allow_listed",
+        "allowed_redirect_hosts": ["app.example.test"],
+        "allowed_scopes": ["openid"],
+        "max_clients": 1_000_000,
+    });
+    doc["tenant"]["settings"]["cimd"] = json!({
+        "policy": "allow_listed",
+        "allowed_hosts": ["mcp.example.test"],
+        "min_cache_secs": 60,
+        "max_cache_secs": 604_800,
+    });
+    assert_eq!(errors(&v, &doc), Vec::<String>::new());
+    let resp = call(
+        &app,
+        Method::POST,
+        &format!("{API}/tenants/default/config/apply"),
+        Some(&token),
+        Some(doc.clone()),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let exported = export(&app, &token, "default").await;
+    assert_eq!(errors(&v, &exported), Vec::<String>::new());
+
+    let hosts: Vec<String> = (0..101).map(|i| format!("h{i}.example.test")).collect();
+    let cases: Vec<(&str, Value)> = vec![
+        ("/tenant/settings/dcr/allowed_redirect_hosts", json!(hosts)),
+        (
+            "/tenant/settings/dcr/allowed_redirect_hosts",
+            json!(["a.example.test", "a.example.test"]),
+        ),
+        ("/tenant/settings/cimd/allowed_hosts", json!(hosts)),
+        (
+            "/tenant/settings/cimd/allowed_hosts",
+            json!(["mcp.example.test", "mcp.example.test"]),
+        ),
+        ("/tenant/settings/dcr/max_clients", json!(1_000_001)),
+        ("/tenant/settings/cimd/min_cache_secs", json!(59)),
+        ("/tenant/settings/cimd/max_cache_secs", json!(604_801)),
+    ];
+    for (pointer, value) in cases {
+        let mut d = doc.clone();
+        *d.pointer_mut(pointer).expect(pointer) = value;
+        assert!(!v.is_valid(&d), "{pointer} accepted");
+        // The server refuses the same document.
+        let resp = call(
+            &app,
+            Method::POST,
+            &format!("{API}/tenants/default/config/plan"),
+            Some(&token),
+            Some(d),
+        )
+        .await;
+        assert_problem(&resp, 422);
+    }
+}

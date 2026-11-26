@@ -46,17 +46,43 @@ pub fn is_logo_upload(path: &str) -> bool {
     path.starts_with("/api/admin/v1/tenants/") && path.ends_with("/branding/logo")
 }
 
+/// Largest accepted request body of a tenant configuration document (plan and apply only): a
+/// document with several email templates does not fit [`crate::BODY_LIMIT`].
+pub const CONFIG_BODY_LIMIT: usize = 1024 * 1024;
+
+/// Whether a request (before tenant resolution) posts a configuration document to the admin API:
+/// `POST /api/admin/v1/tenants/{slug}/config/plan` or `.../config/apply`, one segment for the
+/// slug. The query string is not part of the path, so `apply?prune=true` matches too.
+pub fn is_config_document(method: &axum::http::Method, path: &str) -> bool {
+    if method != axum::http::Method::POST {
+        return false;
+    }
+    let Some(rest) = path.strip_prefix("/api/admin/v1/tenants/") else {
+        return false;
+    };
+    let mut parts = rest.split('/');
+    matches!(
+        (parts.next(), parts.next(), parts.next(), parts.next()),
+        (Some(slug), Some("config"), Some("plan" | "apply"), None) if !slug.is_empty()
+    )
+}
+
 /// Request body limit layer of the whole application: [`crate::BODY_LIMIT`] for every request,
-/// [`LOGO_BODY_LIMIT`] only for the logo upload. Both the stream limit (`RequestBodyLimit`, 413
-/// up front for a larger `Content-Length`) and the extractor limit (`DefaultBodyLimit`) are set
-/// per request, so no other route accepts more than before.
+/// [`LOGO_BODY_LIMIT`] only for the logo upload and [`CONFIG_BODY_LIMIT`] only for configuration
+/// plan/apply. Both the stream limit (`RequestBodyLimit`, 413 up front for a larger
+/// `Content-Length`) and the extractor limit (`DefaultBodyLimit`) are set per request, so no
+/// other route accepts more than before. The size check runs before admin authentication, as for
+/// every route.
 pub(crate) async fn body_limit(
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
     use tower::{ServiceBuilder, ServiceExt as _};
-    let limit = if is_logo_upload(req.uri().path()) {
+    let path = req.uri().path();
+    let limit = if is_logo_upload(path) {
         LOGO_BODY_LIMIT
+    } else if is_config_document(req.method(), path) {
+        CONFIG_BODY_LIMIT
     } else {
         crate::BODY_LIMIT
     };
@@ -889,4 +915,36 @@ pub(crate) async fn publish_client_branding(
         body,
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::Method;
+
+    #[test]
+    fn config_document_paths() {
+        for p in [
+            "/api/admin/v1/tenants/default/config/plan",
+            "/api/admin/v1/tenants/acme/config/apply",
+        ] {
+            assert!(is_config_document(&Method::POST, p), "{p}");
+            for m in [Method::GET, Method::PUT, Method::PATCH, Method::DELETE] {
+                assert!(!is_config_document(&m, p), "{m} {p}");
+            }
+        }
+        for p in [
+            "/api/admin/v1/tenants/default/config",
+            "/api/admin/v1/tenants/default/config/export",
+            "/api/admin/v1/tenants/default/config/plan/x",
+            "/api/admin/v1/tenants//config/plan",
+            "/api/admin/v1/tenants/a/b/config/plan",
+            "/api/admin/v1/tenants/config-like/clients",
+            "/api/admin/v1/tenants/config/plan",
+            "/api/admin/v2/tenants/default/config/plan",
+            "/t/default/api/admin/v1/tenants/default/config/plan",
+        ] {
+            assert!(!is_config_document(&Method::POST, p), "{p}");
+        }
+    }
 }

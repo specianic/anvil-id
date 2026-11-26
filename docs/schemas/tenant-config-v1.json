@@ -85,6 +85,18 @@
     },
     "optional_string": { "type": ["string", "null"] },
     "string_list": { "type": "array", "items": { "type": "string" } },
+    "host_list": {
+      "description": "Allow-listed host names or IP literals: at most 100, no duplicates (the server also compares case-insensitively and checks each entry's syntax).",
+      "type": "array",
+      "items": { "type": "string" },
+      "maxItems": 100,
+      "uniqueItems": true
+    },
+    "registration_list": {
+      "type": "array",
+      "items": { "type": "string" },
+      "maxItems": 100
+    },
     "mfa_policy": { "enum": ["off", "optional", "required"] },
     "token_target": { "enum": ["access_token", "id_token", "userinfo"] },
     "claim_rule": {
@@ -128,25 +140,25 @@
         "upstream_registration": { "type": ["boolean", "null"] },
         "default_locale": { "type": "string" },
         "dcr": {
-          "description": "Dynamic client registration policy; must be disabled for the system tenant.",
+          "description": "Dynamic client registration policy; must be disabled for the system tenant. Scope and resource syntax (no admin scopes, RFC 8707 resources) is checked by the server.",
           "type": "object",
           "properties": {
             "policy": { "enum": ["disabled", "allow_listed", "open"] },
-            "allowed_redirect_hosts": { "$ref": "#/$defs/string_list" },
-            "allowed_scopes": { "$ref": "#/$defs/string_list" },
-            "allowed_resources": { "$ref": "#/$defs/string_list" },
+            "allowed_redirect_hosts": { "$ref": "#/$defs/host_list" },
+            "allowed_scopes": { "$ref": "#/$defs/registration_list" },
+            "allowed_resources": { "$ref": "#/$defs/registration_list" },
             "allow_client_credentials": { "type": "boolean" },
-            "max_clients": { "type": "integer", "minimum": 0 }
+            "max_clients": { "type": "integer", "minimum": 0, "maximum": 1000000 }
           }
         },
         "cimd": {
-          "description": "Client ID Metadata Document policy; must be disabled for the system tenant.",
+          "description": "Client ID Metadata Document policy; must be disabled for the system tenant. Cross-field rules are checked by the server, not this schema: min_cache_secs <= max_cache_secs, and allow_listed needs at least one host.",
           "type": "object",
           "properties": {
             "policy": { "enum": ["disabled", "allow_listed", "open"] },
-            "allowed_hosts": { "$ref": "#/$defs/string_list" },
-            "min_cache_secs": { "type": "integer", "minimum": 0 },
-            "max_cache_secs": { "type": "integer", "minimum": 0 }
+            "allowed_hosts": { "$ref": "#/$defs/host_list" },
+            "min_cache_secs": { "type": "integer", "minimum": 60, "maximum": 604800 },
+            "max_cache_secs": { "type": "integer", "minimum": 60, "maximum": 604800 }
           }
         },
         "claims": {

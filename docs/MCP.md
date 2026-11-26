@@ -14,7 +14,7 @@ AnvilID 0.4 provides:
 
 | MCP needs | AnvilID 0.4 |
 |---|---|
-| Authorization server metadata (RFC 8414 or OpenID Connect Discovery) | Both, per tenant, including RFC 8414 path insertion for path tenants |
+| Authorization server metadata (RFC 8414 or OpenID Connect Discovery) | Both, per tenant, including RFC 8414 and OpenID Connect path insertion for path tenants |
 | PKCE with S256, advertised in `code_challenge_methods_supported` | S256 only, and PKCE is always required for metadata-document and dynamic clients |
 | Client ID Metadata Documents (`client_id_metadata_document_supported`) | draft-ietf-oauth-client-id-metadata-document-03, one tenant setting (off by default) |
 | Dynamic client registration (RFC 7591), optional in MCP | RFC 7591 and RFC 7592, one tenant setting (off by default) |
@@ -43,8 +43,7 @@ For an issuer with a path, MCP clients try three metadata URLs in this order:
 1. `https://id.example.com/.well-known/oauth-authorization-server/t/agents` (RFC 8414 path
    insertion). AnvilID serves this URL.
 2. `https://id.example.com/.well-known/openid-configuration/t/agents` (OpenID Connect path
-   insertion). AnvilID does **not** serve this URL. Clients that follow the MCP order never reach
-   it, because URL 1 answers first.
+   insertion). AnvilID serves this URL; it returns the same document as URL 3.
 3. `https://id.example.com/t/agents/.well-known/openid-configuration` (path appending). AnvilID
    serves this URL.
 
@@ -318,5 +317,3 @@ accepting the token, and the error page once the CIMD policy is disabled. See
 - Resource indicators match exactly, with no case folding or trailing-slash normalisation.
 - The CIMD fetch budget is per document host for the whole installation, not per tenant.
 - `dcr.max_clients` is a soft cap.
-- The OpenID Connect path-insertion URL (`/.well-known/openid-configuration/t/{slug}`) is not
-  served. The RFC 8414 and path-appended URLs are.
