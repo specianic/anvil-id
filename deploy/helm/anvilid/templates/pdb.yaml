@@ -1,0 +1,13 @@
+{{- if include "anvilid.multiNode" . }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "anvilid.fullname" . }}
+  labels:
+    {{- include "anvilid.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.pdb.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "anvilid.selectorLabels" . | nindent 6 }}
+{{- end }}

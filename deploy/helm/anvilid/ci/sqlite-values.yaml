@@ -1,0 +1,16 @@
+# chart-testing (ct install) values: SQLite, one pod, image built in CI and loaded into kind.
+# The workflow (.github/workflows/deploy.yml) creates the Secret anvilid-ci-sqlite with a random
+# KEK before `ct install`; nothing secret is stored here.
+image:
+  repository: anvilid
+  tag: ci
+  pullPolicy: Never
+database:
+  type: sqlite
+existingSecret:
+  name: anvilid-ci-sqlite
+persistence:
+  enabled: true
+  size: 256Mi
+shutdownDrainSeconds: 2
+terminationGracePeriodSeconds: 15

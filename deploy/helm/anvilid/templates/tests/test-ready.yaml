@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "anvilid.fullname" . }}-test-ready
+  labels:
+    {{- include "anvilid.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: ready
+      image: {{ .Values.test.image | quote }}
+      command: ["curl"]
+      args:
+        - --fail
+        - --silent
+        - --show-error
+        - --retry
+        - "10"
+        - --retry-all-errors
+        - --retry-delay
+        - "2"
+        - http://{{ include "anvilid.fullname" . }}:{{ .Values.service.port }}/health/ready
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop:
+            - ALL

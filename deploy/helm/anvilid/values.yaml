@@ -1,0 +1,166 @@
+# Default values for the AnvilID chart. Every key is described in values.schema.json and README.md.
+#
+# The defaults give a single-node SQLite install on a PersistentVolumeClaim. For several replicas,
+# set database.type=postgres, an existingSecret with the KEK and the database URL, and redis.url
+# (shared rate limiter).
+
+image:
+  repository: ghcr.io/specianic/anvil-id
+  # Defaults to the chart appVersion.
+  tag: ""
+  # sha256:... ; when set it pins the image and takes precedence over the tag.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Number of pods. More than 1 requires database.type=postgres and a shared rate limiter
+# (redis.url), or redis.acknowledgePerNodeLimits=true.
+replicaCount: 1
+
+# Public base URL (ANVILID_PUBLIC_URL). Every issuer and endpoint URL derives from it. Plain http is
+# only accepted on a loopback host unless insecureHttp is true.
+publicUrl: http://localhost:8080
+# Allow a plain-http public URL on a non-loopback host (development and tests only; cookies are
+# not Secure).
+insecureHttp: false
+
+database:
+  # sqlite: single node, data on /data (persistence below).
+  # postgres: the database URL comes from existingSecret (databaseUrlKey).
+  type: sqlite
+  # Postgres pool size per pod (ANVILID_DATABASE_MAX_CONNECTIONS).
+  maxConnections: 10
+
+# A Secret you create; the chart never creates or stores secrets.
+existingSecret:
+  # Secret name. Required for database.type=postgres. With SQLite and no secret, AnvilID generates
+  # a KEK in /data/kek on first start (keep the volume, or you lose access to the encrypted data).
+  name: ""
+  # Key holding the base64 key-encryption key (ANVILID_KEK).
+  kekKey: kek
+  # Key holding the Postgres URL (ANVILID_DATABASE_URL); used when database.type=postgres.
+  databaseUrlKey: databaseUrl
+
+redis:
+  # Shared rate-limiter URL (ANVILID_REDIS_URL) without credentials, e.g. redis://redis:6379.
+  # For a URL with a password use existingSecretKey instead.
+  url: ""
+  # Key in existingSecret holding the Redis URL; takes precedence over url.
+  existingSecretKey: ""
+  # Behaviour when Redis is unreachable: closed (reject) or local (per-node limits).
+  failureMode: closed
+  # Run several replicas without Redis. Each pod then enforces the rate limits on its own, so the
+  # effective budget is multiplied by the number of pods.
+  acknowledgePerNodeLimits: false
+
+metrics:
+  # Prometheus /metrics on its own port (ANVILID_METRICS_LISTEN), not on the public listener.
+  enabled: true
+  port: 9464
+  serviceMonitor:
+    # Requires the Prometheus Operator CRDs.
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+
+otel:
+  # OTLP/HTTP collector base URL (ANVILID_OTEL_ENDPOINT); /v1/traces is appended. Empty disables
+  # trace export.
+  endpoint: ""
+  serviceName: anvilid
+
+# Seconds between SIGTERM (readiness turns 503) and the graceful shutdown (ANVILID_SHUTDOWN_DRAIN).
+shutdownDrainSeconds: 10
+# Must be larger than shutdownDrainSeconds plus the time in-flight requests need.
+terminationGracePeriodSeconds: 40
+
+# Comma-separated CIDRs whose X-Forwarded-For is trusted (ANVILID_TRUSTED_PROXIES), e.g. the
+# ingress controller's pod network.
+trustedProxies: ""
+
+log:
+  # json or pretty (ANVILID_LOG_FORMAT).
+  format: json
+  # RUST_LOG filter.
+  level: info
+
+service:
+  type: ClusterIP
+  port: 8080
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: id.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  #  - secretName: id-example-com-tls
+  #    hosts:
+  #      - id.example.com
+
+# SQLite data volume at /data. Ignored for database.type=postgres.
+persistence:
+  # false: emptyDir (data is lost when the pod is deleted).
+  enabled: true
+  existingClaim: ""
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
+  size: 1Gi
+
+hpa:
+  # Requires database.type=postgres.
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70
+
+pdb:
+  # Created when replicaCount > 1 or hpa.enabled.
+  minAvailable: 1
+
+resources: {}
+#  requests:
+#    cpu: 100m
+#    memory: 64Mi
+#  limits:
+#    memory: 256Mi
+
+# The image runs as the distroless nonroot user (uid/gid 65532).
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  capabilities:
+    drop:
+      - ALL
+
+# Extra environment variables for the anvilid container (list of EnvVar objects).
+extraEnv: []
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# `helm test`: a pod that GETs /health/ready through the Service.
+test:
+  image: curlimages/curl:8.23.0@sha256:3fb7e13e5d179a845c97d78204f3f1064d1907037f26a3ebf91710571151fd93

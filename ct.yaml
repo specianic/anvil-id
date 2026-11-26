@@ -1,0 +1,11 @@
+# chart-testing configuration (ct lint / ct install in .github/workflows/deploy.yml).
+chart-dirs:
+  - deploy/helm
+charts:
+  - deploy/helm/anvilid
+target-branch: main
+# The chart is new and versioned by hand; maintainers are not GitHub-validated.
+check-version-increment: false
+validate-maintainers: false
+# Helm waits for the pods to be ready, then `helm test` runs templates/tests/test-ready.yaml.
+helm-extra-args: --timeout 600s

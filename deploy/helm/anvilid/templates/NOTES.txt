@@ -1,0 +1,38 @@
+AnvilID {{ .Chart.AppVersion }} is deployed as {{ include "anvilid.fullname" . }} ({{ .Values.database.type }}).
+
+Public URL: {{ .Values.publicUrl }}
+
+First start: the one-time setup URL for the first administrator is printed in the logs:
+
+  kubectl --namespace {{ .Release.Namespace }} logs deployment/{{ include "anvilid.fullname" . }} | grep "Setup URL"
+
+{{- if not .Values.ingress.enabled }}
+
+Local access without an ingress:
+
+  kubectl --namespace {{ .Release.Namespace }} port-forward service/{{ include "anvilid.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+{{- end }}
+{{- if .Values.metrics.enabled }}
+
+Prometheus metrics: port {{ .Values.metrics.port }} (name "metrics") on the Service, path /metrics.
+{{- end }}
+{{- if and (include "anvilid.multiNode" .) (not (include "anvilid.hasRedis" .)) .Values.redis.acknowledgePerNodeLimits }}
+
+WARNING: several replicas without a shared rate limiter (redis.acknowledgePerNodeLimits=true).
+Each pod enforces the rate limits on its own, so the effective budget is the configured limit
+multiplied by the number of pods. Set redis.url for limits shared across pods.
+{{- end }}
+{{- if and (eq .Values.database.type "sqlite") (not .Values.persistence.enabled) }}
+
+WARNING: persistence.enabled=false. The SQLite database (and a generated KEK) live in an emptyDir
+and are lost when the pod is deleted.
+{{- end }}
+{{- if and (eq .Values.database.type "sqlite") (not .Values.existingSecret.name) }}
+
+NOTE: no existingSecret. AnvilID generated its key-encryption key in /data/kek on the data
+volume. Back it up together with the database; without it the encrypted data cannot be read.
+{{- end }}
+{{- if .Values.insecureHttp }}
+
+WARNING: insecureHttp=true. Cookies are not Secure. Never use this in production.
+{{- end }}

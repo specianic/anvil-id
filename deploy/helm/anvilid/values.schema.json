@@ -1,0 +1,515 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AnvilID chart values",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "global": {
+      "type": "object",
+      "description": "Helm global values (unused by this chart)."
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": {
+          "type": "string",
+          "description": "Image repository.",
+          "minLength": 1
+        },
+        "tag": {
+          "type": "string",
+          "description": "Image tag; defaults to the chart appVersion."
+        },
+        "digest": {
+          "type": "string",
+          "description": "Image digest (sha256:...); takes precedence over the tag.",
+          "pattern": "^(sha256:[a-f0-9]{64})?$"
+        },
+        "pullPolicy": {
+          "type": "string",
+          "description": "Image pull policy.",
+          "enum": [
+            "Always",
+            "IfNotPresent",
+            "Never"
+          ]
+        }
+      },
+      "required": [
+        "repository",
+        "pullPolicy"
+      ]
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "description": "Pull secrets for the pod.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      }
+    },
+    "nameOverride": {
+      "type": "string",
+      "description": "Overrides the chart name in resource names."
+    },
+    "fullnameOverride": {
+      "type": "string",
+      "description": "Overrides the full resource name."
+    },
+    "replicaCount": {
+      "type": "integer",
+      "description": "Number of pods (more than 1 requires database.type=postgres).",
+      "minimum": 0
+    },
+    "publicUrl": {
+      "type": "string",
+      "description": "Public base URL (ANVILID_PUBLIC_URL).",
+      "pattern": "^https?://"
+    },
+    "insecureHttp": {
+      "type": "boolean",
+      "description": "Allow a plain-http public URL on a non-loopback host (development only)."
+    },
+    "database": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "Database backend.",
+          "enum": [
+            "sqlite",
+            "postgres"
+          ]
+        },
+        "maxConnections": {
+          "type": "integer",
+          "description": "Postgres pool size per pod.",
+          "minimum": 1,
+          "maximum": 1000
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    "existingSecret": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Secret holding the KEK and the database URL."
+        },
+        "kekKey": {
+          "type": "string",
+          "description": "Key of the base64 KEK."
+        },
+        "databaseUrlKey": {
+          "type": "string",
+          "description": "Key of the Postgres URL."
+        }
+      }
+    },
+    "redis": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "Shared rate-limiter URL without credentials.",
+          "pattern": "^(rediss?://.+)?$"
+        },
+        "existingSecretKey": {
+          "type": "string",
+          "description": "Key in existingSecret holding the Redis URL."
+        },
+        "failureMode": {
+          "type": "string",
+          "description": "Behaviour when Redis is unreachable.",
+          "enum": [
+            "closed",
+            "local"
+          ]
+        },
+        "acknowledgePerNodeLimits": {
+          "type": "boolean",
+          "description": "Allow several replicas without Redis (per-node rate limits)."
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Serve /metrics on a separate port."
+        },
+        "port": {
+          "type": "integer",
+          "description": "Metrics port.",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "serviceMonitor": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Create a Prometheus Operator ServiceMonitor."
+            },
+            "interval": {
+              "type": "string",
+              "description": "Scrape interval."
+            },
+            "scrapeTimeout": {
+              "type": "string",
+              "description": "Scrape timeout."
+            },
+            "labels": {
+              "type": "object",
+              "description": "Extra ServiceMonitor labels.",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "otel": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "endpoint": {
+          "type": "string",
+          "description": "OTLP/HTTP collector base URL; empty disables trace export.",
+          "pattern": "^(https?://.+)?$"
+        },
+        "serviceName": {
+          "type": "string",
+          "description": "service.name of exported traces.",
+          "minLength": 1,
+          "maxLength": 255
+        }
+      }
+    },
+    "shutdownDrainSeconds": {
+      "type": "integer",
+      "description": "Drain delay between SIGTERM and shutdown.",
+      "minimum": 0,
+      "maximum": 3600
+    },
+    "terminationGracePeriodSeconds": {
+      "type": "integer",
+      "description": "Pod termination grace period; must exceed shutdownDrainSeconds.",
+      "minimum": 1
+    },
+    "trustedProxies": {
+      "type": "string",
+      "description": "Comma-separated trusted proxy CIDRs."
+    },
+    "log": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "type": "string",
+          "description": "Log format.",
+          "enum": [
+            "json",
+            "pretty"
+          ]
+        },
+        "level": {
+          "type": "string",
+          "description": "RUST_LOG filter.",
+          "minLength": 1
+        }
+      }
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "Service type.",
+          "enum": [
+            "ClusterIP",
+            "NodePort",
+            "LoadBalancer"
+          ]
+        },
+        "port": {
+          "type": "integer",
+          "description": "HTTP port (Service and container).",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "annotations": {
+          "type": "object",
+          "description": "Service annotations.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Create an Ingress."
+        },
+        "className": {
+          "type": "string",
+          "description": "IngressClass name."
+        },
+        "annotations": {
+          "type": "object",
+          "description": "Ingress annotations.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "hosts": {
+          "type": "array",
+          "description": "Ingress rules.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "host": {
+                "type": "string",
+                "description": "Host name."
+              },
+              "paths": {
+                "type": "array",
+                "description": "Paths.",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "description": "Path."
+                    },
+                    "pathType": {
+                      "type": "string",
+                      "description": "Path type.",
+                      "enum": [
+                        "Prefix",
+                        "Exact",
+                        "ImplementationSpecific"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "pathType"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "host",
+              "paths"
+            ]
+          }
+        },
+        "tls": {
+          "type": "array",
+          "description": "Ingress TLS entries.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "secretName": {
+                "type": "string",
+                "description": "TLS secret."
+              },
+              "hosts": {
+                "type": "array",
+                "description": "Hosts.",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "secretName",
+              "hosts"
+            ]
+          }
+        }
+      }
+    },
+    "persistence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Use a PersistentVolumeClaim for /data (SQLite); false uses an emptyDir."
+        },
+        "existingClaim": {
+          "type": "string",
+          "description": "Existing claim to use."
+        },
+        "storageClass": {
+          "type": "string",
+          "description": "Storage class of the new claim."
+        },
+        "accessModes": {
+          "type": "array",
+          "description": "Access modes.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "size": {
+          "type": "string",
+          "description": "Claim size."
+        }
+      }
+    },
+    "hpa": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Create a HorizontalPodAutoscaler (postgres only)."
+        },
+        "minReplicas": {
+          "type": "integer",
+          "description": "Minimum replicas.",
+          "minimum": 1
+        },
+        "maxReplicas": {
+          "type": "integer",
+          "description": "Maximum replicas.",
+          "minimum": 1
+        },
+        "targetCPUUtilizationPercentage": {
+          "type": "integer",
+          "description": "Target CPU utilisation.",
+          "minimum": 1,
+          "maximum": 100
+        }
+      }
+    },
+    "pdb": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "minAvailable": {
+          "description": "PodDisruptionBudget minAvailable (count or percentage).",
+          "type": [
+            "integer",
+            "string"
+          ]
+        }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "description": "Container resources."
+    },
+    "podSecurityContext": {
+      "type": "object",
+      "description": "Pod securityContext."
+    },
+    "securityContext": {
+      "type": "object",
+      "description": "Container securityContext."
+    },
+    "extraEnv": {
+      "type": "array",
+      "description": "Extra EnvVar objects for the anvilid container.",
+      "items": {
+        "type": "object",
+        "required": [
+          "name"
+        ]
+      }
+    },
+    "podAnnotations": {
+      "type": "object",
+      "description": "Pod annotations.",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "podLabels": {
+      "type": "object",
+      "description": "Extra pod labels.",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "nodeSelector": {
+      "type": "object",
+      "description": "Node selector.",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "tolerations": {
+      "type": "array",
+      "description": "Tolerations.",
+      "items": {
+        "type": "object"
+      }
+    },
+    "affinity": {
+      "type": "object",
+      "description": "Affinity rules."
+    },
+    "test": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "image": {
+          "type": "string",
+          "description": "Image of the helm test pod (pin by digest).",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "image"
+      ]
+    }
+  },
+  "required": [
+    "image",
+    "replicaCount",
+    "publicUrl",
+    "database",
+    "existingSecret",
+    "redis",
+    "metrics",
+    "otel",
+    "shutdownDrainSeconds",
+    "terminationGracePeriodSeconds",
+    "log",
+    "service",
+    "persistence",
+    "hpa",
+    "pdb",
+    "test"
+  ]
+}

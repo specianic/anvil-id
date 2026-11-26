@@ -1,0 +1,18 @@
+# chart-testing (ct install) values: Postgres, two pods (PodDisruptionBudget, concurrent first
+# start), per-node rate limits acknowledged because the CI cluster has no Redis.
+# The workflow applies deploy/helm/ci/postgres.yaml and creates the Secret anvilid-ci-postgres
+# (random KEK and the database URL) before `ct install`; nothing secret is stored here.
+image:
+  repository: anvilid
+  tag: ci
+  pullPolicy: Never
+replicaCount: 2
+database:
+  type: postgres
+  maxConnections: 5
+existingSecret:
+  name: anvilid-ci-postgres
+redis:
+  acknowledgePerNodeLimits: true
+shutdownDrainSeconds: 2
+terminationGracePeriodSeconds: 15
