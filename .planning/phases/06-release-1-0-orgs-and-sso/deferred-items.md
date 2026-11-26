@@ -9,3 +9,11 @@
   and passed afterwards. Fix: assert on `"171, 171"` (the byte sequence) instead, as
   `model::organization` does.
 - (from 06-05, for 06-09) `SamlAssertionData.has_conditions` (new bool) MUST be set by the XML extractor: `false` when the Assertion has no `<saml:Conditions>` element. Without it `missing_conditions` vs `conditions_missing_not_on_or_after` cannot be told apart; add an extraction test for both.
+
+## From 06-09
+
+- (out of scope, found while removing the 06-09 marker) `crates/anvil-web/src/admin/tenants.rs`
+  says the org claim mappings (`org_roles` / `org_permissions`) are "not on the wire yet (06-09)".
+  06-09 is the SAML XML adapter and does not own the tenant claim-mapping DTO; the comment names
+  the wrong plan. Whoever owns the org claim mapping API (06-12/06-13 by the plan texts) should
+  put them on the wire and fix the comment. Not a TRANSITIONAL marker; behaviour is unchanged.

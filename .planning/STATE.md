@@ -6,15 +6,15 @@ current_phase: 05
 current_phase_name: release 0 4 operate it
 current_plan: 33
 status: executing
-stopped_at: Completed 06-08-PLAN.md
-last_updated: "2026-11-26T10:25:34.205Z"
+stopped_at: Completed 06-09-PLAN.md
+last_updated: "2026-11-26T10:30:19.516Z"
 last_activity: 2026-11-26
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 162
-  completed_plans: 141
-  percent: 87
+  completed_plans: 142
+  percent: 88
 ---
 
 # Project State
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 **Status:** Ready to execute
 **Last Activity:** 2026-11-26
 **Last Activity Description:** 05-28 phase gate complete (632-pair security map, 0.4 plaintext scan, anvilid 0.4.0, 0.4 migrations pinned, every workflow incl. load and deploy green on f80dcb4)
-**Progress:** [█████████░] 87%
+**Progress:** [█████████░] 88%
 
 Phase 5 has 33 plans (05-01 through 05-33). Every plan except 05-29 (release v0.4.0 after owner sign-off) has a
 SUMMARY. Current Plan counts plans in execution order: 05-29 is the 33rd and last. Phase 4 still has one open plan, 04-33 (manual real-provider checklist, then tag v0.3.0); it must be
@@ -198,6 +198,7 @@ done before 05-29 tags v0.4.0.
 | Phase 06 P04 | 60min | 3 tasks | 65 files |
 | Phase 06 P10 | 35min | 1 tasks | 4 files |
 | Phase 06 P08 | 55min | 2 tasks | 12 files |
+| Phase 06 P09 | 55min | 3 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -461,6 +462,8 @@ Recent decisions affecting current work:
 - [Phase 06]: 06-04: operator keys saml_experimental (off; warning via Config.warnings) and domain_verification_resolvers (ip or ip:port, port 53 default, empty = system)
 - [Phase 06]: 06-10: HickoryTxtLookup without readable system resolver config logs a warning and fails every lookup (startup continues); explicit resolvers fail startup on setup error
 - [Phase 06]: 06-08: Postgres org_domain routing uses a composite FK to connection (tenant_id, org_id, id); ConnectionRepo::delete clears routing targets first (SQLite uses a trigger)
+- [Phase 06]: 06-09: SAML verify-then-read on one uppsala Document; precheck before bergshamra refuses non-fragment Reference URIs, stray signatures, any second Assertion, attribute pollution (repeated attribute local name) and duplicate ids across ID/Id/id/AssertionID/xml:id
+- [Phase 06]: 06-09: UntrustedKey vs Signature is reporting only (KeyInfo names an unconfigured cert -> UntrustedKey); trust always comes from configured certs
 
 ### Pending Todos
 
@@ -473,6 +476,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-26T10:25:34.202Z
-Stopped at: Completed 06-08-PLAN.md
+Last session: 2026-11-26T10:30:19.514Z
+Stopped at: Completed 06-09-PLAN.md
 Resume file: None
