@@ -6,14 +6,14 @@ current_phase: 04
 current_phase_name: release 0 3 real world logins
 current_plan: 37
 status: executing
-stopped_at: Completed 05-27-PLAN.md
-last_updated: "2026-11-26T05:50:20.077Z"
+stopped_at: Completed 05-24-PLAN.md
+last_updated: "2026-11-26T05:53:49.975Z"
 last_activity: 2026-11-26
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 131
-  completed_plans: 126
+  completed_plans: 127
   percent: 96
 ---
 
@@ -182,6 +182,7 @@ v0.3.0) has a SUMMARY. Current Plan counts plans in execution order: 04-33 is th
 | Phase 05 P23 | 35min | 2 tasks | 16 files |
 | Phase 05 P25 | 55min | 2 tasks | 9 files |
 | Phase 05 P27 | 60min | 2 tasks | 13 files |
+| Phase 05 P24 | 70min | 3 tasks | 18 files |
 
 ## Accumulated Context
 
@@ -422,6 +423,7 @@ Recent decisions affecting current work:
 - [Phase 05]: 05-23: admin API validation stays 422; webhook rotation POST /webhooks/{id}/secret; redelivery POST /webhooks/deliveries/{delivery_id}/redeliver; TenantView exposes issuer and discovery_url
 - [Phase 05]: 05-25: MCP docs and mocks pinned to MCP authorization revision 2026-07-28 (checked 2026-11-26)
 - [Phase 05]: 05-25: CIMD clients take resources from dcr.allowed_resources (documented 0.4 limit)
+- [Phase 05]: 05-24: one-time secrets in the console move into component state inside mutationFn (never in query/mutation caches); OneTimeSecret component
 
 ### Pending Todos
 
@@ -434,6 +436,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-26T05:50:20.074Z
-Stopped at: Completed 05-27-PLAN.md
+Last session: 2026-11-26T05:53:49.972Z
+Stopped at: Completed 05-24-PLAN.md
 Resume file: None
