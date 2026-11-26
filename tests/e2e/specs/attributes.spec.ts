@@ -8,7 +8,7 @@
 //
 // Selectors (themes/default/templates/account_attributes.html): form attributes-form, inputs
 // attr-{name}, field errors attr-{name}-error, submit attributes-form-submit, messages
-// account-msg-N (data-message-key), nav entry account-nav-attributes.
+// account-msg-N (data-message-key), nav entry account-nav-attributes (on every account page).
 //
 // Env: ANVIL_URL, SETUP_URL, E2E_STATE_FILE (see tests/e2e/run.sh).
 
@@ -97,6 +97,17 @@ test('the user edits an editable attribute, invalid values are refused and the c
   const t = await attributeTenant(token);
   try {
     await signInAtTenant(page, t.slug, t.email, t.password);
+
+    // Every account page carries the Attributes entry (05-33): from the profile page it opens the
+    // attributes page.
+    await page.goto(`${tenantIssuer(t.slug)}/ui/account/profile`);
+    const navEntry = page.locator('#account-nav-attributes');
+    await expect(navEntry).toBeVisible();
+    await navEntry.click();
+    await expect(page).toHaveURL(/\/ui\/account\/attributes$/);
+    await expect(page.locator('#attributes-form')).toBeVisible();
+    await expect(page.locator('#account-nav-attributes')).toHaveAttribute('aria-current', 'page');
+
     await openAttributes(page, t.slug);
 
     // Only the user-editable attribute is offered; the admin-only one is not shown at all.

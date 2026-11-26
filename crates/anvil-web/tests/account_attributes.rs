@@ -11,6 +11,7 @@ use std::sync::Arc;
 use anvil_core::model::{
     AttributeDefinition, AuditAction, AuditActor, AuditEvent, AuditQuery, RequestContext, UserId,
 };
+use anvil_core::ports::Clock as _;
 use anvil_core::service::attribute::AttributeService;
 use anvil_core::service::flow::FLOW_LIFETIME;
 use anvil_web::adapters::attribute_schema::JsonSchemaCheck;
@@ -528,4 +529,149 @@ async fn german_page() {
     let html = app.send(req).await.html();
     assert!(html.contains("Weitere Angaben"), "{html}");
     assert!(html.contains("Nicht festgelegt"));
+}
+
+// ---------------------------------------------------------------------------------------------
+// The navigation entry on every account page (05-33)
+// ---------------------------------------------------------------------------------------------
+
+/// Every account page reachable with a plain GET, with the navigation entry it marks current.
+/// The email confirmation page (no token: 400) belongs to "email".
+const ACCOUNT_PAGES: [(&str, &str, u16); 9] = [
+    ("/ui/account/profile", "profile", 200),
+    ("/ui/account/email", "email", 200),
+    ("/ui/account/email/confirm", "email", 400),
+    ("/ui/account/password", "password", 200),
+    ("/ui/account/security", "security", 200),
+    ("/ui/account/sessions", "sessions", 200),
+    ("/ui/account/apps", "apps", 200),
+    ("/ui/account/linked", "linked", 200),
+    (PAGE, "attributes", 200),
+];
+
+/// The number of `aria-current` marks in the account navigation of `html`.
+fn current_marks(html: &str) -> usize {
+    let start = html.find("id=\"account-nav\"").expect("account nav");
+    let end = html[start..].find("</nav>").expect("nav end") + start;
+    html[start..end].matches("aria-current=\"page\"").count()
+}
+
+/// The page at `path` with the expected status.
+async fn page_html(app: &TestApp, path: &str, status: u16) -> String {
+    let resp = app.get(path).await;
+    assert_eq!(resp.status, status, "{path}: {}", resp.text());
+    resp.html()
+}
+
+/// RFC 6238 TOTP (HMAC-SHA1, 6 digits, 30 s) of the base32 `key` at the app clock (test code;
+/// the server checks it with its own implementation).
+fn totp_now(app: &TestApp, key: &str) -> String {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+    let mut secret = Vec::new();
+    let (mut acc, mut bits) = (0u32, 0u32);
+    for c in key.bytes().filter(|c| !c.is_ascii_whitespace()) {
+        let v = ALPHABET.iter().position(|&a| a == c).expect("base32 char") as u32;
+        acc = (acc << 5) | v;
+        bits += 5;
+        if bits >= 8 {
+            bits -= 8;
+            secret.push((acc >> bits) as u8);
+            acc &= (1 << bits) - 1;
+        }
+    }
+    let step = u64::try_from(app.clock().now().unix_timestamp()).expect("positive") / 30;
+    let tag = aws_lc_rs::hmac::sign(
+        &aws_lc_rs::hmac::Key::new(aws_lc_rs::hmac::HMAC_SHA1_FOR_LEGACY_USE_ONLY, &secret),
+        &step.to_be_bytes(),
+    );
+    let h = tag.as_ref();
+    let off = usize::from(h[h.len() - 1] & 0x0f);
+    let bin = (u32::from(h[off]) & 0x7f) << 24
+        | u32::from(h[off + 1]) << 16
+        | u32::from(h[off + 2]) << 8
+        | u32::from(h[off + 3]);
+    format!("{:06}", bin % 1_000_000)
+}
+
+/// The action (path) of the form with `id` in `html`.
+fn form_action_of(app: &TestApp, html: &str, id: &str) -> String {
+    let start = html
+        .find(&format!("<form id=\"{id}\""))
+        .unwrap_or_else(|| panic!("form #{id} in {html}"));
+    let a = html[start..].find("action=\"").expect("action") + start + 8;
+    let b = html[a..].find('"').expect("quote") + a;
+    to_path(app, &html[a..b].replace("&amp;", "&"))
+}
+
+/// The TOTP enrolment page and the recovery-codes page shown after confirming it.
+async fn enrolment_and_codes_pages(app: &TestApp) -> (String, String) {
+    let html = page_html(app, "/ui/account/security", 200).await;
+    let csrf = csrf_from(&html);
+    let begin = form_action_of(app, &html, "totp-begin");
+    let resp = app.post_form(&begin, &[("csrf_token", &csrf)]).await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let enrolment = resp.html();
+    let code = totp_now(app, &element_text(&enrolment, "totp-secret"));
+    let confirm = form_action_of(app, &enrolment, "totp-confirm");
+    let resp = app
+        .post_form(&confirm, &[("csrf_token", &csrf), ("code", &code)])
+        .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let codes = resp.html();
+    assert_eq!(
+        message_keys(&codes),
+        vec!["account.totp_enrolled".to_owned()]
+    );
+    (enrolment, codes)
+}
+
+#[tokio::test]
+async fn attributes_nav_on_every_account_page() {
+    let app = signed_in().await;
+    define(&app, "nickname_2", json!({"type": "string"}), false, true).await;
+    for (path, current, status) in ACCOUNT_PAGES {
+        let html = page_html(&app, path, status).await;
+        let link = tag(&html, "account-nav-attributes");
+        assert!(
+            link.contains("href=\"/ui/account/attributes\""),
+            "{path}: {link}"
+        );
+        assert_eq!(current_marks(&html), 1, "{path}");
+        let own = tag(&html, &format!("account-nav-{current}"));
+        assert!(own.contains("aria-current=\"page\""), "{path}: {own}");
+    }
+    // The TOTP enrolment and recovery-codes pages carry it too.
+    let (enrolment, codes) = enrolment_and_codes_pages(&app).await;
+    for html in [&enrolment, &codes] {
+        assert!(html.contains("id=\"account-nav-attributes\""));
+        assert_eq!(current_marks(html), 1);
+        assert!(tag(html, "account-nav-security").contains("aria-current=\"page\""));
+    }
+}
+
+#[tokio::test]
+async fn attributes_nav_hidden_without_editable_attributes() {
+    let app = signed_in().await;
+    // No attributes at all.
+    for (path, _, status) in ACCOUNT_PAGES {
+        let html = page_html(&app, path, status).await;
+        assert!(!html.contains("account-nav-attributes"), "{path}");
+        assert!(html.contains("id=\"account-nav-linked\""), "{path}");
+    }
+    // Only a non-editable attribute: still on none of them.
+    define(
+        &app,
+        "cost_center",
+        json!({"type": "integer"}),
+        false,
+        false,
+    )
+    .await;
+    for (path, _, status) in ACCOUNT_PAGES {
+        let html = page_html(&app, path, status).await;
+        assert!(!html.contains("account-nav-attributes"), "{path}");
+    }
+    let (enrolment, codes) = enrolment_and_codes_pages(&app).await;
+    assert!(!enrolment.contains("account-nav-attributes"));
+    assert!(!codes.contains("account-nav-attributes"));
 }

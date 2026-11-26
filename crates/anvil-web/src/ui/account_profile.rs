@@ -34,6 +34,7 @@ use axum_extra::extract::cookie::CookieJar;
 use secrecy::{ExposeSecret as _, SecretString};
 use serde::{Deserialize, Serialize};
 
+use super::account_attributes::attributes_nav_or_page;
 use super::consent::{PageMessage, account_locale, localized};
 use super::login::{UiQuery, csrf_page, rejected_form};
 use crate::errors::core_error_page_in;
@@ -326,10 +327,15 @@ async fn render_profile(
             Err(e) => return core_error_page_in(state, Some(tenant), loc, &e),
         },
     };
+    let attributes_nav = match attributes_nav_or_page(state, tenant, loc).await {
+        Ok(f) => f,
+        Err(page) => return *page,
+    };
     let ctx = minijinja::context! {
         page => PageContext::for_tenant(state, tenant, loc, "title.account_profile").into_value(),
         account_base => tenant.base_path(),
         account_nav => "profile",
+        account_attributes_nav => attributes_nav,
         csrf_token => &bound.csrf,
         messages => messages_value(state, loc, messages),
         action => flow_url(tenant, PROFILE, bound.flow_id),
@@ -468,10 +474,15 @@ async fn render_email(
         Ok(p) => p,
         Err(e) => return core_error_page_in(state, Some(tenant), loc, &e),
     };
+    let attributes_nav = match attributes_nav_or_page(state, tenant, loc).await {
+        Ok(f) => f,
+        Err(page) => return *page,
+    };
     let ctx = minijinja::context! {
         page => PageContext::for_tenant(state, tenant, loc, "title.account_email").into_value(),
         account_base => tenant.base_path(),
         account_nav => "email",
+        account_attributes_nav => attributes_nav,
         mode => "change",
         csrf_token => &bound.csrf,
         messages => messages_value(state, loc, messages),
@@ -576,6 +587,7 @@ async fn email_submit(
 }
 
 /// The confirmation page: `mode` "confirm" (with the token in a hidden field) or "done".
+/// `attributes_nav` is computed by the handler before any change (the confirmation is one-time).
 fn render_confirm(
     state: &AppState,
     tenant: &ResolvedTenant,
@@ -583,12 +595,14 @@ fn render_confirm(
     token: Option<&str>,
     messages: Vec<PageMessage>,
     status: StatusCode,
+    attributes_nav: bool,
 ) -> Response {
     let ctx = minijinja::context! {
         page => PageContext::for_tenant(state, tenant, loc, "title.account_email_confirm")
             .into_value(),
         account_base => tenant.base_path(),
         account_nav => "email",
+        account_attributes_nav => attributes_nav,
         mode => if token.is_some() { "confirm" } else { "done" },
         messages => messages_value(state, loc, messages),
         confirm_action => tenant.ui_url(EMAIL_CONFIRM),
@@ -611,6 +625,10 @@ async fn confirm_show(
     RequestLocale(loc, _): RequestLocale,
     Query(q): Query<UiQuery>,
 ) -> Response {
+    let attributes_nav = match attributes_nav_or_page(&state, &tenant, &loc).await {
+        Ok(f) => f,
+        Err(page) => return *page,
+    };
     // Showing the page consumes nothing (link scanners fetch it).
     match q.token() {
         Some(token) => render_confirm(
@@ -620,6 +638,7 @@ async fn confirm_show(
             Some(&token),
             Vec::new(),
             StatusCode::OK,
+            attributes_nav,
         ),
         None => render_confirm(
             &state,
@@ -628,6 +647,7 @@ async fn confirm_show(
             None,
             vec![PageMessage::error(AccountFailure::EmailTokenInvalid.key())],
             StatusCode::BAD_REQUEST,
+            attributes_nav,
         ),
     }
 }
@@ -644,6 +664,11 @@ async fn confirm_submit(
         Err(e) => return rejected_form(&state, Some(&tenant), &loc, &e),
     };
     let token = form.token.unwrap_or_default();
+    // Computed before the change: the confirmation is one-time.
+    let attributes_nav = match attributes_nav_or_page(&state, &tenant, &loc).await {
+        Ok(f) => f,
+        Err(page) => return *page,
+    };
     match state
         .ui_account_service()
         .complete_email_change(&tenant.tenant, &token, &ctx)
@@ -656,6 +681,7 @@ async fn confirm_submit(
             None,
             vec![PageMessage::info("account.email_changed")],
             StatusCode::OK,
+            attributes_nav,
         ),
         // The token stays usable: offer the button again.
         Err(AccountError::Failure(AccountFailure::EmailTaken)) => render_confirm(
@@ -665,6 +691,7 @@ async fn confirm_submit(
             Some(&token),
             vec![PageMessage::error(AccountFailure::EmailTaken.key())],
             StatusCode::CONFLICT,
+            attributes_nav,
         ),
         Err(AccountError::Failure(f)) => render_confirm(
             &state,
@@ -673,6 +700,7 @@ async fn confirm_submit(
             None,
             vec![PageMessage::error(f.key())],
             refusal_status(f),
+            attributes_nav,
         ),
         Err(AccountError::Core(e)) => core_error_page_in(&state, Some(&tenant), &loc, &e),
     }
@@ -704,10 +732,15 @@ async fn render_password(
         Ok(p) => p,
         Err(e) => return core_error_page_in(state, Some(tenant), loc, &e),
     };
+    let attributes_nav = match attributes_nav_or_page(state, tenant, loc).await {
+        Ok(f) => f,
+        Err(page) => return *page,
+    };
     let ctx = minijinja::context! {
         page => PageContext::for_tenant(state, tenant, loc, "title.account_password").into_value(),
         account_base => tenant.base_path(),
         account_nav => "password",
+        account_attributes_nav => attributes_nav,
         csrf_token => &bound.csrf,
         messages => messages_value(state, loc, messages),
         action => flow_url(tenant, PASSWORD, bound.flow_id),

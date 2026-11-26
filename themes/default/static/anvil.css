@@ -401,6 +401,45 @@ form > p {
   padding: 0;
 }
 
+/* Consent for a client identified by a metadata document (CIMD): initials, the unverified name
+   and the note. Theme variables only, so dark mode follows. */
+.anvil-consent-cimd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  margin: 0 0 1rem;
+  padding: 0.75rem;
+  border: 1px solid var(--anvil-border);
+  border-radius: var(--anvil-radius);
+}
+
+.anvil-consent-cimd p {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The note takes its own line below the initials and the name. */
+.anvil-consent-cimd > .anvil-muted {
+  flex-basis: 100%;
+}
+
+.anvil-avatar {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 50%;
+  background: var(--anvil-primary);
+  color: var(--anvil-primary-text);
+  font-weight: 700;
+  line-height: 1;
+  user-select: none;
+}
+
 .anvil-scope-list {
   margin: 0 0 1rem;
   padding-inline-start: 1.25rem;

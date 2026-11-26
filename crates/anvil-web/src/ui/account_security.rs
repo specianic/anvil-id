@@ -38,6 +38,7 @@ use axum_extra::extract::cookie::CookieJar;
 use secrecy::ExposeSecret as _;
 use serde::{Deserialize, Serialize};
 
+use super::account_attributes::attributes_nav_or_page;
 use super::consent::{PageMessage, account_locale, localized};
 use super::format::{human, iso};
 use super::login::{UiQuery, csrf_page, rejected_form, rejection_is_too_large};
@@ -280,11 +281,16 @@ async fn render_overview(
         .map(|c| row(tenant, flow, c))
         .collect();
     let totp = overview.totp.as_ref().map(|c| row(tenant, flow, c));
+    let attributes_nav = match attributes_nav_or_page(state, tenant, loc).await {
+        Ok(f) => f,
+        Err(page) => return *page,
+    };
     let messages = localized(state, loc, messages);
     let ctx = minijinja::context! {
         page => account_page(state, tenant, loc, "title.account_security"),
         account_base => tenant.base_path(),
         account_nav => "security",
+        account_attributes_nav => attributes_nav,
         csrf_token => csrf,
         messages => minijinja::Value::from(minijinja::value::Serde(&messages)),
         recent_auth => overview.recent_auth,
@@ -402,6 +408,7 @@ fn render_enrolment(
     sub: &Submission,
     enrolment: &TotpEnrolment,
     error: Option<PageMessage>,
+    attributes_nav: bool,
 ) -> Response {
     let loc = &sub.locale;
     let svg = match crate::adapters::qr::qr_svg(enrolment.otpauth_uri.expose_secret()) {
@@ -418,6 +425,7 @@ fn render_enrolment(
         page => account_page(state, tenant, loc, "title.totp_enroll"),
         account_base => tenant.base_path(),
         account_nav => "security",
+        account_attributes_nav => attributes_nav,
         csrf_token => &sub.csrf,
         qr_svg => minijinja::Value::from_safe_string(svg),
         secret_groups => grouped(enrolment.secret_base32.expose_secret()),
@@ -442,6 +450,7 @@ fn render_codes(
     loc: &Locale,
     codes: &[secrecy::SecretString],
     message: PageMessage,
+    attributes_nav: bool,
 ) -> Response {
     let message = message.localized(state, loc);
     let codes: Vec<String> = codes.iter().map(|c| c.expose_secret().to_owned()).collect();
@@ -450,6 +459,7 @@ fn render_codes(
         page => account_page(state, tenant, loc, "title.recovery_codes"),
         account_base => tenant.base_path(),
         account_nav => "security",
+        account_attributes_nav => attributes_nav,
         message => minijinja::Value::from(minijinja::value::Serde(&message)),
         codes => codes,
         codes_text => codes_text,
@@ -618,12 +628,17 @@ async fn totp_begin(
         Ok(s) => s,
         Err(resp) => return *resp,
     };
+    // Computed before the change, so a failure here never loses its one-time result.
+    let attributes_nav = match attributes_nav_or_page(&state, &tenant, &sub.locale).await {
+        Ok(f) => f,
+        Err(page) => return *page,
+    };
     match state
         .ui_account_service()
         .begin_totp(&tenant.tenant, &sub.session, &sub.binding())
         .await
     {
-        Ok(enrolment) => render_enrolment(&state, &tenant, &sub, &enrolment, None),
+        Ok(enrolment) => render_enrolment(&state, &tenant, &sub, &enrolment, None, attributes_nav),
         Err(e) => refused(&state, &tenant, &sub, e).await,
     }
 }
@@ -645,6 +660,11 @@ async fn totp_confirm(
         Ok(s) => s,
         Err(resp) => return *resp,
     };
+    // Computed before the change, so a failure here never loses its one-time result.
+    let attributes_nav = match attributes_nav_or_page(&state, &tenant, &sub.locale).await {
+        Ok(f) => f,
+        Err(page) => return *page,
+    };
     let service = state.ui_account_service();
     let result = service
         .confirm_totp(
@@ -662,6 +682,7 @@ async fn totp_confirm(
             &sub.locale,
             &codes,
             PageMessage::info("account.totp_enrolled"),
+            attributes_nav,
         ),
         Err(AccountError::Failure(AccountFailure::TotpInvalidCode)) => {
             // The pending secret is kept: show the same QR code again with the error.
@@ -675,6 +696,7 @@ async fn totp_confirm(
                     &sub,
                     &enrolment,
                     Some(PageMessage::error(AccountFailure::TotpInvalidCode.key())),
+                    attributes_nav,
                 ),
                 Err(e) => refused(&state, &tenant, &sub, e).await,
             }
@@ -700,6 +722,11 @@ async fn recovery_codes(
         Ok(s) => s,
         Err(resp) => return *resp,
     };
+    // Computed before the change, so a failure here never loses its one-time result.
+    let attributes_nav = match attributes_nav_or_page(&state, &tenant, &sub.locale).await {
+        Ok(f) => f,
+        Err(page) => return *page,
+    };
     match state
         .ui_account_service()
         .regenerate_recovery_codes(&tenant.tenant, &sub.session, &sub.binding(), &ctx)
@@ -711,6 +738,7 @@ async fn recovery_codes(
             &sub.locale,
             &codes,
             PageMessage::info("account.recovery_codes_regenerated"),
+            attributes_nav,
         ),
         Err(e) => refused(&state, &tenant, &sub, e).await,
     }

@@ -37,7 +37,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anvil_core::error::CoreError;
-use anvil_core::model::{AttributeDefinition, BrowserSession, FlowId};
+use anvil_core::model::{AttributeDefinition, BrowserSession, FlowId, TenantId};
 use anvil_core::service::account::SettingsBinding;
 use anvil_core::service::attribute::{AttributeError, AttributeService};
 use axum::Router;
@@ -88,6 +88,31 @@ impl AppState {
             check,
         })
     }
+}
+
+/// Whether the account page shows an attribute: the one rule behind both this page's field list
+/// and the "Attributes" navigation entry on every account page.
+fn is_user_field(d: &AttributeDefinition) -> bool {
+    d.user_editable
+}
+
+/// Whether the account navigation shows the "Attributes" entry: the tenant has at least one
+/// attribute the user can see on the attributes page (`is_user_field`). Every account handler
+/// computes it once per request; an error is the caller's error page, never a silent `false`.
+pub(crate) async fn attributes_nav(state: &AppState, tenant: TenantId) -> Result<bool, CoreError> {
+    let defs = state.attribute_service()?.list(tenant).await?;
+    Ok(defs.iter().any(is_user_field))
+}
+
+/// `attributes_nav` for an account page handler: the flag, or the tenant's error page to return.
+pub(crate) async fn attributes_nav_or_page(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    loc: &Locale,
+) -> Result<bool, Box<Response>> {
+    attributes_nav(state, tenant.tenant.id)
+        .await
+        .map_err(|e| Box::new(core_error_page_in(state, Some(tenant), loc, &e)))
 }
 
 /// The routes of this module (tenant-relative paths), merged by the parent module.
@@ -227,7 +252,7 @@ fn field_views(
     errors: &BTreeSet<String>,
 ) -> Vec<FieldView> {
     defs.iter()
-        .filter(|d| d.user_editable)
+        .filter(|d| is_user_field(d))
         .map(|d| {
             let shape = form_shape(&d.schema);
             let value = typed

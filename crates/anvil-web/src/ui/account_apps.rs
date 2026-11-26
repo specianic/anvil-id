@@ -26,6 +26,7 @@ use secrecy::ExposeSecret as _;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
+use super::account_attributes::attributes_nav_or_page;
 use super::consent::{
     PageMessage, ScopeView, account_locale, current_session, localized, no_store, scope_views,
 };
@@ -133,11 +134,16 @@ async fn apps_page(
             .cookies()
             .flow_cookie(&tenant.tenant, flow.cookie_token.expose_secret()),
     );
+    let attributes_nav = match attributes_nav_or_page(state, tenant, loc).await {
+        Ok(f) => f,
+        Err(page) => return *page,
+    };
     let messages = localized(state, loc, messages);
     let ctx = minijinja::context! {
         page => PageContext::for_tenant(state, tenant, loc, "title.account_apps").into_value(),
         account_base => tenant.base_path(),
         account_nav => "apps",
+        account_attributes_nav => attributes_nav,
         csrf_token => flow.csrf_token.expose_secret(),
         messages => minijinja::Value::from(minijinja::value::Serde(&messages)),
         apps => minijinja::Value::from(minijinja::value::Serde(&rows)),

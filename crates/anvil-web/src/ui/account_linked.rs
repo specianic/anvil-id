@@ -30,6 +30,7 @@ use axum_extra::extract::cookie::CookieJar;
 use secrecy::ExposeSecret as _;
 use serde::{Deserialize, Serialize};
 
+use super::account_attributes::attributes_nav_or_page;
 use super::consent::{PageMessage, account_locale, localized};
 use super::format::{human, iso};
 use super::login::{UiQuery, csrf_page, rejected_form, tenant_relying_party, ui_base};
@@ -215,11 +216,16 @@ async fn render_page(
         .collect();
     let recent_auth =
         anvil_core::flow::settings::is_recent_auth(session.auth_time, state.clock().now());
+    let attributes_nav = match attributes_nav_or_page(state, tenant, loc).await {
+        Ok(f) => f,
+        Err(page) => return *page,
+    };
     let messages = localized(state, loc, messages);
     let ctx = minijinja::context! {
         page => PageContext::for_tenant(state, tenant, loc, "title.account_linked").into_value(),
         account_base => tenant.base_path(),
         account_nav => "linked",
+        account_attributes_nav => attributes_nav,
         csrf_token => csrf,
         messages => minijinja::Value::from(minijinja::value::Serde(&messages)),
         recent_auth => recent_auth,
