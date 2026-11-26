@@ -6,14 +6,14 @@ current_phase: 04
 current_phase_name: release 0 3 real world logins
 current_plan: 37
 status: executing
-stopped_at: "04-33 Task 1 checkpoint: awaiting owner real-provider checklist (approved / waive) before tagging v0.3.0 from 9c2bdd2 (Phase 5 wave 3 in progress; 05-10, 05-06, 05-07 complete)"
-last_updated: "2026-11-26T03:31:57.204Z"
+stopped_at: "04-33 Task 1 checkpoint: awaiting owner real-provider checklist (approved / waive) before tagging v0.3.0 from 9c2bdd2 (Phase 5 wave 3 in progress; 05-10, 05-06, 05-07, 05-18 complete)"
+last_updated: "2026-11-26T03:47:14.985Z"
 last_activity: 2026-11-26
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 131
-  completed_plans: 112
+  completed_plans: 113
   percent: 85
 ---
 
@@ -168,6 +168,7 @@ v0.3.0) has a SUMMARY. Current Plan counts plans in execution order: 04-33 is th
 | Phase 05 P10 | 40min | 2 tasks | 6 files |
 | Phase 05 P06 | 45min | 2 tasks | 65 files |
 | Phase 05 P07 | 70min | 2 tasks | 64 files |
+| Phase 05 P18 | 36min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -386,6 +387,8 @@ Recent decisions affecting current work:
 - [Phase 05]: 05-10: claim names reserved/unique case-insensitively; mapped_claims also skips reserved names at runtime
 - [Phase 05]: 05-06: SQLite complete_setup returns Conflict (full rollback) if the admin tenant lacks the administrator role; webhook delivery log purged with the audit retention cutoff in AuditRepo::purge_before; IATs purged 7 days after expiry/revocation
 - [Phase 05]: 05-07: Postgres webhook claims use a CTE UPDATE with FOR UPDATE OF d SKIP LOCKED joined to enabled endpoints; schema mirrors SQLite 0007 (no enumerated event-type CHECK)
+- [Phase 05]: 05-18: signer cache keyed by (tenant, alg, kid, row id, sha256(sealed), KEK fingerprint); active row still read per request; direct aws-lc signing (RS256 504->180us)
+- [Phase 05]: 05-18: unknown-host negative cache only (TTL unknown_host_ttl, default 5 s, no invalidation hook); positive tenant/client rows never cached
 
 ### Pending Todos
 
@@ -398,6 +401,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-26T03:31:57.201Z
-Stopped at: Completed 05-07-PLAN.md
+Last session: 2026-11-26T03:47:14.983Z
+Stopped at: Completed 05-18-PLAN.md
 Resume file: None
