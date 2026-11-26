@@ -26,6 +26,9 @@ use axum::Router;
 use crate::layers::csrf::fetch_metadata_layer;
 use crate::state::AppState;
 
+/// The shared body-limit rejection check, also used by the admin API's JSON extractor.
+pub(crate) use login::rejection_is_too_large;
+
 /// All UI routes (tenant-relative paths), behind the Fetch-Metadata CSRF layer; the upstream
 /// callback is merged after the layer and is not covered by it.
 pub fn routes() -> Router<AppState> {

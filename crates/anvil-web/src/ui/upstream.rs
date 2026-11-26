@@ -46,8 +46,8 @@ use serde::{Deserialize, Serialize};
 
 use super::login::{
     Extras, UiQuery, bad_form, csrf_page, current_browser_session, factor_token, flow_of,
-    form_status, message_page, restart_login, signed_in_response, started_response_in,
-    tenant_relying_party, ui_base,
+    form_status, message_page, rejected_form, restart_login, signed_in_response,
+    started_response_in, tenant_relying_party, ui_base,
 };
 use crate::errors::{core_error_page_in, error_page_in};
 use crate::i18n::{Locale, RequestLocale, carry_ui_locales};
@@ -148,8 +148,9 @@ async fn start(
     Query(q): Query<UiQuery>,
     form: Result<Form<StartForm>, FormRejection>,
 ) -> Response {
-    let Ok(Form(form)) = form else {
-        return bad_form(&state, &tenant, &loc);
+    let form = match form {
+        Ok(Form(form)) => form,
+        Err(e) => return rejected_form(&state, Some(&tenant), &loc, &e),
     };
     let (Some(flow_id), Some(csrf)) = (q.flow_id(), form.csrf_token.as_deref()) else {
         return csrf_page(&state, Some(&tenant), &loc);
@@ -302,8 +303,9 @@ async fn callback_post(
     Path(slug): Path<String>,
     form: Result<Form<CallbackForm>, FormRejection>,
 ) -> Response {
-    let Ok(Form(form)) = form else {
-        return bad_form(&state, &tenant, &loc);
+    let form = match form {
+        Ok(Form(form)) => form,
+        Err(e) => return rejected_form(&state, Some(&tenant), &loc, &e),
     };
     let mut location = format!("{}/ui/login/upstream/{slug}/callback", tenant.issuer);
     if let Some(st) = form.state.as_deref() {

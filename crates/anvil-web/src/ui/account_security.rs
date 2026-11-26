@@ -40,7 +40,7 @@ use serde::{Deserialize, Serialize};
 
 use super::consent::{PageMessage, account_locale, localized};
 use super::format::{human, iso};
-use super::login::{UiQuery, bad_form, csrf_page};
+use super::login::{UiQuery, csrf_page, rejected_form};
 use crate::adapters::passkey::{WebauthnPasskeys, relying_party};
 use crate::errors::core_error_page_in;
 use crate::i18n::{Locale, RequestLocale};
@@ -552,8 +552,9 @@ async fn passkey_finish(
     Query(q): Query<UiQuery>,
     form: Result<Form<SecurityForm>, FormRejection>,
 ) -> Response {
-    let Ok(Form(form)) = form else {
-        return bad_form(&state, &tenant, &locale.0);
+    let form = match form {
+        Ok(Form(form)) => form,
+        Err(e) => return rejected_form(&state, Some(&tenant), &locale.0, &e),
     };
     let sub = match submission(&state, &tenant, &locale, &jar, &q, form.csrf_token.clone()).await {
         Ok(s) => s,
@@ -602,8 +603,9 @@ async fn totp_begin(
     Query(q): Query<UiQuery>,
     form: Result<Form<SecurityForm>, FormRejection>,
 ) -> Response {
-    let Ok(Form(form)) = form else {
-        return bad_form(&state, &tenant, &locale.0);
+    let form = match form {
+        Ok(Form(form)) => form,
+        Err(e) => return rejected_form(&state, Some(&tenant), &locale.0, &e),
     };
     let sub = match submission(&state, &tenant, &locale, &jar, &q, form.csrf_token).await {
         Ok(s) => s,
@@ -628,8 +630,9 @@ async fn totp_confirm(
     Query(q): Query<UiQuery>,
     form: Result<Form<SecurityForm>, FormRejection>,
 ) -> Response {
-    let Ok(Form(form)) = form else {
-        return bad_form(&state, &tenant, &locale.0);
+    let form = match form {
+        Ok(Form(form)) => form,
+        Err(e) => return rejected_form(&state, Some(&tenant), &locale.0, &e),
     };
     let sub = match submission(&state, &tenant, &locale, &jar, &q, form.csrf_token.clone()).await {
         Ok(s) => s,
@@ -682,8 +685,9 @@ async fn recovery_codes(
     Query(q): Query<UiQuery>,
     form: Result<Form<SecurityForm>, FormRejection>,
 ) -> Response {
-    let Ok(Form(form)) = form else {
-        return bad_form(&state, &tenant, &locale.0);
+    let form = match form {
+        Ok(Form(form)) => form,
+        Err(e) => return rejected_form(&state, Some(&tenant), &locale.0, &e),
     };
     let sub = match submission(&state, &tenant, &locale, &jar, &q, form.csrf_token).await {
         Ok(s) => s,
@@ -719,8 +723,9 @@ async fn remove_credential(
     Query(q): Query<UiQuery>,
     form: Result<Form<SecurityForm>, FormRejection>,
 ) -> Response {
-    let Ok(Form(form)) = form else {
-        return bad_form(&state, &tenant, &locale.0);
+    let form = match form {
+        Ok(Form(form)) => form,
+        Err(e) => return rejected_form(&state, Some(&tenant), &locale.0, &e),
     };
     let sub = match submission(&state, &tenant, &locale, &jar, &q, form.csrf_token).await {
         Ok(s) => s,

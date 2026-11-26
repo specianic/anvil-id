@@ -35,7 +35,7 @@ use secrecy::{ExposeSecret as _, SecretString};
 use serde::{Deserialize, Serialize};
 
 use super::consent::{PageMessage, account_locale, localized};
-use super::login::{UiQuery, bad_form, csrf_page};
+use super::login::{UiQuery, csrf_page, rejected_form};
 use crate::errors::core_error_page_in;
 use crate::i18n::{Locale, RequestLocale};
 use crate::render::PageContext;
@@ -382,8 +382,9 @@ async fn profile_submit(
     Query(q): Query<UiQuery>,
     form: Result<Form<AccountForm>, FormRejection>,
 ) -> Response {
-    let Ok(Form(form)) = form else {
-        return bad_form(&state, &tenant, &locale.0);
+    let form = match form {
+        Ok(Form(form)) => form,
+        Err(e) => return rejected_form(&state, Some(&tenant), &locale.0, &e),
     };
     let sub = match submission(&state, &tenant, &locale, &jar, &q, form.csrf_token.clone()).await {
         Ok(s) => s,
@@ -526,8 +527,9 @@ async fn email_submit(
     Query(q): Query<UiQuery>,
     form: Result<Form<AccountForm>, FormRejection>,
 ) -> Response {
-    let Ok(Form(form)) = form else {
-        return bad_form(&state, &tenant, &locale.0);
+    let form = match form {
+        Ok(Form(form)) => form,
+        Err(e) => return rejected_form(&state, Some(&tenant), &locale.0, &e),
     };
     let sub = match submission(&state, &tenant, &locale, &jar, &q, form.csrf_token.clone()).await {
         Ok(s) => s,
@@ -637,8 +639,9 @@ async fn confirm_submit(
     AuditContext(ctx): AuditContext,
     form: Result<Form<AccountForm>, FormRejection>,
 ) -> Response {
-    let Ok(Form(form)) = form else {
-        return bad_form(&state, &tenant, &loc);
+    let form = match form {
+        Ok(Form(form)) => form,
+        Err(e) => return rejected_form(&state, Some(&tenant), &loc, &e),
     };
     let token = form.token.unwrap_or_default();
     match state
@@ -761,8 +764,9 @@ async fn password_submit(
     Query(q): Query<UiQuery>,
     form: Result<Form<AccountForm>, FormRejection>,
 ) -> Response {
-    let Ok(Form(form)) = form else {
-        return bad_form(&state, &tenant, &locale.0);
+    let form = match form {
+        Ok(Form(form)) => form,
+        Err(e) => return rejected_form(&state, Some(&tenant), &locale.0, &e),
     };
     let sub = match submission(&state, &tenant, &locale, &jar, &q, form.csrf_token.clone()).await {
         Ok(s) => s,

@@ -260,8 +260,9 @@ async fn submit(
     Query(q): Query<UiQuery>,
     form: Result<Form<UiForm>, FormRejection>,
 ) -> Response {
-    let Ok(Form(form)) = form else {
-        return bad_form(&state, &tenant, &loc);
+    let form = match form {
+        Ok(Form(form)) => form,
+        Err(e) => return rejected_form(&state, Some(&tenant), &loc, &e),
     };
     let (Some(flow_id), Some(csrf)) = (q.flow_id(), form.csrf_token.as_deref()) else {
         return csrf_page(&state, Some(&tenant), &loc);
@@ -632,8 +633,9 @@ async fn passkey_submit(
     Query(q): Query<UiQuery>,
     form: Result<Form<UiForm>, FormRejection>,
 ) -> Response {
-    let Ok(Form(form)) = form else {
-        return bad_form(&state, &tenant, &loc);
+    let form = match form {
+        Ok(Form(form)) => form,
+        Err(e) => return rejected_form(&state, Some(&tenant), &loc, &e),
     };
     let (Some(flow_id), Some(csrf)) = (q.flow_id(), form.csrf_token.as_deref()) else {
         return csrf_page(&state, Some(&tenant), &loc);
@@ -797,7 +799,7 @@ pub(super) struct UiForm {
     pub(super) hcaptcha_response: Option<String>,
 }
 
-/// An unparseable form body.
+/// An invalid form submission or page request (400).
 pub(super) fn bad_form(state: &AppState, tenant: &ResolvedTenant, loc: &Locale) -> Response {
     error_page_in(
         state,
@@ -807,6 +809,43 @@ pub(super) fn bad_form(state: &AppState, tenant: &ResolvedTenant, loc: &Locale) 
         "invalid_request",
         "",
     )
+}
+
+/// The page for a form body the extractor refused: 413 when the body was over the request body
+/// limit (also when it was streamed without `Content-Length` and refused while read), else 400.
+/// Every `Result<Form<_>, FormRejection>` handler answers its rejection through this function.
+pub(super) fn rejected_form(
+    state: &AppState,
+    tenant: Option<&ResolvedTenant>,
+    loc: &Locale,
+    rejection: &FormRejection,
+) -> Response {
+    let status = if rejection_is_too_large(rejection) {
+        StatusCode::PAYLOAD_TOO_LARGE
+    } else {
+        StatusCode::BAD_REQUEST
+    };
+    error_page_in(state, tenant, loc, status, "invalid_request", "")
+}
+
+/// The `Display` text of `http_body_util::LengthLimitError`, the error the body limit layers
+/// (`DefaultBodyLimit`, `RequestBodyLimitLayer`) put at the bottom of a refused body read. The
+/// crate is not a normal dependency here, so it is matched by its message;
+/// `tests/security_body_limit.rs` breaks if an upgrade changes it.
+const LENGTH_LIMIT_EXCEEDED: &str = "length limit exceeded";
+
+/// `true` if an extractor rejection (form or JSON body) was caused by the request body limit.
+/// The single rejection-to-413 check for the UI form pages ([`rejected_form`]) and the admin
+/// API's JSON bodies (`admin::auth::AdminJson`).
+pub(crate) fn rejection_is_too_large(err: &(dyn std::error::Error + 'static)) -> bool {
+    let mut current = Some(err);
+    while let Some(e) = current {
+        if e.to_string() == LENGTH_LIMIT_EXCEEDED {
+            return true;
+        }
+        current = e.source();
+    }
+    false
 }
 
 /// The CSRF rejection page (missing or wrong token, missing flow cookie, unbound submission).

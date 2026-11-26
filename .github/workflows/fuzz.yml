@@ -1,11 +1,19 @@
-# Fuzzing (SEC-07). Nightly: each target runs for 5 minutes. PRs touching parsing code: a short smoke
-# run of every target. Entry points are the justfile recipes (scripts owned by plan 02-17).
+# Fuzzing (SEC-07). Nightly: each target runs for 5 minutes. PRs touching parsing code, and pushes
+# to main that touch the fuzz crate or the parsers it covers: a short smoke run of every target
+# (ci.yml's fuzz-build job type-checks the targets on every push). Entry points are the justfile
+# recipes (scripts owned by plan 02-17).
 name: fuzz
 
 on:
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "fuzz/**"
+      - "crates/anvil-core/src/oauth/**"
+      - "crates/anvil-jose/src/**"
   pull_request:
     paths:
       - "crates/anvil-jose/**"
@@ -25,7 +33,7 @@ env:
 jobs:
   smoke:
     name: fuzz smoke
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -39,7 +47,7 @@ jobs:
 
   nightly:
     name: fuzz ${{ matrix.target }}
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:

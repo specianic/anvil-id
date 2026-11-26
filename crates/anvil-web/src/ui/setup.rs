@@ -25,7 +25,7 @@ use axum::routing::get;
 use axum_extra::extract::cookie::CookieJar;
 use secrecy::ExposeSecret as _;
 
-use super::login::{UiForm, UiQuery, csrf_page, form_status, render_form};
+use super::login::{UiForm, UiQuery, csrf_page, form_status, rejected_form, render_form};
 use crate::adapters::passkey::relying_party;
 use crate::errors::{core_error_page_in, error_page_in};
 use crate::i18n::{Locale, RequestLocale};
@@ -196,15 +196,9 @@ async fn submit(
     if !at_root(tenant.as_ref()) {
         return not_found(&state, tenant.as_ref(), &loc);
     }
-    let Ok(Form(form)) = form else {
-        return error_page_in(
-            &state,
-            None,
-            &loc,
-            StatusCode::BAD_REQUEST,
-            "invalid_request",
-            "",
-        );
+    let form = match form {
+        Ok(Form(form)) => form,
+        Err(e) => return rejected_form(&state, None, &loc, &e),
     };
     // An unusable token is refused before any flow work or password hashing.
     match token_usable(&state, form.token.as_deref()).await {

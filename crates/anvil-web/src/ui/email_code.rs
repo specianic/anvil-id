@@ -56,8 +56,8 @@ use axum_extra::extract::cookie::CookieJar;
 
 use super::login::{
     Extras, UiForm, UiQuery, bad_form, csrf_page, current_browser_session, factor_token,
-    locked_page, message_page, outcome_response_with, restart_login, started_response_with,
-    submit_flow, tenant_relying_party, ui_base,
+    locked_page, message_page, outcome_response_with, rejected_form, restart_login,
+    started_response_with, submit_flow, tenant_relying_party, ui_base,
 };
 use crate::client_ip::ClientIp;
 use crate::errors::{core_error_page_in, error_page_in};
@@ -160,8 +160,9 @@ async fn request(
     if !email_code_enabled(&tenant.tenant) {
         return not_found(&state, &tenant, &loc);
     }
-    let Ok(Form(form)) = form else {
-        return bad_form(&state, &tenant, &loc);
+    let form = match form {
+        Ok(Form(form)) => form,
+        Err(e) => return rejected_form(&state, Some(&tenant), &loc, &e),
     };
     let (Some(flow_id), Some(csrf)) = (q.flow_id(), form.csrf_token.as_deref()) else {
         return csrf_page(&state, Some(&tenant), &loc);
@@ -232,8 +233,9 @@ async fn verify(
     if !tenant.tenant.settings.email_otp {
         return not_found(&state, &tenant, &loc);
     }
-    let Ok(Form(form)) = form else {
-        return bad_form(&state, &tenant, &loc);
+    let form = match form {
+        Ok(Form(form)) => form,
+        Err(e) => return rejected_form(&state, Some(&tenant), &loc, &e),
     };
     let (Some(flow_id), Some(csrf)) = (q.flow_id(), form.csrf_token.as_deref()) else {
         return csrf_page(&state, Some(&tenant), &loc);
@@ -367,8 +369,9 @@ async fn link_submit(
     if !tenant.tenant.settings.magic_link {
         return not_found(&state, &tenant, &loc);
     }
-    let Ok(Form(form)) = form else {
-        return bad_form(&state, &tenant, &loc);
+    let form = match form {
+        Ok(Form(form)) => form,
+        Err(e) => return rejected_form(&state, Some(&tenant), &loc, &e),
     };
     let (Some(flow_id), Some(csrf)) = (q.flow_id(), form.csrf_token.as_deref()) else {
         return csrf_page(&state, Some(&tenant), &loc);

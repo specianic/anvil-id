@@ -79,6 +79,9 @@ impl AppState {
 pub(crate) enum AdminError {
     /// No bearer token was presented (RFC 6750 §3.1: challenge without an error code).
     MissingToken,
+    /// The body was over the request body limit (also when streamed without `Content-Length`):
+    /// a 413 problem.
+    PayloadTooLarge(String),
     Core(CoreError),
 }
 
@@ -95,6 +98,7 @@ fn invalid_token() -> CoreError {
 impl IntoResponse for AdminError {
     fn into_response(self) -> Response {
         let (err, challenge) = match self {
+            Self::PayloadTooLarge(detail) => return payload_too_large(&detail),
             Self::MissingToken => (
                 CoreError::InvalidToken("a bearer access token is required".to_owned()),
                 "Bearer realm=\"anvilid\"",
@@ -121,6 +125,30 @@ impl IntoResponse for AdminError {
         }
         resp
     }
+}
+
+/// The 413 problem: the [`errors::problem_json`] document of an `invalid_request` with the
+/// status replaced (`CoreError` has no 413 kind; this is the only body-size answer of the API).
+fn payload_too_large(detail: &str) -> Response {
+    let status = StatusCode::PAYLOAD_TOO_LARGE;
+    let body = serde_json::json!({
+        "type": format!(
+            "urn:anvilid:problem:{}",
+            CoreError::InvalidRequest(String::new()).oauth_error()
+        ),
+        "title": status.canonical_reason().unwrap_or("Error"),
+        "status": status.as_u16(),
+        "detail": detail,
+        "errors": [],
+    });
+    let mut resp = (status, body.to_string()).into_response();
+    let headers = resp.headers_mut();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/problem+json"),
+    );
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    resp
 }
 
 pub(crate) type AdminResult<T> = Result<T, AdminError>;
@@ -253,6 +281,9 @@ where
                 message: e.body_text(),
             }
             .into()),
+            Err(e) if crate::ui::rejection_is_too_large(&e) => {
+                Err(AdminError::PayloadTooLarge(e.body_text()))
+            }
             Err(e) => Err(CoreError::InvalidRequest(e.body_text()).into()),
         }
     }

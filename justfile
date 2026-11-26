@@ -9,7 +9,7 @@ default: ci
 
 # The single command contributors run (needs Docker for the Postgres tests and Node >= 22.12 for
 # the console check).
-ci: fmt-check lint deny deps migrations-check test test-pg release-graph security-tests console-check
+ci: fmt-check lint deny deps migrations-check test test-pg release-graph security-tests console-check fuzz-check
 
 # Check formatting.
 fmt-check:
@@ -90,6 +90,11 @@ docker-image:
 # Short run of every fuzz target (plan 02-17).
 fuzz-smoke:
     scripts/fuzz.sh smoke
+
+# Type-check every fuzz target on the stable toolchain (no sanitizer, no cargo-fuzz), so a target
+# that no longer compiles against the parsers fails CI on every push and PR (plan 05-03).
+fuzz-check:
+    cargo check --manifest-path fuzz/Cargo.toml --locked --bins
 
 # Run one fuzz target for a number of seconds (plan 02-17).
 fuzz target seconds="300":

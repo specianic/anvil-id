@@ -41,7 +41,7 @@ use axum::routing::get;
 use axum_extra::extract::cookie::CookieJar;
 
 use super::login::{
-    Extras, UiForm, UiQuery, bad_form, csrf_page, locked_page, outcome_response_with,
+    Extras, UiForm, UiQuery, csrf_page, locked_page, outcome_response_with, rejected_form,
     restart_login, submit_flow,
 };
 use crate::i18n::{Locale, RequestLocale};
@@ -108,8 +108,9 @@ async fn submit(
     Query(q): Query<UiQuery>,
     form: Result<Form<UiForm>, FormRejection>,
 ) -> Response {
-    let Ok(Form(form)) = form else {
-        return bad_form(&state, &tenant, &loc);
+    let form = match form {
+        Ok(Form(form)) => form,
+        Err(e) => return rejected_form(&state, Some(&tenant), &loc, &e),
     };
     let (Some(flow_id), Some(csrf)) = (q.flow_id(), form.csrf_token.as_deref()) else {
         return csrf_page(&state, Some(&tenant), &loc);

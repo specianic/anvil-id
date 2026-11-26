@@ -88,6 +88,24 @@ jobs:
       - if: matrix.db == 'postgres'
         run: just test-pg
 
+  # The fuzz crate is its own workspace (fuzz/Cargo.toml) and is not built by `just test`; a
+  # stale target reached the 0.3 release that way. Type-check it on stable on every push and PR
+  # (plan 05-03); fuzz.yml runs the targets.
+  fuzz-build:
+    name: fuzz targets compile
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz -> target
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - run: just fuzz-check
+
   release-graph:
     name: release dependency graph
     runs-on: ubuntu-24.04

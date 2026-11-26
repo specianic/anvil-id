@@ -29,7 +29,7 @@ use time::OffsetDateTime;
 use super::consent::{
     PageMessage, ScopeView, account_locale, current_session, localized, no_store, scope_views,
 };
-use super::login::{UiQuery, bad_form, csrf_page};
+use super::login::{UiQuery, csrf_page, rejected_form};
 use crate::errors::core_error_page_in;
 use crate::i18n::{Locale, RequestLocale};
 use crate::render::PageContext;
@@ -186,8 +186,9 @@ async fn revoke(
     Query(q): Query<UiQuery>,
     form: Result<Form<RevokeForm>, FormRejection>,
 ) -> Response {
-    let Ok(Form(form)) = form else {
-        return bad_form(&state, &tenant, &locale.0);
+    let form = match form {
+        Ok(Form(form)) => form,
+        Err(e) => return rejected_form(&state, Some(&tenant), &locale.0, &e),
     };
     let session = match current_session(&state, &tenant, &jar).await {
         Ok(Some(s)) => s,

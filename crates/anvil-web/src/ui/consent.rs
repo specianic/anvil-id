@@ -33,7 +33,7 @@ use axum_extra::extract::cookie::CookieJar;
 use secrecy::ExposeSecret as _;
 use serde::{Deserialize, Serialize};
 
-use super::login::{UiQuery, bad_form, csrf_page, page_locale};
+use super::login::{UiQuery, bad_form, csrf_page, page_locale, rejected_form};
 use crate::errors::{core_error_page_in, error_page_in};
 use crate::i18n::{Locale, RequestLocale, carry_ui_locales, locale_for_user};
 use crate::render::PageContext;
@@ -313,8 +313,9 @@ async fn submit(
     Query(q): Query<UiQuery>,
     form: Result<Form<ConsentForm>, FormRejection>,
 ) -> Response {
-    let Ok(Form(form)) = form else {
-        return bad_form(&state, &tenant, &locale.0);
+    let form = match form {
+        Ok(Form(form)) => form,
+        Err(e) => return rejected_form(&state, Some(&tenant), &locale.0, &e),
     };
     let approved = match form.decision.as_deref() {
         Some("allow") => true,

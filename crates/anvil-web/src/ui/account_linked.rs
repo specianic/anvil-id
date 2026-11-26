@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 
 use super::consent::{PageMessage, account_locale, localized};
 use super::format::{human, iso};
-use super::login::{UiQuery, bad_form, csrf_page, tenant_relying_party, ui_base};
+use super::login::{UiQuery, csrf_page, rejected_form, tenant_relying_party, ui_base};
 use crate::errors::{core_error_page_in, error_page_in};
 use crate::i18n::{Locale, RequestLocale};
 use crate::render::PageContext;
@@ -382,8 +382,9 @@ async fn connect(
     Query(q): Query<UiQuery>,
     form: Result<Form<LinkedForm>, FormRejection>,
 ) -> Response {
-    let Ok(Form(form)) = form else {
-        return bad_form(&state, &tenant, &locale.0);
+    let form = match form {
+        Ok(Form(form)) => form,
+        Err(e) => return rejected_form(&state, Some(&tenant), &locale.0, &e),
     };
     let sub = match submission(&state, &tenant, &locale, &jar, &q, form.csrf_token).await {
         Ok(s) => s,
@@ -477,8 +478,9 @@ async fn unlink(
     Query(q): Query<UiQuery>,
     form: Result<Form<LinkedForm>, FormRejection>,
 ) -> Response {
-    let Ok(Form(form)) = form else {
-        return bad_form(&state, &tenant, &locale.0);
+    let form = match form {
+        Ok(Form(form)) => form,
+        Err(e) => return rejected_form(&state, Some(&tenant), &locale.0, &e),
     };
     let sub = match submission(&state, &tenant, &locale, &jar, &q, form.csrf_token).await {
         Ok(s) => s,

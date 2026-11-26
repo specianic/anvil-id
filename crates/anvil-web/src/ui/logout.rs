@@ -36,7 +36,7 @@ use secrecy::ExposeSecret as _;
 use serde::Deserialize;
 
 use super::consent::{current_session, no_store};
-use super::login::{UiQuery, bad_form, csrf_page};
+use super::login::{UiQuery, bad_form, csrf_page, rejected_form};
 use crate::errors::core_error_page_in;
 use crate::i18n::{Locale, RequestLocale, carry_ui_locales};
 use crate::render::PageContext;
@@ -276,8 +276,9 @@ async fn confirm(
     Query(q): Query<UiQuery>,
     form: Result<Form<ConfirmForm>, FormRejection>,
 ) -> Response {
-    let Ok(Form(form)) = form else {
-        return no_store(bad_form(&state, &tenant, &loc));
+    let form = match form {
+        Ok(Form(form)) => form,
+        Err(e) => return no_store(rejected_form(&state, Some(&tenant), &loc, &e)),
     };
     let (Some(flow_id), Some(csrf)) = (q.flow_id(), form.csrf_token.filter(|c| !c.is_empty()))
     else {

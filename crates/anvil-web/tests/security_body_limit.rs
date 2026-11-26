@@ -1,7 +1,9 @@
 //! Request body limit (UI-03 review of 04-18's per-request middleware) on the selected backend
 //! (`ANVILID_TEST_DB`): every route family answers 413 for a body one byte above
-//! [`anvil_web::BODY_LIMIT`] (64 KiB) announced in `Content-Length`; a streamed body without it
-//! is refused while it is read (413, or the route's 400 rejection). Only the two branding logo
+//! [`anvil_web::BODY_LIMIT`] (64 KiB), whether it is announced in `Content-Length` or streamed
+//! without it (refused while it is read). Form pages, the admin JSON API, `/token` and `/logout`
+//! all answer exactly 413 in both cases: the form and admin JSON extractor rejections go through
+//! one shared check (`ui::login::rejection_is_too_large`). Only the two branding logo
 //! upload routes (tenant and client) accept more, up to [`LOGO_BODY_LIMIT`] (400 KiB): one byte
 //! above it is 413 there too, and a 100 KiB logo goes through.
 //!
@@ -71,10 +73,8 @@ fn json_of_len(key: &str, len: usize) -> String {
     body
 }
 
-/// Asserts 413 for an oversized body announced in `Content-Length`, and that the same body sent
-/// without it is refused while it is read: 413 from the stream limit, or 400 where the route's
-/// extractor rejection maps the limit error to its own bad-request answer (form pages, the admin
-/// API's problem documents). Either way the handler never runs.
+/// Asserts exactly 413 for an oversized body announced in `Content-Length`, and exactly 413 for
+/// the same body streamed without it (refused while it is read; the handler never runs).
 async fn assert_413(
     app: &TestApp,
     method: Method,
@@ -104,12 +104,17 @@ async fn assert_413(
         false,
     )
     .await;
-    assert!(
-        resp.status == 413 || resp.status == 400,
-        "{method} {path} (streamed): {} {}",
+    assert_eq!(
         resp.status,
+        413,
+        "{method} {path} (streamed): {}",
         resp.text()
     );
+    if path.contains("/api/admin/") {
+        // Admin API failures stay problem documents.
+        let problem = body_json(&resp);
+        assert_eq!(problem["status"], 413, "{problem}");
+    }
 }
 
 const FORM: &str = "application/x-www-form-urlencoded";
@@ -130,6 +135,16 @@ async fn protocol_and_page_routes_answer_413_above_64_kib() {
 async fn admin_json_routes_answer_413_above_64_kib() {
     let app = app().await;
     let t = admin_token(&app, "admin:read admin:write").await;
+    let big = json_of_len("slug", BODY_LIMIT + 1);
+    assert_413(
+        &app,
+        Method::POST,
+        &format!("{API}/tenants"),
+        Some(&t),
+        JSON,
+        &big,
+    )
+    .await;
     let big = json_of_len("display_name", BODY_LIMIT + 1);
     assert_413(
         &app,
@@ -151,6 +166,39 @@ async fn admin_json_routes_answer_413_above_64_kib() {
         &big,
     )
     .await;
+}
+
+/// The 413 mapping only fires for the size limit: other extractor rejections keep their 400.
+#[tokio::test]
+async fn other_body_rejections_stay_400() {
+    let app = app().await;
+    let (action, _) = open_form(&app, "/ui/login").await;
+    // A form page posted with a non-form content type.
+    let resp = send(
+        &app,
+        Method::POST,
+        &action,
+        None,
+        JSON,
+        "{}".to_owned(),
+        false,
+    )
+    .await;
+    assert_eq!(resp.status, 400, "{}", resp.text());
+    // Malformed JSON on the admin API.
+    let t = admin_token(&app, "admin:read admin:write").await;
+    let resp = send(
+        &app,
+        Method::POST,
+        &format!("{API}/tenants"),
+        Some(&t),
+        JSON,
+        "{".to_owned(),
+        false,
+    )
+    .await;
+    assert_eq!(resp.status, 400, "{}", resp.text());
+    assert_eq!(body_json(&resp)["status"], 400);
 }
 
 #[tokio::test]

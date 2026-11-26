@@ -13,7 +13,7 @@ use axum::response::Response;
 use axum::routing::get;
 use axum_extra::extract::cookie::CookieJar;
 
-use super::login::{UiForm, UiQuery, bad_form, start_page, submit_page};
+use super::login::{UiForm, UiQuery, rejected_form, start_page, submit_page};
 use crate::i18n::RequestLocale;
 use crate::request_context::AuditContext;
 use crate::state::AppState;
@@ -41,8 +41,9 @@ async fn submit(
     Query(q): Query<UiQuery>,
     form: Result<Form<UiForm>, FormRejection>,
 ) -> Response {
-    let Ok(Form(form)) = form else {
-        return bad_form(&state, &tenant, &loc);
+    let form = match form {
+        Ok(Form(form)) => form,
+        Err(e) => return rejected_form(&state, Some(&tenant), &loc, &e),
     };
     // The reset form posts the token; the request form does not.
     let input = match form.token.clone() {
