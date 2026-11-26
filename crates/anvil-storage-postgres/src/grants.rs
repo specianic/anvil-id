@@ -9,8 +9,9 @@
 use anvil_core::model::{
     AccessTokenRecord, AuthRequestId, AuthorizationCode, AuthorizationRequest, CodeHash,
     ConsentGrant, NewAccessToken, NewAuthorizationCode, NewAuthorizationRequest, NewConsent,
-    NewRefreshToken, NewTokenFamily, OrgId, RefreshToken, ReplayKind, RevokeReason, SecretHash,
-    SessionId, TenantId, TokenFamily, TokenFamilyId, UserId,
+    NewPushedRequest, NewRefreshToken, NewTokenFamily, OrgId, PushedRequest, RefreshToken,
+    ReplayKind, RequestUriHash, RevokeReason, SecretHash, SessionId, TenantId, TokenFamily,
+    TokenFamilyId, UserId,
 };
 use anvil_core::ports::{ConsumeOutcome, GrantRepo, JtiOutcome, RotateOutcome, StorageError};
 use sqlx::PgPool;
@@ -674,32 +675,80 @@ impl GrantRepo for PgGrants {
 
     async fn families_for_user(
         &self,
-        _tenant: TenantId,
-        _user: UserId,
-    ) -> Result<Vec<anvil_core::model::TokenFamily>, StorageError> {
-        Err(StorageError::Unsupported(
-            "TRANSITIONAL(07-11): GrantRepo::families_for_user",
-        ))
+        tenant: TenantId,
+        user: UserId,
+    ) -> Result<Vec<TokenFamily>, StorageError> {
+        // Every state (active, revoked, expired), oldest first. Service families have no user_id
+        // and never match.
+        sqlx::query_as!(
+            FamilyRow,
+            "SELECT id, tenant_id, client_id, user_id, scope, auth_time, acr, amr, session_id,
+                    claims, created_at, absolute_expires_at, revoked_at, revoked_reason, resource,
+                    org_id
+               FROM token_family
+              WHERE tenant_id = $1 AND user_id = $2
+              ORDER BY created_at, id",
+            tenant.0,
+            user.0,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_err)?
+        .into_iter()
+        .map(FamilyRow::into_model)
+        .collect()
     }
 
     async fn create_pushed_request(
         &self,
-        _tenant: TenantId,
-        _request: &anvil_core::model::NewPushedRequest,
+        tenant: TenantId,
+        request: &NewPushedRequest,
     ) -> Result<(), StorageError> {
-        Err(StorageError::Unsupported(
-            "TRANSITIONAL(07-11): GrantRepo::create_pushed_request",
-        ))
+        // `Conflict` on a duplicate (tenant, uri_hash). The composite FK rejects a client of
+        // another tenant.
+        sqlx::query!(
+            "INSERT INTO pushed_authorization_request
+                 (tenant_id, uri_hash, client_id, params, created_at, expires_at)
+             VALUES ($1, $2, $3, $4, $5, $6)",
+            tenant.0,
+            request.request_uri_hash.as_bytes().as_slice(),
+            request.client_id,
+            request.params,
+            request.created_at,
+            request.expires_at,
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(map_err)?;
+        Ok(())
     }
 
     async fn consume_pushed_request(
         &self,
-        _tenant: TenantId,
-        _request_uri_hash: &anvil_core::model::RequestUriHash,
-        _now: OffsetDateTime,
-    ) -> Result<Option<anvil_core::model::PushedRequest>, StorageError> {
-        Err(StorageError::Unsupported(
-            "TRANSITIONAL(07-11): GrantRepo::consume_pushed_request",
-        ))
+        tenant: TenantId,
+        request_uri_hash: &RequestUriHash,
+        now: OffsetDateTime,
+    ) -> Result<Option<PushedRequest>, StorageError> {
+        // One conditional UPDATE decides the race (see the module docs): competing consumers
+        // block on the row lock and re-check `consumed_at IS NULL` against the committed row.
+        let row = sqlx::query!(
+            "UPDATE pushed_authorization_request
+                SET consumed_at = $3
+              WHERE tenant_id = $1 AND uri_hash = $2
+                AND consumed_at IS NULL AND expires_at > $3
+          RETURNING client_id, params, expires_at, consumed_at",
+            tenant.0,
+            request_uri_hash.as_bytes().as_slice(),
+            now,
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_err)?;
+        Ok(row.map(|r| PushedRequest {
+            client_id: r.client_id,
+            params: r.params,
+            expires_at: r.expires_at,
+            consumed_at: r.consumed_at,
+        }))
     }
 }

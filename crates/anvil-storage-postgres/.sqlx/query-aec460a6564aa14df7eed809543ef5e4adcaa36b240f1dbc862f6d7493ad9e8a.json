@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO password_hash_profile\n                 (id, tenant_id, name, kind, salt_separator, rounds, mem_cost, signer_key_enc,\n                  created_at)\n             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Bytea",
+        "Int8",
+        "Int4",
+        "Bytea",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "aec460a6564aa14df7eed809543ef5e4adcaa36b240f1dbc862f6d7493ad9e8a"
+}

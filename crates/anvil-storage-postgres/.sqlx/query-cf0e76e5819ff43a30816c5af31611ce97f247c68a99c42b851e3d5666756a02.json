@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "UPDATE client\n                SET name = COALESCE($3, name),\n                    redirect_uris = COALESCE($4, redirect_uris),\n                    grant_types = COALESCE($5, grant_types),\n                    scopes = COALESCE($6, scopes),\n                    require_pkce = COALESCE($7, require_pkce),\n                    jwks = CASE WHEN $8 THEN $9 ELSE jwks END,\n                    token_format = COALESCE($11, token_format),\n                    consent_mode = COALESCE($12, consent_mode),\n                    id_token_signed_response_alg =\n                      CASE WHEN $13 THEN $14 ELSE id_token_signed_response_alg END,\n                    can_introspect = COALESCE($15, can_introspect),\n                    post_logout_redirect_uris = COALESCE($16, post_logout_redirect_uris),\n                    backchannel_logout_uri =\n                      CASE WHEN $17 THEN $18 ELSE backchannel_logout_uri END,\n                    backchannel_logout_session_required =\n                      COALESCE($19, backchannel_logout_session_required),\n                    allowed_resources = COALESCE($20, allowed_resources),\n                    mfa_policy = CASE WHEN $21 THEN $22 ELSE mfa_policy END,\n                    metadata_expires_at = CASE WHEN $23 THEN $24 ELSE metadata_expires_at END,\n                    registration_access_token_hash =\n                      CASE WHEN $25 THEN $26 ELSE registration_access_token_hash END,\n                    organization = COALESCE($27, organization),\n                    updated_at = $10\n              WHERE tenant_id = $1 AND client_id = $2\n          RETURNING id, tenant_id, client_id, name, client_type, application_type, auth_method,\n                    secret_hash, jwks, redirect_uris, grant_types, scopes, require_pkce,\n                    token_format, consent_mode, id_token_signed_response_alg, can_introspect,\n                    created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,\n                    backchannel_logout_session_required, allowed_resources, mfa_policy,\n                    registration_source, metadata_expires_at, registration_access_token_hash,\n                    organization",
+  "query": "SELECT id, tenant_id, client_id, name, client_type, application_type, auth_method,\n                    secret_hash, jwks, redirect_uris, grant_types, scopes, require_pkce,\n                    token_format, consent_mode, id_token_signed_response_alg, can_introspect,\n                    created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,\n                    backchannel_logout_session_required, allowed_resources, mfa_policy,\n                    registration_source, metadata_expires_at, registration_access_token_hash,\n                    organization, require_pushed_authorization_requests, client_kind, headless_native\n               FROM client\n              WHERE tenant_id = $1 AND client_id = $2",
   "describe": {
     "columns": [
       {
@@ -310,36 +310,44 @@
             "name": "organization"
           }
         }
+      },
+      {
+        "ordinal": 28,
+        "name": "require_pushed_authorization_requests",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "require_pushed_authorization_requests"
+          }
+        }
+      },
+      {
+        "ordinal": 29,
+        "name": "client_kind",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "client_kind"
+          }
+        }
+      },
+      {
+        "ordinal": 30,
+        "name": "headless_native",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "headless_native"
+          }
+        }
       }
     ],
     "parameters": {
       "Left": [
         "Uuid",
-        "Text",
-        "Text",
-        "TextArray",
-        "TextArray",
-        "TextArray",
-        "Bool",
-        "Bool",
-        "Text",
-        "Timestamptz",
-        "Text",
-        "Text",
-        "Bool",
-        "Text",
-        "Bool",
-        "Jsonb",
-        "Bool",
-        "Text",
-        "Bool",
-        "Jsonb",
-        "Bool",
-        "Text",
-        "Bool",
-        "Timestamptz",
-        "Bool",
-        "Bytea",
         "Text"
       ]
     },
@@ -371,8 +379,11 @@
       false,
       true,
       true,
+      false,
+      false,
+      false,
       false
     ]
   },
-  "hash": "68344b7c59a7e8442bd60414c9579b9f0aba4fa2a964a119ed090a6977e7e4b8"
+  "hash": "cf0e76e5819ff43a30816c5af31611ce97f247c68a99c42b851e3d5666756a02"
 }

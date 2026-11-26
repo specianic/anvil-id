@@ -20,33 +20,6 @@ pub(crate) struct PgClients {
     pub(crate) pool: PgPool,
 }
 
-/// TRANSITIONAL(07-11): the client table has no columns yet for
-/// `require_pushed_authorization_requests`, `client_kind` and `headless_native`. Reads fill the
-/// defaults; a write carrying a non-default value is refused instead of being dropped silently.
-const NEW_FIELDS_UNSUPPORTED: &str = "TRANSITIONAL(07-11): client PAR/kind/headless columns";
-
-fn refuse_new_fields_in_new(client: &NewClient) -> Result<(), StorageError> {
-    if client.require_pushed_authorization_requests
-        || client.client_kind != ClientKind::Application
-        || client.headless_native
-    {
-        return Err(StorageError::Unsupported(NEW_FIELDS_UNSUPPORTED));
-    }
-    Ok(())
-}
-
-fn refuse_new_fields_in_update(update: &ClientUpdate) -> Result<(), StorageError> {
-    if update.require_pushed_authorization_requests == Some(true)
-        || update
-            .client_kind
-            .is_some_and(|k| k != ClientKind::Application)
-        || update.headless_native == Some(true)
-    {
-        return Err(StorageError::Unsupported(NEW_FIELDS_UNSUPPORTED));
-    }
-    Ok(())
-}
-
 pub(crate) struct ClientRow {
     id: Uuid,
     tenant_id: Uuid,
@@ -76,6 +49,9 @@ pub(crate) struct ClientRow {
     metadata_expires_at: Option<OffsetDateTime>,
     registration_access_token_hash: Option<Vec<u8>>,
     organization: String,
+    require_pushed_authorization_requests: bool,
+    client_kind: String,
+    headless_native: bool,
 }
 
 impl ClientRow {
@@ -143,10 +119,9 @@ impl ClientRow {
                 &self.organization,
                 OrgClientPolicy::parse,
             )?,
-            // TRANSITIONAL(07-11): no columns yet, see NEW_FIELDS_UNSUPPORTED.
-            require_pushed_authorization_requests: false,
-            client_kind: ClientKind::Application,
-            headless_native: false,
+            require_pushed_authorization_requests: self.require_pushed_authorization_requests,
+            client_kind: enum_from("client.client_kind", &self.client_kind, ClientKind::parse)?,
+            headless_native: self.headless_native,
         })
     }
 }
@@ -197,7 +172,6 @@ pub(crate) async fn insert_client<'e, E>(
 where
     E: sqlx::PgExecutor<'e>,
 {
-    refuse_new_fields_in_new(c)?;
     let post_logout = to_json(
         "client.post_logout_redirect_uris",
         &c.post_logout_redirect_uris,
@@ -213,9 +187,9 @@ where
               created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,
               backchannel_logout_session_required, allowed_resources, mfa_policy,
               registration_source, metadata_expires_at, registration_access_token_hash,
-              organization)
+              organization, require_pushed_authorization_requests, client_kind, headless_native)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-                 $18, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)",
+                 $18, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)",
         c.id.0,
         tenant.0,
         c.client_id,
@@ -245,6 +219,9 @@ where
             .as_ref()
             .map(|h| h.as_bytes().as_slice()),
         c.organization.as_str(),
+        c.require_pushed_authorization_requests,
+        c.client_kind.as_str(),
+        c.headless_native,
     )
     .execute(exec)
     .await
@@ -268,7 +245,7 @@ impl ClientRepo for PgClients {
                     created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,
                     backchannel_logout_session_required, allowed_resources, mfa_policy,
                     registration_source, metadata_expires_at, registration_access_token_hash,
-                    organization
+                    organization, require_pushed_authorization_requests, client_kind, headless_native
                FROM client
               WHERE tenant_id = $1 AND client_id = $2",
             tenant.0,
@@ -295,7 +272,7 @@ impl ClientRepo for PgClients {
                     created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,
                     backchannel_logout_session_required, allowed_resources, mfa_policy,
                     registration_source, metadata_expires_at, registration_access_token_hash,
-                    organization
+                    organization, require_pushed_authorization_requests, client_kind, headless_native
                FROM client
               WHERE tenant_id = $1 AND ($2::uuid IS NULL OR id > $2)
               ORDER BY id
@@ -321,7 +298,6 @@ impl ClientRepo for PgClients {
         update: &ClientUpdate,
         now: OffsetDateTime,
     ) -> Result<Option<Client>, StorageError> {
-        refuse_new_fields_in_update(update)?;
         let post_logout = update
             .post_logout_redirect_uris
             .as_ref()
@@ -385,6 +361,10 @@ impl ClientRepo for PgClients {
                     registration_access_token_hash =
                       CASE WHEN $25 THEN $26 ELSE registration_access_token_hash END,
                     organization = COALESCE($27, organization),
+                    require_pushed_authorization_requests =
+                      COALESCE($28, require_pushed_authorization_requests),
+                    client_kind = COALESCE($29, client_kind),
+                    headless_native = COALESCE($30, headless_native),
                     updated_at = $10
               WHERE tenant_id = $1 AND client_id = $2
           RETURNING id, tenant_id, client_id, name, client_type, application_type, auth_method,
@@ -393,7 +373,7 @@ impl ClientRepo for PgClients {
                     created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,
                     backchannel_logout_session_required, allowed_resources, mfa_policy,
                     registration_source, metadata_expires_at, registration_access_token_hash,
-                    organization",
+                    organization, require_pushed_authorization_requests, client_kind, headless_native",
             tenant.0,
             client_id,
             update.name,
@@ -421,6 +401,9 @@ impl ClientRepo for PgClients {
             set_rat,
             rat,
             update.organization.map(|o| o.as_str()),
+            update.require_pushed_authorization_requests,
+            update.client_kind.map(|k| k.as_str()),
+            update.headless_native,
         )
         .fetch_optional(&self.pool)
         .await
@@ -507,7 +490,6 @@ impl ClientRepo for PgClients {
         metadata_expires_at: OffsetDateTime,
         now: OffsetDateTime,
     ) -> Result<Client, StorageError> {
-        refuse_new_fields_in_new(c)?;
         // One statement: insert, or replace the metadata of an existing CIMD client. The
         // conflict update only applies to CIMD rows; for a static or dynamic client holding the
         // `client_id` the WHERE fails, nothing changes and no row comes back (`Conflict`).
@@ -531,9 +513,9 @@ impl ClientRepo for PgClients {
                   created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,
                   backchannel_logout_session_required, allowed_resources, mfa_policy,
                   registration_source, metadata_expires_at, registration_access_token_hash,
-                  organization)
+                  organization, require_pushed_authorization_requests, client_kind, headless_native)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-                     $18, $18, $19, $20, $21, $22, $23, 'cimd', $24, $25, $26)
+                     $18, $18, $19, $20, $21, $22, $23, 'cimd', $24, $25, $26, $27, $28, $29)
              ON CONFLICT (tenant_id, client_id) DO UPDATE
                 SET name = EXCLUDED.name,
                     client_type = EXCLUDED.client_type,
@@ -558,7 +540,11 @@ impl ClientRepo for PgClients {
                     mfa_policy = EXCLUDED.mfa_policy,
                     metadata_expires_at = EXCLUDED.metadata_expires_at,
                     registration_access_token_hash = EXCLUDED.registration_access_token_hash,
-                    organization = EXCLUDED.organization
+                    organization = EXCLUDED.organization,
+                    require_pushed_authorization_requests =
+                      EXCLUDED.require_pushed_authorization_requests,
+                    client_kind = EXCLUDED.client_kind,
+                    headless_native = EXCLUDED.headless_native
               WHERE client.registration_source = 'cimd'
           RETURNING id, tenant_id, client_id, name, client_type, application_type, auth_method,
                     secret_hash, jwks, redirect_uris, grant_types, scopes, require_pkce,
@@ -566,7 +552,7 @@ impl ClientRepo for PgClients {
                     created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,
                     backchannel_logout_session_required, allowed_resources, mfa_policy,
                     registration_source, metadata_expires_at, registration_access_token_hash,
-                    organization",
+                    organization, require_pushed_authorization_requests, client_kind, headless_native",
             c.id.0,
             tenant.0,
             c.client_id,
@@ -593,6 +579,9 @@ impl ClientRepo for PgClients {
             metadata_expires_at,
             rat,
             c.organization.as_str(),
+            c.require_pushed_authorization_requests,
+            c.client_kind.as_str(),
+            c.headless_native,
         )
         .fetch_optional(&self.pool)
         .await
@@ -619,7 +608,7 @@ impl ClientRepo for PgClients {
                     created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,
                     backchannel_logout_session_required, allowed_resources, mfa_policy,
                     registration_source, metadata_expires_at, registration_access_token_hash,
-                    organization
+                    organization, require_pushed_authorization_requests, client_kind, headless_native
                FROM client
               WHERE tenant_id = $1 AND client_id = $2 AND registration_source = 'dynamic'
                 AND registration_access_token_hash = $3",

@@ -22,6 +22,7 @@ mod mail_settings;
 pub mod migrate;
 mod organizations;
 mod outbox;
+mod password_profiles;
 mod registration;
 mod roles;
 mod sessions;
@@ -53,6 +54,7 @@ use crate::logout::PgLogout;
 use crate::mail_settings::PgMailSettings;
 use crate::organizations::PgOrgs;
 use crate::outbox::PgOutbox;
+use crate::password_profiles::PgPasswordProfiles;
 use crate::registration::PgRegistration;
 use crate::roles::PgRoles;
 use crate::sessions::PgSessions;
@@ -90,6 +92,7 @@ pub struct PostgresStorage {
     webhooks: PgWebhooks,
     registration: PgRegistration,
     organizations: PgOrgs,
+    password_profiles: PgPasswordProfiles,
 }
 
 impl PostgresStorage {
@@ -125,6 +128,7 @@ impl PostgresStorage {
             webhooks: PgWebhooks { pool: pool.clone() },
             registration: PgRegistration { pool: pool.clone() },
             organizations: PgOrgs { pool: pool.clone() },
+            password_profiles: PgPasswordProfiles { pool: pool.clone() },
             pool,
         }
     }
@@ -193,7 +197,7 @@ impl Storage for PostgresStorage {
         &self.organizations
     }
     fn password_profiles(&self) -> &dyn PasswordProfileRepo {
-        &PgPasswordProfiles
+        &self.password_profiles
     }
 
     async fn purge_expired(&self, now: time::OffsetDateTime) -> Result<u64, StorageError> {
@@ -215,8 +219,11 @@ impl Storage for PostgresStorage {
             }};
         }
         let mut total = 0u64;
-        // TRANSITIONAL(07-11): pushed_authorization_request does not exist on Postgres yet (its
-        // create refuses with Unsupported, so there is nothing to purge); 07-11 adds the purge.
+        // Pushed authorization requests go once expired, consumed or not.
+        total += purge!(
+            "DELETE FROM pushed_authorization_request WHERE ctid IN
+               (SELECT ctid FROM pushed_authorization_request WHERE expires_at <= $1 LIMIT $2)"
+        );
         total += purge!(
             "DELETE FROM authorization_code WHERE ctid IN
                (SELECT ctid FROM authorization_code WHERE expires_at <= $1 LIMIT $2)"
@@ -719,62 +726,5 @@ mod tests {
             assert_eq!(left, 0, "{table}: rows cascade with the user");
         }
         conn.close().await.expect("close");
-    }
-}
-
-/// TRANSITIONAL(07-11): the `password_hash_profile` table does not exist on Postgres yet. Every
-/// method refuses explicitly; nothing reports a fake success.
-#[derive(Debug, Clone, Copy)]
-struct PgPasswordProfiles;
-
-#[async_trait::async_trait]
-impl PasswordProfileRepo for PgPasswordProfiles {
-    async fn create(
-        &self,
-        _tenant: anvil_core::model::TenantId,
-        _profile: &anvil_core::model::NewPasswordHashProfile,
-    ) -> Result<anvil_core::model::PasswordHashProfile, StorageError> {
-        Err(StorageError::Unsupported(
-            "TRANSITIONAL(07-11): PasswordProfileRepo::create",
-        ))
-    }
-
-    async fn get(
-        &self,
-        _tenant: anvil_core::model::TenantId,
-        _id: uuid::Uuid,
-    ) -> Result<Option<anvil_core::model::PasswordHashProfile>, StorageError> {
-        Err(StorageError::Unsupported(
-            "TRANSITIONAL(07-11): PasswordProfileRepo::get",
-        ))
-    }
-
-    async fn list(
-        &self,
-        _tenant: anvil_core::model::TenantId,
-    ) -> Result<Vec<anvil_core::model::PasswordHashProfile>, StorageError> {
-        Err(StorageError::Unsupported(
-            "TRANSITIONAL(07-11): PasswordProfileRepo::list",
-        ))
-    }
-
-    async fn delete(
-        &self,
-        _tenant: anvil_core::model::TenantId,
-        _id: uuid::Uuid,
-    ) -> Result<bool, StorageError> {
-        Err(StorageError::Unsupported(
-            "TRANSITIONAL(07-11): PasswordProfileRepo::delete",
-        ))
-    }
-
-    async fn count_references(
-        &self,
-        _tenant: anvil_core::model::TenantId,
-        _id: uuid::Uuid,
-    ) -> Result<u64, StorageError> {
-        Err(StorageError::Unsupported(
-            "TRANSITIONAL(07-11): PasswordProfileRepo::count_references",
-        ))
     }
 }

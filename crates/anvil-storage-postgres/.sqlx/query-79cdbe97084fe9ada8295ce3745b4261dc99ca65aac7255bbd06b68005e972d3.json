@@ -1,0 +1,124 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, tenant_id, name, kind, salt_separator, rounds, mem_cost, signer_key_enc,\n                    created_at\n               FROM password_hash_profile\n              WHERE tenant_id = $1\n              ORDER BY name COLLATE \"C\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "password_hash_profile",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "tenant_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "password_hash_profile",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "password_hash_profile",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "kind",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "password_hash_profile",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "salt_separator",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "password_hash_profile",
+            "name": "salt_separator"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "rounds",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "password_hash_profile",
+            "name": "rounds"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "mem_cost",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "password_hash_profile",
+            "name": "mem_cost"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "signer_key_enc",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "password_hash_profile",
+            "name": "signer_key_enc"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "password_hash_profile",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "79cdbe97084fe9ada8295ce3745b4261dc99ca65aac7255bbd06b68005e972d3"
+}

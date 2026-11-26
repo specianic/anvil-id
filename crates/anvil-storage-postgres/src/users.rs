@@ -704,26 +704,57 @@ impl UserRepo for PgUsers {
 
     async fn replace_password_if(
         &self,
-        _tenant: TenantId,
-        _user: UserId,
-        _expected: &str,
-        _new_phc: &str,
-        _now: OffsetDateTime,
+        tenant: TenantId,
+        user: UserId,
+        expected: &str,
+        new_phc: &str,
+        now: OffsetDateTime,
     ) -> Result<bool, StorageError> {
-        Err(StorageError::Unsupported(
-            "TRANSITIONAL(07-11): UserRepo::replace_password_if",
-        ))
+        // One conditional statement (READ COMMITTED): a competing UPDATE blocks on the row lock
+        // and re-checks `data = expected` against the committed row, so only one swap wins.
+        let done = sqlx::query!(
+            "UPDATE credential SET data = $4, updated_at = $5
+              WHERE tenant_id = $1 AND user_id = $2 AND kind = 'password' AND data = $3",
+            tenant.0,
+            user.0,
+            expected,
+            new_phc,
+            now,
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(map_err)?;
+        Ok(done.rows_affected() == 1)
     }
 
     async fn pending_self_service_tokens(
         &self,
-        _tenant: TenantId,
-        _user: UserId,
-        _now: OffsetDateTime,
-    ) -> Result<Vec<(anvil_core::model::SelfServiceKind, OffsetDateTime)>, StorageError> {
-        Err(StorageError::Unsupported(
-            "TRANSITIONAL(07-11): UserRepo::pending_self_service_tokens",
-        ))
+        tenant: TenantId,
+        user: UserId,
+        now: OffsetDateTime,
+    ) -> Result<Vec<(SelfServiceKind, OffsetDateTime)>, StorageError> {
+        // Existence only: never the hash or the address.
+        sqlx::query!(
+            "SELECT kind, expires_at
+               FROM self_service_token
+              WHERE tenant_id = $1 AND user_id = $2 AND consumed_at IS NULL
+                AND expires_at > $3
+              ORDER BY created_at, token_hash",
+            tenant.0,
+            user.0,
+            now,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_err)?
+        .into_iter()
+        .map(|r| {
+            Ok((
+                enum_from("self_service_token.kind", &r.kind, SelfServiceKind::parse)?,
+                r.expires_at,
+            ))
+        })
+        .collect()
     }
 }
 
