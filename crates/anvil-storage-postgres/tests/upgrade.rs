@@ -6,6 +6,9 @@
 //! is then checked through the storage traits. Finally the whole contract suite runs against
 //! databases built through this upgrade path. Needs Docker (one shared testcontainers Postgres per
 //! test binary, a fresh database per test), like the contract suite.
+//!
+//! Later releases add their own upgrade tests below (0.2 → 0.3, the 0.3 logout issuer, and
+//! 0.3 → 0.4 from `fixtures/release_0_3.sql`, which also checks the administrator backfill).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -740,6 +743,182 @@ async fn upgrade_keeps_pre_issuer_rp_sessions_and_deliveries_with_null_issuer() 
     assert_eq!(
         deliveries[0].issuer, None,
         "pre-0005 deliveries have no issuer"
+    );
+}
+
+/// Last schema version shipped in 0.3 (0005, the logout issuer).
+const LAST_V0_3_VERSION: i64 = 5;
+
+const V3_SYSTEM: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0003_0001);
+const V3_ACME: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0003_0002);
+const V3_ADMIN_ONE: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0003_0010);
+const V3_ADMIN_TWO: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0003_0011);
+const V3_USER: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0003_0012);
+const V3_CONSENT: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0003_0030);
+
+/// 0.3 → 0.4 (0006): every 0.3 row stays readable with the 0.4 defaults, and the system tenant's
+/// users keep administering the installation through the backfilled `administrator` role.
+#[tokio::test]
+async fn upgrade_from_0_3_backfills_administrators_and_keeps_rows() {
+    use anvil_core::model::{ClientSource, MfaPolicy, SYSTEM_ADMIN_ROLE};
+
+    let url = fresh_database().await;
+    let mut conn = connect(&url).await;
+    sqlx::migrate!()
+        .run_to(LAST_V0_3_VERSION, &mut conn)
+        .await
+        .expect("0.3 migrations apply");
+    sqlx::raw_sql(include_str!("fixtures/release_0_3.sql"))
+        .execute(&mut conn)
+        .await
+        .expect("0.3 fixtures load");
+    conn.close().await.expect("close");
+
+    // The 0.4 binary starts: migrate with the defaults (destructive refused).
+    let s = PostgresStorage::connect(&url, MAX_CONNECTIONS)
+        .await
+        .expect("connect");
+    s.migrate_with(MigrateOptions::default())
+        .await
+        .expect("0006 applies without the destructive flag");
+
+    // Administrators: the role exists once, with [admin:write], and both system users hold it.
+    let system = TenantId(V3_SYSTEM);
+    let role = s
+        .roles()
+        .get_by_name(system, SYSTEM_ADMIN_ROLE)
+        .await
+        .expect("get_by_name")
+        .expect("0006 creates the administrator role");
+    assert_eq!(role.tenant_id, system);
+    assert_eq!(role.org_id, None);
+    assert_eq!(role.permissions, vec!["admin:write".to_owned()]);
+    assert_eq!(s.roles().list(system).await.expect("list").len(), 1);
+    for admin in [V3_ADMIN_ONE, V3_ADMIN_TWO] {
+        assert_eq!(
+            s.roles()
+                .roles_for_user(system, UserId(admin))
+                .await
+                .expect("roles_for_user"),
+            vec![role.clone()],
+            "system user {admin} keeps administering"
+        );
+    }
+    assert_eq!(
+        s.roles()
+            .holders_of_permission(system, "admin:write")
+            .await
+            .expect("holders"),
+        2
+    );
+    // Other tenants get no role and no assignment.
+    let acme = TenantId(V3_ACME);
+    assert!(s.roles().list(acme).await.expect("list").is_empty());
+    assert!(
+        s.roles()
+            .roles_for_user(acme, UserId(V3_USER))
+            .await
+            .expect("roles_for_user")
+            .is_empty()
+    );
+
+    // 0.3 rows read back with the 0.4 defaults.
+    let client = s
+        .clients()
+        .get(acme, "rp")
+        .await
+        .expect("get client")
+        .expect("client survives");
+    assert_eq!(client.registration_source, ClientSource::Static);
+    assert_eq!(client.metadata_expires_at, None);
+    assert_eq!(client.registration_access_token_hash, None);
+    assert_eq!(client.mfa_policy, Some(MfaPolicy::Optional));
+    assert_eq!(
+        client.allowed_resources,
+        vec!["https://api.example.test".to_owned()]
+    );
+    let consent = s
+        .grants()
+        .consent(acme, UserId(V3_USER), "rp")
+        .await
+        .expect("consent")
+        .expect("consent survives");
+    assert_eq!(consent.id.0, V3_CONSENT);
+    assert_eq!(
+        consent.scopes,
+        vec!["openid".to_owned(), "profile".to_owned()]
+    );
+    assert!(
+        consent.resources.is_empty(),
+        "0.3 grants cover no resources"
+    );
+    let user = s
+        .users()
+        .get(acme, UserId(V3_USER))
+        .await
+        .expect("get user")
+        .expect("user survives");
+    assert_eq!(user.email, "ada@example.test");
+    assert_eq!(
+        s.attributes()
+            .user_values(acme, UserId(V3_USER))
+            .await
+            .expect("user_values"),
+        Some(serde_json::Map::new()),
+        "0.3 users start without attribute values"
+    );
+    assert!(s.attributes().list(acme).await.expect("list").is_empty());
+    assert!(
+        s.webhooks()
+            .list_endpoints(system)
+            .await
+            .expect("endpoints")
+            .is_empty()
+    );
+    assert!(
+        s.registration()
+            .list_iats(acme)
+            .await
+            .expect("iats")
+            .is_empty()
+    );
+
+    // A new 0.4 administrator still gets the role through setup (the backfilled role is the one
+    // `complete_setup` assigns).
+    let token = SecretHash::from_slice(&[0x77; 32]).expect("hash");
+    let now = now();
+    s.setup()
+        .create_setup_token(&anvil_core::model::NewSetupToken {
+            token_hash: token,
+            created_at: now,
+            expires_at: now + time::Duration::hours(1),
+        })
+        .await
+        .expect("setup token");
+    let admin = anvil_storage::contract::new_user();
+    let outcome = s
+        .setup()
+        .complete_setup(
+            &token,
+            now,
+            system,
+            &admin,
+            &anvil_storage::contract::new_password(),
+            acme,
+            &anvil_storage::contract::new_client(),
+        )
+        .await
+        .expect("complete_setup");
+    assert!(matches!(
+        outcome,
+        anvil_core::ports::SetupOutcome::Completed { .. }
+    ));
+    assert_eq!(
+        s.roles()
+            .holders_of_permission(system, "admin:write")
+            .await
+            .expect("holders"),
+        3
     );
 }
 
