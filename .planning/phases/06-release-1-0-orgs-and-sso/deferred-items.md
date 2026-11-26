@@ -32,3 +32,20 @@
   `?email=` filter on listUsers would make the lookup one request.
 - (from 06-19) `policy::mfa::effective_policy` now only forwards to `effective_policy_for` with no callers outside mfa.rs: remove it (one implementation) in the gate gap plan. Org MFA during the first password login arrives as an immediate step-up (login flow has no org yet); documented, acceptable.
 - (from 06-20, UX) After registering through an invitation the user is not signed in, and a signed-out user with an account must sign in and reopen the invitation link manually. Gap plan: return-to-invitation after sign-in (login flow carries a validated return target to /ui/invitation) and optionally sign in after invitation registration.
+
+## From 06-23
+
+- **(Blocker for 06-24 saml.spec, needs a decision)** The mock SAML IdP (06-03, `lib/mock-saml-idp.ts`)
+  serves plain http on 127.0.0.1, so its metadata has `SingleSignOnService Location="http://…"`. AnvilID
+  refuses that at both layers: `SamlXmlAdapter::parse_metadata` (saml_xml.rs: `scheme != "https"` ->
+  `Structure`, the import answers 422 "is not usable SAML IdP metadata") and `SamlConfig::validate`
+  (`sso_url` "must be an https URL"). `console-org-sso.spec.ts` works around it because it never signs in
+  through the connection (it rewrites the Location to https before pasting). A SAML *sign-in* e2e cannot.
+  Options: (a) the mock gains an https listener with its in-memory key/cert (`node:https`; the browser
+  context sets `ignoreHTTPSErrors`; anvilid never fetches the SSO URL server-side, only the browser
+  does), keeping the product rule as is; (b) allow `http://` loopback SSO URLs in both places, like
+  OIDC issuers (`https_or_loopback_http`). (a) keeps the product strict and is the smaller change.
+- (one implementation) `ConnectionForm.tsx` now exports `SecretRotation` (write-only secret
+  replace/remove, secret via a ref), used by the org connections panel. The tenant page
+  `connections/$connectionId.tsx` still has its own `SecretCard` with the same logic (06-23 did not
+  own that file); it should switch to `SecretRotation` in the gate gap plan.
