@@ -7,14 +7,14 @@ current_phase_name: release 0 3 real world logins
 current_plan: 37
 status: executing
 stopped_at: "04-33 Task 1 checkpoint: awaiting owner real-provider checklist (approved / waive) before tagging v0.3.0 from 9c2bdd2"
-last_updated: "2026-11-26T03:12:58.602Z"
+last_updated: "2026-11-26T03:30:46.617Z"
 last_activity: 2026-11-26
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 131
-  completed_plans: 108
-  percent: 82
+  completed_plans: 110
+  percent: 84
 ---
 
 # Project State
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 **Status:** Ready to execute
 **Last Activity:** 2026-11-26
 **Last Activity Description:** 04-32 phase gate complete (430-pair security map, anvilid 0.3.0, 0.3 migrations pinned, every workflow green on 9f88363)
-**Progress:** [████████░░] 82%
+**Progress:** [████████░░] 84%
 
 Phase 4 has 37 plans (04-01 through 04-37). Every plan except 04-33 (manual real-provider checklist, then tag
 v0.3.0) has a SUMMARY. Current Plan counts plans in execution order: 04-33 is the 37th and last.
@@ -165,6 +165,7 @@ v0.3.0) has a SUMMARY. Current Plan counts plans in execution order: 04-33 is th
 | Phase 05 P02 | 75min | 2 tasks | 56 files |
 | Phase 05 P05 | 27min | 3 tasks | 18 files |
 | Phase 05 P09 | 45min | 2 tasks | 5 files |
+| Phase 05 P10 | 40min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -378,6 +379,9 @@ Recent decisions affecting current work:
 - [Phase 05]: 05-05: health and /metrics routes live on the outer router (no tenant resolution, no rate limiting)
 - [Phase 05]: 05-05: metric labels are bounded classes only; tenant slug only in spans/logs; AppConfig.metrics is a render callback
 - [Phase 05]: 05-05: traceparent honoured only from trusted_proxies via AppConfig.trace_context hook; otel_endpoint is a base URL (+/v1/traces)
+- [Phase 05]: 05-10: config plan treats an omitted secret as keep; {configured:false} clears; deletes are the prune-only list
+- [Phase 05]: 05-10: webhook_event(tenant_slug, &NewAuditEvent) maps by exhaustive match; UserAttributesUpdated -> user.updated
+- [Phase 05]: 05-10: claim names reserved/unique case-insensitively; mapped_claims also skips reserved names at runtime
 
 ### Pending Todos
 
@@ -390,6 +394,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-26T03:12:58.600Z
-Stopped at: 04-33 Task 1 checkpoint: awaiting owner real-provider checklist (approved / waive) before tagging v0.3.0 from 9c2bdd2 (Phase 5 wave 2 in progress; 05-01, 05-02, 05-03, 05-04, 05-05, 05-08 and 05-11 complete)
+Last session: 2026-11-26T03:30:46.614Z
+Stopped at: 04-33 Task 1 checkpoint: awaiting owner real-provider checklist (approved / waive) before tagging v0.3.0 from 9c2bdd2 (Phase 5 wave 3 in progress; 05-10 complete)
 Resume file: .planning/phases/04-release-0-3-real-world-logins/04-33-PLAN.md
