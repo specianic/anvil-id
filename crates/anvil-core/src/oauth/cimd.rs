@@ -32,13 +32,14 @@
 use serde_json::{Map, Value};
 use time::OffsetDateTime;
 
+use crate::error::CoreError;
 use crate::model::{
     ApplicationType, ClientAuthMethod, ClientId, ClientSource, ClientType, ConsentMode, GrantType,
     NewClient, Scope, TokenFormat,
 };
 use crate::oauth::redirect::validate_redirect_uri;
 use crate::service::admin_scope::is_admin_scope;
-use crate::service::client::{ClientInput, MAX_REDIRECT_URIS, validate_client};
+use crate::service::client::{ClientInput, MAX_REDIRECT_URIS, uses_secret, validate_client};
 
 /// Largest accepted metadata document (draft-03 §4: 5 kilobytes).
 pub const MAX_DOCUMENT_BYTES: usize = 5 * 1024;
@@ -114,15 +115,101 @@ impl NewClientMetadata {
         metadata_expires_at: OffsetDateTime,
         allowed_resources: Vec<String>,
     ) -> NewClient {
-        let _ = (id, created_at, metadata_expires_at, allowed_resources);
-        todo!("05-09 GREEN")
+        NewClient {
+            id,
+            client_id: self.client_id.clone(),
+            name: self.name.clone(),
+            client_type: self.client_type,
+            application_type: self.application_type,
+            auth_method: self.auth_method,
+            secret_hash: None,
+            jwks: self.jwks.clone(),
+            redirect_uris: self.redirect_uris.clone(),
+            grant_types: self.grant_types.clone(),
+            scopes: self.scopes.clone(),
+            require_pkce: true,
+            token_format: TokenFormat::Jwt,
+            consent_mode: ConsentMode::Required,
+            id_token_signed_response_alg: None,
+            can_introspect: false,
+            post_logout_redirect_uris: self.post_logout_redirect_uris.clone(),
+            backchannel_logout_uri: None,
+            backchannel_logout_session_required: false,
+            allowed_resources,
+            mfa_policy: None,
+            registration_source: ClientSource::Cimd,
+            metadata_expires_at: Some(metadata_expires_at),
+            registration_access_token_hash: None,
+            created_at,
+        }
     }
 }
 
 /// Checks a client id URL before anything is fetched. See the module docs for the rules.
 pub fn check_url(url: &str, allow_http_loopback: bool) -> Result<(), CimdError> {
-    let _ = (url, allow_http_loopback);
-    todo!("05-09 GREEN")
+    let bad = |why| Err(CimdError::InvalidUrl(why));
+    if url.is_empty() || url.len() > MAX_URL_LEN {
+        return bad("empty or too long");
+    }
+    if url
+        .chars()
+        .any(|c| c.is_whitespace() || c.is_control() || c == '\\')
+    {
+        return bad("contains whitespace, control characters or a backslash");
+    }
+    // The scheme is compared literally: the client id is compared as a string, never normalised.
+    let (is_http, rest) = if let Some(rest) = url.strip_prefix("https://") {
+        (false, rest)
+    } else if let Some(rest) = url.strip_prefix("http://") {
+        (true, rest)
+    } else {
+        return bad("must use https");
+    };
+    if is_http && !allow_http_loopback {
+        return bad("must use https");
+    }
+    if url.contains('#') {
+        return bad("must not contain a fragment");
+    }
+    if url.contains('?') {
+        return bad("must not contain a query");
+    }
+    let Some(path_start) = rest.find('/') else {
+        return bad("must have a path");
+    };
+    let (authority, path) = rest.split_at(path_start);
+    if authority.contains('@') {
+        return bad("must not contain userinfo");
+    }
+    if authority.is_empty() {
+        return bad("must have a host");
+    }
+    if path == "/" {
+        return bad("path must not be /");
+    }
+    if path.split('/').any(|segment| {
+        let decoded = segment.to_ascii_lowercase().replace("%2e", ".");
+        decoded == "." || decoded == ".."
+    }) {
+        return bad("must not contain dot path segments");
+    }
+    let Ok(parsed) = url::Url::parse(url) else {
+        return bad("is not a valid URL");
+    };
+    let Some(host) = parsed.host() else {
+        return bad("must have a host");
+    };
+    if is_http {
+        let loopback = match host {
+            url::Host::Domain(d) => d == "localhost",
+            url::Host::Ipv4(ip) => ip.is_loopback(),
+            url::Host::Ipv6(ip) => ip.is_loopback(),
+        };
+        if !loopback {
+            return bad("http is only allowed for loopback hosts in development mode");
+        }
+    }
+    Ok(())
 }
 
 /// Validates a fetched metadata document for `url` (which is checked with [`check_url`] and the
@@ -133,8 +220,216 @@ pub fn validate(
     caps: &ServerCaps,
     allow_http_loopback: bool,
 ) -> Result<NewClientMetadata, CimdError> {
-    let _ = (url, body, caps, allow_http_loopback);
-    todo!("05-09 GREEN")
+    check_url(url, allow_http_loopback)?;
+    if body.len() > MAX_DOCUMENT_BYTES {
+        return Err(CimdError::TooLarge);
+    }
+    let document: Value =
+        serde_json::from_slice(body).map_err(|_| invalid("the document is not valid JSON"))?;
+    let obj = document
+        .as_object()
+        .ok_or_else(|| invalid("the document must be a JSON object"))?;
+
+    // draft-03: the client_id is the document URL, compared as strings.
+    match member(obj, "client_id") {
+        Some(Value::String(id)) if id == url => {}
+        _ => return Err(invalid("client_id does not equal the document URL")),
+    }
+    if member(obj, "client_secret").is_some() || member(obj, "client_secret_expires_at").is_some() {
+        return Err(invalid(
+            "a metadata document must not contain a client secret",
+        ));
+    }
+    if member(obj, "jwks_uri").is_some() {
+        return Err(invalid(
+            "jwks_uri is not supported in this release; publish the keys inline with jwks",
+        ));
+    }
+
+    // Auth method: missing means none; shared secrets are impossible for a public document.
+    let auth_method = match opt_str(obj, "token_endpoint_auth_method")? {
+        None => ClientAuthMethod::None,
+        Some("client_secret_basic" | "client_secret_post" | "client_secret_jwt") => {
+            return Err(invalid(
+                "shared-secret authentication methods are not allowed",
+            ));
+        }
+        Some(s) => match ClientAuthMethod::parse(s) {
+            Some(m) if caps.auth_methods.contains(&m) && !uses_secret(m) => m,
+            _ => return Err(invalid("token_endpoint_auth_method is not supported")),
+        },
+    };
+    let client_type = if auth_method == ClientAuthMethod::PrivateKeyJwt {
+        ClientType::Confidential
+    } else {
+        ClientType::Public
+    };
+    let jwks = match member(obj, "jwks") {
+        None => None,
+        Some(v @ Value::Object(_)) => Some(v.to_string()),
+        Some(_) => return Err(invalid("jwks must be a JWK Set object")),
+    };
+
+    let application_type = match opt_str(obj, "application_type")? {
+        None | Some("web") => ApplicationType::Web,
+        Some("native") => ApplicationType::Native,
+        Some(_) => return Err(invalid("application_type must be web or native")),
+    };
+
+    // Redirect URIs: required.
+    let redirect_uris = dedup(opt_str_array(obj, "redirect_uris")?.unwrap_or_default());
+    if redirect_uris.is_empty() {
+        return Err(invalid("redirect_uris is required"));
+    }
+    if redirect_uris.len() > MAX_REDIRECT_URIS {
+        return Err(invalid("too many redirect URIs"));
+    }
+    let post_logout_redirect_uris =
+        dedup(opt_str_array(obj, "post_logout_redirect_uris")?.unwrap_or_default());
+    if post_logout_redirect_uris.len() > MAX_REDIRECT_URIS {
+        return Err(invalid("too many post-logout redirect URIs"));
+    }
+    for uri in &post_logout_redirect_uris {
+        validate_redirect_uri(uri, application_type)
+            .map_err(|_| invalid("post_logout_redirect_uris contains an invalid URI"))?;
+    }
+
+    // Grant and response types: intersection with what we support; empty is an error.
+    let grant_names = opt_str_array(obj, "grant_types")?
+        .unwrap_or_else(|| vec![GrantType::AuthorizationCode.as_str().to_owned()]);
+    let mut grant_types: Vec<GrantType> = Vec::new();
+    for g in grant_names.iter().filter_map(|n| GrantType::parse(n)) {
+        if caps.grant_types.contains(&g) && !grant_types.contains(&g) {
+            grant_types.push(g);
+        }
+    }
+    if grant_types.is_empty() {
+        return Err(invalid("no supported grant type"));
+    }
+    let response_names =
+        opt_str_array(obj, "response_types")?.unwrap_or_else(|| vec!["code".to_owned()]);
+    let response_types = dedup(
+        response_names
+            .into_iter()
+            .filter(|r| caps.response_types.contains(r))
+            .collect(),
+    );
+    if response_types.is_empty() {
+        return Err(invalid("no supported response type"));
+    }
+    if response_types.iter().any(|r| r == "code")
+        != grant_types.contains(&GrantType::AuthorizationCode)
+    {
+        return Err(invalid(
+            "response_types and grant_types are inconsistent: code requires authorization_code",
+        ));
+    }
+
+    // Scopes: never admin scopes.
+    let scopes = match opt_str(obj, "scope")? {
+        Some(raw) => {
+            Scope::parse(raw).map_err(|_| invalid("scope is not a valid scope string"))?;
+            let tokens = dedup(raw.split(' ').map(str::to_owned).collect());
+            if tokens
+                .iter()
+                .any(|t| t == "admin" || t.starts_with("admin:") || is_admin_scope(t))
+            {
+                return Err(invalid("admin scopes are not allowed"));
+            }
+            tokens
+        }
+        None => caps.default_scopes.clone(),
+    };
+
+    let client_name = match opt_str(obj, "client_name")? {
+        None => None,
+        Some(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return Err(invalid("client_name must not be empty"));
+            }
+            Some(trimmed.to_owned())
+        }
+    };
+    // check_url guarantees a host.
+    let host = url::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_owned))
+        .unwrap_or_default();
+    let name = client_name.clone().unwrap_or(host);
+
+    // The rules every client obeys (one implementation: `service::client`).
+    let input = ClientInput {
+        name: name.clone(),
+        client_type,
+        application_type,
+        auth_method,
+        redirect_uris: redirect_uris.clone(),
+        grant_types: grant_types.clone(),
+        scopes: scopes.clone(),
+        require_pkce: Some(true),
+        jwks: jwks.clone(),
+        jwks_uri: None,
+    };
+    validate_client(&input, validate_redirect_uri).map_err(|e| match e {
+        CoreError::Validation { field, message } => invalid(format!("{field}: {message}")),
+        other => invalid(other.to_string()),
+    })?;
+
+    Ok(NewClientMetadata {
+        client_id: url.to_owned(),
+        name,
+        client_name,
+        client_type,
+        application_type,
+        auth_method,
+        jwks,
+        redirect_uris,
+        grant_types,
+        response_types,
+        scopes,
+        post_logout_redirect_uris,
+    })
+}
+
+fn invalid(message: impl Into<String>) -> CimdError {
+    CimdError::InvalidDocument(message.into())
+}
+
+/// A document member; JSON `null` counts as absent.
+fn member<'a>(obj: &'a Map<String, Value>, key: &str) -> Option<&'a Value> {
+    obj.get(key).filter(|v| !v.is_null())
+}
+
+fn opt_str<'a>(obj: &'a Map<String, Value>, key: &str) -> Result<Option<&'a str>, CimdError> {
+    match member(obj, key) {
+        None => Ok(None),
+        Some(Value::String(s)) => Ok(Some(s)),
+        Some(_) => Err(invalid(format!("{key} must be a string"))),
+    }
+}
+
+fn opt_str_array(obj: &Map<String, Value>, key: &str) -> Result<Option<Vec<String>>, CimdError> {
+    let Some(value) = member(obj, key) else {
+        return Ok(None);
+    };
+    let not_strings = || invalid(format!("{key} must be an array of strings"));
+    let items = value.as_array().ok_or_else(not_strings)?;
+    items
+        .iter()
+        .map(|v| v.as_str().map(str::to_owned).ok_or_else(not_strings))
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
+
+fn dedup(items: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::with_capacity(items.len());
+    for item in items {
+        if !out.contains(&item) {
+            out.push(item);
+        }
+    }
+    out
 }
 
 #[cfg(test)]
