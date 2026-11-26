@@ -92,14 +92,22 @@ fn serve(cwd: &Path, port: u16, envs: &[(&str, &str)]) -> Server {
     }
 }
 
-/// A one-shot HTTP server answering every request with `status_line`.
+/// A one-shot HTTP server answering every request with `status_line`, after reading the whole
+/// request head (answering after a partial read and closing would reset the connection).
 fn fake_server(status_line: &'static str) -> (u16, std::thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().expect("addr").port();
     let handle = std::thread::spawn(move || {
         if let Ok((mut stream, _)) = listener.accept() {
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+            let mut head = Vec::new();
             let mut buf = [0_u8; 1024];
-            let _ = stream.read(&mut buf);
+            while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+                match stream.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => head.extend_from_slice(&buf[..n]),
+                }
+            }
             let _ = write!(
                 stream,
                 "{status_line}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"

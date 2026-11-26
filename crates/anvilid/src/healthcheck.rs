@@ -119,12 +119,15 @@ pub fn probe(target: &Target) -> Result<(), String> {
         .set_read_timeout(Some(TIMEOUT))
         .and_then(|()| stream.set_write_timeout(Some(TIMEOUT)))
         .map_err(|e| format!("socket error: {e}"))?;
-    write!(
-        stream,
+    // One write: `write!` on an unbuffered stream issues a syscall per formatted fragment, and a
+    // server that answers after the first segment and closes would make the rest fail (EPIPE).
+    let request = format!(
         "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: anvilid-healthcheck\r\nConnection: close\r\n\r\n",
         target.path, target.host
-    )
-    .map_err(|e| format!("request failed: {e}"))?;
+    );
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|e| format!("request failed: {e}"))?;
     let mut raw = Vec::new();
     // A timeout or reset after the status line still leaves a usable answer.
     let read = stream.take(MAX_RESPONSE).read_to_end(&mut raw);
