@@ -7,14 +7,16 @@
 //! - a redirect (error or success) only ever targets a URI that `redirect_matches` the client's
 //!   registered list;
 //! - a successful request belongs to the client it was validated against, and a public client
-//!   always carries a PKCE challenge, even with `require_pkce = false`.
+//!   always carries a PKCE challenge, even with `require_pkce = false`;
+//! - every accepted `resource` is one of the client's allowed resources (RFC 8707);
+//! - `prompt=create` is only accepted when the tenant's registration is open.
 #![no_main]
 
 use std::sync::OnceLock;
 
 use anvil_core::model::{
     ApplicationType, Client, ClientAuthMethod, ClientId, ClientType, ConsentMode, GrantType,
-    TenantId, TokenFormat,
+    RegistrationMode, TenantId, TokenFormat,
 };
 use anvil_core::oauth::authorize_request::{AuthorizeError, parse_raw, validate};
 use anvil_core::oauth::redirect::redirect_matches;
@@ -53,6 +55,14 @@ fn client(
         consent_mode: ConsentMode::Required,
         id_token_signed_response_alg: None,
         can_introspect: false,
+        post_logout_redirect_uris: vec![],
+        backchannel_logout_uri: None,
+        backchannel_logout_session_required: false,
+        allowed_resources: vec![
+            "https://api.example.test".into(),
+            "https://other.example.test/v1".into(),
+        ],
+        mfa_policy: None,
         created_at: at,
         updated_at: at,
     }
@@ -66,7 +76,10 @@ fn fixture() -> &'static Fixture {
             ClientType::Confidential,
             ApplicationType::Web,
             ClientAuthMethod::ClientSecretBasic,
-            &["https://rp.example.test/cb", "https://rp.example.test/other"],
+            &[
+                "https://rp.example.test/cb",
+                "https://rp.example.test/other",
+            ],
             true,
         ),
         public: client(
@@ -80,11 +93,25 @@ fn fixture() -> &'static Fixture {
     })
 }
 
-fn check(c: &Client, data: &[u8]) {
+fn check(c: &Client, data: &[u8], registration: RegistrationMode) {
     let raw = parse_raw(data);
-    match validate(&raw, Some(c)) {
+    match validate(&raw, Some(c), registration) {
         Ok(v) => {
             assert_eq!(v.client.client_id, c.client_id);
+            for r in &v.params.resource {
+                assert!(
+                    c.allowed_resources.contains(r),
+                    "accepted resource {r:?} the client may not request"
+                );
+            }
+            if registration != RegistrationMode::Open {
+                assert!(
+                    !raw.all("prompt")
+                        .iter()
+                        .any(|p| p.split(' ').any(|v| v == "create")),
+                    "prompt=create accepted without open registration"
+                );
+            }
             assert!(
                 redirect_matches(&c.redirect_uris, &v.params.redirect_uri, c.application_type),
                 "accepted unregistered redirect_uri {:?}",
@@ -108,9 +135,9 @@ fuzz_target!(|data: &[u8]| {
     let f = fixture();
     let raw = parse_raw(data);
     assert!(matches!(
-        validate(&raw, None),
+        validate(&raw, None, RegistrationMode::Open),
         Err(AuthorizeError::ErrorPage { .. })
     ));
-    check(&f.confidential, data);
-    check(&f.public, data);
+    check(&f.confidential, data, RegistrationMode::Open);
+    check(&f.public, data, RegistrationMode::Disabled);
 });
