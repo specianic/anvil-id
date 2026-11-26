@@ -6,15 +6,15 @@ current_phase: 04
 current_phase_name: release 0 3 real world logins
 current_plan: Not started
 status: planning
-stopped_at: Completed 04-35-PLAN.md
-last_updated: "2026-11-26T00:00:35.866Z"
+stopped_at: Completed 04-36-PLAN.md
+last_updated: "2026-11-26T00:03:44.181Z"
 last_activity: 2026-11-25
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 102
-  completed_plans: 98
-  percent: 95
+  completed_plans: 99
+  percent: 97
 ---
 
 # Project State
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 **Status:** Ready to plan
 **Last Activity:** 2026-11-25
 **Last Activity Description:** Phase 3 complete, transitioned to Phase 04
-**Progress:** [██████████] 95%
+**Progress:** [██████████] 97%
 
 Phase 3 plans 03-01 through 03-34 are all complete (34/34 summaries); v0.2.0 is published. 03-34 closed the verification gap (base64). Next: Phase 3 re-verification, then Phase 4.
 
@@ -153,6 +153,7 @@ Phase 3 plans 03-01 through 03-34 are all complete (34/34 summaries); v0.2.0 is 
 | Phase 04 P28 | 35min | 2 tasks | 7 files |
 | Phase 04 P34 | 50min | 3 tasks | 40 files |
 | Phase 04 P35 | 75min | 2 tasks | 16 files |
+| Phase 04 P36 | 95min | 3 tasks | 16 files |
 
 ## Accumulated Context
 
@@ -346,6 +347,7 @@ Recent decisions affecting current work:
 - [Phase 04]: 04-28: e2e adds prompt/acr_values by rewriting the RP's /authorize redirect (Playwright routes only the first request of a redirect chain); specs changing tenant settings use withTenantSettings
 - [Phase 04]: 04-34: logout-token iss recorded per RP session (SQLite 0006 / Postgres 0005); unlink is one guarded storage intent (DeleteLinkOutcome), unverified email never counts
 - [Phase 04]: 04-35: email_otp = code, magic_link = link, enforced separately (route 404 + core refusal by what the email carried); login_code code/link optional, overrides must guard with 'is defined'
+- [Phase 04]: 04-36: every sign-in wakes the back-channel worker (AppState::wake_logout_worker is the only notifier)
 
 ### Pending Todos
 
@@ -358,6 +360,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-26T00:00:35.864Z
-Stopped at: Completed 04-35-PLAN.md
+Last session: 2026-11-26T00:03:44.179Z
+Stopped at: Completed 04-36-PLAN.md
 Resume file: None
