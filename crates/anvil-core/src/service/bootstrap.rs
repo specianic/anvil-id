@@ -182,6 +182,9 @@ pub fn build_mgmt_client(now: OffsetDateTime) -> (NewClient, SecretString) {
         registration_access_token_hash: None,
         registration_source: crate::model::ClientSource::Static,
         organization: crate::model::OrgClientPolicy::Off,
+        require_pushed_authorization_requests: false,
+        client_kind: crate::model::ClientKind::Application,
+        headless_native: false,
     };
     (client, secret)
 }
@@ -228,6 +231,9 @@ pub fn build_console_client(now: OffsetDateTime, public_url: &PublicUrl) -> NewC
         registration_access_token_hash: None,
         registration_source: crate::model::ClientSource::Static,
         organization: crate::model::OrgClientPolicy::Off,
+        require_pushed_authorization_requests: false,
+        client_kind: crate::model::ClientKind::Application,
+        headless_native: false,
     }
 }
 
@@ -650,6 +656,9 @@ mod tests {
             registration_access_token_hash: None,
             registration_source: crate::model::ClientSource::Static,
             organization: crate::model::OrgClientPolicy::Off,
+            require_pushed_authorization_requests: false,
+            client_kind: crate::model::ClientKind::Application,
+            headless_native: false,
         }
     }
 
@@ -779,6 +788,9 @@ mod tests {
             registration_access_token_hash: None,
             registration_source: crate::model::ClientSource::Static,
             organization: crate::model::OrgClientPolicy::Off,
+            require_pushed_authorization_requests: false,
+            client_kind: crate::model::ClientKind::Application,
+            headless_native: false,
         };
         let expected_secret = secret.expose_secret().to_owned();
         let r = setup_outcome(SetupOutcome::Completed { user, client }, secret).unwrap();
@@ -806,6 +818,7 @@ mod tests {
             &self,
             _phc: Option<&str>,
             _password: &str,
+            _profile: Option<&crate::model::HashProfileMaterial>,
         ) -> Result<PasswordCheck, CoreError> {
             Err(CoreError::Internal("race test: no hashing".into()))
         }

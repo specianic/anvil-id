@@ -2730,6 +2730,9 @@ mod tests {
             created_at: at(),
             updated_at: at(),
             organization: crate::model::OrgClientPolicy::Off,
+            require_pushed_authorization_requests: false,
+            client_kind: crate::model::ClientKind::Application,
+            headless_native: false,
         }
     }
 

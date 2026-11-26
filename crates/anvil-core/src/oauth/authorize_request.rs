@@ -505,6 +505,9 @@ pub(crate) mod tests {
             registration_access_token_hash: None,
             registration_source: crate::model::ClientSource::Static,
             organization: crate::model::OrgClientPolicy::Off,
+            require_pushed_authorization_requests: false,
+            client_kind: crate::model::ClientKind::Application,
+            headless_native: false,
         }
     }
 

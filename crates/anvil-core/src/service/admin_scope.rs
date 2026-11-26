@@ -5,6 +5,15 @@
 //! - `admin:{tenants|clients|users|sessions|audit|settings|organizations}:read` grants read access to that
 //!   resource only;
 //!   `admin:{resource}:write` grants read and write access to that resource only.
+//! - `admin:users:export` ([`ADMIN_USERS_EXPORT`], ADM-09) is a third access kind: bulk and GDPR
+//!   user export. It is satisfied only by itself or by the full `admin:write` umbrella, never by
+//!   `admin:read`, `admin:users:read` or `admin:users:write`: reading users page by page is not
+//!   the same grant as pulling every user out in one call. Installations upgraded from 0.4 or
+//!   1.0.0-beta.1 get it through `admin:write`.
+//!
+//! [`scope_covers`] is THE coverage rule. Route checks ([`scope_satisfies`],
+//! [`export_scope_satisfied`]) and the role rules in [`crate::service::role`] (effective scopes,
+//! token bounding, escalation) all go through it.
 //!
 //! The admin API (02-16) checks every route with [`scope_satisfies`] and lists
 //! [`ALL_ADMIN_SCOPES`] in its OpenAPI security scheme.
@@ -15,6 +24,9 @@ use crate::model::Scope;
 pub const ADMIN_READ: &str = "admin:read";
 /// Broad write scope (implies [`ADMIN_READ`]).
 pub const ADMIN_WRITE: &str = "admin:write";
+
+/// Bulk/GDPR user export (ADM-09). Covered only by itself and [`ADMIN_WRITE`].
+pub const ADMIN_USERS_EXPORT: &str = "admin:users:export";
 
 /// Every admin scope, broad scopes first.
 pub const ALL_ADMIN_SCOPES: &[&str] = &[
@@ -34,6 +46,7 @@ pub const ALL_ADMIN_SCOPES: &[&str] = &[
     "admin:settings:write",
     "admin:organizations:read",
     "admin:organizations:write",
+    ADMIN_USERS_EXPORT,
 ];
 
 /// Scope of an organization admin's token in an application tenant (decision Q1). Not an
@@ -91,18 +104,37 @@ pub fn resource_scope(resource: Resource, access: Access) -> String {
     format!("admin:{}:{access}", resource.as_str())
 }
 
-/// Whether `granted` allows `access` on `resource`.
-pub fn scope_satisfies(granted: &Scope, resource: Resource, access: Access) -> bool {
-    if granted.contains(ADMIN_WRITE) || granted.contains(&resource_scope(resource, Access::Write)) {
+/// Whether admin scope `held` grants admin scope `wanted`, the single coverage rule:
+///
+/// - every scope covers itself;
+/// - `admin:write` covers every admin scope, including [`ADMIN_USERS_EXPORT`];
+/// - `admin:read` covers every `:read` scope (so never a write scope or the export scope);
+/// - `admin:{r}:write` covers `admin:{r}:read` (so never `admin:users:export`).
+pub fn scope_covers(held: &str, wanted: &str) -> bool {
+    if held == wanted || held == ADMIN_WRITE {
         return true;
     }
-    match access {
-        Access::Write => false,
-        Access::Read => {
-            granted.contains(ADMIN_READ)
-                || granted.contains(&resource_scope(resource, Access::Read))
-        }
+    if held == ADMIN_READ {
+        return wanted.ends_with(":read");
     }
+    match (held.strip_suffix(":write"), wanted.strip_suffix(":read")) {
+        (Some(h), Some(w)) => h == w,
+        _ => false,
+    }
+}
+
+/// Whether `granted` allows `access` on `resource`.
+pub fn scope_satisfies(granted: &Scope, resource: Resource, access: Access) -> bool {
+    let wanted = resource_scope(resource, access);
+    granted.iter().any(|held| scope_covers(held, &wanted))
+}
+
+/// Whether `granted` allows bulk/GDPR user export: only [`ADMIN_USERS_EXPORT`] or
+/// [`ADMIN_WRITE`].
+pub fn export_scope_satisfied(granted: &Scope) -> bool {
+    granted
+        .iter()
+        .any(|held| scope_covers(held, ADMIN_USERS_EXPORT))
 }
 
 /// Whether `token` is one of the admin scopes.
@@ -201,7 +233,9 @@ mod tests {
                 assert!(is_admin_scope(&resource_scope(r, a)));
             }
         }
-        assert_eq!(ALL_ADMIN_SCOPES.len(), 2 + 2 * RESOURCES.len());
+        // Two umbrellas, read and write per resource, plus the export scope.
+        assert_eq!(ALL_ADMIN_SCOPES.len(), 2 + 2 * RESOURCES.len() + 1);
+        assert!(is_admin_scope(ADMIN_USERS_EXPORT));
         assert!(is_admin_scope("admin:sessions:write"));
         assert!(is_admin_scope("admin:audit:read"));
         assert!(is_admin_scope("admin:settings:write"));
@@ -230,5 +264,39 @@ mod tests {
             assert!(!scope_satisfies(&s, r, Access::Read));
             assert!(!scope_satisfies(&s, r, Access::Write));
         }
+    }
+
+    #[test]
+    fn export_scope_not_implied_by_admin_read() {
+        assert!(!scope_covers(ADMIN_READ, ADMIN_USERS_EXPORT));
+        assert!(!export_scope_satisfied(&scope("admin:read")));
+    }
+
+    #[test]
+    fn export_scope_not_implied_by_users_read() {
+        assert!(!scope_covers("admin:users:read", ADMIN_USERS_EXPORT));
+        assert!(!export_scope_satisfied(&scope("admin:users:read")));
+    }
+
+    #[test]
+    fn export_scope_not_implied_by_users_write() {
+        assert!(!scope_covers("admin:users:write", ADMIN_USERS_EXPORT));
+        assert!(!export_scope_satisfied(&scope(
+            "admin:read admin:users:read admin:users:write"
+        )));
+    }
+
+    #[test]
+    fn export_scope_implied_by_admin_write() {
+        assert!(scope_covers(ADMIN_WRITE, ADMIN_USERS_EXPORT));
+        assert!(export_scope_satisfied(&scope("admin:write")));
+        assert!(export_scope_satisfied(&scope("admin:users:export")));
+        // The export scope grants nothing else.
+        let s = scope("admin:users:export");
+        for r in RESOURCES {
+            assert!(!scope_satisfies(&s, r, Access::Read));
+            assert!(!scope_satisfies(&s, r, Access::Write));
+        }
+        assert!(!export_scope_satisfied(&scope("admin:users admin:export")));
     }
 }

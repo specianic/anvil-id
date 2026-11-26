@@ -100,6 +100,77 @@ pub struct TenantSettings {
     pub cimd: CimdSettings,
     /// How roles and permissions are mapped into tokens.
     pub claims: ClaimMappingSettings,
+    /// Pushed authorization requests (RFC 9126) tenant policy.
+    pub par: ParSettings,
+    /// Headless flow API settings (browser mode origin allow-list).
+    pub headless: HeadlessSettings,
+}
+
+/// Tenant policy for pushed authorization requests (RFC 9126).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ParSettings {
+    /// RFC 9126 §5 authorization server metadata `require_pushed_authorization_requests`: every
+    /// client of the tenant must use a pushed request. Default false (each client may still opt
+    /// in through its own metadata, RFC 9126 §6).
+    pub require_pushed_authorization_requests: bool,
+}
+
+/// Headless flow API settings of a tenant.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HeadlessSettings {
+    /// Origins allowed to call the headless flow API in browser mode with credentials (decision
+    /// Q5): exact match, `https://host[:port]`, lowercase, no path, no wildcard. Empty (the
+    /// default) = browser mode only from the tenant's own origin.
+    pub allowed_origins: Vec<String>,
+}
+
+impl HeadlessSettings {
+    /// Validates one allow-list entry (decision Q5): scheme `https`, a host, an optional port,
+    /// no userinfo, path, query, fragment or wildcard, all lowercase. With `dev` (callers pass
+    /// the installation's dev mode), `http://localhost[:port]` and `http://127.0.0.1[:port]` are
+    /// accepted too.
+    pub fn validate_origin(origin: &str, dev: bool) -> Result<(), &'static str> {
+        if origin.is_empty() || origin.chars().any(|c| c.is_whitespace() || c.is_control()) {
+            return Err("origin must be a non-empty URL origin without whitespace");
+        }
+        if origin.contains('*') {
+            return Err("origin must not contain a wildcard");
+        }
+        if origin != origin.to_ascii_lowercase() {
+            return Err("origin must be lowercase");
+        }
+        let (scheme, authority) = origin
+            .split_once("://")
+            .ok_or("origin must start with https://")?;
+        if authority.contains(['/', '?', '#']) {
+            return Err("origin must not contain a path, query or fragment");
+        }
+        if authority.contains('@') {
+            return Err("origin must not contain userinfo");
+        }
+        let (host, port) = split_host_port(authority).map_err(|_| "origin has an invalid host")?;
+        if let Some(port) = port {
+            match port.parse::<u16>() {
+                Ok(p) if p > 0 && port.chars().all(|c| c.is_ascii_digit()) => {}
+                _ => return Err("origin has an invalid port"),
+            }
+        }
+        match scheme {
+            "https" => Ok(()),
+            "http" if dev && matches!(host, "localhost" | "127.0.0.1") => Ok(()),
+            "http" => Err("origin must use https (http only for localhost in dev mode)"),
+            _ => Err("origin must start with https://"),
+        }
+    }
+
+    /// Validates every allow-list entry (see [`HeadlessSettings::validate_origin`]).
+    pub fn validate(&self, dev: bool) -> Result<(), &'static str> {
+        self.allowed_origins
+            .iter()
+            .try_for_each(|o| Self::validate_origin(o, dev))
+    }
 }
 
 impl Default for TenantSettings {
@@ -118,6 +189,8 @@ impl Default for TenantSettings {
             dcr: DcrSettings::default(),
             cimd: CimdSettings::default(),
             claims: ClaimMappingSettings::default(),
+            par: ParSettings::default(),
+            headless: HeadlessSettings::default(),
         }
     }
 }
@@ -690,5 +763,99 @@ mod tests {
         for p in CaptchaProvider::ALL {
             assert_eq!(CaptchaProvider::parse(p.as_str()), Some(*p));
         }
+    }
+
+    #[test]
+    fn tenant_settings_beta1_json_parses_with_new_defaults() {
+        // Settings as written by 1.0.0-beta.1 (no `par`, no `headless`).
+        let beta1 = r#"{"registration":"open","require_verified_email":false,"signing_algs":["RS256","ES256"],"captcha":null,"mfa_policy":"optional","email_otp":false,"magic_link":true,"auto_link":true,"upstream_registration":null,"default_locale":"en","dcr":{"policy":"disabled"},"cimd":{"policy":"disabled"},"claims":{"roles":{"claim":"roles","tokens":["access_token","id_token","userinfo"],"scope":"roles"},"permissions":{"claim":"permissions","tokens":["access_token"],"scope":null},"org_roles":{"claim":"org_roles","tokens":["access_token","id_token","userinfo"],"scope":"roles"},"org_permissions":{"claim":"org_permissions","tokens":["access_token"],"scope":null}}}"#;
+        let s: TenantSettings = serde_json::from_str(beta1).unwrap();
+        assert!(s.magic_link);
+        assert_eq!(s.par, ParSettings::default());
+        assert!(!s.par.require_pushed_authorization_requests);
+        assert_eq!(s.headless, HeadlessSettings::default());
+        assert!(s.headless.allowed_origins.is_empty());
+        // Round trip with the new keys.
+        let mut with_new = s.clone();
+        with_new.par.require_pushed_authorization_requests = true;
+        with_new.headless.allowed_origins = vec!["https://app.example".into()];
+        let json = serde_json::to_string(&with_new).unwrap();
+        assert_eq!(
+            serde_json::from_str::<TenantSettings>(&json).unwrap(),
+            with_new
+        );
+        // Partial nested objects take defaults too.
+        let partial: TenantSettings = serde_json::from_str(r#"{"par":{},"headless":{}}"#).unwrap();
+        assert_eq!(partial, TenantSettings::default());
+    }
+
+    #[test]
+    fn headless_origin_validation_rejects_wildcard_path_and_http() {
+        for good in [
+            "https://app.example",
+            "https://app.example:8443",
+            "https://a-b.c.example",
+            "https://[::1]:8443",
+        ] {
+            assert_eq!(
+                HeadlessSettings::validate_origin(good, false),
+                Ok(()),
+                "{good}"
+            );
+        }
+        for bad in [
+            "",
+            "*",
+            "https://*.example",
+            "https://app.example/",
+            "https://app.example/path",
+            "https://app.example?x=1",
+            "https://app.example#f",
+            "https://user@app.example",
+            "https://App.Example",
+            "HTTPS://app.example",
+            "http://app.example",
+            "http://localhost:3000",
+            "ftp://app.example",
+            "app.example",
+            "https://",
+            "https://app.example:0",
+            "https://app.example:+1",
+            "https://app.example:99999",
+            "https://app example",
+            "null",
+        ] {
+            assert!(
+                HeadlessSettings::validate_origin(bad, false).is_err(),
+                "{bad:?} must be rejected"
+            );
+        }
+        // Dev mode: plain http only on localhost / 127.0.0.1.
+        for dev_ok in [
+            "http://localhost",
+            "http://localhost:3000",
+            "http://127.0.0.1:5173",
+        ] {
+            assert_eq!(
+                HeadlessSettings::validate_origin(dev_ok, true),
+                Ok(()),
+                "{dev_ok}"
+            );
+        }
+        for dev_bad in [
+            "http://app.example",
+            "http://localhost/x",
+            "http://*.localhost",
+        ] {
+            assert!(
+                HeadlessSettings::validate_origin(dev_bad, true).is_err(),
+                "{dev_bad}"
+            );
+        }
+        let settings = HeadlessSettings {
+            allowed_origins: vec!["https://ok.example".into(), "https://*.bad".into()],
+        };
+        assert!(settings.validate(false).is_err());
+        assert_eq!(HeadlessSettings::default().validate(false), Ok(()));
     }
 }

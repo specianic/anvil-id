@@ -694,6 +694,9 @@ mod tests {
                 created_at: c.created_at,
                 updated_at: c.created_at,
                 organization: crate::model::OrgClientPolicy::Off,
+                require_pushed_authorization_requests: c.require_pushed_authorization_requests,
+                client_kind: c.client_kind,
+                headless_native: c.headless_native,
             };
             self.clients.lock().unwrap().push((tenant, client.clone()));
             Ok(client)
@@ -1696,6 +1699,9 @@ mod tests {
             created_at: T0,
             updated_at: T0,
             organization: crate::model::OrgClientPolicy::Off,
+            require_pushed_authorization_requests: false,
+            client_kind: crate::model::ClientKind::Application,
+            headless_native: false,
         };
         assert_eq!(client_metadata(&client), v.metadata());
     }

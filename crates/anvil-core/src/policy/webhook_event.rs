@@ -152,7 +152,13 @@ fn classify(action: AuditAction) -> Option<(WebhookEventType, Subject)> {
         | A::OrgDomainUpdated
         | A::OrgDomainDeleted
         | A::SamlLoginSucceeded
-        | A::SamlLoginFailed => None,
+        | A::SamlLoginFailed
+        // Bulk admin operations and tenant hash profiles: not lifecycle events (like
+        // TenantConfigApplied). Import and export are audited, not webhooked.
+        | A::UsersImported
+        | A::UserExported
+        | A::PasswordProfileCreated
+        | A::PasswordProfileDeleted => None,
     }
 }
 
@@ -569,6 +575,10 @@ mod tests {
             AuditAction::OrgDomainDeleted,
             AuditAction::SamlLoginSucceeded,
             AuditAction::SamlLoginFailed,
+            AuditAction::UsersImported,
+            AuditAction::UserExported,
+            AuditAction::PasswordProfileCreated,
+            AuditAction::PasswordProfileDeleted,
         ] {
             assert_eq!(
                 webhook_event("acme", &admin_event(action, ORG, org_details())),

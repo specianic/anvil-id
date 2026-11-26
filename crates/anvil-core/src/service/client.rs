@@ -677,6 +677,9 @@ impl ClientService {
             },
             registration_access_token_hash: dynamic,
             organization: options.organization,
+            require_pushed_authorization_requests: false,
+            client_kind: crate::model::ClientKind::Application,
+            headless_native: false,
         };
         let action = if new.registration_access_token_hash.is_some() {
             AuditAction::ClientRegistered
@@ -896,6 +899,9 @@ impl ClientService {
             metadata_expires_at: None,
             registration_access_token_hash: None,
             organization: options.organization,
+            require_pushed_authorization_requests: None,
+            client_kind: None,
+            headless_native: None,
         };
         let client = self
             .storage

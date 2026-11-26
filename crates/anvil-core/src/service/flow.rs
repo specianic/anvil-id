@@ -2351,9 +2351,10 @@ impl FlowService {
                     }
                     _ => None,
                 };
+                // No hash profile yet: imported legacy hashes and their profiles land in 07-14.
                 let check = match self
                     .hasher
-                    .verify(phc.as_deref(), password.expose_secret())
+                    .verify(phc.as_deref(), password.expose_secret(), None)
                     .await
                 {
                     Ok(c) => c,

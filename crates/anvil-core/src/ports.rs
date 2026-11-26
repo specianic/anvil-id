@@ -1987,7 +1987,16 @@ pub trait PasswordHasher: Send + Sync {
     /// Verifies `password` against `phc`. With `phc = None` (unknown user, no password) it
     /// verifies against a dummy hash so timing does not reveal account existence, and returns
     /// `valid = false`.
-    async fn verify(&self, phc: Option<&str>, password: &str) -> Result<PasswordCheck, CoreError>;
+    ///
+    /// `profile` carries the unsealed tenant hash-profile parameters an imported legacy hash
+    /// needs (e.g. Firebase scrypt). An implementation that cannot use a profile returns an
+    /// error for `Some(_)`; it never reports such a check as valid.
+    async fn verify(
+        &self,
+        phc: Option<&str>,
+        password: &str,
+        profile: Option<&crate::model::HashProfileMaterial>,
+    ) -> Result<PasswordCheck, CoreError>;
 }
 
 /// Checks a password against a breached-password corpus.

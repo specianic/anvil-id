@@ -6,7 +6,8 @@
 //!   `role_assigned`, `role_unassigned`); failed calls record nothing.
 //! - **System-tenant roles are admin API scopes** (decision Q3). A system user's console token
 //!   carries an admin scope only when one of the user's roles grants it
-//!   ([`effective_admin_scopes`], [`bound_admin_scope`]); `admin:write` covers every admin scope,
+//!   ([`effective_admin_scopes`], [`bound_admin_scope`]). Coverage is the single rule
+//!   [`scope_covers`]: `admin:write` covers every admin scope (including `admin:users:export`),
 //!   `admin:read` every read scope, `admin:{resource}:write` that resource's read scope. Roles
 //!   of any other tenant never grant admin scopes, whatever their permission strings look like.
 //! - **Last administrator**: in the system tenant, no unassignment, role deletion, role
@@ -37,7 +38,7 @@ use crate::model::{
 use crate::policy::claims_mapping::{ClaimInputs, mapped_claims};
 use crate::policy::org_claims::{bound_org_admin_scope, org_claims_json};
 use crate::ports::{AttributeSchemaCheck, Storage, StorageError};
-use crate::service::admin_scope::{ADMIN_READ, ADMIN_WRITE, ALL_ADMIN_SCOPES, is_admin_scope};
+use crate::service::admin_scope::{ADMIN_WRITE, ALL_ADMIN_SCOPES, is_admin_scope, scope_covers};
 use crate::service::audit::AuditService;
 use crate::service::tenant::admin_page;
 
@@ -51,27 +52,12 @@ const GUARD_PAGE: u32 = 200;
 // Pure rules
 // ---------------------------------------------------------------------------------------------
 
-/// Whether admin scope `held` grants admin scope `wanted`: `admin:write` grants everything,
-/// `admin:read` every read scope, `admin:{r}:write` also `admin:{r}:read`.
-fn admin_scope_covers(held: &str, wanted: &str) -> bool {
-    if held == wanted || held == ADMIN_WRITE {
-        return true;
-    }
-    if held == ADMIN_READ {
-        return wanted.ends_with(":read");
-    }
-    match (held.strip_suffix(":write"), wanted.strip_suffix(":read")) {
-        (Some(h), Some(w)) => h == w,
-        _ => false,
-    }
-}
-
 /// Every admin scope granted by `held` (non-admin strings grant nothing).
 pub fn admin_scopes_covered_by<'a>(held: impl IntoIterator<Item = &'a str>) -> BTreeSet<String> {
     let held: Vec<&str> = held.into_iter().filter(|h| is_admin_scope(h)).collect();
     ALL_ADMIN_SCOPES
         .iter()
-        .filter(|s| held.iter().any(|h| admin_scope_covers(h, s)))
+        .filter(|s| held.iter().any(|h| scope_covers(h, s)))
         .map(|s| (*s).to_owned())
         .collect()
 }
@@ -98,7 +84,7 @@ pub fn bound_admin_scope(requested: &Scope, effective: &BTreeSet<String>) -> Sco
     let kept: Vec<&String> = requested_admin.intersection(effective).collect();
     let minimal = kept
         .iter()
-        .filter(|s| !kept.iter().any(|t| t != *s && admin_scope_covers(t, s)))
+        .filter(|s| !kept.iter().any(|t| t != *s && scope_covers(t, s)))
         .map(|s| (*s).clone());
     requested
         .iter()
@@ -753,6 +739,7 @@ impl RoleService {
 mod tests {
     use super::*;
     use crate::model::TenantSettings;
+    use crate::service::admin_scope::ADMIN_READ;
     use time::OffsetDateTime;
 
     fn tenant(slug: &str) -> Tenant {
@@ -862,6 +849,30 @@ mod tests {
         assert!(check_escalation(&scope("admin:read"), &perms(&["admin:users:write"])).is_err());
         // Non-admin permissions are never escalation.
         assert!(check_escalation(&scope("admin:users:write"), &perms(&["docs:write"])).is_ok());
+    }
+
+    #[test]
+    fn role_escalation_users_write_cannot_grant_export() {
+        let export = vec!["admin:users:export".to_owned()];
+        for caller in [
+            "admin:users:write",
+            "admin:users:read admin:users:write",
+            "admin:read admin:users:write",
+        ] {
+            assert!(
+                matches!(
+                    check_escalation(&scope(caller), &export),
+                    Err(CoreError::InsufficientScope(_))
+                ),
+                "{caller} must not grant admin:users:export"
+            );
+        }
+        assert!(check_escalation(&scope("admin:write"), &export).is_ok());
+        assert!(check_escalation(&scope("admin:users:export"), &export).is_ok());
+        // Role expansion follows the same rule: users:write never yields the export scope.
+        assert!(!admin_scopes_covered_by(["admin:users:write"]).contains("admin:users:export"));
+        assert!(admin_scopes_covered_by([ADMIN_WRITE]).contains("admin:users:export"));
+        assert!(!admin_scopes_covered_by([ADMIN_READ]).contains("admin:users:export"));
     }
 
     fn org_source(perms: &[&str]) -> UserClaimSource {

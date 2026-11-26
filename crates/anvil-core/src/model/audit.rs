@@ -216,6 +216,14 @@ pub enum AuditAction {
     OrgDomainDeleted,
     SamlLoginSucceeded,
     SamlLoginFailed,
+    /// A bulk user import ran (ADM-08). Details carry counts only, never a hash.
+    UsersImported,
+    /// A user's data was exported (ADM-09).
+    UserExported,
+    /// A tenant password hash profile (legacy import parameters) was created.
+    PasswordProfileCreated,
+    /// A tenant password hash profile was deleted.
+    PasswordProfileDeleted,
 }
 
 str_enum!(AuditAction {
@@ -317,6 +325,10 @@ str_enum!(AuditAction {
     OrgDomainDeleted => "org_domain_deleted",
     SamlLoginSucceeded => "saml_login_succeeded",
     SamlLoginFailed => "saml_login_failed",
+    UsersImported => "users_imported",
+    UserExported => "user_exported",
+    PasswordProfileCreated => "password_profile_created",
+    PasswordProfileDeleted => "password_profile_deleted",
 });
 
 /// Structured event details. Only typed constructors build it, and none of them accepts a
@@ -564,7 +576,22 @@ mod tests {
         for v in AuditOutcome::ALL {
             assert_eq!(AuditOutcome::parse(v.as_str()), Some(*v));
         }
-        assert_eq!(AuditAction::ALL.len(), 98);
+        assert_eq!(AuditAction::ALL.len(), 102);
+        for (action, name) in [
+            (AuditAction::UsersImported, "users_imported"),
+            (AuditAction::UserExported, "user_exported"),
+            (
+                AuditAction::PasswordProfileCreated,
+                "password_profile_created",
+            ),
+            (
+                AuditAction::PasswordProfileDeleted,
+                "password_profile_deleted",
+            ),
+        ] {
+            assert_eq!(action.as_str(), name);
+            assert_eq!(AuditAction::parse(name), Some(action));
+        }
         assert_eq!(
             AuditAction::OrgDomainVerificationFailed.as_str(),
             "org_domain_verification_failed"

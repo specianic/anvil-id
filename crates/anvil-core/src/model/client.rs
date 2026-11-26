@@ -99,6 +99,24 @@ str_enum!(ConsentMode {
     SkipFirstParty => "skip_first_party",
 });
 
+/// What a client is (decision Q7): an ordinary application, or an AI agent acting for a user.
+/// Agents are marked explicitly (never inferred from metadata) so the consent screen can say
+/// that an agent is asking (AGT-03). Stored as TEXT; an unknown stored value is corrupt data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClientKind {
+    /// An ordinary application (every client before 1.0).
+    #[default]
+    Application,
+    /// An AI agent acting on a user's behalf.
+    Agent,
+}
+
+str_enum!(ClientKind {
+    Application => "application",
+    Agent => "agent",
+});
+
 /// A persisted client. `client_id` (the OAuth identifier) is unique per tenant.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Client {
@@ -142,6 +160,15 @@ pub struct Client {
     pub registration_access_token_hash: Option<SecretHash>,
     /// Organization policy (`organization` parameter, org claims); default `off`.
     pub organization: OrgClientPolicy,
+    /// RFC 9126 §6 client metadata `require_pushed_authorization_requests`: the client must
+    /// start every authorization request with a pushed request (`request_uri`). Default false.
+    pub require_pushed_authorization_requests: bool,
+    /// Application or AI agent (decision Q7); default [`ClientKind::Application`].
+    pub client_kind: ClientKind,
+    /// First-party native client allowed to drive the headless flow API through a pushed
+    /// request plus PKCE, receiving the code as JSON (decision Q6). Never set for DCR or CIMD
+    /// clients. Default false.
+    pub headless_native: bool,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
 }
@@ -178,6 +205,12 @@ pub struct NewClient {
     pub registration_access_token_hash: Option<SecretHash>,
     /// Organization policy; default `off`.
     pub organization: OrgClientPolicy,
+    /// See [`Client::require_pushed_authorization_requests`].
+    pub require_pushed_authorization_requests: bool,
+    /// See [`Client::client_kind`].
+    pub client_kind: ClientKind,
+    /// See [`Client::headless_native`].
+    pub headless_native: bool,
     pub created_at: OffsetDateTime,
 }
 
@@ -208,6 +241,9 @@ pub struct ClientUpdate {
     /// RFC 7592 token rotation: `Some(None)` clears the hash.
     pub registration_access_token_hash: Option<Option<SecretHash>>,
     pub organization: Option<OrgClientPolicy>,
+    pub require_pushed_authorization_requests: Option<bool>,
+    pub client_kind: Option<ClientKind>,
+    pub headless_native: Option<bool>,
 }
 
 #[cfg(test)]
@@ -237,5 +273,23 @@ mod tests {
         }
         assert_eq!(TokenFormat::default(), TokenFormat::Jwt);
         assert_eq!(ConsentMode::default(), ConsentMode::Required);
+    }
+
+    #[test]
+    fn client_kind_round_trips_and_unknown_is_error() {
+        for v in ClientKind::ALL {
+            assert_eq!(ClientKind::parse(v.as_str()), Some(*v));
+        }
+        assert_eq!(ClientKind::Application.as_str(), "application");
+        assert_eq!(ClientKind::Agent.as_str(), "agent");
+        assert_eq!(ClientKind::default(), ClientKind::Application);
+        for bad in ["", "Agent", "bot", "application "] {
+            assert_eq!(ClientKind::parse(bad), None, "{bad:?}");
+        }
+        assert_eq!(
+            serde_json::from_str::<ClientKind>("\"agent\"").unwrap(),
+            ClientKind::Agent
+        );
+        assert!(serde_json::from_str::<ClientKind>("\"robot\"").is_err());
     }
 }
