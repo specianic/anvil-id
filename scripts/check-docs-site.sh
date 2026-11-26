@@ -13,16 +13,52 @@
 #      (docs/research/ holds local-only notes and must never reach the site)
 #   4. broken internal links: a relative href/src in an HTML page that does not resolve to a file in
 #      the output (anchors, query strings, http(s):, mailto:, data: and javascript: are ignored)
+#   5. security policy: the repository's SECURITY.md (which the site's security page points to) is
+#      missing, has no supported-versions table, or still contains an `OWNER:` placeholder that the
+#      owner has to resolve before the policy is published
 set -euo pipefail
+
+# The security policy checked by rule 5: SECURITY.md at the repository root.
+SECURITY_POLICY="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/SECURITY.md"
 
 usage() {
 	echo "usage: $0 <book-dir> | --self-test" >&2
 	exit 2
 }
 
-# check_site <dir>: prints one line per violation, returns 1 if any were found.
+# check_policy <file>: rule 5. Prints one line per violation, returns 1 if any were found.
+check_policy() {
+	local policy="$1"
+	if [[ ! -f "$policy" ]]; then
+		echo "FAIL [security-policy] $policy is missing"
+		return 1
+	fi
+	local fail=0
+	# A "## Supported versions" section with a Markdown table (header row plus separator row)
+	# before the next level-2 heading.
+	if ! awk '
+		/^## / { in_section = ($0 ~ /^## Supported versions[[:space:]]*$/); next }
+		in_section && /^\|.*\|[[:space:]]*$/ { rows++ }
+		in_section && /^\|[[:space:]:]*-{3,}/ { sep++ }
+		END { exit !(rows >= 2 && sep >= 1) }
+	' "$policy"; then
+		echo "FAIL [security-policy] $policy has no supported-versions table (## Supported versions)"
+		fail=1
+	fi
+	local hits
+	hits="$(grep -n 'OWNER:' "$policy" || true)"
+	if [[ -n "$hits" ]]; then
+		echo "FAIL [security-policy] $policy still contains an OWNER: placeholder:"
+		echo "$hits" | sed 's/^/  /'
+		fail=1
+	fi
+	return $fail
+}
+
+# check_site <dir> [<security-policy>]: prints one line per violation, returns 1 if any were found.
 check_site() {
 	local root="$1"
+	local policy="${2:-$SECURITY_POLICY}"
 	local fail=0
 	if [[ ! -d "$root" ]]; then
 		echo "error: $root is not a directory" >&2
@@ -99,8 +135,11 @@ check_site() {
 		fail=1
 	fi
 
+	# Rule 5: the published security policy.
+	check_policy "$policy" || fail=1
+
 	if [[ $fail -eq 0 ]]; then
-		echo "ok: $root (no external assets, no tracking, no research paths, no broken internal links)"
+		echo "ok: $root (no external assets, no tracking, no research paths, no broken internal links; security policy complete)"
 	fi
 	return $fail
 }
@@ -139,6 +178,23 @@ make_clean_site() {
 	echo '{}' >"$d/schemas/config.json"
 }
 
+# A minimal complete security policy.
+make_policy() {
+	cat >"$1" <<-'MD'
+		# Security policy
+
+		## Supported versions
+
+		| Version | Supported |
+		| --- | --- |
+		| 1.0.x | Yes |
+
+		## Reporting a vulnerability
+
+		Report it privately.
+	MD
+}
+
 self_test() {
 	local tmp # removed by the EXIT trap through _selftest_tmp
 	tmp="$(mktemp -d)"
@@ -146,9 +202,13 @@ self_test() {
 	trap 'rm -rf "${_selftest_tmp:-}"' EXIT
 	local failures=0
 
-	expect() { # expect <name> <expected-rc> <expected-rule-tag or ""> <dir>
-		local name="$1" want="$2" tag="$3" dir="$4" out rc=0
-		out="$(check_site "$dir" 2>&1)" || rc=$?
+	# A complete security policy for every case except the rule-5 ones.
+	local good_policy="$tmp/SECURITY.md"
+	make_policy "$good_policy"
+
+	expect() { # expect <name> <expected-rc> <expected-rule-tag or ""> <dir> [<security-policy>]
+		local name="$1" want="$2" tag="$3" dir="$4" policy="${5:-$good_policy}" out rc=0
+		out="$(check_site "$dir" "$policy" 2>&1)" || rc=$?
 		if [[ $rc -ne $want ]]; then
 			echo "self-test FAIL: $name: exit $rc, want $want"
 			echo "$out" | sed 's/^/    /'
@@ -230,6 +290,25 @@ self_test() {
 	expect "broken link under <base href> rejected" 1 broken-link "$d"
 
 	expect "missing directory rejected" 2 "" "$tmp/does-not-exist"
+
+	local p
+	p="$tmp/policy-missing.md"
+	expect "missing SECURITY.md rejected" 1 security-policy "$c" "$p"
+
+	p="$tmp/policy-no-table.md"
+	make_policy "$p"
+	sed -i '/^|/d' "$p"
+	expect "SECURITY.md without a supported-versions table rejected" 1 security-policy "$c" "$p"
+
+	p="$tmp/policy-table-elsewhere.md"
+	make_policy "$p"
+	sed -i 's/^## Supported versions$/## Versions we like/' "$p"
+	expect "table outside the supported-versions section rejected" 1 security-policy "$c" "$p"
+
+	p="$tmp/policy-owner.md"
+	make_policy "$p"
+	echo '<!-- OWNER: optional alternative contact -->' >>"$p"
+	expect "SECURITY.md with an OWNER: placeholder rejected" 1 security-policy "$c" "$p"
 
 	if [[ $failures -ne 0 ]]; then
 		echo "self-test: $failures case(s) failed"

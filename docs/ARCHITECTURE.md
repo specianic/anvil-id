@@ -227,13 +227,15 @@ from handler code.
 | `credential` | id, tenant_id, user_id, kind (password/webauthn/totp), data (encrypted or hashed per kind), external_id (WebAuthn credential ID, nullable), counter (integer, nullable), backup_eligible, label, created_at, last_used_at | Password: PHC string. TOTP: sealed seed; `counter` = last accepted time step. WebAuthn: credential JSON; `counter` = signature counter. Counters are plain columns so replay and clone checks are a single conditional `UPDATE … WHERE counter < ?`. Partial unique indexes: one password and one TOTP per user, `external_id` unique per tenant; SQLite also checks `(kind = 'webauthn') = (external_id IS NOT NULL)`. Password rows migrated from 0.1 get random ids |
 | `recovery_code` | tenant_id, user_id, code_hash, created_at, used_at | Primary key (tenant_id, user_id, code_hash). One row per code, consumed atomically (`UPDATE … SET used_at … WHERE used_at IS NULL`). Removing TOTP deletes the user's codes |
 | `identity_link` | id, tenant_id, user_id, connection_id, subject, email_at_link, metadata (JSON), created_at, last_used_at | Upstream identities (0.3). Unique (tenant_id, connection_id, subject); composite foreign keys to `user (tenant_id, id)` and `connection (tenant_id, id)`, both cascading. `metadata` keeps provider facts such as the Microsoft `tid`/`oid`, the Google `hd` or the GitHub `login` |
-| `client` | id, tenant_id, client_id, name, type (confidential/public), application_type (web/native), require_pkce, auth_method, secret_hash, jwks / jwks_uri, redirect_uris, post_logout_redirect_uris, grant_types, scopes, token_format (jwt/opaque), consent_mode (required/skip_first_party), backchannel_logout_uri, backchannel_logout_session_required, allowed_resources, mfa_policy (nullable), created_at | `client_id` is unique per tenant. 0.4 adds `registration_source` (static/dynamic/cimd), `metadata_expires_at` and `registration_access_token_hash`. **As built in 0.4 there is no `client_metadata_cache` table:** a fetched Client ID Metadata Document is validated and materialised as a `client` row with `registration_source = cimd` (`client_id` = the document URL, `metadata_expires_at` = the clamped cache lifetime), upserted in one statement that never overwrites a static or dynamic client. Failed fetches are not stored |
+| `client` | id, tenant_id, client_id, name, type (confidential/public), application_type (web/native), require_pkce, auth_method, secret_hash, jwks / jwks_uri, redirect_uris, post_logout_redirect_uris, grant_types, scopes, token_format (jwt/opaque), consent_mode (required/skip_first_party), backchannel_logout_uri, backchannel_logout_session_required, allowed_resources, mfa_policy (nullable), created_at | `client_id` is unique per tenant. 0.4 adds `registration_source` (static/dynamic/cimd), `metadata_expires_at` and `registration_access_token_hash`. **As built in 0.4 there is no `client_metadata_cache` table:** a fetched Client ID Metadata Document is validated and materialised as a `client` row with `registration_source = cimd` (`client_id` = the document URL, `metadata_expires_at` = the clamped cache lifetime), upserted in one statement that never overwrites a static or dynamic client. Failed fetches are not stored. 1.0 adds `require_pushed_authorization_requests`, `client_kind` (`application`/`agent`, no CHECK so a later kind needs no rebuild) and `headless_native` |
 | `signing_key` | id, tenant_id, kid, alg, state (next/active/retired), private_key (encrypted with KEK), public_jwk, activated_at, retired_at, expires_at | |
 | `browser_session` | id, tenant_id, user_id, auth_time, acr, amr (JSON), ip, user_agent, created_at, last_seen_at, expires_at, idle_expires_at | Session cookie holds an opaque random ID; only its hash is stored |
 | `rp_session` | tenant_id, session_id, client_id, issuer, created_at | Which clients a browser session signed in to (for back-channel logout). Primary key (tenant_id, session_id, client_id); cascades with the session. Recorded in the `GrantRepo::create_code` transaction, only for a stored session of the same tenant. `issuer` is the issuer the client got its code (and ID tokens) from; a later code for the same row overwrites it (latest wins). It is null only for rows written before the 0.3 issuer migration. There is no `sid` column: the OIDC `sid` is the browser session id (§8.3) |
 | `logout_delivery` (0.3) | id, tenant_id, client_id, uri, sub, sid, issuer, attempts, next_attempt_at, give_up_at, created_at, delivered_at, last_error | Back-channel logout queue. No foreign key to session, user or client, so a delivery survives the deletion that caused it. Rows are enqueued by the revoking storage intents (§7.1); `issuer` is copied from the RP session |
 | `flow` | id, tenant_id, kind (login/registration/recovery/verification/settings/consent/logout), state (JSON), csrf_hash, expires_at, browser_session_id? | Short-lived flow state machines (§9). `logout` (0.3) is the sign-out confirmation |
-| `authorization_request` | id, tenant_id, client_id, params (JSON: redirect_uri, scope, state, nonce, code_challenge, resource, prompt, max_age, acr_values, organization…), created_at, expires_at | Created at `/authorize`, consumed when a code is issued. Also used for PAR. 1.0: the organization switcher writes the chosen org into `params.organization` (delete and re-create under the same id, keeping `created_at` and `expires_at`) |
+| `authorization_request` | id, tenant_id, client_id, params (JSON: redirect_uri, scope, state, nonce, code_challenge, resource, prompt, max_age, acr_values, organization…), created_at, expires_at | Created at `/authorize` (also when `/authorize` consumes a pushed request), consumed when a code is issued. Pushed requests have their own table (`pushed_authorization_request`, below). 1.0: the organization switcher writes the chosen org into `params.organization` (delete and re-create under the same id, keeping `created_at` and `expires_at`) |
+| `pushed_authorization_request` (1.0) | tenant_id, uri_hash, client_id, params (JSON), created_at, expires_at, consumed_at | RFC 9126 (§10.1). Primary key (tenant_id, uri_hash): only the SHA-256 of the `request_uri` is stored. Composite foreign key to `client (tenant_id, client_id)`, cascading. Consumed atomically once (`UPDATE … WHERE consumed_at IS NULL AND expires_at > now`); the cleanup job deletes expired rows |
+| `password_hash_profile` (1.0) | id, tenant_id, name, kind (`firebase_scrypt`), salt_separator, rounds, mem_cost, signer_key_enc, created_at | Tenant-level parameters for imported legacy hashes (ADM-8). Unique (tenant_id, name). The signer key is stored only sealed with the KEK (AAD tenant and profile id) and is write-only in the API. A profile referenced by a stored password cannot be deleted |
 | `authorization_code` | code_hash (PK), tenant_id, client_id, user_id, browser_session_id, redirect_uri, scope, nonce, code_challenge, resource, auth_time, acr, amr, expires_at, consumed_at, token_family_id | The token family is created in the same transaction as the code, so a code replay that races the exchange still finds and revokes it. 1.0 adds `org_id` (the active organization, nullable, no foreign key) |
 | `token_family` | id, tenant_id, client_id, user_id?, scope, resource, auth_time?, acr?, amr, browser_session_id?, claims request (JSON)?, created_at, absolute_expires_at, revoked_at, revoked_reason | Groups a refresh-token chain; revoking the family revokes all of its tokens. Carries the authentication context so refreshed ID tokens repeat `auth_time` and UserInfo applies `claims.userinfo`. Access tokens carry the family id and UserInfo checks `revoked_at`. 1.0 adds `org_id`: the active organization is bound to the family (never to a cookie or the session), re-checked at every refresh (membership lost → `invalid_grant` and the family is revoked) |
 | `refresh_token` | token_hash (PK), tenant_id, family_id, parent_hash?, expires_at, consumed_at | Rotation: each use consumes the token and issues a child |
@@ -927,6 +929,24 @@ otherwise query) when the redirect URI is valid. `request_uri` is never fetched.
 **Added in 1.0:** the `organization` parameter at `/authorize` (§9.4); discovery's
 `claims_supported` lists `org_id`, `org_slug`, `org_roles` and `org_permissions`.
 
+**Pushed authorization requests (1.0, OIDC-18, RFC 9126; user docs `docs/PAR.md`).** `POST /par`
+authenticates the client through the same `ClientAuthService` as `/token` (one implementation;
+`private_key_jwt` assertions must have the issuer as their only `aud`, RFC 10070, and share the
+`/token` replay store) and validates the parameters through the same `authorize_request`
+validation as `/authorize`. `request_uri`, `request` and `id_token_hint` are refused in the pushed
+body; interaction errors never come from `/par`. It answers 201 with
+`urn:ietf:params:oauth:request_uri:<43 base64url chars>` (32 random bytes) and `expires_in: 60`,
+and stores only `sha256(request_uri)` with the validated parameters (`pushed_authorization_request`,
+§6.1). At `/authorize` only `client_id` and `request_uri` are read: the row is consumed atomically
+(exactly one concurrent winner, reloads included), must belong to the same client, and the
+client's current registration is re-checked (RFC 9126 §7.4) before the stored parameters continue
+as a normal authorization request. Redirect URIs match exactly (no unregistered URIs from
+authenticated clients). PAR is required per client (`require_pushed_authorization_requests`) or
+per tenant (`par.require_pushed_authorization_requests`, advertised in discovery). Discovery adds
+`pushed_authorization_request_endpoint`; `request_uri_parameter_supported` stays `false` (request
+objects by reference are still not fetched). `/par` is in the `Token` rate-limit class (per IP; no
+per-client limit in 1.0) and has no CORS.
+
 **Added in 0.3:** `GET`/`POST /logout` (§8.3), a repeatable `resource` at `/authorize` and `/token`
 (§8.2), and the `prompt`, `max_age`, `login_hint` and `acr_values` handling of §9. Discovery adds
 `end_session_endpoint`, `backchannel_logout_supported: true`,
@@ -939,7 +959,7 @@ otherwise query) when the redirect URI is valid. `request_uri` is never fetched.
 
 `/ui/login`, `/ui/registration`, `/ui/recovery`, `/ui/verification`, `/ui/consent`, `/ui/account/*`,
 plus `/ui/assets/*` (hashed, immutable static files). The headless API mirrors these under
-`/api/flows/*` (1.0).
+`/api/flows/v1/*` (1.0, below).
 
 0.1 ships `/ui/login`, `/ui/registration`, `/ui/recovery` and `/ui/verification`, the installation
 setup page `/setup?token=…` (installation-level, see §13) and hashed assets under `/assets/*`. Every UI
@@ -977,6 +997,38 @@ credential changes.
 | `GET /ui/invitation?token=`, `POST /ui/invitation`, `POST /ui/invitation/register` | Organization invitation: the GET only shows the offer; accept (signed in) or register for the invited address (registering signs in through the shared session code, `FlowService::sign_in_registered_user`). CSRF: a `__Host-anvil_invitation` nonce cookie (SameSite=Strict, 1 h) plus an HMAC over tenant, nonce and token under a KEK-derived key; `no-store`, `no-referrer` |
 | `GET /ui/login?return_to=` | Where a sign-in without an authorization request returns: an exact allowlist (`policy::return_to`: `/ui/invitation?token=` plus 1-128 base64url characters, nothing else; anything else is ignored). Stored in the login flow state only sealed with the KEK (`return_to_sealed`, AAD tenant and flow id, resealed when the login continues in a new flow); one `FlowService::continuation` helper gives every sign-in outcome its target, and an authorization request bound to the flow always wins |
 | `POST /ui/login/saml/{slug}/start?flow=`, `POST /ui/login/saml/{slug}/acs`, `GET /ui/login/saml/{slug}/continue?state=`, `GET /saml/{slug}/metadata` | SAML SP (§9.5; 404 with the flag off). The ACS is outside the Fetch-Metadata layer |
+
+**Headless flow API (1.0, UI-5; user docs `docs/HEADLESS.md`, contract `docs/openapi/flows-v1.json`
+with a drift test).** `POST /api/flows/v1/{kind}` (login, registration, recovery, verification),
+`GET|POST /api/flows/v1/{kind}/{flow_id}` and the passkey sub-routes are a second renderer, not a
+second engine: the UI handlers' orchestration was extracted into one shared `ui::flow_driver`
+module (07-05), and both the pages and the API call it, so brute-force limits, CAPTCHA, flow
+binding, session creation and audit are the same code. The API maps the engine's
+`FormDescription` to a versioned DTO (`api_flows::dto`); the internal form description is never
+part of the contract. The router sits outside the UI's Fetch-Metadata layer and outside
+`public_cors()`, with its own layers. Two modes:
+
+- **Browser mode (SPAs):** the flow cookie plus an `X-CSRF-Token` header carrying the flow's CSRF
+  token; JSON bodies only (415 otherwise); requests admitted only from the tenant's own origin and
+  the exact origins in the tenant setting `headless.allowed_origins` (403 `forbidden_origin`);
+  credentialed CORS (`headless_cors`) echoes listed origins only, never `*`. Same-site with the
+  issuer is required (SameSite cookies). Completion sets the session cookie and returns
+  `continue_to` on the AnvilID origin; upstream, SAML and enterprise SSO answer `browser_required`.
+- **Native mode (first-party apps, Q6):** start with `{client_id, request_uri}` of a pushed request
+  of a client with `headless_native = true`, which the single client validation function only
+  allows with `consent_mode = skip_first_party`, `require_pkce` and `client_kind = application`
+  (checked again at every start). The `request_uri` is consumed through the `/authorize` code
+  path. The answer carries a 256-bit flow token once; the flow stores only its SHA-256 and is
+  token-bound (`Authorization: AnvilFlow <token>`; a token-bound flow never accepts the cookie and
+  CSRF token, and a browser flow never accepts a token). Requests with `Origin` or
+  `Sec-Fetch-Site` are refused (`browser_signals`). Completion returns `{code, iss, state}` as
+  JSON, redeemed at `/token` with PKCE. CAPTCHA demands, upstream SSO, registration and any page
+  after sign-in (consent, account or organization choice, step-up) answer `browser_required` with
+  the `/authorize/continue` URL for the system browser. The shape follows
+  draft-ietf-oauth-first-party-apps (a draft, no conformance claimed). The code is anchored to a
+  server-side `browser_session` row (`authorization_code.session_id` is NOT NULL and `rp_session`
+  references it), whose cookie is never sent, so no browser SSO results; session-less code
+  issuance is a 1.x candidate.
 
 ### 10.3 Management API
 
@@ -1037,6 +1089,21 @@ credential changes.
   scopes `admin:users:{read|write}`, `admin:organizations:{read|write}` or `admin:read|write`) and
   `GET /tenants/{slug}/users?email=` (`listUsers` filter, 0 or 1 users; the users scopes). 123
   operations; `security_admin_v10.rs` proves the scopes.
+- Added in 1.0 (Phase 7): the client fields `require_pushed_authorization_requests`, `client_kind`
+  and `headless_native` and the tenant settings `par` and `headless` (one validation function for
+  every write path: admin API, tenant YAML, DCR, CIMD); user import, export and hash profiles
+  (ADM-8, ADM-9; user docs `docs/IMPORT-EXPORT.md`), all under `/tenants/{slug}`:
+  `POST users/import` (NDJSON, `?dry_run&update&source`, at most 1,000 records; the 1 MiB body
+  limit is a branch of the single body-limit middleware for this one path), scope
+  `admin:users:write`; `GET|POST password-hash-profiles` and `DELETE password-hash-profiles/{id}`
+  (Firebase scrypt parameters; the signer key is write-only and sealed with the KEK), scopes
+  `admin:settings:{read|write}`; `GET users/{user_id}/export[?profile=gdpr]` (one user, or the GDPR
+  data-subject bundle) and `GET users/export` (all users, streamed NDJSON in pages of 100), scope
+  **`admin:users:export`** (or `admin:write`). Export is a separate grant: `admin:read`,
+  `admin:users:read` and `admin:users:write` do not include it. Export DTOs are allow-lists, every
+  export is audited (`user_exported`), and no HTTP route can export password hashes (unknown query
+  parameters are 422); only the audited CLI bulk export has `--include-password-hashes` (Q4). The
+  CLI `anvilid users import|export` calls the same services. 129 operations.
 - **Organization admins (1.0, decision Q1).** The `{org}` sub-routes use a second extractor,
   `OrgAdminAuth`, with one `Principal` enum (`SystemAdmin`, `OrgAdmin { tenant, org, user }`). It
   accepts a system-tenant token (scopes checked by the handler) or a JWT access token of tenant
@@ -1049,8 +1116,9 @@ credential changes.
   org-admin token gets `401` outside its org's sub-routes and `403` for another org or for
   tenant-admin-only actions (org update/delete, direct member add). An org admin cannot remove or
   demote the last `org:admin` holder (`409`); tenant admins can (recovery path). **Tenant-restricted
-  system administrators** (system roles limited to a tenant list) are **deferred to Phase 7**: they
-  would need a second principal shape checked on every tenant-level and installation route.
+  system administrators** (system roles limited to a tenant list) are **deferred to a later 1.x
+  release** (decision Q8, §20): they would need a second principal shape checked on every
+  tenant-level and installation route.
 - **RBAC admin scopes (0.4).** In the `system` tenant a user's roles decide which admin scopes the
   console token can carry: the requested admin scopes are intersected, at code exchange and at
   every refresh, with the scopes the user's role permissions grant (`admin:write` covers every
@@ -1430,16 +1498,32 @@ Exit criteria: OpenID certification submitted for all target profiles; external 
 completed and findings fixed; upgrade path from 0.4 tested; documentation site complete (install,
 integrations, migration guides).
 
-Status (1.0 in progress, Phase 6): built are organizations with members, invitations, org roles
+Status (1.0 in progress). Phase 6 built organizations with members, invitations, org roles
 (hybrid model on one assignment table), org claims and the switcher (ORG-2); org OIDC connections
 and the SAML 2.0 SP with just-in-time membership (ORG-3, SAML experimental behind
 `saml_experimental`); DNS TXT domain verification with the daily re-check and identifier-first
 home-realm discovery (ORG-4); organization admins on the management API; the signing-keys API;
 and console pages for organizations, org SSO and keys (ADM-2). The 0.4 → 1.0 upgrade is tested on
 both backends (`tests/upgrade.rs`). User docs: `docs/ORGANIZATIONS.md`, `docs/SAML.md`,
-`docs/UPGRADING.md`. Open items: **tenant-restricted system admins deferred to Phase 7**; **SAML
-experimental until the Phase 7 external review and interop checklist** (D4); the remaining M5 scope (certification, external review, PAR, headless flow API, user
-import/export) belongs to Phase 7.
+`docs/UPGRADING.md`.
+
+Phase 7 built the remaining M5 scope: pushed authorization requests (OIDC-18, §10.1); the headless
+flow API in browser and native modes over the shared `flow_driver` (UI-5, §10.2); user import with
+legacy password hashes (bcrypt, scrypt, Firebase scrypt, PBKDF2, Argon2, salted SHA-2), verified
+on first login and re-hashed with Argon2id, plus single, bulk and GDPR export (ADM-8, ADM-9,
+§10.3); agent clients on the consent screen with incremental step-up (AGT-3); the versioned API
+compatibility policy with a breaking-change test against committed baselines
+(`docs/COMPATIBILITY.md`); the 0.4 → 1.0 and 1.0.0-beta.1 → 1.0 upgrade tests on both backends;
+the security policy (`SECURITY.md`) and the external review package
+(`docs/SECURITY-REVIEW-SCOPE.md`, `docs/THREAT-MODEL.md`); the certification runbook and evidence
+retention (`docs/CERTIFICATION.md`); and the documentation site (mdBook, built and checked in CI;
+install, integration and migration guides).
+
+Open items, all owner actions or decisions: OpenID certification submission (OIDC-23); the external
+security review and its findings; the legacy-hash crypto exception and the `chrono` exception
+reviews (§2); GitHub private vulnerability reporting; SAML stays **experimental** until the
+external review and the real-IdP interop checklist (D4); publishing the release and the docs site.
+Deferred past 1.0 with justification: tenant-restricted system admins (Q8, §20).
 
 ### Beyond 1.0
 
@@ -1460,7 +1544,8 @@ These are designed in from the start so later modules don't require rewrites:
   in 1.0, organization claims are inserted by the token builders before mapped extras, and the
   reserved names keep any mapping from producing or overriding them.
 - **Principals:** the management API's `Principal` enum (1.0: `SystemAdmin`, `OrgAdmin`) is where
-  a tenant-restricted administrator variant would go (deferred to Phase 7).
+  a tenant-restricted administrator variant would go (deferred to a later 1.x release, decision Q8 in
+  §20; adding it is additive and does not change existing roles).
 - **Events:** core services emit typed domain events; audit and webhooks are subscribers.
   Back-channel logout is not an event subscriber: since 0.3 its deliveries are enqueued by the
   revoking storage intents in the same transaction (§7.1), so a revocation cannot commit without
@@ -1476,4 +1561,5 @@ These are designed in from the start so later modules don't require rewrites:
 | D4 | SAML stack: pure-Rust XML-DSig (saml-rs/bergshamra) vs alternatives | **Spike verdict 2026-11-26 (06-01):** `bergshamra-dsig` 0.12.0 on the aws-lc provider only + `uppsala` 0.12.1 as the single XML parser + our own narrow SAML SP layer. The spike (`crates/anvil-web/tests/saml_dsig_spike.rs`) signs a minimal SAML assertion (enveloped exc-c14n, RSA-SHA256 and ECDSA-P256-SHA256, `Reference URI="#_a1"`) under keys generated at test time and verifies it with `DsigContext::new(keys).with_trusted_keys_only(true).with_strict_verification(true).with_require_reference_digests(true).with_skip_time_checks(true)` and `verify::verify_all_document_with_source` on one `uppsala::Parser::new().with_forbid_dtd(true)` document; the reference resolves to the Assertion node, a one-character change fails, and a key embedded in `KeyInfo` is never trusted. Costs: the scoped `chrono` exception (§2, wrapper `tsp-ltv`). SAML stays behind a runtime experimental flag through 1.0 (Q3) until the Phase 7 external review and a real-IdP interop checklist; the attack-corpus gate is 06-09. Verified locally on Linux; macOS targets are verified by the release-build workflow at the 1.0 gate (06-26). **Status after the corpus (06-09):** the adapter (`adapters/saml_xml.rs`) parses once with DTDs forbidden, runs a strict profile pre-check before any bergshamra call, verifies against pinned certificates only and reads claims only from the verified node; the 67-case attack corpus (`tests/security_saml.rs`: XSW1-8 and variants, exclusion, key injection, comment injection, parser differentials, void canonicalisation, algorithm downgrade, file references, XML bombs) is green in CI, and three fuzz targets run nightly. SAML is built (06-18) but stays **experimental** (operator flag `saml_experimental`, off by default; IdP-initiated SSO refused, decision Q4); the external review and the real-IdP interop checklist (`docs/SAML.md`) are Phase 7. The `chrono` exception (§2) awaits the owner's review | **open:** experimental; corpus green; external review and interop checklist in Phase 7 |
 | D5 | Permissions engine: embedded tuple store vs integrating OpenFGA/SpiceDB | Decide at the 3.0 addendum | 3.0 |
 | D6 | Embedded HA without Postgres (replicated SQLite) | Not planned; revisit on user demand | post-1.0 |
+| Q8 | Tenant-restricted system administrators (system roles limited to some tenants; Phase 6 carry-over of decision Q1) | **Deferred to a later 1.x release (2026-11-26, Phase 7 default; the owner may override).** Not a numbered 1.0 requirement. It needs a second administrator principal shape that every tenant-level and installation-level route would have to check: security-sensitive surface that should not be added right before the external security review. Organization admins (`OrgAdmin`, §10.3) already cover delegated administration per organization. Adding it later is additive (a new `Principal` variant, §19) and does not change existing roles | 1.x |
 | D7 | sqlx minimum supported Rust version vs our toolchain policy | **Resolved 2026-11-25:** sqlx 0.9.1 requires Rust ≥ 1.94; pin current stable (1.100.0) in `rust-toolchain.toml` | ✓ |

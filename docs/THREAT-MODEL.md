@@ -9,7 +9,7 @@ control specification itself is `docs/ARCHITECTURE.md` §11.
 
 It deliberately contains no exploit details. It is an input to the external review
 ([SECURITY-REVIEW-SCOPE.md](SECURITY-REVIEW-SCOPE.md)); vulnerabilities are reported as described
-in [SECURITY.md](../SECURITY.md).
+in [SECURITY.md](https://github.com/specianic/anvil-id/blob/main/SECURITY.md).
 
 **Phase 7 controls** (pushed authorization requests, the headless flow API, password import, user
 export, agent consent) are listed per boundary and marked **mapped at the 07-23 gate**: their tests are

@@ -5,7 +5,7 @@ AnvilID 1.0 (requirement SEC-08, PRD R2 and NFR-SEC-8). It is written for the re
 It describes surfaces, inputs and process only: it contains no findings, and findings are never
 committed to this repository before their fixes ship (see [Findings handling](#findings-handling)).
 
-The security policy for outside reporters is [SECURITY.md](../SECURITY.md). The assets, trust
+The security policy for outside reporters is [SECURITY.md](https://github.com/specianic/anvil-id/blob/main/SECURITY.md). The assets, trust
 boundaries, attacker models and the mapping of controls to tests are in
 [THREAT-MODEL.md](THREAT-MODEL.md).
 
@@ -287,7 +287,7 @@ These are documented design decisions for 1.0:
 - Findings, reproductions, severity notes and exploit details **never go to the public repository**
   (no issues, pull requests, commit messages, documents or test names that describe them) before the
   fix ships in a release.
-- Fixes are released as described in [SECURITY.md](../SECURITY.md): a patch release, the published
+- Fixes are released as described in [SECURITY.md](https://github.com/specianic/anvil-id/blob/main/SECURITY.md): a patch release, the published
   advisory and a CVE where applicable.
 - After release, the repository gets only a public summary: the review completion date, the number
   of findings and the versions that fixed them.

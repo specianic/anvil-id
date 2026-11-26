@@ -28,6 +28,13 @@ Coming in 0.4 "Operate it" (on `main`, not released yet):
   recovery ([docs/OPERATIONS.md](docs/OPERATIONS.md)).
 - A Helm chart and Docker Compose examples ([deploy/README.md](deploy/README.md)).
 
+## Documentation
+
+The documentation (install, integration and migration guides, operations, security policy) lives
+in [`docs/`](docs/introduction.md) and is built into a static site with mdBook
+(`docs/SUMMARY.md` is the table of contents). Once published, the site is at
+<https://specianic.github.io/anvil-id/>. Start with [docs/INSTALL.md](docs/INSTALL.md).
+
 ## Install
 
 Every release publishes static Linux binaries (x86_64, arm64), macOS binaries (Apple silicon,
