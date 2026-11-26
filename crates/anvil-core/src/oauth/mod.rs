@@ -15,3 +15,6 @@ pub mod resource;
 // Phase 5 (pre-declared by plan 05-02; the owning plans fill them in)
 pub mod cimd;
 pub mod registration;
+
+// Phase 7 (pre-declared by plan 07-04; the owning plan fills it in)
+pub mod par;

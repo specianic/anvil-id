@@ -29,6 +29,11 @@ mod webhooks;
 mod keys;
 mod organizations;
 
+// Phase 7 (pre-declared by plan 07-04; plan 07-17 adds the routes)
+mod password_profiles;
+mod user_export;
+mod user_import;
+
 use anvil_core::error::CoreError;
 use anvil_core::service::admin_scope::ALL_ADMIN_SCOPES;
 use axum::Router;
@@ -243,6 +248,9 @@ fn api_router() -> OpenApiRouter<AppState> {
         .merge(config::routes())
         .merge(organizations::routes())
         .merge(keys::routes())
+        .merge(user_import::routes())
+        .merge(user_export::routes())
+        .merge(password_profiles::routes())
 }
 
 /// Management API routes, including the served OpenAPI document.

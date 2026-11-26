@@ -52,3 +52,9 @@ pub mod org_domain;
 pub mod org_invitation;
 pub mod organization;
 pub mod saml;
+
+// Phase 7 (pre-declared by plan 07-04; the owning plans fill them in)
+pub mod hash_profile;
+pub mod par;
+pub mod user_export;
+pub mod user_import;

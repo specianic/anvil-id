@@ -4,6 +4,8 @@
 
 pub mod adapters;
 pub mod admin;
+// Phase 7 (pre-declared by plan 07-04; plans 07-10 and 07-18 fill it in)
+pub mod api_flows;
 mod assets;
 pub mod client_ip;
 pub mod config;
@@ -54,6 +56,9 @@ pub fn router(state: AppState) -> Router {
     let inner = Router::new()
         .merge(protocol::routes())
         .merge(ui::routes())
+        // Headless flow API: outside ui's Fetch-Metadata layer and outside `public_cors()`
+        // (it brings its own origin and CORS layers).
+        .merge(api_flows::routes())
         .merge(theme::routes())
         .merge(admin::routes())
         .route("/assets/{*path}", get(assets::handler))

@@ -5,6 +5,8 @@ mod discovery;
 mod introspect;
 mod jwks;
 mod logout;
+// Phase 7 (pre-declared by plan 07-04; plan 07-13 adds the route)
+mod par;
 // Phase 5 (pre-declared by plan 05-02; the owning plan adds its routes)
 mod registration;
 mod revoke;
@@ -27,4 +29,5 @@ pub fn routes() -> Router<AppState> {
         .merge(revoke::routes())
         .merge(logout::routes())
         .merge(registration::routes())
+        .merge(par::routes())
 }

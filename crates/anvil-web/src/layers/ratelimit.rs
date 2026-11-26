@@ -11,16 +11,17 @@
 //! - [`too_many_requests`] is the one place a 429 response is built, per surface:
 //!   OAuth-style JSON for protocol endpoints (OAuth has no rate-limit error code, so the body is
 //!   `{"error":"invalid_request","error_description":"too many requests"}`), RFC 9457 problem JSON
-//!   for the admin API, and the themed error page for browser routes.
+//!   for the admin API and the headless flow API (everything below `/api`), and the themed
+//!   error page for browser routes.
 //!
 //! # Route classes
 //!
 //! | Request | Class |
 //! | ------- | ----- |
 //! | `/health/*`, `/healthz`, `/readyz`, `/metrics`, `/assets/*` (any method) | never limited |
-//! | `/token`, `/introspect`, `/revoke` (any method) | `Token` |
+//! | `/token`, `/introspect`, `/revoke`, `/par` (any method) | `Token` |
 //! | `/api/admin` and below (any method) | `Admin` |
-//! | `POST` to `/ui/login`, `/ui/registration`, `/ui/recovery`, `/setup` and below | `Auth` |
+//! | `POST` to `/ui/login`, `/ui/registration`, `/ui/recovery`, `/setup`, `/api/flows` and below | `Auth` |
 //! | `/register` and below (RFC 7591/7592, any method) | `Auth` |
 //! | everything else (including `GET` of the auth pages) | `Default` |
 
@@ -47,11 +48,17 @@ use crate::tenant::ResolvedTenant;
 /// Paths (and everything below them) that are never rate limited.
 const EXEMPT: &[&str] = &["/health", "/healthz", "/readyz", "/metrics", "/assets"];
 /// Token-class paths (any method).
-const TOKEN: &[&str] = &["/token", "/introspect", "/revoke"];
+const TOKEN: &[&str] = &["/token", "/introspect", "/revoke", "/par"];
 /// Admin-class paths (any method).
 const ADMIN: &[&str] = &["/api/admin"];
 /// Auth-class paths (`POST` only; rendering the page is `Default`).
-const AUTH_POST: &[&str] = &["/ui/login", "/ui/registration", "/ui/recovery", "/setup"];
+const AUTH_POST: &[&str] = &[
+    "/ui/login",
+    "/ui/registration",
+    "/ui/recovery",
+    "/setup",
+    "/api/flows",
+];
 /// Auth-class paths (any method): dynamic client registration and its management endpoint.
 const AUTH_ANY: &[&str] = &["/register"];
 /// Paths whose 429 is an OAuth-style JSON body (protocol endpoints, not browser pages).
@@ -59,6 +66,7 @@ const PROTOCOL: &[&str] = &[
     "/token",
     "/introspect",
     "/revoke",
+    "/par",
     "/register",
     "/userinfo",
     "/jwks",
@@ -386,6 +394,34 @@ mod tests {
         assert_eq!(Surface::of("/ui/login"), Surface::Browser);
         assert_eq!(Surface::of("/setup"), Surface::Browser);
         assert_eq!(Surface::of("/authorize"), Surface::Browser);
+    }
+
+    #[test]
+    fn par_is_token_class() {
+        assert_eq!(classify(&Method::POST, "/par"), Some(RouteClass::Token));
+        assert_eq!(classify(&Method::GET, "/par"), Some(RouteClass::Token));
+        assert_eq!(classify(&Method::POST, "/parx"), Some(RouteClass::Default));
+        assert_eq!(Surface::of("/par"), Surface::Protocol);
+    }
+
+    #[test]
+    fn flows_post_is_auth_class() {
+        let post = Method::POST;
+        assert_eq!(
+            classify(&post, "/api/flows/v1/login"),
+            Some(RouteClass::Auth)
+        );
+        assert_eq!(
+            classify(&post, "/api/flows/v1/registration/x"),
+            Some(RouteClass::Auth)
+        );
+        assert_eq!(
+            classify(&Method::GET, "/api/flows/v1/login/x"),
+            Some(RouteClass::Default)
+        );
+        assert_eq!(classify(&post, "/api/flowsx"), Some(RouteClass::Default));
+        // 429s below /api are JSON (problem details), never the HTML error page.
+        assert_eq!(Surface::of("/api/flows/v1/login"), Surface::Admin);
     }
 
     #[test]
