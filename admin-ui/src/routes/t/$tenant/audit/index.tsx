@@ -159,7 +159,7 @@ const PAGE_SIZE = 50;
 const col = createColumnHelper<DataTableFeatures, AuditEventView>();
 
 function AuditFilters({ search }: { search: AuditSearch }) {
-  const navigate = useNavigate({ from: "/audit/" });
+  const navigate = useNavigate({ from: Route.fullPath });
   const [draft, setDraft] = useState<AuditSearch>(search);
   const set = (key: keyof AuditSearch) => (e: { target: { value: string } }) =>
     setDraft((d) => ({ ...d, [key]: e.target.value || undefined }));

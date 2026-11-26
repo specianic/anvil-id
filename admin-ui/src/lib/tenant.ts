@@ -6,7 +6,7 @@ import { api, unwrap } from "@/api/client";
 
 /**
  * The installation's default tenant: opened when no tenant was used before in this browser tab,
- * target of pre-0.4 links, and served at the public URL itself (no /t/{slug} prefix needed).
+ * and served at the public URL itself (no /t/{slug} prefix needed).
  */
 export const DEFAULT_TENANT = "default";
 /** The installation's own tenant: its users are the console admins. It cannot be deleted. */

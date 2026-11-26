@@ -372,6 +372,9 @@ Changes that do apply to every tenant:
   skip them.
 - **Tenant YAML** documents never contain organizations or anything they own, and `--prune` never
   deletes them ([CONFIG-YAML.md](CONFIG-YAML.md#organizations-are-not-part-of-the-document)).
+- **Console links from before 0.4** (`/console/users`, `/console/clients/…` and the other paths
+  without `/t/{tenant}`) no longer redirect to the `default` tenant; they show the console's
+  not-found page. Update bookmarks to `/console/t/{tenant}/…`.
 
 ### New configuration keys
 
