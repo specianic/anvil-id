@@ -10,7 +10,9 @@
 //! additive schema plus the system tenant's administrator role backfill) and 0.4 → 1.0
 //! (migration 0008, additive, and 0009, the no-transaction rebuild of connection, role,
 //! role_assignment, replay_guard and email_template), each with its own fixtures and its own
-//! contract-suite run.
+//! contract-suite run. 1.0.0-beta.1 → final (migration 0010: PAR, password hash profiles and the
+//! new client columns, all additive) starts from the beta.1 schema (version 9) with
+//! organization data.
 
 use std::collections::BTreeMap;
 use std::str::FromStr;
@@ -33,6 +35,9 @@ use uuid::Uuid;
 
 /// Last schema version shipped in 0.1.
 const LAST_V0_1_VERSION: i64 = 2;
+
+/// Schema version of the final 1.0 schema (the newest migration).
+const LATEST_VERSION: i64 = 10;
 
 /// Fixed test KEK (never a production key).
 const TEST_KEK: [u8; 32] = [0x42; 32];
@@ -1362,7 +1367,8 @@ async fn upgrade_from_0_4_keeps_every_row() {
         .fetch_one(&pool)
         .await
         .expect("version");
-    assert_eq!(version, 9);
+    assert_eq!(version, LATEST_VERSION);
+    assert_new_1_0_tables_empty(&pool).await;
 
     // The new columns take their defaults on old rows.
     let conn = s
@@ -1398,6 +1404,7 @@ async fn upgrade_from_0_4_keeps_every_row() {
         .expect("get client")
         .expect("client survives");
     assert_eq!(web.organization, OrgClientPolicy::Off);
+    assert_client_phase7_defaults(&web);
     let family = s
         .grants()
         .get_family(default, TokenFamilyId(V04_FAMILY))
@@ -1574,7 +1581,7 @@ async fn upgrade_from_0_4_is_idempotent_on_restart() {
         .fetch_one(&pool)
         .await
         .expect("count");
-    assert_eq!(applied, 9, "every migration recorded once");
+    assert_eq!(applied, LATEST_VERSION, "every migration recorded once");
     pool.close().await;
 }
 
@@ -1600,4 +1607,391 @@ pub async fn upgraded_v0_4_sqlite() -> TestStorage {
 
 mod upgraded_v0_4_contract {
     anvil_storage::storage_contract_tests!(crate::upgraded_v0_4_sqlite);
+}
+
+// ---------------------------------------------------------------------------------------------
+// 1.0.0-beta.1 → final (migration 0010: pushed_authorization_request and password_hash_profile
+// tables, client columns require_pushed_authorization_requests, client_kind and
+// headless_native). Additive only: every beta.1 row must survive unchanged.
+
+/// Schema version shipped in 1.0.0-beta.1 (0009_release_1_0_rebuild).
+const BETA1_VERSION: i64 = 9;
+
+const B1_SYSTEM: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0010_0001);
+const B1_DEFAULT: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0010_0002);
+const B1_ALICE: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0010_0011);
+const B1_BOB: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0010_0012);
+const B1_ORG: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0010_0020);
+const B1_ORG_ROLE: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0010_0031);
+const B1_SAML: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0010_0050);
+const B1_FAMILY: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0010_0080);
+
+/// Tables the beta.1 fixture must populate (at least one row each).
+const B1_POPULATED: [&str; 16] = [
+    "tenant",
+    "user",
+    "credential",
+    "client",
+    "organization",
+    "org_membership",
+    "org_invitation",
+    "connection",
+    "identity_link",
+    "org_domain",
+    "role",
+    "role_assignment",
+    "token_family",
+    "authorization_code",
+    "replay_guard",
+    "audit_event",
+];
+
+/// The tables 0010 adds; they must exist and be empty right after the upgrade.
+async fn assert_new_1_0_tables_empty(pool: &sqlx::SqlitePool) {
+    for table in ["pushed_authorization_request", "password_hash_profile"] {
+        // Table names are compile-time constants of this test.
+        let sql = sqlx::AssertSqlSafe(format!("SELECT count(*) FROM \"{table}\""));
+        let n: i64 = sqlx::query_scalar(sql)
+            .fetch_one(pool)
+            .await
+            .unwrap_or_else(|e| panic!("{table} must exist after the upgrade: {e}"));
+        assert_eq!(n, 0, "{table} starts empty");
+    }
+}
+
+/// The 0010 client columns read as their defaults on pre-0010 rows.
+fn assert_client_phase7_defaults(client: &anvil_core::model::Client) {
+    assert!(!client.require_pushed_authorization_requests);
+    assert_eq!(
+        client.client_kind,
+        anvil_core::model::ClientKind::Application
+    );
+    assert!(!client.headless_native);
+}
+
+/// `count(*)` of every table in `columns`.
+async fn table_counts(
+    pool: &sqlx::SqlitePool,
+    columns: &BTreeMap<String, Vec<String>>,
+) -> BTreeMap<String, i64> {
+    let mut out = BTreeMap::new();
+    for table in columns.keys() {
+        // Table names come from sqlite_master of the test database itself.
+        let sql = sqlx::AssertSqlSafe(format!("SELECT count(*) FROM \"{table}\""));
+        let n: i64 = sqlx::query_scalar(sql)
+            .fetch_one(pool)
+            .await
+            .unwrap_or_else(|e| panic!("count {table}: {e}"));
+        out.insert(table.clone(), n);
+    }
+    out
+}
+
+struct UpgradedBeta1 {
+    storage: SqliteStorage,
+    url: String,
+    before: BTreeMap<String, Vec<String>>,
+    columns: BTreeMap<String, Vec<String>>,
+    counts_before: BTreeMap<String, i64>,
+    _dir: tempfile::TempDir,
+}
+
+/// Builds a file database through the 1.0.0-beta.1 → latest upgrade path.
+async fn upgraded_from_beta1() -> UpgradedBeta1 {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let url = format!("sqlite://{}", dir.path().join("anvil.db").display());
+    let pool = raw_pool(&url).await;
+    sqlx::migrate!()
+        .run_to(BETA1_VERSION, &pool)
+        .await
+        .expect("beta.1 migrations apply");
+    let version: i64 = sqlx::query_scalar("SELECT max(version) FROM _sqlx_migrations")
+        .fetch_one(&pool)
+        .await
+        .expect("version");
+    assert_eq!(version, BETA1_VERSION);
+    sqlx::raw_sql(include_str!("fixtures/release_1_0_beta1.sql"))
+        .execute(&pool)
+        .await
+        .expect("beta.1 fixtures load");
+    let fk_violations: i64 = sqlx::query_scalar("SELECT count(*) FROM pragma_foreign_key_check")
+        .fetch_one(&pool)
+        .await
+        .expect("fk check");
+    assert_eq!(
+        fk_violations, 0,
+        "the beta.1 fixture is referentially valid"
+    );
+    let columns = table_columns(&pool).await;
+    let before = snapshot(&pool, &columns).await;
+    let counts_before = table_counts(&pool, &columns).await;
+    for table in B1_POPULATED {
+        assert!(
+            counts_before.get(table).copied().unwrap_or(0) >= 1,
+            "the beta.1 fixture must populate {table}"
+        );
+    }
+    pool.close().await;
+
+    // The final 1.0 binary starts: connect and migrate with the defaults (destructive refused).
+    let storage = SqliteStorage::connect(&url).await.expect("connect");
+    storage
+        .migrate_with(MigrateOptions::default())
+        .await
+        .expect("beta.1 → latest upgrade applies without the destructive flag");
+    UpgradedBeta1 {
+        storage,
+        url,
+        before,
+        columns,
+        counts_before,
+        _dir: dir,
+    }
+}
+
+#[tokio::test]
+async fn upgrade_from_1_0_beta1_keeps_every_row_and_defaults_new_columns() {
+    use anvil_core::model::{
+        ConnectionConfig, ConnectionId, ConnectionKind, NameIdFormat, NewPushedRequest,
+        OrgClientPolicy, OrgId, PageRequest, ReplayKind, RoleId,
+    };
+    use anvil_core::ports::JtiOutcome;
+
+    let up = upgraded_from_beta1().await;
+    let s = &up.storage;
+    let default = TenantId(B1_DEFAULT);
+    let pool = raw_pool(&up.url).await;
+
+    // Row counts per table and every value of every beta.1 column are unchanged.
+    let counts_after = table_counts(&pool, &up.columns).await;
+    assert_eq!(
+        counts_after, up.counts_before,
+        "0010 must not add or lose a row in any beta.1 table"
+    );
+    let after = snapshot(&pool, &up.columns).await;
+    assert_eq!(
+        after, up.before,
+        "the upgrade must not lose or change any row"
+    );
+    let fk_violations: i64 = sqlx::query_scalar("SELECT count(*) FROM pragma_foreign_key_check")
+        .fetch_one(&pool)
+        .await
+        .expect("fk check");
+    assert_eq!(fk_violations, 0);
+    let version: i64 = sqlx::query_scalar("SELECT max(version) FROM _sqlx_migrations")
+        .fetch_one(&pool)
+        .await
+        .expect("version");
+    assert_eq!(version, LATEST_VERSION);
+    assert_new_1_0_tables_empty(&pool).await;
+    pool.close().await;
+
+    // The client keeps its beta.1 policy and defaults the new columns.
+    let web = s
+        .clients()
+        .get(default, "beta1-web")
+        .await
+        .expect("get client")
+        .expect("client survives");
+    assert_eq!(web.organization, OrgClientPolicy::Optional);
+    assert_client_phase7_defaults(&web);
+
+    // The beta.1 organization data reads back through the traits.
+    let org = s
+        .organizations()
+        .get(default, OrgId(B1_ORG))
+        .await
+        .expect("get org")
+        .expect("org survives");
+    assert_eq!(org.slug, "acme");
+    assert!(
+        s.organizations()
+            .is_member(default, OrgId(B1_ORG), UserId(B1_ALICE))
+            .await
+            .expect("is_member")
+    );
+    assert_eq!(
+        s.organizations()
+            .list_members(
+                default,
+                OrgId(B1_ORG),
+                PageRequest {
+                    after: None,
+                    limit: 10
+                }
+            )
+            .await
+            .expect("members")
+            .items
+            .len(),
+        1
+    );
+    let invitations = s
+        .organizations()
+        .list_invitations(default, OrgId(B1_ORG), false)
+        .await
+        .expect("invitations");
+    assert_eq!(invitations.len(), 1);
+    assert_eq!(invitations[0].role_ids, vec![RoleId(B1_ORG_ROLE)]);
+    let saml = s
+        .connections()
+        .get(default, ConnectionId(B1_SAML))
+        .await
+        .expect("get connection")
+        .expect("SAML connection survives");
+    assert_eq!(saml.kind(), ConnectionKind::Saml);
+    assert_eq!(saml.org_id, Some(OrgId(B1_ORG)));
+    match &saml.config {
+        ConnectionConfig::Saml(c) => assert_eq!(c.name_id_format, NameIdFormat::EmailAddress),
+        other => panic!("SAML config expected, got {other:?}"),
+    }
+    let domains = s
+        .organizations()
+        .list_domains(default, OrgId(B1_ORG))
+        .await
+        .expect("domains");
+    assert_eq!(domains.len(), 1);
+    assert_eq!(domains[0].connection_id, Some(ConnectionId(B1_SAML)));
+    assert!(
+        s.organizations()
+            .routed_domain(default, "acme.example.test")
+            .await
+            .expect("routed_domain")
+            .is_some(),
+        "the verified routing domain still routes"
+    );
+    let org_roles: Vec<RoleId> = s
+        .roles()
+        .roles_for_user_in_org(default, UserId(B1_ALICE), OrgId(B1_ORG))
+        .await
+        .expect("org roles")
+        .into_iter()
+        .map(|r| r.id)
+        .collect();
+    assert!(org_roles.contains(&RoleId(B1_ORG_ROLE)));
+    assert_eq!(
+        s.connections()
+            .links_for_user(default, UserId(B1_BOB))
+            .await
+            .expect("links")
+            .len(),
+        1
+    );
+    assert_eq!(
+        s.grants()
+            .record_jti(
+                default,
+                ReplayKind::SamlAssertionId,
+                &SecretHash([0x53; 32]),
+                now() + time::Duration::hours(1),
+                now(),
+            )
+            .await
+            .expect("record_jti"),
+        JtiOutcome::Replayed,
+        "the beta.1 SAML replay guard still blocks"
+    );
+    match s
+        .grants()
+        .consume_code(default, &SecretHash([0x52; 32]), now())
+        .await
+        .expect("consume")
+    {
+        ConsumeOutcome::Consumed(code) => assert_eq!(code.org_id, Some(OrgId(B1_ORG))),
+        other => panic!("the beta.1 code must survive: {other:?}"),
+    }
+
+    // The Phase 7 methods work on the upgraded beta.1 rows.
+    let families = s
+        .grants()
+        .families_for_user(default, UserId(B1_ALICE))
+        .await
+        .expect("families_for_user");
+    assert_eq!(families.len(), 1);
+    assert_eq!(families[0].id, TokenFamilyId(B1_FAMILY));
+    assert_eq!(families[0].org_id, Some(OrgId(B1_ORG)));
+    assert!(
+        s.users()
+            .replace_password_if(
+                default,
+                UserId(B1_ALICE),
+                "$argon2id$v=19$beta1-alice",
+                "$argon2id$v=19$rehashed",
+                now(),
+            )
+            .await
+            .expect("replace_password_if"),
+        "the beta.1 password can be swapped"
+    );
+    let at = anvil_core::model::truncate_to_ms(now());
+    let pushed = NewPushedRequest {
+        request_uri_hash: SecretHash([0x54; 32]),
+        client_id: "beta1-web".to_owned(),
+        params: serde_json::json!({"redirect_uri": "https://rp.acme.example.test/cb"}),
+        created_at: at,
+        expires_at: at + time::Duration::seconds(60),
+    };
+    s.grants()
+        .create_pushed_request(default, &pushed)
+        .await
+        .expect("PAR on the upgraded client");
+    assert!(
+        s.grants()
+            .consume_pushed_request(default, &pushed.request_uri_hash, at)
+            .await
+            .expect("consume")
+            .is_some()
+    );
+    assert!(
+        s.password_profiles()
+            .list(default)
+            .await
+            .expect("profiles")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn upgrade_from_1_0_beta1_is_idempotent_on_restart() {
+    let up = upgraded_from_beta1().await;
+    up.storage
+        .migrate()
+        .await
+        .expect("a second start finds nothing pending");
+    let again = SqliteStorage::connect(&up.url).await.expect("reconnect");
+    again.migrate().await.expect("third start");
+    let pool = raw_pool(&up.url).await;
+    assert_eq!(table_counts(&pool, &up.columns).await, up.counts_before);
+    assert_eq!(snapshot(&pool, &up.columns).await, up.before);
+    let applied: i64 = sqlx::query_scalar("SELECT count(*) FROM _sqlx_migrations")
+        .fetch_one(&pool)
+        .await
+        .expect("count");
+    assert_eq!(applied, LATEST_VERSION, "every migration recorded once");
+    assert_new_1_0_tables_empty(&pool).await;
+    pool.close().await;
+}
+
+/// Contract-suite factory: a database built through the beta.1 upgrade path, with the fixture
+/// tenants deleted through the storage traits (the contract tests start uninstalled).
+pub async fn upgraded_beta1_sqlite() -> TestStorage {
+    let up = upgraded_from_beta1().await;
+    for id in [B1_DEFAULT, B1_SYSTEM] {
+        assert!(
+            up.storage
+                .tenants()
+                .delete(TenantId(id))
+                .await
+                .expect("delete fixture tenant"),
+            "fixture tenant {id} missing"
+        );
+    }
+    TestStorage {
+        storage: Arc::new(up.storage),
+        _guard: Box::new(up._dir),
+    }
+}
+
+mod upgraded_beta1_contract {
+    anvil_storage::storage_contract_tests!(crate::upgraded_beta1_sqlite);
 }
