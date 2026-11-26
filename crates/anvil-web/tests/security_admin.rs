@@ -291,7 +291,8 @@ async fn system_clients_need_full_admin() {
         "scopes": ["admin:write"],
     });
 
-    // Allowed in an application tenant.
+    // Admin scope names are refused outright in an application tenant (05-32): they would grant
+    // nothing there, so storing them is an error rather than a silent no-op.
     let resp = call(
         &app,
         Method::POST,
@@ -300,7 +301,8 @@ async fn system_clients_need_full_admin() {
         Some(cc.clone()),
     )
     .await;
-    assert_eq!(resp.status, 201, "{}", resp.text());
+    assert_eq!(resp.status, 422, "{}", resp.text());
+    assert!(resp.text().contains("scopes"), "{}", resp.text());
 
     // In the system tenant a client can carry admin scopes: admin:clients:write must not mint
     // or take over one.
