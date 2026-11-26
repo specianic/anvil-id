@@ -27,13 +27,14 @@ use anvil_core::ports::{Clock, InstallOutcome, Storage};
 use anvil_jose::kek::Kek;
 use anvil_web::adapters::argon2::Argon2Pool;
 use anvil_web::adapters::hibp::{BreachCheckMode, breach_checker};
-use anvil_web::{AppConfig, AppDeps};
+use anvil_web::{AppConfig, AppDeps, AppState};
 use axum::Router;
 use axum::body::Body;
 use axum::extract::ConnectInfo;
 use axum::http::{HeaderMap, Method, Request, StatusCode, header};
 use http_body_util::BodyExt;
 use time::OffsetDateTime;
+use tokio::sync::Notify;
 use tower::ServiceExt;
 
 /// Default public URL of [`TestApp::new`] (production mode: https).
@@ -233,6 +234,7 @@ pub struct TestApp {
     pub backend: Backend,
     pub config: AppConfig,
     router: Router,
+    logout_wake: Arc<Notify>,
     storage: Arc<dyn Storage>,
     clock: Arc<TestClock>,
     kek: Arc<Kek>,
@@ -300,11 +302,14 @@ impl TestApp {
             breach: breach_checker(BreachCheckMode::Off),
             kek: Arc::clone(&kek),
         };
-        let router = anvil_web::app(config.clone(), deps).expect("app builds");
+        let state = AppState::new(config.clone(), deps).expect("app builds");
+        let logout_wake = state.logout_wake();
+        let router = anvil_web::router(state);
         Self {
             backend,
             config,
             router,
+            logout_wake,
             storage,
             clock,
             kek,
@@ -321,6 +326,12 @@ impl TestApp {
     /// The storage handle as an `Arc`, for services under test that keep it.
     pub fn storage_arc(&self) -> Arc<dyn Storage> {
         Arc::clone(&self.storage)
+    }
+
+    /// The app's back-channel logout wake (`AppState::logout_wake`): hand it to a worker, or
+    /// check that a request woke it.
+    pub fn logout_wake(&self) -> Arc<Notify> {
+        Arc::clone(&self.logout_wake)
     }
 
     pub fn clock(&self) -> &TestClock {

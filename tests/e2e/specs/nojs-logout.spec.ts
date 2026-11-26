@@ -104,7 +104,7 @@ test('account chooser without JavaScript: continue, then use another account', a
   }
 
   // Alice's session was ended by the switch and her RP session told so over the back channel
-  // (the switch does not wake the delivery worker: up to one 10 s poll interval).
+  // (every sign-in wakes the delivery worker, so this takes no longer than a logout).
   expect(await userSessions(await adminToken(creds), alice.id)).toHaveLength(0);
-  expect(await waitForBackchannel(rp.base, aliceSub, 30_000)).not.toHaveLength(0);
+  expect(await waitForBackchannel(rp.base, aliceSub, 15_000)).not.toHaveLength(0);
 });

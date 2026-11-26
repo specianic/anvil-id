@@ -402,6 +402,7 @@ async fn revoke_one(
         .await
     {
         Ok(()) if id == sub.session.id => {
+            state.wake_logout_worker();
             // Signed out of this browser: drop its cookies and go to the sign-in page.
             let jar = CookieJar::new()
                 .add(state.cookies().clear_session(&tenant.tenant))
@@ -409,6 +410,7 @@ async fn revoke_one(
             to_login(&tenant, jar)
         }
         Ok(()) => {
+            state.wake_logout_worker();
             same_flow(
                 &state,
                 &tenant,
@@ -450,6 +452,7 @@ async fn revoke_others(
         .await
     {
         Ok(_) => {
+            state.wake_logout_worker();
             same_flow(
                 &state,
                 &tenant,

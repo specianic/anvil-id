@@ -210,6 +210,8 @@ pub(crate) async fn delete_user(
         .admin_users()
         .delete(tenant.id, user_id(&id)?, auth.actor(), &ctx)
         .await?;
+    // Deleting the user revoked its sessions and enqueued their back-channel logouts.
+    state.wake_logout_worker();
     Ok(no_content())
 }
 

@@ -99,12 +99,12 @@ test('select_account: continue, then use another account switches users', async 
   }
 
   // Alice's session was revoked by the switch (with its token families), and the RP got a
-  // back-channel logout for her (the switch does not wake the delivery worker, so this can take up
-  // to one 10 s poll interval); Bob holds the only session in this browser.
+  // back-channel logout for her (every sign-in wakes the delivery worker, so it arrives within the
+  // normal logout budget); Bob holds the only session in this browser.
   const token = await adminToken(creds);
   expect(await userSessions(token, alice.id)).toHaveLength(0);
   expect(await userSessions(token, bob.id)).toHaveLength(1);
-  const entries = await waitForBackchannel(rp.base, aliceSub, 30_000);
+  const entries = await waitForBackchannel(rp.base, aliceSub, 15_000);
   expect(entries.length).toBeGreaterThan(0);
   expect(await backchannelReceived(rp.base, bob.id)).toHaveLength(0);
 });

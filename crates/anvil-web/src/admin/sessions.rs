@@ -108,6 +108,7 @@ pub(crate) async fn revoke_session(
         .admin_sessions()
         .admin_revoke(tenant.id, id, &auth.claims.sub, &ctx)
         .await?;
+    state.wake_logout_worker();
     Ok(no_content())
 }
 
@@ -179,5 +180,6 @@ pub(crate) async fn revoke_user_sessions(
         .admin_sessions()
         .admin_revoke_all(tenant.id, UserId(uuid_of(&user)?), &auth.claims.sub, &ctx)
         .await?;
+    state.wake_logout_worker();
     Ok(json(StatusCode::OK, &RevokedSessions { revoked }))
 }

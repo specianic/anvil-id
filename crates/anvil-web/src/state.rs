@@ -168,4 +168,12 @@ impl AppState {
     pub fn logout_wake(&self) -> Arc<Notify> {
         Arc::clone(&self.0.logout_wake)
     }
+
+    /// Wakes the back-channel logout worker. Revocations enqueue back-channel deliveries in
+    /// their own storage transaction; this wakes the worker so they go out now instead of at
+    /// the next poll. Spurious wakes cost one claim query, so call it after every successful
+    /// revoking request (never from read-only handlers). This is the only place that notifies.
+    pub fn wake_logout_worker(&self) {
+        self.0.logout_wake.notify_one();
+    }
 }

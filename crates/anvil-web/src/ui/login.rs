@@ -1327,6 +1327,10 @@ pub(super) fn signed_in_response(
     recovery_codes: &[SecretString],
     jar: CookieJar,
 ) -> Response {
+    // Every sign-in can switch away from another user's session in this browser (the flow
+    // revokes it and enqueues its back-channel logouts). Waking on each sign-in is cheaper than
+    // threading a "revoked" flag out of the flow engine.
+    state.wake_logout_worker();
     let continue_url = continue_to
         .map(|request| format!("{}/authorize/continue?request={request}", tenant.issuer));
     if !recovery_codes.is_empty() {

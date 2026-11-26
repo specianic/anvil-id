@@ -54,5 +54,13 @@ async fn submit(
             email: form.email.clone().unwrap_or_default(),
         },
     };
-    submit_page(&state, &tenant, &loc, &ctx, &jar, &q, &form, input).await
+    let resets = matches!(input, FlowInput::ResetPassword { .. });
+    let response = submit_page(&state, &tenant, &loc, &ctx, &jar, &q, &form, input).await;
+    if resets {
+        // A completed recovery revokes all of the user's sessions and enqueues their back-channel
+        // logouts. The flow outcome is opaque behind the page response, so every reset POST wakes
+        // the worker; a spurious wake costs one claim query.
+        state.wake_logout_worker();
+    }
+    response
 }

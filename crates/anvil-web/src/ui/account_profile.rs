@@ -788,11 +788,17 @@ async fn password_submit(
         )
         .await;
     let (bound, message, status) = match result {
-        Ok(_) => (
-            sub.bound(),
-            PageMessage::info("account.password_changed"),
-            StatusCode::OK,
-        ),
+        Ok(_) => {
+            if revoke_others {
+                // The change signed out the other sessions; send their back-channel logouts now.
+                state.wake_logout_worker();
+            }
+            (
+                sub.bound(),
+                PageMessage::info("account.password_changed"),
+                StatusCode::OK,
+            )
+        }
         Err(e) => {
             let (failure, status) = match classify(&state, &tenant, &sub.locale, e) {
                 Ok(c) => c,

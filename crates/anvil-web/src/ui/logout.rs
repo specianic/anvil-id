@@ -97,7 +97,7 @@ impl AppState {
         if revoked {
             // Deliveries were enqueued with the revocation; the worker sends them. The redirect
             // never waits for it.
-            self.logout_wake().notify_one();
+            self.wake_logout_worker();
         }
         let jar = jar.add(self.cookies().clear_session(&tenant.tenant));
         match (redirect, redirect_to_signed_out) {
