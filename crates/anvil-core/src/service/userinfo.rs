@@ -15,12 +15,14 @@ use time::OffsetDateTime;
 
 use crate::error::CoreError;
 use crate::model::{
-    AccessTokenRecord, Scope, SecretHash, Tenant, TenantId, TokenFamily, TokenFamilyId, UserStatus,
+    AccessTokenRecord, Scope, SecretHash, Tenant, TenantId, TokenFamily, TokenFamilyId,
+    TokenTarget, UserStatus,
 };
 use crate::oauth::resource::{audience, userinfo_audience_ok};
 use crate::ports::{AttributeSchemaCheck, Clock, Storage};
 use crate::service::claims::{requested_claims, scope_claims};
 use crate::service::key::published_jwks;
+use crate::service::role::UserClaimSource;
 use crate::service::token::ACCESS_TOKEN_TYP;
 
 /// The verified contents of an access token this OP issued.
@@ -250,13 +252,15 @@ impl AccessTokenVerifier {
 pub struct UserInfoService {
     pub storage: Arc<dyn Storage>,
     pub clock: Arc<dyn Clock>,
-    /// Attribute schema check for mapped attribute claims (used from plan 05-12; `None` until the
-    /// adapter is wired).
+    /// Attribute schema check for mapped attribute claims; `None` omits attribute claims
+    /// (values are never emitted unvalidated).
     pub attribute_check: Option<Arc<dyn AttributeSchemaCheck>>,
 }
 
 impl UserInfoService {
-    /// `sub`, the claims of the token's scopes and the family's `claims.userinfo` requests.
+    /// `sub`, the claims of the token's scopes, the family's `claims.userinfo` requests and the
+    /// tenant's mapped role, permission and attribute claims for UserInfo (read now, so role
+    /// changes show at once). Mapped claims never replace standard or protocol claims.
     pub async fn userinfo(
         &self,
         tenant: &Tenant,
@@ -295,6 +299,22 @@ impl UserInfoService {
             out.extend(requested_claims(&user, &req.userinfo));
         }
         out.extend(scope_claims(&user, &claims.scope));
+        let source = UserClaimSource::load(
+            self.storage.as_ref(),
+            tenant.id,
+            user.id,
+            self.attribute_check.is_some(),
+        )
+        .await?;
+        let mapped = source.claims(
+            tenant,
+            &claims.scope,
+            TokenTarget::Userinfo,
+            self.attribute_check.as_deref(),
+        );
+        for (k, v) in mapped {
+            out.entry(k).or_insert(v);
+        }
         out.insert("sub".to_owned(), Value::String(claims.sub));
         Ok(out)
     }

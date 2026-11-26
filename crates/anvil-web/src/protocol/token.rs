@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use anvil_cache::limiter::{Decision, LimitKey, RouteClass};
 use anvil_core::error::CoreError;
-use anvil_core::model::RequestContext;
+use anvil_core::model::{GrantType, RequestContext};
 use anvil_core::service::client_auth::{ClientAuthInput, parse_basic};
 use anvil_core::service::token::{TokenRequest, TokenService};
 use axum::Router;
@@ -23,6 +23,7 @@ use axum::routing::post;
 use crate::errors::oauth_json;
 use crate::layers::cors::public_cors;
 use crate::layers::ratelimit::{Surface, too_many_requests};
+use crate::observability::{REFRESH_REUSE_TOTAL, TOKENS_ISSUED_TOTAL};
 use crate::request_context::AuditContext;
 use crate::state::AppState;
 use crate::tenant::ResolvedTenant;
@@ -189,13 +190,30 @@ async fn token(
             return too_many_requests(&state, Some(&tenant), Surface::Protocol, retry_after);
         }
     }
-    match state
+    // Bounded label: only a supported grant type can succeed.
+    let grant = req.grant_type.as_deref().and_then(GrantType::parse);
+    let result = state
         .token_service()
         .token(&tenant.tenant, &tenant.issuer, req)
-        .await
-    {
+        .await;
+    record_token_metrics(grant, &result);
+    match result {
         Ok(resp) => no_store(axum::Json(resp).into_response()),
         Err(e) => oauth_json(&e),
+    }
+}
+
+/// `anvil_tokens_issued_total{grant}` on success, `anvil_refresh_reuse_total` when a consumed
+/// refresh token was presented again (the family is revoked).
+fn record_token_metrics<T>(grant: Option<GrantType>, result: &Result<T, CoreError>) {
+    match (result, grant) {
+        (Ok(_), Some(g)) => {
+            metrics::counter!(TOKENS_ISSUED_TOTAL, "grant" => g.as_str()).increment(1);
+        }
+        (Err(CoreError::RefreshTokenReuse), _) => {
+            metrics::counter!(REFRESH_REUSE_TOTAL).increment(1);
+        }
+        _ => {}
     }
 }
 

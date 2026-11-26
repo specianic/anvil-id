@@ -29,6 +29,7 @@ use crate::model::{
     Page, PageRequest, RequestContext, SIGNING_KEY_PURPOSE, SYSTEM_TENANT_SLUG, SigningKeyId,
     Tenant, TenantId, TenantSettings, TenantUpdate, signing_key_aad,
 };
+use crate::policy::claims_mapping::validate_mapping;
 use crate::ports::{Storage, StorageError};
 use crate::service::audit::AuditService;
 use crate::service::key_rotation::{KeyRotationService, RotationPolicy};
@@ -515,6 +516,8 @@ impl TenantService {
         }
         settings.signing_algs = normalize_signing_algs(&settings.signing_algs)?;
         validate_phase4_settings(None, &settings, input.installation_smtp)?;
+        // A new tenant has no attribute definitions yet.
+        validate_mapping(&settings.claims, &[])?;
         let now = self.clock.now();
         let new = NewTenant {
             id: TenantId::new_v7(),
@@ -618,6 +621,12 @@ impl TenantService {
         )?;
         if let Some(new) = &settings {
             self.refuse_disabling_used_algs(&tenant, new).await?;
+            // Claim mapping is checked when it changes (stored configuration that predates a
+            // rule never blocks unrelated updates; mapped_claims skips such rules at runtime).
+            if new.claims != tenant.settings.claims {
+                let attributes = self.storage.attributes().list(tenant.id).await?;
+                validate_mapping(&new.claims, &attributes)?;
+            }
         }
         let settings_changed = settings.is_some();
         let update = TenantUpdate {

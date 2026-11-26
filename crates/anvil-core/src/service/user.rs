@@ -28,6 +28,7 @@ use crate::model::{
 use crate::policy::{PasswordPolicy, check_password};
 use crate::ports::{PasswordHasher, Storage, StorageError};
 use crate::service::audit::AuditService;
+use crate::service::role::guard_user_removal;
 use crate::service::tenant::admin_page;
 
 /// Lifetime of an invitation link.
@@ -318,7 +319,8 @@ impl UserService {
     }
 
     /// Applies a patch (including block/unblock through `status`). Audited as `user_updated`
-    /// with the changed field names.
+    /// with the changed field names. Blocking the last active `admin:write` holder of the system
+    /// tenant is refused with `LastAdministrator`.
     pub async fn update(
         &self,
         tenant: TenantId,
@@ -328,6 +330,9 @@ impl UserService {
         ctx: &RequestContext,
     ) -> Result<User, CoreError> {
         let fields = changed_fields(&patch);
+        if patch.status.is_some_and(|s| s != UserStatus::Active) {
+            guard_user_removal(self.storage.as_ref(), tenant, id).await?;
+        }
         let update = UserUpdate {
             email: patch.email.as_deref().map(normalize_email).transpose()?,
             email_verified: patch.email_verified,
@@ -359,7 +364,8 @@ impl UserService {
     }
 
     /// Deletes the user; the repository removes credentials, sessions and tokens and revokes
-    /// token families. Audited as `user_deleted`.
+    /// token families. Audited as `user_deleted`. Deleting the last active `admin:write` holder
+    /// of the system tenant is refused with `LastAdministrator`.
     pub async fn delete(
         &self,
         tenant: TenantId,
@@ -367,6 +373,7 @@ impl UserService {
         actor: AuditActor,
         ctx: &RequestContext,
     ) -> Result<(), CoreError> {
+        guard_user_removal(self.storage.as_ref(), tenant, id).await?;
         if !self.storage.users().delete(tenant, id).await? {
             return Err(CoreError::NotFound);
         }

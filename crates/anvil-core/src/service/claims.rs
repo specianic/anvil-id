@@ -9,29 +9,12 @@ use time::{Duration, OffsetDateTime};
 
 use crate::model::{RequestedClaim, Scope, TokenFamilyId, User};
 use crate::oauth::resource::audience;
+use crate::policy::claims_mapping::is_reserved_claim;
 
 /// ID token lifetime (1 hour).
 pub const ID_TOKEN_TTL: Duration = Duration::hours(1);
 /// Access token lifetime (10 minutes).
 pub const ACCESS_TOKEN_TTL: Duration = Duration::minutes(10);
-
-/// Protocol claims an ID token always controls; `claims.id_token` extras never override them.
-const ID_TOKEN_PROTOCOL_CLAIMS: &[&str] = &[
-    "iss",
-    "sub",
-    "aud",
-    "azp",
-    "exp",
-    "iat",
-    "auth_time",
-    "nonce",
-    "acr",
-    "amr",
-    "sid",
-    "at_hash",
-    "c_hash",
-    "jti",
-];
 
 /// `profile` scope claims (OIDC Core §5.4), excluding `updated_at` which is added separately.
 const PROFILE_CLAIMS: &[&str] = &[
@@ -49,6 +32,40 @@ const PROFILE_CLAIMS: &[&str] = &[
     "zoneinfo",
     "locale",
 ];
+
+/// The other claims the standard scopes release (OIDC Core §5.4): `updated_at` (`profile`),
+/// `email`, `address` and `phone` claims.
+const CONTACT_CLAIMS: &[&str] = &[
+    "updated_at",
+    "email",
+    "email_verified",
+    "address",
+    "phone_number",
+    "phone_number_verified",
+];
+
+/// Whether `name` is a user claim the standard scopes release ([`scope_claims`]).
+fn is_standard_user_claim(name: &str) -> bool {
+    PROFILE_CLAIMS.contains(&name) || CONTACT_CLAIMS.contains(&name)
+}
+
+/// Whether `name` is a protocol claim the token builders always control: a reserved claim
+/// ([`is_reserved_claim`], the single list in `policy::claims_mapping`) that is not a standard
+/// user claim. ID token extras (`claims.id_token` requests, mapped claims) never set these.
+fn is_protocol_claim(name: &str) -> bool {
+    is_reserved_claim(name) && !is_standard_user_claim(name)
+}
+
+/// Adds `extra` (mapped role, permission and attribute claims) to built access token claims.
+/// Reserved claims ([`is_reserved_claim`]) and names already present are skipped, so extras
+/// can never change `sub`, `scope`, `aud`, ... or add user profile claims to an access token.
+pub fn merge_access_token_extras(claims: &mut Map<String, Value>, extra: Map<String, Value>) {
+    for (k, v) in extra {
+        if !is_reserved_claim(&k) && !claims.contains_key(&k) {
+            claims.insert(k, v);
+        }
+    }
+}
 
 fn opt_str(v: Option<&String>) -> Option<Value> {
     v.map(|s| Value::String(s.clone()))
@@ -173,7 +190,7 @@ pub struct IdTokenInput<'a> {
 pub fn id_token_claims(input: &IdTokenInput) -> Map<String, Value> {
     let mut m = Map::new();
     for (k, v) in &input.extra {
-        if !ID_TOKEN_PROTOCOL_CLAIMS.contains(&k.as_str()) {
+        if !is_protocol_claim(k) {
             m.insert(k.clone(), v.clone());
         }
     }
@@ -425,6 +442,78 @@ pub(crate) mod tests {
         assert_eq!(m["sid"], "sid-1");
         assert_eq!(m["at_hash"], "hash");
         assert_eq!(m["email"], "x@example.test");
+    }
+
+    #[test]
+    fn id_token_extras_never_set_reserved_protocol_claims() {
+        // Every reserved claim that is not a standard user claim is dropped from the extras,
+        // even when the builder itself leaves it unset (no nonce, sid, acr, ... here).
+        let mut extra = Map::new();
+        for k in crate::policy::claims_mapping::RESERVED_CLAIMS {
+            extra.insert((*k).to_owned(), Value::from("forged"));
+        }
+        extra.insert("roles".into(), serde_json::json!(["editor"]));
+        let m = id_token_claims(&IdTokenInput {
+            issuer: "https://op.test",
+            sub: "user-1",
+            client_id: "rp",
+            now: now(),
+            auth_time: None,
+            nonce: None,
+            acr: None,
+            amr: &[],
+            sid: None,
+            at_hash: None,
+            extra,
+        });
+        for k in [
+            "nonce",
+            "sid",
+            "acr",
+            "amr",
+            "auth_time",
+            "s_hash",
+            "client_id",
+            "scope",
+            "fid",
+            "nbf",
+            "cnf",
+        ] {
+            assert!(!m.contains_key(k), "{k} must not come from the extras");
+        }
+        assert_eq!(m["sub"], "user-1");
+        assert_eq!(m["roles"], serde_json::json!(["editor"]));
+        // Standard user claims requested through `claims.id_token` still pass.
+        assert_eq!(m["email"], "forged");
+    }
+
+    #[test]
+    fn access_token_extras_never_override_or_add_reserved_claims() {
+        let s = scope("openid");
+        let mut m = access_token_claims(&AccessTokenInput {
+            issuer: "https://op.test",
+            sub: "user-1",
+            client_id: "rp",
+            scope: &s,
+            now: now(),
+            jti: "j".into(),
+            family_id: None,
+            auth_time: None,
+            acr: None,
+            resource: &[],
+        });
+        let mut extra = Map::new();
+        for k in ["sub", "scope", "aud", "email", "Sub", "acr"] {
+            extra.insert(k.into(), Value::from("forged"));
+        }
+        extra.insert("permissions".into(), serde_json::json!(["docs:write"]));
+        merge_access_token_extras(&mut m, extra);
+        assert_eq!(m["sub"], "user-1");
+        assert_eq!(m["scope"], "openid");
+        assert!(!m.contains_key("email"));
+        assert!(!m.contains_key("Sub"));
+        assert!(!m.contains_key("acr"));
+        assert_eq!(m["permissions"], serde_json::json!(["docs:write"]));
     }
 
     #[test]

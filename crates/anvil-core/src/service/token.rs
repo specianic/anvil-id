@@ -12,14 +12,15 @@ use anvil_jose::encoding::{random_token, secret_hash};
 use anvil_jose::keys::{Alg, SigningKey};
 use anvil_jose::token_hash;
 use serde::Serialize;
+use serde_json::{Map, Value};
 use time::{Duration, OffsetDateTime};
 
 use crate::error::CoreError;
 use crate::model::{
     AuditAction, AuditActor, AuditDetails, AuditOutcome, AuthorizationCode, Client, ClientType,
-    GrantType, NewAccessToken, NewRefreshToken, RefreshToken, RequestContext, RevokeReason, Scope,
-    SecretHash, Tenant, TenantId, TokenFamily, TokenFamilyId, TokenFormat, User, UserId,
-    UserStatus,
+    GrantType, NewAccessToken, NewRefreshToken, RefreshToken, RequestContext, RevokeReason,
+    SYSTEM_TENANT_SLUG, Scope, SecretHash, Tenant, TenantId, TokenFamily, TokenFamilyId,
+    TokenFormat, TokenTarget, User, UserId, UserStatus,
 };
 use crate::oauth::resource;
 use crate::ports::{
@@ -28,11 +29,12 @@ use crate::ports::{
 use crate::service::audit::AuditService;
 use crate::service::claims::{
     ACCESS_TOKEN_TTL, AccessTokenInput, IdTokenInput, access_token_claims, id_token_claims,
-    requested_claims,
+    merge_access_token_extras, requested_claims,
 };
 use crate::service::client_auth::{ClientAuthInput, ClientAuthenticator};
 use crate::service::key::{KeyService, TOKEN_ALG};
 use crate::service::key_rotation::enabled_algs;
+use crate::service::role::{UserClaimSource, bound_admin_scope};
 
 /// Refresh token idle lifetime; a child never outlives its family's absolute expiry.
 pub const REFRESH_TOKEN_IDLE_TTL: Duration = Duration::days(14);
@@ -353,9 +355,32 @@ pub fn sign_access_token(
     signer: &SigningKey,
     input: &AccessTokenInput,
 ) -> Result<String, CoreError> {
+    sign_access_token_with(signer, input, Map::new())
+}
+
+/// Signs an access token with mapped extra claims (roles, permissions, attributes); extras
+/// never override or add reserved claims ([`merge_access_token_extras`]).
+pub fn sign_access_token_with(
+    signer: &SigningKey,
+    input: &AccessTokenInput,
+    extra: Map<String, Value>,
+) -> Result<String, CoreError> {
+    let mut claims = access_token_claims(input);
+    merge_access_token_extras(&mut claims, extra);
     signer
-        .sign_jwt(Some(ACCESS_TOKEN_TYP), &access_token_claims(input))
+        .sign_jwt(Some(ACCESS_TOKEN_TYP), &claims)
         .map_err(signing_error)
+}
+
+/// The scope user tokens are issued with. In the system tenant admin scopes are bounded by the
+/// user's roles (decision Q3, [`bound_admin_scope`]); elsewhere the granted scope unchanged.
+/// The refresh token keeps the full grant, so a role change applies at the next refresh.
+pub fn issued_scope(tenant: &Tenant, granted: &Scope, source: &UserClaimSource) -> Scope {
+    if tenant.slug == SYSTEM_TENANT_SLUG {
+        bound_admin_scope(granted, &source.effective_admin_scopes(tenant))
+    } else {
+        granted.clone()
+    }
 }
 
 /// The stored form of a new opaque access token: only the SHA-256 of `raw` is kept, linked to
@@ -398,8 +423,8 @@ pub struct TokenService {
     pub storage: Arc<dyn Storage>,
     pub clock: Arc<dyn Clock>,
     pub kek: Arc<Kek>,
-    /// Attribute schema check for mapped attribute claims (used from plan 05-12; `None` until the
-    /// adapter is wired).
+    /// Attribute schema check for mapped attribute claims; `None` omits attribute claims
+    /// (values are never emitted unvalidated).
     pub attribute_check: Option<Arc<dyn AttributeSchemaCheck>>,
     /// Client ID Metadata Document fetcher, passed to the [`ClientAuthenticator`] this service
     /// builds (used from plan 05-15; `None` = URL client ids are not resolved).
@@ -587,6 +612,8 @@ impl TokenService {
         };
         let user = check_user(self.storage.users().get(tenant.id, code.user_id).await?)?;
         let scope = Scope::parse(&code.scope).unwrap_or_default();
+        let source = self.claim_source(tenant, &user).await?;
+        let issued = issued_scope(tenant, &scope, &source);
 
         let minted = self
             .mint_user_tokens(
@@ -595,7 +622,8 @@ impl TokenService {
                 client,
                 &family,
                 &user,
-                &scope,
+                &issued,
+                &source,
                 &selected,
                 now,
                 code.nonce.as_deref(),
@@ -620,7 +648,7 @@ impl TokenService {
         } else {
             None
         };
-        Ok(response(minted, scope, refresh_token))
+        Ok(response(minted, issued, refresh_token))
     }
 
     async fn refresh(
@@ -671,16 +699,20 @@ impl TokenService {
                     &req.context,
                 )
                 .await?;
-                return Err(invalid_grant());
+                // Same wire response as invalid_grant; the variant feeds the reuse metric.
+                return Err(CoreError::RefreshTokenReuse);
             }
             RotateOutcome::NotFound => return Err(invalid_grant()),
         };
+        // Roles and attributes are read again at every refresh: changes apply here.
+        let source = self.claim_source(tenant, &user).await?;
+        let issued = issued_scope(tenant, &scope, &source);
         let minted = self
             .mint_user_tokens(
-                tenant, issuer, client, &family, &user, &scope, &selected, now, None,
+                tenant, issuer, client, &family, &user, &issued, &source, &selected, now, None,
             )
             .await?;
-        Ok(response(minted, scope, Some(rt)))
+        Ok(response(minted, issued, Some(rt)))
     }
 
     async fn client_credentials(
@@ -726,6 +758,21 @@ impl TokenService {
         ))
     }
 
+    /// The user's roles and (when the schema check is wired) attribute data for this issuance.
+    async fn claim_source(
+        &self,
+        tenant: &Tenant,
+        user: &User,
+    ) -> Result<UserClaimSource, CoreError> {
+        UserClaimSource::load(
+            self.storage.as_ref(),
+            tenant.id,
+            user.id,
+            self.attribute_check.is_some(),
+        )
+        .await
+    }
+
     #[expect(
         clippy::too_many_arguments,
         reason = "internal helper; every argument is a distinct input of the minted tokens"
@@ -738,10 +785,12 @@ impl TokenService {
         family: &TokenFamily,
         user: &User,
         scope: &Scope,
+        source: &UserClaimSource,
         selected: &[String],
         now: OffsetDateTime,
         nonce: Option<&str>,
     ) -> Result<Minted, CoreError> {
+        let check = self.attribute_check.as_deref();
         let sub = user.id.to_string();
         let mut at_signer = None;
         let access_token = match client.token_format {
@@ -759,7 +808,7 @@ impl TokenService {
             }
             TokenFormat::Jwt => {
                 let signer = self.keys().signer(tenant.id).await?;
-                let token = sign_access_token(
+                let token = sign_access_token_with(
                     &signer,
                     &AccessTokenInput {
                         issuer,
@@ -773,6 +822,7 @@ impl TokenService {
                         acr: family.acr.as_deref(),
                         resource: selected,
                     },
+                    source.claims(tenant, scope, TokenTarget::AccessToken, check),
                 )?;
                 at_signer = Some(signer);
                 token
@@ -784,7 +834,7 @@ impl TokenService {
                 Some(signer) if signer.alg() == alg => signer,
                 _ => self.keys().signer_for(tenant.id, alg).await?,
             };
-            let input = family_id_token_input(
+            let mut input = family_id_token_input(
                 issuer,
                 &sub,
                 family,
@@ -794,6 +844,9 @@ impl TokenService {
                 &access_token,
                 id_signer.alg(),
             );
+            for (k, v) in source.claims(tenant, scope, TokenTarget::IdToken, check) {
+                input.extra.entry(k).or_insert(v);
+            }
             Some(sign_id_token(&id_signer, &input)?)
         } else {
             None
