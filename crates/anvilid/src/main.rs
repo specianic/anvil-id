@@ -1,5 +1,6 @@
 //! The `anvilid` binary: CLI entry point and wiring of concrete adapters.
 
+mod backup;
 mod config;
 mod datadir;
 mod jobs;
@@ -58,6 +59,20 @@ enum Command {
         #[command(subcommand)]
         cmd: KeysCommand,
     },
+    /// SQLite backup and restore (Postgres: see docs/OPERATIONS.md#postgres).
+    Backup {
+        #[command(subcommand)]
+        cmd: BackupCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum BackupCommand {
+    /// Write a consistent copy of the SQLite database while the server runs. The KEK is not
+    /// included: keep it separately.
+    Create(backup::CreateArgs),
+    /// Replace the SQLite database with a backup (the server must be stopped).
+    Restore(backup::RestoreArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -110,6 +125,12 @@ fn main() -> anyhow::Result<()> {
         Command::Keys {
             cmd: KeysCommand::Rotate(args),
         } => keys_rotate(&load(&args.config)?, &args),
+        Command::Backup {
+            cmd: BackupCommand::Create(args),
+        } => backup_create(&load(&args.config)?, &args),
+        Command::Backup {
+            cmd: BackupCommand::Restore(args),
+        } => backup_restore(&load(&args.config)?, &args),
     }
 }
 
@@ -171,6 +192,18 @@ async fn setup_url(cfg: &Config) -> anyhow::Result<()> {
 async fn keys_rotate(cfg: &Config, args: &keys::RotateArgs) -> anyhow::Result<()> {
     let _telemetry = telemetry::init_tracing(cfg.log_format, None)?;
     keys::rotate(cfg, args).await
+}
+
+#[tokio::main(flavor = "multi_thread")]
+async fn backup_create(cfg: &Config, args: &backup::CreateArgs) -> anyhow::Result<()> {
+    let _telemetry = telemetry::init_tracing(cfg.log_format, None)?;
+    backup::create(cfg, args).await
+}
+
+#[tokio::main(flavor = "multi_thread")]
+async fn backup_restore(cfg: &Config, args: &backup::RestoreArgs) -> anyhow::Result<()> {
+    let _telemetry = telemetry::init_tracing(cfg.log_format, None)?;
+    backup::restore(cfg, args).await
 }
 
 #[tokio::main(flavor = "multi_thread")]

@@ -16,6 +16,7 @@
 
 mod attributes;
 mod audit;
+pub mod backup;
 mod branding;
 mod clients;
 mod connections;
@@ -225,6 +226,15 @@ impl SqliteStorage {
             },
             writer,
         })
+    }
+
+    /// Closes both pools and waits for their connections to close. The read-only pool closes
+    /// first, so the writer is the last connection: it checkpoints the WAL into the database file
+    /// and removes `-wal`/`-shm`. Used by CLI commands that open a database file only briefly,
+    /// such as the restore checks.
+    pub async fn close(&self) {
+        self.setup.reader.close().await;
+        self.writer.close().await;
     }
 }
 

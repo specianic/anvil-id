@@ -302,3 +302,62 @@ fn admin_setup_url_needs_an_installation() {
         "setup-url must not create a database"
     );
 }
+
+#[test]
+fn backup_on_postgres_fails_and_points_to_the_docs() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    // Port 9 on loopback: the refusal happens before any connection attempt.
+    let url = "postgres://anvil:pg-secret-pw@127.0.0.1:9/anvil";
+    for args in [
+        vec![
+            "backup",
+            "create",
+            "--output",
+            "b.db",
+            "--database-url",
+            url,
+        ],
+        vec![
+            "backup",
+            "restore",
+            "--input",
+            "b.db",
+            "--yes",
+            "--database-url",
+            url,
+        ],
+    ] {
+        let out = run(dir.path(), &args, &[("ANVILID_KEK", KNOWN_KEK)]);
+        assert!(!out.status.success(), "{args:?} must fail");
+        let all = text(&out);
+        assert!(all.contains("docs/OPERATIONS.md#postgres"), "{all}");
+        assert!(all.contains("pg_dump"), "{all}");
+        assert!(!all.contains("pg-secret-pw"), "URL leaked: {all}");
+    }
+    assert!(!dir.path().join("b.db").exists(), "nothing was written");
+}
+
+#[test]
+fn backup_create_needs_an_installation() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = run(dir.path(), &["backup", "create", "--output", "b.db"], &[]);
+    assert!(!out.status.success());
+    assert!(text(&out).contains("anvilid serve"), "{}", text(&out));
+    assert!(!dir.path().join("b.db").exists());
+    assert!(
+        !dir.path().join("anvilid-data").join("anvilid.db").exists(),
+        "backup must not create a database"
+    );
+}
+
+#[test]
+fn help_lists_backup_admin_recover_and_healthcheck() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let top = text(&run(dir.path(), &["--help"], &[]));
+    assert!(top.contains("backup"), "{top}");
+    let backup = text(&run(dir.path(), &["backup", "--help"], &[]));
+    assert!(
+        backup.contains("create") && backup.contains("restore"),
+        "{backup}"
+    );
+}
