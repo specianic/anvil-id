@@ -15,8 +15,12 @@
 #    (by webhook-id): deliveries == unique ids == distinct user ids == users created.
 # 5. Shared limit: the nodes are recreated with token quotas of SHARED_QUOTA/s (burst = rate)
 #    and SHARED_PER_NODE requests per node for the benchmark client are fired at the three nodes
-#    directly, all at once. Allowed must stay within one shared GCRA budget (bound below), well
-#    under the three budgets a per-node limiter would grant.
+#    directly, all at once. Every TCP connection is opened before the start barrier, so the burst
+#    window W covers only the requests themselves: connection setup through Docker's published
+#    ports can take a SYN retransmission (about 1 s) for part of a 90-connection burst on a CI
+#    runner, which would stretch W past 1 s without the server seeing the requests any earlier.
+#    Allowed must stay within one shared GCRA budget (bound below), well under the three budgets a
+#    per-node limiter would grant.
 #
 # Shared-limit bound (05-08 limiter contract, governor GCRA): a quota of `b` burst refilled every
 # T = 1 s / rate allows at most b + floor(W / T) requests in any window of W seconds, starting from
@@ -210,7 +214,7 @@ python3 -I - "$LOAD_TMP/bench.json" "$SHARED_QUOTA" "$SHARED_PER_NODE" "$(
     IFS=,
     echo "${NODE_PORTS[*]}"
 )" >"$OUT/shared-limit.json" <<'PY' || shared_status=$?
-import base64, json, math, sys, threading, time, urllib.error, urllib.parse, urllib.request
+import base64, http.client, json, math, sys, threading, time, urllib.parse
 cred = json.load(open(sys.argv[1]))
 quota, per_node, ports = int(sys.argv[2]), int(sys.argv[3]), sys.argv[4].split(",")
 basic = "%s:%s" % (urllib.parse.quote(cred["client_id"], safe=""),
@@ -228,17 +232,28 @@ lock = threading.Lock()
 results = []
 
 def fire(port):
-    req = urllib.request.Request(f"http://127.0.0.1:{port}/token",
-                                 data=b"grant_type=client_credentials", headers=headers)
+    # Connect first (outside the measured window), then wait for every thread, then send.
+    conn = http.client.HTTPConnection("127.0.0.1", int(port), timeout=10)
+    connect_error = None
+    try:
+        conn.connect()
+    except Exception as e:  # a connection that cannot be opened counts as a failure
+        connect_error = "connect-error:" + e.__class__.__name__
     barrier.wait()
     t0 = time.monotonic()
-    try:
-        with urllib.request.urlopen(req, timeout=10) as r:
-            status = r.status
-    except urllib.error.HTTPError as e:
-        status = e.code
-    except Exception as e:  # connection errors count as failures
-        status = "error:" + e.__class__.__name__
+    if connect_error is not None:
+        status = connect_error
+    else:
+        try:
+            conn.request("POST", "/token", body=b"grant_type=client_credentials",
+                         headers=headers)
+            response = conn.getresponse()
+            response.read()
+            status = response.status
+        except Exception as e:  # request errors count as failures
+            status = "error:" + e.__class__.__name__
+        finally:
+            conn.close()
     t1 = time.monotonic()
     with lock:
         results.append((port, status, t0, t1))
