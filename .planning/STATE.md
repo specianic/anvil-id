@@ -7,14 +7,14 @@ current_phase_name: release 0 3 real world logins
 current_plan: 37
 status: executing
 stopped_at: "04-33 Task 1 checkpoint: awaiting owner real-provider checklist (approved / waive) before tagging v0.3.0 from 9c2bdd2 (Phase 5 executing in parallel: waves 1-4 complete, 19/29 plans)"
-last_updated: "2026-11-26T04:38:10.512Z"
+last_updated: "2026-11-26T04:44:13.184Z"
 last_activity: 2026-11-26
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 131
-  completed_plans: 121
-  percent: 92
+  completed_plans: 122
+  percent: 93
 ---
 
 # Project State
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 **Status:** Ready to execute
 **Last Activity:** 2026-11-26
 **Last Activity Description:** 04-32 phase gate complete (430-pair security map, anvilid 0.3.0, 0.3 migrations pinned, every workflow green on 9f88363)
-**Progress:** [█████████░] 92%
+**Progress:** [█████████░] 93%
 
 Phase 4 has 37 plans (04-01 through 04-37). Every plan except 04-33 (manual real-provider checklist, then tag
 v0.3.0) has a SUMMARY. Current Plan counts plans in execution order: 04-33 is the 37th and last.
@@ -177,6 +177,7 @@ v0.3.0) has a SUMMARY. Current Plan counts plans in execution order: 04-33 is th
 | Phase 05 P17 | 45min | 2 tasks | 12 files |
 | Phase 05 P12 | 35min | 2 tasks | 19 files |
 | Phase 05 P22 | 25min | 2 tasks | 27 files |
+| Phase 05 P21 | 55min | 2 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -410,6 +411,7 @@ Recent decisions affecting current work:
 - [Phase 05]: 05-12: system-tenant admin scopes = requested ∩ role permissions (minimal form); refresh token keeps the grant so role changes apply on refresh
 - [Phase 05]: 05-12: escalation check covers create/edit/assign/unassign of system roles; system role definitions need admin:write at the route
 - [Phase 05]: 05-22: Helm chart refuses unsafe values at template time (sqlite multi-replica, postgres without existingSecret, multi-replica without redis.url unless acknowledged, grace <= drain); pods disable service links
+- [Phase 05]: 05-21: DCR empty allowed_scopes -> DEFAULT_DCR_SCOPES (= discovery scopes_supported); logo/client/policy/tos URIs validated but neither stored nor echoed; IAT verified before validation, consumed atomically after
 
 ### Pending Todos
 
@@ -422,6 +424,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-26T04:38:10.507Z
-Stopped at: Completed 05-22-PLAN.md
+Last session: 2026-11-26T04:44:13.179Z
+Stopped at: Completed 05-21-PLAN.md
 Resume file: None
