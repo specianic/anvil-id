@@ -7,14 +7,14 @@ current_phase_name: release 0 3 real world logins
 current_plan: 37
 status: executing
 stopped_at: "04-33 Task 1 checkpoint: awaiting owner real-provider checklist (approved / waive) before tagging v0.3.0 from 9c2bdd2 (Phase 5 wave 3 in progress; 05-10, 05-06, 05-07, 05-18 complete)"
-last_updated: "2026-11-26T04:16:28.918Z"
+last_updated: "2026-11-26T04:18:57.669Z"
 last_activity: 2026-11-26
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 131
-  completed_plans: 119
-  percent: 91
+  completed_plans: 120
+  percent: 92
 ---
 
 # Project State
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 **Status:** Ready to execute
 **Last Activity:** 2026-11-26
 **Last Activity Description:** 04-32 phase gate complete (430-pair security map, anvilid 0.3.0, 0.3 migrations pinned, every workflow green on 9f88363)
-**Progress:** [█████████░] 91%
+**Progress:** [█████████░] 92%
 
 Phase 4 has 37 plans (04-01 through 04-37). Every plan except 04-33 (manual real-provider checklist, then tag
 v0.3.0) has a SUMMARY. Current Plan counts plans in execution order: 04-33 is the 37th and last.
@@ -175,6 +175,7 @@ v0.3.0) has a SUMMARY. Current Plan counts plans in execution order: 04-33 is th
 | Phase 05 P15 | 50min | 2 tasks | 9 files |
 | Phase 05 P14 | 25min | 2 tasks | 8 files |
 | Phase 05 P17 | 45min | 2 tasks | 12 files |
+| Phase 05 P12 | 35min | 2 tasks | 19 files |
 
 ## Accumulated Context
 
@@ -405,6 +406,8 @@ Recent decisions affecting current work:
 - [Phase 05]: 05-14: webhook payload data.tenant is the tenant id (AuditService has only the id; no per-event slug lookup)
 - [Phase 05]: 05-17: admin recover reuses the Recovery self-service token + system /ui/recovery page with no email; fresh admin only when holders_of_permission(system, admin:write)=0
 - [Phase 05]: 05-17: backup restore holds serve.lock, refuses corrupt/newer-version/wrong-KEK backups; Postgres backup refused with docs/OPERATIONS.md#postgres
+- [Phase 05]: 05-12: system-tenant admin scopes = requested ∩ role permissions (minimal form); refresh token keeps the grant so role changes apply on refresh
+- [Phase 05]: 05-12: escalation check covers create/edit/assign/unassign of system roles; system role definitions need admin:write at the route
 
 ### Pending Todos
 
@@ -417,6 +420,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-26T04:16:28.916Z
-Stopped at: Completed 05-17-PLAN.md
+Last session: 2026-11-26T04:18:57.666Z
+Stopped at: Completed 05-12-PLAN.md
 Resume file: None
