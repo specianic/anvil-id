@@ -10,7 +10,7 @@ import { ConfirmDialog, Modal } from "@/components/ConfirmDialog";
 import { DataTable, type DataTableFeatures, useCursorPager } from "@/components/DataTable";
 import { OrgRoleAssignments, RolePicker, useAssignableRoles } from "@/components/OrgRoleAssignments";
 import { ProblemAlert } from "@/components/ProblemAlert";
-import { type FieldErrors, StatusMessage, TextField } from "@/components/form";
+import { type FieldErrors, StatusMessage, TextField, fieldErrors } from "@/components/form";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatDateTime } from "@/lib/format";
@@ -19,33 +19,26 @@ import { useTenant } from "@/lib/tenant";
 type MemberView = components["schemas"]["MemberView"];
 
 const PAGE_SIZE = 50;
-const USER_PAGE = 200;
-/** Users scanned at most when looking an email up (the users API has no email filter). */
-const MAX_USER_PAGES = 50;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Thrown when the email names no user of the tenant; shown next to the field. */
 class UserLookupError extends Error {}
 
-/** The id of the tenant user with `email` (case-insensitive), paging through the users list. */
+/**
+ * The id of the tenant user with `email` (one `listUsers?email=` request; the API compares
+ * case-insensitively). A user id is accepted as is.
+ */
 async function findUserId(tenant: string, input: string): Promise<string> {
-  const wanted = input.trim().toLowerCase();
-  if (UUID_PATTERN.test(wanted)) return wanted;
-  let after: string | undefined;
-  for (let page = 0; page < MAX_USER_PAGES; page++) {
-    const result = unwrap(
-      await api.GET("/api/admin/v1/tenants/{slug}/users", {
-        params: { path: { slug: tenant }, query: { limit: USER_PAGE, after } },
-      }),
-    );
-    const match = result.items.find((u) => u.email.toLowerCase() === wanted);
-    if (match) return match.id;
-    if (!result.next_cursor) throw new UserLookupError("No user of this tenant has this email.");
-    after = result.next_cursor;
-  }
-  throw new UserLookupError(
-    `Not found among the first ${MAX_USER_PAGES * USER_PAGE} users. Enter the user's id (shown on the user's page) instead.`,
+  const wanted = input.trim();
+  if (UUID_PATTERN.test(wanted)) return wanted.toLowerCase();
+  const result = unwrap(
+    await api.GET("/api/admin/v1/tenants/{slug}/users", {
+      params: { path: { slug: tenant }, query: { email: wanted } },
+    }),
   );
+  const match = result.items[0];
+  if (!match) throw new UserLookupError("No user of this tenant has this email.");
+  return match.id;
 }
 
 function membersQueryKey(tenant: string, org: string) {
@@ -78,12 +71,15 @@ function AddMember({ tenant, org }: { tenant: string; org: string }) {
       await queryClient.invalidateQueries({ queryKey: ["user-orgs", tenant] });
     },
   });
+  const apiEmailErrors = fieldErrors(add.error).email;
   const fieldIssue: FieldErrors =
     add.error instanceof UserLookupError
       ? { email: [{ message: add.error.message }] }
-      : add.error instanceof ApiError && add.error.status === 404
-        ? { email: [{ message: "No user of this tenant has this id." }] }
-        : {};
+      : apiEmailErrors
+        ? { email: apiEmailErrors }
+        : add.error instanceof ApiError && add.error.status === 404
+          ? { email: [{ message: "No user of this tenant has this id." }] }
+          : {};
   const otherError = add.error && Object.keys(fieldIssue).length === 0 ? add.error : null;
 
   const submit = (e: FormEvent) => {

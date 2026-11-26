@@ -1,22 +1,20 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
-import { type FormEvent, useRef, useState } from "react";
-import { ApiError, api, unwrap } from "@/api/client";
+import { useState } from "react";
+import { api, unwrap } from "@/api/client";
 import { useTenant } from "@/lib/tenant";
 import {
   ConnectionForm,
   type ConnectionFormValues,
   type ConnectionView,
   KIND_LABELS,
-  LocalFieldError,
-  SecretInput,
-  readSecret,
+  SecretRotation,
   updateBody,
   valuesFromConnection,
 } from "@/components/ConnectionForm";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ProblemAlert } from "@/components/ProblemAlert";
-import { StatusMessage, fieldErrors } from "@/components/form";
+import { StatusMessage } from "@/components/form";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -107,130 +105,33 @@ function EditConnection({ connection }: { connection: ConnectionView }) {
   );
 }
 
-function SecretCard({ connection }: { connection: ConnectionView }) {
+/** The connection's write-only secret: the shared `SecretRotation` (one implementation). */
+function ConnectionSecret({ connection }: { connection: ConnectionView }) {
   const tenant = useTenant();
   const queryClient = useQueryClient();
-  const apple = connection.kind === "apple";
-  const [password, setPassword] = useState("");
-  const [localError, setLocalError] = useState<LocalFieldError | null>(null);
-  const [status, setStatus] = useState<string | null>(null);
-  const [confirmClear, setConfirmClear] = useState(false);
-  const fileInput = useRef<HTMLInputElement>(null);
-  // Handed to the request through a ref so the secret never lands in the mutation cache.
-  const secretRef = useRef<string | null>(null);
-
-  const put = useMutation({
-    mutationFn: async (_action: "set" | "clear") => {
-      const secret = secretRef.current;
-      secretRef.current = null;
-      return unwrap(
-        await api.PUT("/api/admin/v1/tenants/{slug}/connections/{id}/secret", {
-          params: { path: { slug: tenant, id: connection.id } },
-          body: { secret },
-        }),
-      );
-    },
-    onMutate: () => setStatus(null),
-    onSuccess: async (saved, action) => {
-      setPassword("");
-      if (fileInput.current) fileInput.current.value = "";
-      setConfirmClear(false);
-      queryClient.setQueryData(queryKey(tenant, connection.id), saved);
-      setStatus(action === "clear" ? "Secret removed." : "Secret saved.");
-      await queryClient.invalidateQueries({ queryKey: ["connections"] });
-    },
-  });
-
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
-    setLocalError(null);
-    let secret: string | null;
-    try {
-      secret = await readSecret(connection.kind, password, fileInput);
-    } catch (err) {
-      if (err instanceof LocalFieldError) {
-        setLocalError(err);
-        return;
-      }
-      throw err;
-    }
-    if (secret === null) {
-      setLocalError(new LocalFieldError("secret", apple ? "Choose a .p8 key file." : "Enter the new secret."));
-      return;
-    }
-    secretRef.current = secret;
-    put.mutate("set");
-  };
-
-  const formError = put.variables === "set" ? put.error : null;
-  const errors = fieldErrors(formError);
-  if (localError) errors.secret = [{ message: localError.message }];
-  const otherError =
-    formError && !(formError instanceof ApiError && formError.problem.errors.every((e) => e.field === "secret"))
-      ? formError
-      : null;
-
   return (
     <Card>
       <CardHeader>
         <CardTitle>
-          <h2>{apple ? "Private key" : "Client secret"}</h2>
+          <h2>{connection.kind === "apple" ? "Private key" : "Client secret"}</h2>
         </CardTitle>
       </CardHeader>
-      <CardContent className="space-y-4">
-        <p className="text-sm" data-testid="connection-secret-status">
-          {connection.secret_configured ? (
-            <Badge variant="secondary">Configured</Badge>
-          ) : (
-            <Badge variant="outline">Not set</Badge>
-          )}{" "}
-          <span className="text-muted-foreground">
-            The {apple ? "key" : "secret"} is stored encrypted and never shown. Enter a new one to replace it.
-          </span>
-        </p>
-        <form
-          onSubmit={(e) => void submit(e)}
-          aria-label={apple ? "Replace private key" : "Rotate secret"}
-          className="space-y-4"
-          noValidate
-        >
-          {otherError ? <ProblemAlert error={otherError} /> : null}
-          <SecretInput
-            kind={connection.kind}
-            label={apple ? "New key file (.p8)" : "New client secret"}
-            hint={apple ? "The .p8 key downloaded from Apple." : "Replaces the current secret immediately."}
-            password={password}
-            onPasswordChange={setPassword}
-            fileInput={fileInput}
-            errors={errors.secret}
-          />
-          <div className="flex flex-wrap gap-2">
-            <Button type="submit" disabled={put.isPending} data-testid="rotate-connection-secret">
-              {put.isPending && put.variables === "set" ? "Saving…" : apple ? "Replace key" : "Rotate secret"}
-            </Button>
-            {connection.secret_configured && (
-              <Button type="button" variant="outline" onClick={() => setConfirmClear(true)}>
-                Remove {apple ? "key" : "secret"}
-              </Button>
-            )}
-          </div>
-          <StatusMessage message={status} />
-        </form>
-        <ConfirmDialog
-          open={confirmClear}
-          title={apple ? "Remove the private key?" : "Remove the client secret?"}
-          description={<p>Sign-in through this connection fails until a new one is set.</p>}
-          confirmLabel={apple ? "Remove key" : "Remove secret"}
-          onConfirm={() => {
-            secretRef.current = null;
-            put.mutate("clear");
+      <CardContent>
+        <SecretRotation
+          kind={connection.kind}
+          configured={connection.secret_configured}
+          put={async (secret) =>
+            unwrap(
+              await api.PUT("/api/admin/v1/tenants/{slug}/connections/{id}/secret", {
+                params: { path: { slug: tenant, id: connection.id } },
+                body: { secret },
+              }),
+            )
+          }
+          onSaved={async (saved) => {
+            queryClient.setQueryData(queryKey(tenant, connection.id), saved);
+            await queryClient.invalidateQueries({ queryKey: ["connections"] });
           }}
-          onCancel={() => {
-            put.reset();
-            setConfirmClear(false);
-          }}
-          pending={put.isPending}
-          error={put.variables === "clear" ? put.error : null}
         />
       </CardContent>
     </Card>
@@ -338,7 +239,7 @@ function ConnectionPage() {
         <>
           <RedirectUri connection={query.data} />
           <EditConnection connection={query.data} />
-          <SecretCard connection={query.data} />
+          <ConnectionSecret connection={query.data} />
           <DangerZone connection={query.data} />
         </>
       )}

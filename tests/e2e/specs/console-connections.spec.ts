@@ -1,39 +1,28 @@
-// AUTH-07, ADM-04: managing an upstream connection in the admin console (/console/t/default/connections).
-// An admin of the system tenant creates a Google connection with a client secret, sees the secret
-// as "Configured" and the redirect URI to register at the provider, edits the display name,
-// rotates the secret and deletes the connection. The secret is write-only: it never appears on a
-// console page nor in any admin API response the console receives. Every console page visited
-// passes the axe WCAG 2.2 AA audit (console spec precedent: console.spec.ts).
+// AUTH-07, ADM-04: managing an upstream connection in the admin console (/console/t/{tenant}/connections).
+// A console administrator creates a Google connection with a client secret, sees the secret as
+// "Configured" and the redirect URI to register at the provider, edits the display name, rotates
+// the secret, removes it (status "Not set"), sets it again and deletes the connection. The secret
+// is write-only: it never appears on a console page nor in any admin API response the console
+// receives. The secret card is the shared SecretRotation component (06-29), the same one the org
+// connections panel uses. Every console page visited passes the axe WCAG 2.2 AA audit.
 //
-// The connection is created in the default tenant (/console/t/default/...), so it briefly exists there; it is deleted
-// at the end of the test (and in afterAll if the test fails half way). No provider is contacted:
-// a connection is only configuration until someone signs in with it.
+// Runs in a fresh tenant of its own (deleted afterwards), signed in as a console administrator
+// created with createConsoleAdmin. No provider is contacted: a connection is only configuration
+// until someone signs in with it.
 //
 // Env: ANVIL_URL, SETUP_URL, E2E_STATE_FILE (see tests/e2e/run.sh).
 
 import { randomBytes } from 'node:crypto';
 import { expect, test, type Page } from '@playwright/test';
 import { expectNoA11yViolations } from '../fixtures/axe';
-import {
-  adminToken,
-  anvilUrl,
-  createConsoleAdmin,
-  randomEmail,
-  randomPassword,
-  sharedManagementCredential,
-  type AdminAccount,
-} from '../lib/anvil';
-import { consoleLogin } from '../lib/console';
-import { deleteConnection, listConnections } from '../lib/upstream';
+import { openTenantPage, setUpConsoleTenant, type ConsoleTenant } from '../lib/console-v10';
+import { listConnections, tenantIssuer } from '../lib/upstream';
 
 const slug = `google-${randomBytes(4).toString('hex')}`;
-let cleanupToken: string | undefined;
+let tenant: ConsoleTenant | undefined;
 
 test.afterAll(async () => {
-  if (!cleanupToken) return;
-  for (const c of await listConnections(cleanupToken, 'default')) {
-    if (c.slug === slug && typeof c.id === 'string') await deleteConnection(cleanupToken, 'default', c.id);
-  }
+  await tenant?.cleanup();
 });
 
 /** Records every admin API response body the console receives, to prove secrets never come back. */
@@ -52,10 +41,10 @@ function recordAdminResponses(page: Page): string[] {
 
 test('admin console: create, edit, rotate and delete a connection', async ({ page, browser }) => {
   test.setTimeout(120_000);
-  const tok = await adminToken(await sharedManagementCredential(browser));
-  cleanupToken = tok;
-  const admin: AdminAccount = { email: randomEmail('conn-admin'), password: randomPassword() };
-  await createConsoleAdmin(tok, admin);
+  tenant = await setUpConsoleTenant(browser, page, 'cconn');
+  const { token: tok, slug: tenantSlug } = tenant;
+  expect(tenantSlug).not.toBe('default');
+  const base = `/console/t/${tenantSlug}/connections`;
 
   const secret = `e2e-first-${randomBytes(18).toString('base64url')}`;
   const rotated = `e2e-rotated-${randomBytes(18).toString('base64url')}`;
@@ -69,10 +58,9 @@ test('admin console: create, edit, rotate and delete a connection', async ({ pag
     expect(html).not.toContain(rotated);
   };
 
-  await test.step('sign in and open Connections', async () => {
-    await consoleLogin(page, admin);
-    await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Connections' }).click();
-    await expect(page).toHaveURL((url) => url.pathname === '/console/t/default/connections');
+  await test.step('open the tenant\'s Connections', async () => {
+    await openTenantPage(page, tenantSlug, 'connections');
+    await expect(page).toHaveURL((url) => url.pathname === base);
     await expect(page.getByRole('heading', { level: 1, name: 'Connections' })).toBeVisible();
     await expect(page.getByRole('table')).toHaveAttribute('aria-busy', 'false');
     await expectNoA11yViolations(page);
@@ -97,10 +85,10 @@ test('admin console: create, edit, rotate and delete a connection', async ({ pag
   });
 
   await test.step('the connection page shows the redirect URI and a configured secret', async () => {
-    await expect(page).toHaveURL((url) => url.pathname.startsWith('/console/t/default/connections/') && !url.pathname.endsWith('/new'));
+    await expect(page).toHaveURL((url) => url.pathname.startsWith(`${base}/`) && !url.pathname.endsWith('/new'));
     await expect(page.getByRole('heading', { level: 1, name: displayName })).toBeVisible();
     await expect(page.getByTestId('connection-redirect-uri')).toHaveText(
-      `${anvilUrl()}/ui/login/upstream/${slug}/callback`,
+      `${tenantIssuer(tenantSlug)}/ui/login/upstream/${slug}/callback`,
     );
     await expect(page.getByTestId('copy-redirect-uri')).toBeVisible();
     await expect(page.getByTestId('connection-secret-status')).toContainText('Configured');
@@ -134,9 +122,29 @@ test('admin console: create, edit, rotate and delete a connection', async ({ pag
     await expectNoA11yViolations(page);
   });
 
+  await test.step('remove the secret after confirming, then set it again', async () => {
+    await page.getByRole('button', { name: 'Remove secret' }).click();
+    const dialog = page.getByRole('alertdialog', { name: 'Remove the client secret?' });
+    await expect(dialog).toBeVisible();
+    await expectNoA11yViolations(page);
+    await dialog.getByRole('button', { name: 'Remove secret' }).click();
+    await expect(dialog).toHaveCount(0);
+    const rotate = page.getByRole('form', { name: 'Rotate secret' });
+    await expect(rotate.getByRole('status')).toHaveText('Secret removed.');
+    await expect(page.getByTestId('connection-secret-status')).toContainText('Not set');
+    await expect(page.getByRole('button', { name: 'Remove secret' })).toHaveCount(0);
+    expect((await listConnections(tok, tenantSlug)).find((c) => c.slug === slug)?.secret_configured).toBe(false);
+
+    await page.getByLabel('New client secret').fill(rotated);
+    await page.getByTestId('rotate-connection-secret').click();
+    await expect(rotate.getByRole('status')).toHaveText('Secret saved.');
+    await expect(page.getByTestId('connection-secret-status')).toContainText('Configured');
+    await expectSecretsHidden();
+  });
+
   await test.step('the list shows the renamed connection with a configured secret', async () => {
     await page.getByRole('link', { name: '← Connections' }).click();
-    await expect(page).toHaveURL((url) => url.pathname === '/console/t/default/connections');
+    await expect(page).toHaveURL((url) => url.pathname === base);
     const row = page.getByRole('row').filter({ has: page.getByRole('link', { name: renamed }) });
     await expect(row).toBeVisible();
     await expect(row).toContainText(slug);
@@ -152,10 +160,10 @@ test('admin console: create, edit, rotate and delete a connection', async ({ pag
     await expect(dialog).toBeVisible();
     await expectNoA11yViolations(page);
     await dialog.getByRole('button', { name: 'Delete connection' }).click();
-    await expect(page).toHaveURL((url) => url.pathname === '/console/t/default/connections');
+    await expect(page).toHaveURL((url) => url.pathname === base);
     await expect(page.getByRole('table')).toHaveAttribute('aria-busy', 'false');
     await expect(page.getByRole('link', { name: renamed })).toHaveCount(0);
-    expect((await listConnections(tok, 'default')).some((c) => c.slug === slug)).toBe(false);
+    expect((await listConnections(tok, tenantSlug)).some((c) => c.slug === slug)).toBe(false);
   });
 
   // No admin API response carried either secret.

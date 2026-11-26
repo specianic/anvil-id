@@ -5,12 +5,16 @@
 // deletes a throwaway organization. Every new page and dialog passes the axe audit. Delivery of the
 // invitation email is asserted by the invitations spec (06-24).
 //
+// Each lookup is one admin API request (06-29): "add member by email" asks
+// `listUsers?email=`, and the user's Organizations card asks
+// `/users/{id}/organizations` (no per-org role scan, no user list paging).
+//
 // Runs in a fresh tenant of its own, deleted afterwards, signed in as a console administrator
 // created with createConsoleAdmin.
 //
 // Env: ANVIL_URL, SETUP_URL, E2E_STATE_FILE (see tests/e2e/run.sh).
 
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { expectNoA11yViolations } from '../fixtures/axe';
 import { adminCall, tenantPath } from '../lib/admin-api';
 import { createClient, createUser, randomEmail, randomPassword } from '../lib/anvil';
@@ -27,6 +31,16 @@ import {
 
 let tenant: ConsoleTenant | undefined;
 
+/** Records the path and query of every admin API GET the console sends. */
+function recordAdminGets(page: Page): URL[] {
+  const urls: URL[] = [];
+  page.on('request', (req) => {
+    const url = new URL(req.url());
+    if (req.method() === 'GET' && url.pathname.startsWith('/api/admin/')) urls.push(url);
+  });
+  return urls;
+}
+
 test.afterAll(async () => {
   await tenant?.cleanup();
 });
@@ -42,6 +56,7 @@ test('console: organizations with members, org roles, invitations and client pol
   if (!member.id) throw new Error('created user has no id');
   const memberId = member.id;
   const sectionNav = page.getByRole('navigation', { name: 'Organization sections' });
+  const adminGets = recordAdminGets(page);
 
   await test.step('the Organizations page is in the navigation and starts empty', async () => {
     await openTenantPage(page, slug, 'users');
@@ -111,13 +126,29 @@ test('console: organizations with members, org roles, invitations and client pol
     await sectionNav.getByRole('link', { name: 'Members' }).click();
     await expect(page.getByText('No members yet.')).toBeVisible();
 
+    const usersPath = `/api/admin/v1/tenants/${slug}/users`;
+    const userListGets = () => adminGets.filter((u) => u.pathname === usersPath);
+    const before = userListGets().length;
     await page.getByTestId('add-member-email').fill(randomEmail('corgs-nobody'));
     await page.getByTestId('add-member').click();
     await expect(page.getByTestId('add-member-form')).toContainText('No user of this tenant has this email.');
 
+    // A malformed address is the API's 422, shown next to the field.
+    await page.getByTestId('add-member-email').fill('not an address');
+    await page.getByTestId('add-member').click();
+    await expect(page.getByTestId('add-member-form')).toContainText('whitespace');
+
     await page.getByTestId('add-member-email').fill(memberEmail.toUpperCase());
     await page.getByTestId('add-member').click();
     await expect(page.getByRole('status').filter({ hasText: 'added.' })).toBeVisible();
+    // One `?email=` request per lookup, never a page of the user list.
+    const lookups = userListGets().slice(before);
+    expect(lookups).toHaveLength(3);
+    for (const u of lookups) {
+      expect(u.searchParams.get('email')).not.toBeNull();
+      expect(u.searchParams.get('after')).toBeNull();
+    }
+    expect(lookups[2]?.searchParams.get('email')).toBe(memberEmail.toUpperCase());
     const table = page.getByRole('table', { name: 'Members' });
     await expect(table.getByRole('link', { name: memberEmail })).toBeVisible();
     await expectNoA11yViolations(page);
@@ -201,10 +232,16 @@ test('console: organizations with members, org roles, invitations and client pol
   });
 
   await test.step("the user's page lists the membership with a link to the organization", async () => {
+    const before = adminGets.length;
     await openTenantPage(page, slug, `users/${memberId}`);
     const card = page.getByTestId('user-organizations');
     await expect(card.getByRole('link', { name: 'Acme Corp' })).toBeVisible();
     await expect(card).toContainText('billing');
+    // The card is one request: no organization paging and no per-org member role scan.
+    const gets = adminGets.slice(before);
+    expect(gets.filter((u) => u.pathname === `/api/admin/v1/tenants/${slug}/users/${memberId}/organizations`)).toHaveLength(1);
+    expect(gets.some((u) => /\/members\/[^/]+\/roles$/.test(u.pathname))).toBe(false);
+    expect(gets.some((u) => u.pathname === `/api/admin/v1/tenants/${slug}/organizations`)).toBe(false);
     await expectNoA11yViolations(page);
     await card.getByRole('link', { name: 'Acme Corp' }).click();
     await expect(page).toHaveURL((url) => url.pathname === `/console/t/${slug}/organizations/${orgId}/members`);

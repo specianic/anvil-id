@@ -25,8 +25,6 @@ import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, Tabl
 import { formatDateTime } from "@/lib/format";
 
 type SessionView = components["schemas"]["SessionView"];
-type OrganizationView = components["schemas"]["OrganizationView"];
-type OrgRoleView = components["schemas"]["OrgRoleView"];
 type CredentialView = components["schemas"]["CredentialView"];
 
 const TABS = [
@@ -105,53 +103,14 @@ function UserDetails({ user }: { user: UserView }) {
   );
 }
 
-/** Organizations scanned at most for the memberships card. */
-const MAX_ORG_PAGES = 10;
-
-/**
- * The user's organization memberships. The API has no per-user membership list, so this asks each
- * organization of the tenant for the user's roles there (404 = not a member).
- */
-async function fetchMemberships(
-  tenant: string,
-  userId: string,
-  signal: AbortSignal,
-): Promise<{ memberships: { org: OrganizationView; roles: OrgRoleView[] }[]; truncated: boolean }> {
-  const orgs: OrganizationView[] = [];
-  let after: string | undefined;
-  let truncated = false;
-  for (let page = 0; ; page++) {
-    if (page === MAX_ORG_PAGES) {
-      truncated = true;
-      break;
-    }
-    const result = unwrap(
-      await api.GET("/api/admin/v1/tenants/{slug}/organizations", {
-        params: { path: { slug: tenant }, query: { limit: 200, after } },
-        signal,
-      }),
-    );
-    orgs.push(...result.items);
-    if (!result.next_cursor) break;
-    after = result.next_cursor;
-  }
-  const checked = await Promise.all(
-    orgs.map(async (org) => {
-      try {
-        const roles = unwrap(
-          await api.GET("/api/admin/v1/tenants/{slug}/organizations/{org}/members/{user_id}/roles", {
-            params: { path: { slug: tenant, org: org.id, user_id: userId } },
-            signal,
-          }),
-        );
-        return { org, roles: roles.items };
-      } catch (error) {
-        if (error instanceof ApiError && error.status === 404) return null;
-        throw error;
-      }
+/** The user's organization memberships with their roles in each: one request. */
+async function fetchMemberships(tenant: string, userId: string, signal: AbortSignal) {
+  return unwrap(
+    await api.GET("/api/admin/v1/tenants/{slug}/users/{user_id}/organizations", {
+      params: { path: { slug: tenant, user_id: userId } },
+      signal,
     }),
-  );
-  return { memberships: checked.filter((m) => m !== null), truncated };
+  ).items;
 }
 
 function UserOrganizations({ userId }: { userId: string }) {
@@ -172,11 +131,11 @@ function UserOrganizations({ userId }: { userId: string }) {
           <ProblemAlert error={query.error} />
         ) : query.isPending ? (
           <Skeleton className="h-5 w-1/2" />
-        ) : query.data.memberships.length === 0 ? (
+        ) : query.data.length === 0 ? (
           <p className="text-muted-foreground text-sm">Not a member of any organization.</p>
         ) : (
           <ul className="divide-y">
-            {query.data.memberships.map(({ org, roles }) => (
+            {query.data.map(({ organization: org, roles }) => (
               <li key={org.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 py-2 text-sm">
                 <Link
                   to="/t/$tenant/organizations/$orgId/members"
@@ -192,9 +151,6 @@ function UserOrganizations({ userId }: { userId: string }) {
               </li>
             ))}
           </ul>
-        )}
-        {query.data?.truncated && (
-          <p className="text-muted-foreground mt-2 text-xs">Only the first {MAX_ORG_PAGES * 200} organizations were checked.</p>
         )}
       </CardContent>
     </Card>
