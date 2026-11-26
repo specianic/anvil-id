@@ -21,10 +21,16 @@
 // The RSA key pair and the self-signed certificate are generated at start-up, held in memory only and
 // never written anywhere. Only the certificate (certPem, metadataXml) leaves the process. The server
 // binds 127.0.0.1 on a free port unless `port` is given.
+//
+// `https: true` serves the same endpoints over TLS with that in-memory key and certificate (06-24): AnvilID
+// accepts only https sign-in URLs (metadata import and SamlConfig), so a sign-in journey needs an https
+// SingleSignOnService. Only the browser talks to the SSO URL (AnvilID never fetches it); the specs set
+// `ignoreHTTPSErrors` for the self-signed certificate. The default stays plain http.
 
 import { createPrivateKey, generateKeyPairSync, randomBytes, randomUUID, sign, X509Certificate } from 'node:crypto';
 import type { KeyObject } from 'node:crypto';
 import { createServer } from 'node:http';
+import { createServer as createHttpsServer } from 'node:https';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { deflateRawSync, inflateRawSync } from 'node:zlib';
@@ -56,10 +62,12 @@ export interface MockSamlIdpOptions {
   ssoPath?: string;
   /** Port to bind on 127.0.0.1. Default: 0 (a free port). */
   port?: number;
+  /** Serve https with the in-memory key and self-signed certificate (see the module comment). Default: false. */
+  https?: boolean;
 }
 
 export interface MockSamlIdp {
-  /** Base URL, e.g. http://127.0.0.1:41234 */
+  /** Base URL, e.g. http://127.0.0.1:41234 (https://... with `https: true`). */
   url: string;
   /** SingleSignOnService URL (HTTP-Redirect binding). */
   ssoUrl: string;
@@ -343,9 +351,10 @@ export async function startMockSamlIdp(opts: MockSamlIdpOptions = {}): Promise<M
   let variant: SamlVariant = 'ok';
   const requests: SamlRequestLog[] = [];
 
+  // The certificate does not depend on the port; the TLS listener (https: true) serves it too.
+  const certPem = selfSignedCertPem(privateKey, publicKey, 'AnvilID e2e mock SAML IdP');
   // Filled in after listen() (the default entity ID and the URLs depend on the port).
   let entityId = '';
-  let certPem = '';
   let metadataXml = '';
 
   const handle = (req: IncomingMessage, res: ServerResponse): void => {
@@ -406,22 +415,22 @@ export async function startMockSamlIdp(opts: MockSamlIdpOptions = {}): Promise<M
     );
   };
 
-  const server = createServer((req, res) => {
+  const listener = (req: IncomingMessage, res: ServerResponse): void => {
     try {
       handle(req, res);
     } catch (err) {
       sendText(res, 500, 'text/plain; charset=utf-8', `mock-saml-idp error: ${(err as Error).message}`);
     }
-  });
+  };
+  const server = opts.https ? createHttpsServer({ key: privateKeyPem, cert: certPem }, listener) : createServer(listener);
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
     server.listen(opts.port ?? 0, '127.0.0.1', () => resolve());
   });
   const port = (server.address() as AddressInfo).port;
-  const url = `http://127.0.0.1:${port}`;
+  const url = `${opts.https ? 'https' : 'http'}://127.0.0.1:${port}`;
   const ssoUrl = `${url}${ssoPath}`;
   entityId = opts.entityId ?? `${url}/metadata`;
-  certPem = selfSignedCertPem(privateKey, publicKey, 'AnvilID e2e mock SAML IdP');
   metadataXml = buildMetadata(entityId, ssoUrl, certPem);
 
   return {
