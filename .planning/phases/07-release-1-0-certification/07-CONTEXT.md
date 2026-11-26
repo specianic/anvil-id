@@ -66,3 +66,31 @@ Roadmap success criteria:
 
 ---
 *Phase: 07-release-1-0-certification*
+
+## Decisions after research (orchestrator defaults, 2026-11-26 — owner may override)
+
+Owner-only decisions stay as checkpoints (not decided here): Q2 OIDF membership/fee/waiver + public deployment;
+Q3 external reviewer, budget, timeline; Q9 publishing tags; Q12 which vendors get migration guides (each verified
+against the vendor's current docs before commit); certification submission; GitHub private vulnerability reporting.
+
+Technical defaults (researcher recommendations):
+- **Q1 legacy-hash crypto:** plan the import verifiers with RustCrypto `scrypt` and `bcrypt`, scoped in deny.toml with
+  wrappers (blowfish only via bcrypt, salsa20 only via scrypt), verification of imported hashes only; PBKDF2/SHA-2/AES-CTR
+  via aws-lc-rs. This is a crypto-policy exception: the plan that adds it ends with a **checkpoint for owner approval**
+  before the gate; if rejected, bcrypt/scrypt import is dropped and documented.
+- **DoS caps:** hard caps on imported hash parameters (memory/iterations/cost) enforced at import AND verify, incl. for
+  Argon2 parameters read from stored hashes; floors per research Q10 defaults.
+- **Q4 password-hash export:** CLI-only, opt-in flag, audited; never in the admin API bulk export, never in the GDPR export.
+- **Q5 headless SPAs:** per-tenant allow-list of origins (exact match), CSRF/binding per research design.
+- **Q6 native headless:** support browser SPAs AND native first-party clients via PAR + PKCE returning the code as JSON,
+  documented as following the IETF draft shape (not an RFC); first-party clients only.
+- **Q7 agent clients:** explicit `client_kind = agent` marker (CIMD/DCR provenance shown too); agents never skip consent;
+  incremental step-up prompts only for new scopes.
+- **Q8 tenant-restricted system admins:** deferred to 1.x with written justification in ARCHITECTURE.
+- **Q11 import ids:** keep source user ids when they are valid UUIDs so `sub` survives; otherwise generate.
+- **Q13 API compatibility check:** small in-repo breaking-change test against the committed OpenAPI baseline (no beta tool).
+- **Headless throttling:** extract one shared `flow_driver` used by both UI handlers and the headless API (no duplicate
+  throttling/CAPTCHA/session logic).
+- **Migrations:** new files only (SQLite 0010+, Postgres 0008+); upgrade tests cover 0.4→1.0 and beta.1→1.0; avoid
+  CHECK-constrained discriminator columns that force SQLite rebuilds.
+- **Review findings** are tracked privately (draft advisories), never committed before fixes ship.
