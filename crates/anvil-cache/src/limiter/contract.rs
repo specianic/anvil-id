@@ -131,7 +131,7 @@ where
 }
 
 /// Token quota used by the GCRA tests: burst 3, one request every 10 s.
-fn gcra_config() -> LimiterConfig {
+pub fn gcra_config() -> LimiterConfig {
     LimiterConfig {
         token: RateQuota::per_minute(6, 3),
         token_client: RateQuota::per_minute(12, 5),

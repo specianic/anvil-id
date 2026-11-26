@@ -10,10 +10,16 @@
 //! receive a `retry_after` and decide how to respond. Keyed state is bounded: GCRA keys are
 //! pruned at most once per minute (triggered from [`RateLimiter::check`]) and the backoff store
 //! is a capacity-bounded cache.
+//!
+//! Two backends implement the one [`RateLimiter`] trait: [`InProcessLimiter`] (default, per
+//! node) and [`RedisLimiter`] (shared across nodes, selected once at startup). The limiter
+//! contract suite (`contract.rs`, test code) proves they decide identically.
 
 mod backoff;
+mod breaker;
 mod config;
 mod gcra;
+mod redis;
 mod types;
 
 use std::sync::Arc;
@@ -22,7 +28,12 @@ use std::time::Duration;
 use anvil_core::ports::Clock;
 use async_trait::async_trait;
 
+pub use breaker::BREAKER_COOL_DOWN;
 pub use config::{LimiterConfig, RateQuota};
+pub use redis::{
+    BACKOFF_LUA, BackendHealth, CONNECTION_TIMEOUT, FailureMode, GCRA_LUA, HealthObserver,
+    KEY_PREFIX, KeyHasher, RESPONSE_TIMEOUT, RedisInitError, RedisLimiter, canonical,
+};
 pub use types::{Backoff, Decision, LimitKey, RouteClass};
 
 use backoff::BackoffStore;

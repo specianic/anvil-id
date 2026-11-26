@@ -87,6 +87,9 @@ jobs:
         run: just security-tests security-tests-selftest
       - if: matrix.db == 'postgres'
         run: just test-pg
+      # Redis limiter backend (contract + failure policy) on the runner's Docker (plan 05-08).
+      - if: matrix.db == 'postgres'
+        run: just test-redis
 
   # The fuzz crate is its own workspace (fuzz/Cargo.toml) and is not built by `just test`; a
   # stale target reached the 0.3 release that way. Type-check it on stable on every push and PR

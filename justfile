@@ -9,7 +9,7 @@ default: ci
 
 # The single command contributors run (needs Docker for the Postgres tests and Node >= 22.12 for
 # the console check).
-ci: fmt-check lint deny deps migrations-check test test-pg release-graph security-tests console-check fuzz-check
+ci: fmt-check lint deny deps migrations-check test test-pg test-redis release-graph security-tests console-check fuzz-check
 
 # Check formatting.
 fmt-check:
@@ -74,6 +74,12 @@ conformance:
 # Web and binary tests against Postgres (needs Docker).
 test-pg:
     ANVILID_TEST_DB=postgres cargo test -p anvil-web -p anvilid --locked
+
+# Redis-backed tests (needs Docker): the limiter contract against Redis plus the Redis backend's
+# failure policy. Convention: every Redis-backed test in any crate has `redis` in its name and is
+# `#[ignore]`d (plain `cargo test` never needs Redis), so new ones join without editing this.
+test-redis:
+    ANVILID_TEST_REDIS=1 cargo test --workspace --tests --locked -- redis --include-ignored
 
 # Playwright end-to-end suite against a local build (scripts owned by plan 02-20).
 e2e backend="sqlite":
