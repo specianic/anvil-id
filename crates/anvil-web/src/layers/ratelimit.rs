@@ -39,6 +39,7 @@ use std::net::IpAddr;
 
 use crate::client_ip::ClientIp;
 use crate::errors::error_page;
+use crate::observability::{AUTH_ATTEMPTS_TOTAL, RATELIMIT_REJECTIONS_TOTAL, class_label};
 use crate::state::AppState;
 use crate::tenant::ResolvedTenant;
 
@@ -191,6 +192,8 @@ pub(crate) async fn layer(State(state): State<AppState>, req: Request, next: Nex
         Decision::Deny { retry_after } => {
             // No client IP in operational logs (the audit log keeps it where it is recorded).
             tracing::info!(?class, "rate limited");
+            metrics::counter!(RATELIMIT_REJECTIONS_TOTAL, "route_class" => class_label(class))
+                .increment(1);
             too_many_requests(
                 &state,
                 parts.extensions.get::<ResolvedTenant>(),
@@ -231,10 +234,18 @@ pub async fn guard_attempt(
     loose: &LimitKey,
     captcha_available: bool,
 ) -> Decision {
-    state
+    let decision = state
         .limiter()
         .brute_force_gate(strict, loose, captcha_available)
-        .await
+        .await;
+    if matches!(decision, Decision::Deny { .. }) {
+        metrics::counter!(
+            RATELIMIT_REJECTIONS_TOTAL,
+            "route_class" => class_label(RouteClass::Auth),
+        )
+        .increment(1);
+    }
+    decision
 }
 
 fn key_kind(key: &LimitKey) -> &'static str {
@@ -259,6 +270,11 @@ pub async fn record_attempt(
     keys: &[LimitKey],
     success: bool,
 ) {
+    metrics::counter!(
+        AUTH_ATTEMPTS_TOTAL,
+        "outcome" => if success { "success" } else { "failure" },
+    )
+    .increment(1);
     let limiter = state.limiter();
     for key in keys {
         if success {

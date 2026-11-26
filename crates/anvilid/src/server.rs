@@ -77,6 +77,21 @@ pub async fn run(
     }
 }
 
+/// Serves only `GET /metrics` (plain HTTP) on the separate metrics listener until shutdown.
+pub async fn run_metrics(
+    listener: TcpListener,
+    endpoint: anvil_web::observability::MetricsEndpoint,
+    shutdown: watch::Receiver<bool>,
+) -> anyhow::Result<()> {
+    axum::serve(
+        listener,
+        anvil_web::observability::metrics_router(endpoint).into_make_service(),
+    )
+    .with_graceful_shutdown(wait_for_shutdown(shutdown))
+    .await
+    .context("metrics server error")
+}
+
 /// The router of one connection: inserts the connection's peer address into every request.
 #[derive(Clone)]
 struct WithPeer {

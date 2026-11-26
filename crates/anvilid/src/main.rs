@@ -8,6 +8,7 @@ mod limiter;
 mod server;
 mod startup;
 mod storage;
+mod telemetry;
 
 use std::io::IsTerminal as _;
 use std::sync::Arc;
@@ -254,7 +255,13 @@ async fn serve(cfg: &Config) -> anyhow::Result<()> {
     // Fail on a bad certificate before touching the data directory or the database.
     let tls = cfg.tls.as_ref().map(server::tls_config).transpose()?;
 
-    let started = startup::start(cfg).await?;
+    // The process-wide recorder exists only when metrics are exposed.
+    let metrics = if cfg.metrics_listen.is_some() || cfg.metrics_on_main_port {
+        Some(telemetry::install_metrics()?)
+    } else {
+        None
+    };
+    let started = startup::start(cfg, metrics.clone().map(telemetry::endpoint)).await?;
 
     let listener = tokio::net::TcpListener::bind(cfg.listen)
         .await
@@ -280,6 +287,24 @@ async fn serve(cfg: &Config) -> anyhow::Result<()> {
         &stop_rx,
     )?;
     jobs::spawn_workers(&mut jobs, started.workers, &stop_rx);
+    let mut metrics_server = None;
+    if let Some(handle) = &metrics {
+        jobs.spawn(telemetry::upkeep(handle.clone(), stop_rx.clone()));
+        if let Some(metrics_addr) = cfg.metrics_listen {
+            let metrics_listener = tokio::net::TcpListener::bind(metrics_addr)
+                .await
+                .with_context(|| format!("failed to bind metrics_listen {metrics_addr}"))?;
+            let bound = metrics_listener
+                .local_addr()
+                .context("failed to read the metrics address")?;
+            tracing::info!("metrics on http://{bound}/metrics");
+            metrics_server = Some(tokio::spawn(server::run_metrics(
+                metrics_listener,
+                telemetry::endpoint(handle.clone()),
+                stop_rx.clone(),
+            )));
+        }
+    }
     let signal_tx = Arc::clone(&stop_tx);
     let state = started.state.clone();
     let drain = cfg.shutdown_drain;
@@ -302,8 +327,16 @@ async fn serve(cfg: &Config) -> anyhow::Result<()> {
     tracing::info!(public_url = %cfg.public_url, "listening on {scheme}://{addr}");
     let result = server::run(listener, started.app, tls, stop_rx).await;
 
-    // The server stopped: make sure the jobs stop too (also when the server failed).
+    // The server stopped: make sure the jobs and the metrics listener stop too (also when the
+    // server failed).
     let _ = stop_tx.send(true);
+    if let Some(task) = metrics_server {
+        match task.await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => tracing::warn!(error = %e, "metrics listener failed"),
+            Err(e) => tracing::warn!(error = %e, "metrics listener task failed"),
+        }
+    }
     let jobs_done = async { while jobs.join_next().await.is_some() {} };
     if tokio::time::timeout(JOBS_SHUTDOWN_TIMEOUT, jobs_done)
         .await

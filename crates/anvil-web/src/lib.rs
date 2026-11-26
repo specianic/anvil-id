@@ -14,6 +14,7 @@ mod health;
 mod http_cache;
 pub mod i18n;
 pub mod layers;
+pub mod observability;
 pub mod protocol;
 pub mod render;
 pub mod request_context;
@@ -29,7 +30,6 @@ use axum::response::Response;
 use axum::routing::get;
 use tower::ServiceBuilder;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
-use tower_http::trace::TraceLayer;
 
 pub use config::AppConfig;
 pub use errors::WebError;
@@ -57,6 +57,8 @@ pub fn router(state: AppState) -> Router {
         .merge(theme::routes())
         .merge(admin::routes())
         .route("/assets/{*path}", get(assets::handler))
+        // Hands the matched (tenant-relative) route template to the request layer.
+        .route_layer(axum::middleware::from_fn(observability::record_route))
         .fallback(not_found)
         .with_state(state.clone());
     let tenant_routed = ServiceBuilder::new()
@@ -64,6 +66,8 @@ pub fn router(state: AppState) -> Router {
             state.clone(),
             tenant::resolve,
         ))
+        // Records the tenant on the request span and the route class for the metrics.
+        .layer(axum::middleware::from_fn(observability::tenant_context))
         // After tenant resolution: paths are tenant-relative and `ResolvedTenant` is set.
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
@@ -73,11 +77,18 @@ pub fn router(state: AppState) -> Router {
     let headers = layers::security_headers::SecurityHeaders {
         hsts: state.config().is_https(),
     };
-    Router::new()
+    let mut outer = Router::new()
         // Installation-wide, outside tenant resolution: `/t/{slug}/console/` is not the console.
         .merge(console::routes())
         // Probes never depend on tenant lookups and are never rate limited.
-        .merge(health::routes().with_state(state.clone()))
+        .merge(health::routes().with_state(state.clone()));
+    // `metrics_on_main_port`: the same /metrics route as the separate listener, outside tenant
+    // resolution and rate limiting. Absent otherwise (404).
+    if let Some(metrics) = state.config().metrics.clone() {
+        outer = outer.merge(observability::metrics_router(metrics));
+    }
+    outer
+        .route_layer(axum::middleware::from_fn(observability::record_route))
         .fallback_service(tenant_routed)
         .layer(axum::middleware::map_response_with_state(
             headers,
@@ -85,7 +96,8 @@ pub fn router(state: AppState) -> Router {
         ))
         // BODY_LIMIT everywhere; only the admin logo upload gets its larger limit (UI-03).
         .layer(axum::middleware::from_fn(admin::branding::body_limit))
-        .layer(TraceLayer::new_for_http())
+        // The one request span/log/metrics layer (route templates only, never the raw URI).
+        .layer(axum::middleware::from_fn(observability::observe))
         .layer(PropagateRequestIdLayer::x_request_id())
         .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
 }

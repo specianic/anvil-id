@@ -10,6 +10,7 @@ use anvil_core::policy::PasswordPolicy;
 use crate::adapters::captcha::CaptchaEndpoints;
 use crate::adapters::outbound::OutboundPolicy;
 use crate::client_ip::TrustedProxies;
+use crate::observability::MetricsEndpoint;
 
 /// Settings the web layer needs. The binary builds it from its own configuration (02-18).
 #[derive(Debug, Clone)]
@@ -45,6 +46,9 @@ pub struct AppConfig {
     /// [`crate::state::AppState`], used by 05-18). Default [`DEFAULT_UNKNOWN_HOST_TTL`]; a plain
     /// field so tests can inject a short TTL.
     pub unknown_host_ttl: Duration,
+    /// `/metrics` on the main router (`metrics_on_main_port`), rendering the binary's exporter.
+    /// `None` (default): the main router has no `/metrics` route.
+    pub metrics: Option<MetricsEndpoint>,
 }
 
 /// Default lifetime of a negative "unknown host" cache entry.
@@ -69,6 +73,7 @@ impl AppConfig {
             outbound,
             installation_smtp: false,
             unknown_host_ttl: DEFAULT_UNKNOWN_HOST_TTL,
+            metrics: None,
         }
     }
 

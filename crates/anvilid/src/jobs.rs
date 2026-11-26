@@ -35,6 +35,7 @@ use anvil_jose::Kek;
 use anvil_mail::worker::SmtpTransportFactory;
 use anvil_mail::{EmailRenderer, MailTransport, OutboxWorker, SmtpTransport, StorageOutbox};
 use anvil_web::adapters::backchannel::LogoutDeliveryWorker;
+use anvil_web::observability::JOBS_RUNS_TOTAL;
 use anyhow::Context;
 use secrecy::{ExposeSecret, SecretString};
 use tokio::sync::watch;
@@ -166,14 +167,17 @@ impl LeaseRunner {
             Ok(true) => {}
             Ok(false) => {
                 tracing::debug!(job = job.name(), "job lease held by another node");
+                count_run(job.name(), "lease_held");
                 return false;
             }
             Err(e) => {
                 tracing::warn!(job = job.name(), error = %e, "failed to take the job lease");
+                count_run(job.name(), "lease_error");
                 return false;
             }
         }
         job.run().await;
+        count_run(job.name(), "ran");
         if let Err(e) = self.storage.jobs().release(job.name(), &self.node_id).await {
             // The lease expires on its own.
             tracing::warn!(job = job.name(), error = %e, "failed to release the job lease");
@@ -206,6 +210,11 @@ impl LeaseRunner {
             self.run_once(job.as_ref()).await;
         }
     }
+}
+
+/// `anvil_jobs_runs_total{job, outcome}` (job names are code constants: bounded).
+fn count_run(job: &'static str, outcome: &'static str) {
+    metrics::counter!(JOBS_RUNS_TOTAL, "job" => job, "outcome" => outcome).increment(1);
 }
 
 /// A random delay in `[0, min(interval / 10, 30 s))`.

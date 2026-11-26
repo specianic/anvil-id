@@ -291,6 +291,62 @@ fn sigterm_turns_readiness_503_serves_during_the_drain_then_exits_zero() {
     assert!(stderr.contains("shut down cleanly"), "{stderr}");
 }
 
+#[test]
+fn metrics_listen_serves_only_metrics_and_the_main_port_has_none() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let port = free_port();
+    let metrics_port = free_port();
+    let mut server = Server {
+        child: spawn(
+            dir.path(),
+            None,
+            port,
+            &["--metrics-listen", &format!("127.0.0.1:{metrics_port}")],
+        ),
+        port,
+    };
+    wait_ready(&mut server, healthy);
+    assert_discovery(port);
+    let (status, body) = http_get(metrics_port, "/metrics").expect("metrics");
+    assert!(status.contains(" 200 "), "{status}");
+    assert!(
+        body.contains("anvil_http_requests_total{route_class=\"default\",status_class=\"2xx\"}"),
+        "{body}"
+    );
+    assert!(
+        body.contains("anvil_http_request_duration_seconds_bucket{route_class="),
+        "{body}"
+    );
+    assert!(
+        !body.contains("127.0.0.1"),
+        "an address leaked into metrics: {body}"
+    );
+    let (status, _) = http_get(metrics_port, "/healthz").expect("metrics listener");
+    assert!(status.contains(" 404 "), "only /metrics there: {status}");
+    let (status, _) = http_get(port, "/metrics").expect("main listener");
+    assert!(
+        status.contains(" 404 "),
+        "no /metrics on the main port: {status}"
+    );
+}
+
+#[test]
+fn metrics_on_main_port_serves_metrics_there() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let port = free_port();
+    let mut server = Server {
+        child: spawn(dir.path(), None, port, &["--metrics-on-main-port"]),
+        port,
+    };
+    wait_ready(&mut server, healthy);
+    let (status, body) = http_get(port, "/metrics").expect("metrics");
+    assert!(status.contains(" 200 "), "{status}");
+    assert!(
+        body.contains("anvil_http_requests_total{route_class=\"health\",status_class=\"2xx\"}"),
+        "{body}"
+    );
+}
+
 /// Generates a self-signed P-256 certificate for localhost with openssl, or returns `None` (and
 /// says why) when openssl is not available.
 fn self_signed_cert(dir: &Path) -> Option<(std::path::PathBuf, std::path::PathBuf)> {

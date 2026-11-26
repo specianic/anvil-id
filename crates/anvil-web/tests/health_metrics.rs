@@ -1,7 +1,14 @@
-//! Health endpoints (OPS-08): liveness and readiness aliases, readiness cleared for the
-//! shutdown drain, probes outside tenant resolution and rate limiting.
+//! Health endpoints and request telemetry (OPS-08): liveness and readiness aliases, readiness
+//! cleared for the shutdown drain, probes outside tenant resolution and rate limiting; the
+//! `/metrics` route per configuration; metric names and label hygiene (bounded class labels,
+//! no email, client id, tenant, IP or query); the `http.request` span with the route template.
+//!
+//! Metrics are captured by a recorder installed once for this test binary (the recorder is
+//! process-wide), so assertions are about presence and absence, never exact global counts.
 
 mod support;
+mod token_support;
+mod ui_helpers;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -13,6 +20,7 @@ use anvil_core::ports::Clock;
 use anvil_jose::kek::Kek;
 use anvil_web::adapters::argon2::Argon2Pool;
 use anvil_web::adapters::hibp::{BreachCheckMode, breach_checker};
+use anvil_web::observability::MetricsEndpoint;
 use anvil_web::{AppConfig, AppDeps, AppState};
 use axum::Router;
 use axum::body::Body;
@@ -136,4 +144,407 @@ async fn health_probes_skip_tenant_resolution_and_rate_limits() {
         limited,
         "the default class quota applies to ordinary routes"
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Metrics capture (test code only)
+// ---------------------------------------------------------------------------------------------
+
+mod capture {
+    use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex, OnceLock};
+
+    use metrics::{
+        Counter, CounterFn, Gauge, GaugeFn, Histogram, HistogramFn, Key, KeyName, Metadata,
+        Recorder, SharedString, Unit,
+    };
+
+    /// One series: a counter value, or the number of histogram observations.
+    #[derive(Default)]
+    pub struct Series(AtomicU64);
+
+    impl CounterFn for Series {
+        fn increment(&self, value: u64) {
+            self.0.fetch_add(value, Ordering::Relaxed);
+        }
+        fn absolute(&self, value: u64) {
+            self.0.store(value, Ordering::Relaxed);
+        }
+    }
+
+    impl GaugeFn for Series {
+        fn increment(&self, _: f64) {}
+        fn decrement(&self, _: f64) {}
+        fn set(&self, _: f64) {}
+    }
+
+    impl HistogramFn for Series {
+        fn record(&self, _: f64) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Every series by rendered key (`name{label="value",...}`) and every label pair seen.
+    #[derive(Default)]
+    pub struct Capture {
+        series: Mutex<BTreeMap<String, Arc<Series>>>,
+        pub labels: Mutex<Vec<(String, String)>>,
+    }
+
+    impl Capture {
+        fn series(&self, key: &Key) -> Arc<Series> {
+            let labels: Vec<String> = key
+                .labels()
+                .map(|l| format!("{}=\"{}\"", l.key(), l.value()))
+                .collect();
+            {
+                let mut seen = self.labels.lock().expect("labels");
+                for l in key.labels() {
+                    seen.push((l.key().to_owned(), l.value().to_owned()));
+                }
+            }
+            let rendered = format!("{}{{{}}}", key.name(), labels.join(","));
+            Arc::clone(
+                self.series
+                    .lock()
+                    .expect("series")
+                    .entry(rendered)
+                    .or_default(),
+            )
+        }
+
+        /// One `key value` line per series.
+        pub fn render(&self) -> String {
+            self.series
+                .lock()
+                .expect("series")
+                .iter()
+                .map(|(k, v)| format!("{k} {}\n", v.0.load(Ordering::Relaxed)))
+                .collect()
+        }
+
+        pub fn value(&self, key: &str) -> u64 {
+            self.series
+                .lock()
+                .expect("series")
+                .get(key)
+                .map_or(0, |s| s.0.load(Ordering::Relaxed))
+        }
+    }
+
+    struct Rec(&'static Capture);
+
+    impl Recorder for Rec {
+        fn describe_counter(&self, _: KeyName, _: Option<Unit>, _: SharedString) {}
+        fn describe_gauge(&self, _: KeyName, _: Option<Unit>, _: SharedString) {}
+        fn describe_histogram(&self, _: KeyName, _: Option<Unit>, _: SharedString) {}
+        fn register_counter(&self, key: &Key, _: &Metadata<'_>) -> Counter {
+            Counter::from_arc(self.0.series(key))
+        }
+        fn register_gauge(&self, key: &Key, _: &Metadata<'_>) -> Gauge {
+            Gauge::from_arc(self.0.series(key))
+        }
+        fn register_histogram(&self, key: &Key, _: &Metadata<'_>) -> Histogram {
+            Histogram::from_arc(self.0.series(key))
+        }
+    }
+
+    /// The capture recorder, installed globally on first use.
+    pub fn capture() -> &'static Capture {
+        static CAPTURE: OnceLock<&'static Capture> = OnceLock::new();
+        CAPTURE.get_or_init(|| {
+            let capture: &'static Capture = Box::leak(Box::default());
+            metrics::set_global_recorder(Rec(capture)).expect("first recorder of this binary");
+            capture
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Span capture (test code only)
+// ---------------------------------------------------------------------------------------------
+
+mod spans {
+    use std::collections::{BTreeMap, HashMap};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    use tracing::span::{Attributes, Id, Record};
+    use tracing::{Event, Metadata, Subscriber};
+
+    pub type Fields = BTreeMap<String, String>;
+
+    #[derive(Default)]
+    pub struct Inner {
+        next: AtomicU64,
+        spans: Mutex<HashMap<u64, (&'static Metadata<'static>, Fields)>>,
+        pub events: Mutex<Vec<(String, Fields)>>,
+    }
+
+    impl Inner {
+        /// Every captured span named `name`, with its fields.
+        pub fn spans(&self, name: &str) -> Vec<Fields> {
+            self.spans
+                .lock()
+                .expect("spans")
+                .values()
+                .filter(|(m, _)| m.name() == name)
+                .map(|(_, f)| f.clone())
+                .collect()
+        }
+    }
+
+    struct Visit<'a>(&'a mut Fields);
+
+    impl tracing::field::Visit for Visit<'_> {
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+            self.0.insert(field.name().to_owned(), value.to_owned());
+        }
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            self.0.insert(field.name().to_owned(), format!("{value:?}"));
+        }
+    }
+
+    /// A minimal subscriber recording span fields and events.
+    #[derive(Clone, Default)]
+    pub struct Capture(pub Arc<Inner>);
+
+    impl Subscriber for Capture {
+        fn enabled(&self, _: &Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, attrs: &Attributes<'_>) -> Id {
+            let id = self.0.next.fetch_add(1, Ordering::Relaxed) + 1;
+            let mut fields = Fields::new();
+            attrs.record(&mut Visit(&mut fields));
+            self.0
+                .spans
+                .lock()
+                .expect("spans")
+                .insert(id, (attrs.metadata(), fields));
+            Id::from_u64(id)
+        }
+        fn record(&self, span: &Id, values: &Record<'_>) {
+            if let Some((_, fields)) = self
+                .0
+                .spans
+                .lock()
+                .expect("spans")
+                .get_mut(&span.into_u64())
+            {
+                values.record(&mut Visit(fields));
+            }
+        }
+        fn record_follows_from(&self, _: &Id, _: &Id) {}
+        fn event(&self, event: &Event<'_>) {
+            let mut fields = Fields::new();
+            event.record(&mut Visit(&mut fields));
+            self.0
+                .events
+                .lock()
+                .expect("events")
+                .push((event.metadata().target().to_owned(), fields));
+        }
+        fn enter(&self, _: &Id) {}
+        fn exit(&self, _: &Id) {}
+    }
+}
+
+const EMAIL: &str = "alice@example.com";
+const PASSWORD: &str = "correct horse battery";
+const REQUEST: &str = "0192f0c4-7a1b-7c3d-8e9f-0123456789ab";
+const PEER_IP: &str = "203.0.113.10";
+
+/// Label names and values the metrics may carry (bounded by construction).
+const LABEL_NAMES: &[&str] = &["route_class", "status_class", "outcome", "job", "grant"];
+
+#[tokio::test]
+async fn metrics_labels_are_bounded_and_free_of_identifiers() {
+    let capture = capture::capture();
+    let app = TestApp::new().await;
+    let acme = token_support::acme(&app).await;
+    ui_helpers::register(&app, "", EMAIL, PASSWORD).await;
+
+    // A login page, a failed and a successful login.
+    assert_eq!(
+        app.get(&format!("/ui/login?request={REQUEST}"))
+            .await
+            .status,
+        200
+    );
+    let failed = ui_helpers::submit_form(
+        &app,
+        &format!("/ui/login?request={REQUEST}"),
+        &[("identifier", EMAIL), ("password", "not the password")],
+    )
+    .await;
+    assert_ne!(failed.status, 303, "a wrong password does not sign in");
+    let ok = ui_helpers::submit_form(
+        &app,
+        &format!("/ui/login?request={REQUEST}"),
+        &[("identifier", EMAIL), ("password", PASSWORD)],
+    )
+    .await;
+    assert_eq!(ok.status, 303, "{}", ok.text());
+
+    // A token request and an authorize call carrying a login hint, in another tenant.
+    let rp = token_support::register(
+        &app,
+        token_support::default_tenant(&app),
+        token_support::cc_input(anvil_core::model::ClientAuthMethod::ClientSecretBasic),
+    )
+    .await;
+    let token =
+        token_support::token(&app, &rp.auth(), &[("grant_type", "client_credentials")]).await;
+    assert_eq!(token.status, 200, "{}", token.text());
+    let acme_rp = token_support::register(
+        &app,
+        acme.id,
+        token_support::web_input(anvil_core::model::ClientAuthMethod::ClientSecretBasic),
+    )
+    .await;
+    let authorize = format!(
+        "/t/acme/authorize?client_id={}&response_type=code&scope=openid&login_hint={EMAIL}",
+        acme_rp.id()
+    );
+    let _ = app.get(&authorize).await;
+
+    let rendered = capture.render();
+    assert!(
+        rendered.contains("anvil_http_requests_total{"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("anvil_http_request_duration_seconds{"),
+        "{rendered}"
+    );
+    assert!(
+        capture.value("anvil_auth_attempts_total{outcome=\"failure\"}") >= 1,
+        "{rendered}"
+    );
+    assert!(
+        capture.value("anvil_auth_attempts_total{outcome=\"success\"}") >= 1,
+        "{rendered}"
+    );
+    assert!(
+        capture.value("anvil_http_requests_total{route_class=\"token\",status_class=\"2xx\"}") >= 1,
+        "{rendered}"
+    );
+    assert!(
+        capture.value("anvil_http_requests_total{route_class=\"auth\",status_class=\"3xx\"}") >= 1,
+        "{rendered}"
+    );
+
+    for forbidden in [
+        EMAIL,
+        "alice",
+        rp.id(),
+        acme_rp.id(),
+        "acme",
+        PEER_IP,
+        "/authorize?",
+        "login_hint",
+        "/t/",
+    ] {
+        assert!(
+            !rendered.contains(forbidden),
+            "{forbidden} in metrics:\n{rendered}"
+        );
+    }
+    for (name, value) in capture.labels.lock().expect("labels").iter() {
+        assert!(LABEL_NAMES.contains(&name.as_str()), "label {name}={value}");
+        assert!(
+            value.len() <= 32
+                && value
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'),
+            "unbounded-looking label value {name}={value}"
+        );
+    }
+}
+
+/// Requests to `router` from the default peer.
+async fn get_path(router: &Router, path: &str) -> (u16, String) {
+    get(router, path, "op.test").await
+}
+
+#[tokio::test]
+async fn metrics_route_follows_the_configuration() {
+    // Neither metrics_listen nor metrics_on_main_port reaches the web layer: no route.
+    let (_, router) = app_with_state(|_| {}).await;
+    assert_eq!(get_path(&router, "/metrics").await.0, 404);
+
+    // metrics_on_main_port: served outside tenant resolution and rate limiting.
+    let (_, router) = app_with_state(|c| {
+        c.metrics = Some(MetricsEndpoint::new(|| {
+            "# TYPE anvil_http_requests_total counter\n".to_owned()
+        }));
+        c.rate_limits = LimiterConfig {
+            default: RateQuota::per_second(1, 1),
+            ..LimiterConfig::default()
+        };
+    })
+    .await;
+    for _ in 0..10 {
+        let (status, body) = get(&router, "/metrics", "unknown.example.test").await;
+        assert_eq!(status, 200);
+        assert!(body.contains("anvil_http_requests_total"), "{body}");
+    }
+    // Only at the root: a tenant path is not the metrics route.
+    assert_eq!(get_path(&router, "/t/default/metrics").await.0, 404);
+}
+
+#[tokio::test]
+async fn request_span_carries_the_route_template_not_the_uri() {
+    let app = TestApp::new().await;
+    token_support::acme(&app).await;
+    let subscriber = spans::Capture::default();
+    let inner = Arc::clone(&subscriber.0);
+    let guard = tracing::subscriber::set_default(subscriber);
+    let resp = app
+        .get(&format!(
+            "/t/acme/authorize?login_hint={EMAIL}&client_id=unknown-client&state=s3cr3t-state"
+        ))
+        .await;
+    drop(guard);
+
+    let spans = inner.spans("http.request");
+    let span = spans
+        .iter()
+        .find(|f| f.get("route").map(String::as_str) == Some("/authorize"))
+        .unwrap_or_else(|| panic!("no http.request span for /authorize: {spans:?}"));
+    assert_eq!(
+        span.get("tenant").map(String::as_str),
+        Some("acme"),
+        "{span:?}"
+    );
+    assert_eq!(
+        span.get("status").map(String::as_str),
+        Some(resp.status.as_str()),
+        "{span:?}"
+    );
+    assert!(span.contains_key("latency_ms"), "{span:?}");
+    assert!(span.contains_key("method"), "{span:?}");
+
+    let events = inner.events.lock().expect("events");
+    let access: Vec<_> = events
+        .iter()
+        .filter(|(target, _)| target == anvil_web::observability::ACCESS_LOG_TARGET)
+        .collect();
+    assert!(!access.is_empty(), "no access log line");
+    let everything = format!("{spans:?} {access:?}");
+    for forbidden in [
+        EMAIL,
+        "login_hint",
+        "s3cr3t-state",
+        "unknown-client",
+        "?",
+        PEER_IP,
+    ] {
+        assert!(
+            !everything.contains(forbidden),
+            "{forbidden} in telemetry: {everything}"
+        );
+    }
 }
