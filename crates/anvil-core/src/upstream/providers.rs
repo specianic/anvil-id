@@ -132,6 +132,10 @@ pub fn resolve(
     metadata: Option<&ProviderMetadata>,
 ) -> Result<ResolvedProvider, CoreError> {
     match &conn.config {
+        // Permanent: SAML never runs through the OIDC/OAuth upstream path.
+        ConnectionConfig::Saml(_) => Err(CoreError::InvalidRequest(
+            "saml connections use the SAML service".into(),
+        )),
         ConnectionConfig::Social(s) => resolve_social(s, conn.trust_email_verified),
         ConnectionConfig::Oidc(o) => {
             let md = metadata.ok_or_else(|| {
@@ -553,6 +557,7 @@ mod tests {
             trust_email_verified: trust,
             created_at: now,
             updated_at: now,
+            org_id: None,
         }
     }
 

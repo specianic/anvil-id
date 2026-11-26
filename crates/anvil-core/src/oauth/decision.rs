@@ -614,6 +614,7 @@ mod tests {
             claims: None,
             response_mode: ResponseMode::Query,
             resource: vec![],
+            organization: None,
         };
         assert_eq!(requested_acr(&params), AcrRequest::None);
         params.acr_values = vec![ACR_MFA.into()];

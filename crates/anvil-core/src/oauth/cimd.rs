@@ -141,6 +141,7 @@ impl NewClientMetadata {
             metadata_expires_at: Some(metadata_expires_at),
             registration_access_token_hash: None,
             created_at,
+            organization: crate::model::OrgClientPolicy::Off,
         }
     }
 }

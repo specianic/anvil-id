@@ -263,6 +263,7 @@ mod tests {
             revoked_at: None,
             revoked_reason: None,
             resource: vec![],
+            org_id: None,
         }
     }
 

@@ -602,6 +602,7 @@ fn client_input(c: &ClientSection) -> (ClientInput, ClientOptions) {
             backchannel_logout_session_required: c.backchannel_logout_session_required,
             allowed_resources: c.allowed_resources.clone(),
             mfa_policy: c.mfa_policy,
+            organization: c.organization,
         },
     )
 }
@@ -1020,6 +1021,7 @@ fn client_section(c: &Client) -> ClientSection {
         backchannel_logout_session_required: c.backchannel_logout_session_required,
         allowed_resources: c.allowed_resources.clone(),
         mfa_policy: c.mfa_policy,
+        organization: c.organization,
     }
 }
 
@@ -1939,6 +1941,7 @@ impl ConfigService {
                     .then_some(s.backchannel_logout_session_required),
                 allowed_resources: has("allowed_resources").then(|| s.allowed_resources.clone()),
                 mfa_policy: has("mfa_policy").then_some(s.mfa_policy),
+                organization: has("organization").then_some(s.organization),
             };
             if patch != ClientPatch::default() || options != ClientOptionsPatch::default() {
                 self.clients
@@ -2688,6 +2691,7 @@ mod tests {
             registration_access_token_hash: None,
             created_at: at(),
             updated_at: at(),
+            organization: crate::model::OrgClientPolicy::Off,
         }
     }
 

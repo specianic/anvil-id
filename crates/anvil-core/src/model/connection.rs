@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use time::OffsetDateTime;
 
-use super::ids::{ConnectionId, IdentityLinkId, TenantId, UserId, str_enum};
+use super::ids::{ConnectionId, IdentityLinkId, OrgId, TenantId, UserId, str_enum};
+use super::saml::SamlConfig;
 
 /// KEK purpose for a sealed upstream client secret (Apple: the `.p8` private key PEM).
 pub const CONNECTION_SECRET_PURPOSE: &str = "anvilid/connection-secret/v1";
@@ -33,6 +34,7 @@ pub enum ConnectionKind {
     Github,
     Oidc,
     Oauth2,
+    Saml,
 }
 
 str_enum!(ConnectionKind {
@@ -42,6 +44,7 @@ str_enum!(ConnectionKind {
     Github => "github",
     Oidc => "oidc",
     Oauth2 => "oauth2",
+    Saml => "saml",
 });
 
 impl ConnectionKind {
@@ -172,14 +175,16 @@ pub struct OAuth2Config {
     pub mapping: ClaimMapping,
 }
 
-/// Connection configuration, stored as JSON tagged by `type` (ARCHITECTURE §19; `saml` arrives
-/// in Phase 6).
+/// Connection configuration, stored as JSON tagged by `type` (ARCHITECTURE §19).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ConnectionConfig {
     Social(SocialConfig),
     Oidc(OidcConfig),
     Oauth2(OAuth2Config),
+    /// A SAML 2.0 IdP (experimental, behind an operator flag). Runs only through the SAML
+    /// service, never through the OIDC/OAuth upstream path.
+    Saml(SamlConfig),
 }
 
 impl ConnectionConfig {
@@ -188,15 +193,17 @@ impl ConnectionConfig {
             Self::Social(s) => s.provider.kind(),
             Self::Oidc(_) => ConnectionKind::Oidc,
             Self::Oauth2(_) => ConnectionKind::Oauth2,
+            Self::Saml(_) => ConnectionKind::Saml,
         }
     }
 
-    /// The upstream OAuth `client_id`.
-    pub fn client_id(&self) -> &str {
+    /// The upstream OAuth `client_id`; `None` for SAML, which has no OAuth client.
+    pub fn client_id(&self) -> Option<&str> {
         match self {
-            Self::Social(s) => &s.client_id,
-            Self::Oidc(o) => &o.client_id,
-            Self::Oauth2(o) => &o.client_id,
+            Self::Social(s) => Some(&s.client_id),
+            Self::Oidc(o) => Some(&o.client_id),
+            Self::Oauth2(o) => Some(&o.client_id),
+            Self::Saml(_) => None,
         }
     }
 }
@@ -206,6 +213,9 @@ impl ConnectionConfig {
 pub struct Connection {
     pub id: ConnectionId,
     pub tenant_id: TenantId,
+    /// `Some` = an organization's enterprise connection (never shown on the tenant sign-in
+    /// page; reached through domain routing or the `organization` parameter).
+    pub org_id: Option<OrgId>,
     pub slug: String,
     pub display_name: String,
     pub enabled: bool,
@@ -229,6 +239,7 @@ impl std::fmt::Debug for Connection {
         f.debug_struct("Connection")
             .field("id", &self.id)
             .field("tenant_id", &self.tenant_id)
+            .field("org_id", &self.org_id)
             .field("slug", &self.slug)
             .field("display_name", &self.display_name)
             .field("enabled", &self.enabled)
@@ -245,6 +256,8 @@ impl std::fmt::Debug for Connection {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewConnection {
     pub id: ConnectionId,
+    /// `Some` = an organization's enterprise connection. Fixed at creation.
+    pub org_id: Option<OrgId>,
     pub slug: String,
     pub display_name: String,
     pub enabled: bool,
@@ -320,7 +333,7 @@ mod tests {
             serde_json::from_str(r#"{"type":"social","provider":"google","client_id":"abc"}"#)
                 .unwrap();
         assert_eq!(social.kind(), ConnectionKind::Google);
-        assert_eq!(social.client_id(), "abc");
+        assert_eq!(social.client_id(), Some("abc"));
         let ConnectionConfig::Social(s) = &social else {
             panic!("social")
         };
@@ -360,8 +373,18 @@ mod tests {
         );
         assert!(
             serde_json::from_str::<ConnectionConfig>(r#"{"type":"saml"}"#).is_err(),
+            "a saml config without its required fields is rejected"
+        );
+        assert!(
+            serde_json::from_str::<ConnectionConfig>(r#"{"type":"ldap"}"#).is_err(),
             "unknown types are rejected"
         );
+        let saml: ConnectionConfig = serde_json::from_str(
+            r#"{"type":"saml","idp_entity_id":"e","sso_url":"https://i/sso","signing_certs":["c"]}"#,
+        )
+        .unwrap();
+        assert_eq!(saml.kind(), ConnectionKind::Saml);
+        assert_eq!(saml.client_id(), None);
     }
 
     #[test]
@@ -381,6 +404,7 @@ mod tests {
         let conn = Connection {
             id: ConnectionId::new_v7(),
             tenant_id: TenantId::new_v7(),
+            org_id: None,
             slug: "google".into(),
             display_name: "Google".into(),
             enabled: true,

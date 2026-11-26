@@ -23,6 +23,8 @@ pub enum EmailKind {
     EmailChange,
     /// Notice to the old address after an email change.
     EmailChanged,
+    /// Invitation to join an organization.
+    OrgInvitation,
 }
 
 str_enum!(EmailKind {
@@ -34,6 +36,7 @@ str_enum!(EmailKind {
     LoginCode => "login_code",
     EmailChange => "email_change",
     EmailChanged => "email_changed",
+    OrgInvitation => "org_invitation",
 });
 
 /// A tenant override of one email template.

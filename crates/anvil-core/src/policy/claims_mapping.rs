@@ -58,6 +58,12 @@ pub const RESERVED_CLAIMS: &[&str] = &[
     "typ",
     // AnvilID token family
     "fid",
+    // AnvilID organizations (the active org of the grant; only the org mapping rules produce
+    // `org_roles` / `org_permissions`, see [`validate_mapping`])
+    "org_id",
+    "org_slug",
+    "org_roles",
+    "org_permissions",
     // OIDC standard claims (OIDC Core §5.1)
     "name",
     "given_name",
@@ -176,7 +182,9 @@ fn invalid(message: String) -> CoreError {
     }
 }
 
-fn check_rule_syntax(rule: &ClaimRule) -> Result<(), CoreError> {
+/// `own_name`: the one reserved name this rule may carry (the org mapping rules produce
+/// `org_roles` / `org_permissions`); `None` for every other rule.
+fn check_rule_syntax(rule: &ClaimRule, own_name: Option<&str>) -> Result<(), CoreError> {
     let c = rule.claim.as_str();
     if c.is_empty()
         || c.len() > MAX_CLAIM_NAME_LEN
@@ -188,7 +196,7 @@ fn check_rule_syntax(rule: &ClaimRule) -> Result<(), CoreError> {
             "claim names are 1-{MAX_CLAIM_NAME_LEN} printable ASCII characters without spaces, quotes or backslashes"
         )));
     }
-    if is_reserved_claim(c) {
+    if is_reserved_claim(c) && own_name != Some(c) {
         return Err(invalid(format!(
             "claim {c:?} is a protocol or standard claim and cannot be mapped"
         )));
@@ -204,7 +212,9 @@ fn check_rule_syntax(rule: &ClaimRule) -> Result<(), CoreError> {
 }
 
 /// Validates a tenant's mapping: every claim name is well formed, none is reserved, and no two
-/// rules (roles, permissions, attributes) produce the same claim (case-insensitive).
+/// rules (roles, permissions, org roles, org permissions, attributes) produce the same claim
+/// (case-insensitive). The org rules may keep their own reserved names (`org_roles`,
+/// `org_permissions`); no other rule may use a reserved name.
 pub fn validate_mapping(
     settings: &ClaimMappingSettings,
     attributes: &[AttributeDefinition],
@@ -212,11 +222,24 @@ pub fn validate_mapping(
     let rules = settings
         .roles
         .iter()
-        .chain(settings.permissions.iter())
-        .chain(attributes.iter().filter_map(|a| a.claim.as_ref()));
+        .map(|r| (r, None))
+        .chain(settings.permissions.iter().map(|r| (r, None)))
+        .chain(settings.org_roles.iter().map(|r| (r, Some("org_roles"))))
+        .chain(
+            settings
+                .org_permissions
+                .iter()
+                .map(|r| (r, Some("org_permissions"))),
+        )
+        .chain(
+            attributes
+                .iter()
+                .filter_map(|a| a.claim.as_ref())
+                .map(|r| (r, None)),
+        );
     let mut seen = BTreeSet::new();
-    for rule in rules {
-        check_rule_syntax(rule)?;
+    for (rule, own_name) in rules {
+        check_rule_syntax(rule, own_name)?;
         if !seen.insert(rule.claim.to_ascii_lowercase()) {
             return Err(invalid(format!(
                 "claim {:?} is produced by more than one mapping",
@@ -322,6 +345,8 @@ mod tests {
         let settings = ClaimMappingSettings {
             roles: Some(rule("roles", &[TokenTarget::IdToken], None)),
             permissions: None,
+            org_roles: None,
+            org_permissions: None,
         };
         let roles = strings(&["a"]);
         let none = Map::new();
@@ -374,6 +399,8 @@ mod tests {
         let settings = ClaimMappingSettings {
             roles: None,
             permissions: None,
+            org_roles: None,
+            org_permissions: None,
         };
         let m = map_for(
             &strings(&["a"]),
@@ -411,6 +438,8 @@ mod tests {
         let settings = ClaimMappingSettings {
             roles: None,
             permissions: None,
+            org_roles: None,
+            org_permissions: None,
         };
         let inputs = ClaimInputs {
             roles: &[],
@@ -470,6 +499,8 @@ mod tests {
         let settings = ClaimMappingSettings {
             roles: None,
             permissions: None,
+            org_roles: None,
+            org_permissions: None,
         };
         let m = map_for(
             &[],
@@ -524,9 +555,83 @@ mod tests {
             let settings = ClaimMappingSettings {
                 roles: Some(rule(name, &[TokenTarget::AccessToken], None)),
                 permissions: None,
+                org_roles: None,
+                org_permissions: None,
             };
             assert!(validate_mapping(&settings, &[]).is_err(), "roles as {name}");
         }
+    }
+
+    #[test]
+    fn org_claim_names_are_reserved_for_attribute_and_role_rules() {
+        for name in [
+            "org_id",
+            "org_slug",
+            "ORG_SLUG",
+            "Org_Slug",
+            "org_roles",
+            "org_permissions",
+        ] {
+            let attrs = vec![attr("a", Some(rule(name, &[TokenTarget::IdToken], None)))];
+            let err = validate_mapping(&ClaimMappingSettings::default(), &attrs);
+            assert!(
+                matches!(err, Err(CoreError::Validation { field: "claim", .. })),
+                "attribute as {name}: {err:?}"
+            );
+            let settings = ClaimMappingSettings {
+                roles: Some(rule(name, &[TokenTarget::AccessToken], None)),
+                ..ClaimMappingSettings::default()
+            };
+            assert!(validate_mapping(&settings, &[]).is_err(), "roles as {name}");
+        }
+        // The org rules keep their own names but cannot take the other reserved ones.
+        validate_mapping(&ClaimMappingSettings::default(), &[]).unwrap();
+        let swapped = ClaimMappingSettings {
+            org_roles: Some(rule("org_permissions", &[TokenTarget::AccessToken], None)),
+            org_permissions: None,
+            ..ClaimMappingSettings::default()
+        };
+        assert!(validate_mapping(&swapped, &[]).is_err());
+        let slug = ClaimMappingSettings {
+            org_permissions: Some(rule("org_slug", &[TokenTarget::AccessToken], None)),
+            ..ClaimMappingSettings::default()
+        };
+        assert!(validate_mapping(&slug, &[]).is_err());
+        let sub = ClaimMappingSettings {
+            org_roles: Some(rule("sub", &[TokenTarget::AccessToken], None)),
+            ..ClaimMappingSettings::default()
+        };
+        assert!(validate_mapping(&sub, &[]).is_err());
+        // An org rule renamed to a free name collides like any other rule.
+        let clash = ClaimMappingSettings {
+            org_roles: Some(rule("roles", &[TokenTarget::AccessToken], None)),
+            ..ClaimMappingSettings::default()
+        };
+        assert!(validate_mapping(&clash, &[]).is_err());
+    }
+
+    #[test]
+    fn org_slug_attribute_is_never_emitted_at_runtime() {
+        let attrs = vec![
+            attr(
+                "a",
+                Some(rule("org_slug", &[TokenTarget::AccessToken], None)),
+            ),
+            attr("b", Some(rule("Org_Id", &[TokenTarget::AccessToken], None))),
+        ];
+        let mut values = Map::new();
+        values.insert("a".into(), json!("evil"));
+        values.insert("b".into(), json!("evil"));
+        let m = map_for(
+            &[],
+            &[],
+            &values,
+            &attrs,
+            &ClaimMappingSettings::default(),
+            "openid",
+            TokenTarget::AccessToken,
+        );
+        assert!(m.is_empty(), "{m:?}");
     }
 
     #[test]
@@ -544,6 +649,8 @@ mod tests {
         let settings = ClaimMappingSettings {
             roles: Some(rule("authz", &[TokenTarget::AccessToken], None)),
             permissions: Some(rule("authz", &[TokenTarget::AccessToken], None)),
+            org_roles: None,
+            org_permissions: None,
         };
         assert!(validate_mapping(&settings, &[]).is_err());
     }
@@ -591,6 +698,8 @@ mod tests {
         let settings = ClaimMappingSettings {
             roles: Some(rule("sub", &[TokenTarget::AccessToken], None)),
             permissions: Some(rule("perms", &[TokenTarget::AccessToken], None)),
+            org_roles: None,
+            org_permissions: None,
         };
         let attrs = vec![
             attr("a", Some(rule("PERMS", &[TokenTarget::AccessToken], None))),
@@ -635,6 +744,8 @@ mod tests {
             let settings = ClaimMappingSettings {
                 roles: Some(rule(&roles_claim, TokenTarget::ALL, None)),
                 permissions: Some(rule(&perms_claim, TokenTarget::ALL, None)),
+                org_roles: None,
+                org_permissions: None,
             };
             let attrs: Vec<AttributeDefinition> = attr_claims
                 .iter()

@@ -371,6 +371,7 @@ pub fn validate(
             claims,
             response_mode,
             resource,
+            organization: None,
         },
         id_token_hint: raw.get("id_token_hint").map(str::to_owned),
     })
@@ -481,6 +482,7 @@ pub(crate) mod tests {
             metadata_expires_at: None,
             registration_access_token_hash: None,
             registration_source: crate::model::ClientSource::Static,
+            organization: crate::model::OrgClientPolicy::Off,
         }
     }
 

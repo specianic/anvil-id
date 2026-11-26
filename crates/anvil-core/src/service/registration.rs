@@ -693,6 +693,7 @@ mod tests {
                 registration_access_token_hash: c.registration_access_token_hash,
                 created_at: c.created_at,
                 updated_at: c.created_at,
+                organization: crate::model::OrgClientPolicy::Off,
             };
             self.clients.lock().unwrap().push((tenant, client.clone()));
             Ok(client)
@@ -1691,6 +1692,7 @@ mod tests {
             registration_access_token_hash: None,
             created_at: T0,
             updated_at: T0,
+            organization: crate::model::OrgClientPolicy::Off,
         };
         assert_eq!(client_metadata(&client), v.metadata());
     }

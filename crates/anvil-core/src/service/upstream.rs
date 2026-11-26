@@ -552,9 +552,13 @@ impl UpstreamService<'_> {
                     .map(|o| StartResult::Done(Box::new(o)));
             }
         };
-        let resolved = match resolve(&conn, metadata.as_ref()) {
-            Ok(r) => r,
-            Err(_) => {
+        // `resolve` refuses SAML connections, which also have no OAuth client id.
+        let resolved_and_client = resolve(&conn, metadata.as_ref())
+            .ok()
+            .and_then(|r| conn.config.client_id().map(|c| (r, c.to_owned())));
+        let (resolved, client_id) = match resolved_and_client {
+            Some(r) => r,
+            None => {
                 return self
                     .fail(cx, Some(&conn), to, "configuration")
                     .await
@@ -610,7 +614,7 @@ impl UpstreamService<'_> {
         };
         let url = authorization_url(
             &resolved,
-            conn.config.client_id(),
+            &client_id,
             &redirect_uri(cx.issuer, &conn.slug),
             &state_param,
             nonce.as_deref(),
@@ -886,7 +890,8 @@ impl UpstreamService<'_> {
             _ => {}
         }
         let resolved = resolve(conn, metadata.as_ref()).map_err(|_| "configuration")?;
-        let client_id = conn.config.client_id();
+        // SAML connections have no OAuth client (and `resolve` already refused them).
+        let client_id = conn.config.client_id().ok_or("configuration")?;
         let client_secret = if conn.kind() == ConnectionKind::Apple {
             Some(
                 self.apple_client_secret(conn, &resolved)

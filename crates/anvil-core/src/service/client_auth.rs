@@ -429,6 +429,7 @@ pub(crate) mod tests {
             metadata_expires_at: None,
             registration_access_token_hash: None,
             registration_source: crate::model::ClientSource::Static,
+            organization: crate::model::OrgClientPolicy::Off,
         }
     }
 

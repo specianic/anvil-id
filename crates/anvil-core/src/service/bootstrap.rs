@@ -181,6 +181,7 @@ pub fn build_mgmt_client(now: OffsetDateTime) -> (NewClient, SecretString) {
         metadata_expires_at: None,
         registration_access_token_hash: None,
         registration_source: crate::model::ClientSource::Static,
+        organization: crate::model::OrgClientPolicy::Off,
     };
     (client, secret)
 }
@@ -226,6 +227,7 @@ pub fn build_console_client(now: OffsetDateTime, public_url: &PublicUrl) -> NewC
         metadata_expires_at: None,
         registration_access_token_hash: None,
         registration_source: crate::model::ClientSource::Static,
+        organization: crate::model::OrgClientPolicy::Off,
     }
 }
 
@@ -647,6 +649,7 @@ mod tests {
             metadata_expires_at: None,
             registration_access_token_hash: None,
             registration_source: crate::model::ClientSource::Static,
+            organization: crate::model::OrgClientPolicy::Off,
         }
     }
 
@@ -775,6 +778,7 @@ mod tests {
             metadata_expires_at: None,
             registration_access_token_hash: None,
             registration_source: crate::model::ClientSource::Static,
+            organization: crate::model::OrgClientPolicy::Off,
         };
         let expected_secret = secret.expose_secret().to_owned();
         let r = setup_outcome(SetupOutcome::Completed { user, client }, secret).unwrap();

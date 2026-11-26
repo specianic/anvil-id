@@ -15,6 +15,7 @@ use super::client::{
     ApplicationType, ClientAuthMethod, ClientType, ConsentMode, GrantType, TokenFormat,
 };
 use super::connection::ConnectionConfig;
+use super::organization::OrgClientPolicy;
 use super::tenant::{MfaPolicy, TenantSettings};
 use super::webhook::WebhookEventType;
 use crate::error::CoreError;
@@ -130,13 +131,18 @@ pub struct ClientSection {
     pub allowed_resources: Vec<String>,
     #[serde(default)]
     pub mfa_policy: Option<MfaPolicy>,
+    /// Organization policy; omitted when `off`.
+    #[serde(default, skip_serializing_if = "OrgClientPolicy::is_off")]
+    pub organization: OrgClientPolicy,
 }
 
 fn default_true() -> bool {
     true
 }
 
-/// An upstream identity-provider connection, keyed by slug.
+/// An upstream identity-provider connection, keyed by slug. Tenant connections only: an
+/// organization's connections are org-owned runtime state and never part of the document
+/// (export, plan and prune exclude them).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConnectionSection {
@@ -164,7 +170,7 @@ pub struct BrandingSection {
     pub custom_css: Option<String>,
 }
 
-/// A role, keyed by name.
+/// A role, keyed by name. Tenant roles only: org-owned roles are never part of the document.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RoleSection {

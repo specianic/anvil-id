@@ -451,6 +451,7 @@ mod tests {
             trust_email_verified: trust,
             created_at: OffsetDateTime::UNIX_EPOCH,
             updated_at: OffsetDateTime::UNIX_EPOCH,
+            org_id: None,
         }
     }
 

@@ -93,6 +93,10 @@ pub enum CoreError {
     Conflict(String),
     #[error("forbidden")]
     Forbidden,
+    /// The operator has not enabled this feature (e.g. the experimental SAML service). The name
+    /// is a stable feature key, safe to show.
+    #[error("feature disabled: {0}")]
+    FeatureDisabled(&'static str),
     /// Load shedding (e.g. the password hashing queue is full).
     #[error("overloaded")]
     Overloaded,
@@ -136,6 +140,7 @@ impl CoreError {
             Self::NotFound => "not_found",
             Self::Conflict(_) => "conflict",
             Self::Forbidden => "forbidden",
+            Self::FeatureDisabled(_) => "feature_disabled",
             Self::Overloaded => "temporarily_unavailable",
             Self::Internal(_) | Self::Storage(_) => "server_error",
         }
@@ -145,7 +150,7 @@ impl CoreError {
     pub fn http_status(&self) -> u16 {
         match self {
             Self::InvalidClient { .. } | Self::InvalidToken(_) => 401,
-            Self::InsufficientScope(_) | Self::Forbidden => 403,
+            Self::InsufficientScope(_) | Self::Forbidden | Self::FeatureDisabled(_) => 403,
             Self::NotFound => 404,
             Self::Conflict(_) | Self::LastAdministrator => 409,
             Self::Validation { .. } => 422,
@@ -212,6 +217,9 @@ impl CoreError {
             }
             Self::NotFound => "not found".to_owned(),
             Self::Forbidden => "forbidden".to_owned(),
+            Self::FeatureDisabled(feature) => {
+                format!("the {feature} feature is not enabled on this server")
+            }
             Self::Overloaded => "the server is temporarily overloaded, retry later".to_owned(),
             Self::Internal(_) | Self::Storage(_) => "internal server error".to_owned(),
         }
@@ -293,6 +301,7 @@ mod tests {
             (CoreError::NotFound, "not_found", 404),
             (CoreError::Conflict(s("x")), "conflict", 409),
             (CoreError::Forbidden, "forbidden", 403),
+            (CoreError::FeatureDisabled("saml"), "feature_disabled", 403),
             (CoreError::Overloaded, "temporarily_unavailable", 503),
             (
                 CoreError::InvalidClientMetadata(s("x")),

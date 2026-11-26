@@ -103,6 +103,19 @@ v7_id!(
     /// Identifier of an initial access token for dynamic client registration (RFC 7591 §3).
     InitialAccessTokenId
 );
+v7_id!(
+    /// Identifier of an organization (a business customer inside a tenant).
+    OrgId
+);
+v7_id!(
+    /// Identifier of an organization invitation.
+    OrgInvitationId
+);
+v7_id!(
+    /// Identifier of a domain claimed by an organization (DNS TXT verification, home-realm
+    /// discovery).
+    OrgDomainId
+);
 
 /// SHA-256 hash of a secret (authorization code, refresh token, session cookie, flow CSRF token,
 /// self-service token, setup token, client secret digest). Secrets are stored and looked up only
@@ -219,6 +232,9 @@ mod tests {
         assert_eq!(WebhookEndpointId::new_v7().0.get_version_num(), 7);
         assert_eq!(WebhookDeliveryId::new_v7().0.get_version_num(), 7);
         assert_eq!(InitialAccessTokenId::new_v7().0.get_version_num(), 7);
+        assert_eq!(OrgId::new_v7().0.get_version_num(), 7);
+        assert_eq!(OrgInvitationId::new_v7().0.get_version_num(), 7);
+        assert_eq!(OrgDomainId::new_v7().0.get_version_num(), 7);
     }
 
     #[test]

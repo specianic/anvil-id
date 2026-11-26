@@ -232,11 +232,11 @@ fn logo_of(b: &Branding) -> Option<LogoRef> {
     }
 }
 
-/// The audit target of a scope: `tenant` or `client:{client_id}`.
+/// The audit target of a scope: `tenant`, `client:{client_id}` or `org:{uuid}`.
 fn target(scope: &BrandingScope) -> String {
     match scope {
         BrandingScope::Tenant => "tenant".to_owned(),
-        BrandingScope::Client(_) => scope.scope_key(),
+        BrandingScope::Client(_) | BrandingScope::Org(_) => scope.scope_key(),
     }
 }
 
@@ -572,7 +572,8 @@ impl BrandingService {
             BrandingScope::Tenant => {
                 compose(Some(draft_layer), None, tenant_b.as_ref().and_then(logo_of))?
             }
-            BrandingScope::Client(_) => {
+            // A client or org draft previews on top of the live tenant branding.
+            BrandingScope::Client(_) | BrandingScope::Org(_) => {
                 let client_b = repo.get(tenant, &scope.scope_key()).await?;
                 let logo = client_b
                     .as_ref()

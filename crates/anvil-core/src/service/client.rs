@@ -25,9 +25,9 @@ use crate::clock::Clock;
 use crate::error::CoreError;
 use crate::model::{
     ApplicationType, AuditAction, AuditActor, AuditDetails, AuditOutcome, Client, ClientAuthMethod,
-    ClientId, ClientType, ClientUpdate, ConsentMode, GrantType, MfaPolicy, NewClient, Page,
-    PageRequest, RequestContext, SYSTEM_TENANT_SLUG, Scope, SecretHash, Tenant, TenantId,
-    TenantSettings, TokenFormat,
+    ClientId, ClientType, ClientUpdate, ConsentMode, GrantType, MfaPolicy, NewClient,
+    OrgClientPolicy, Page, PageRequest, RequestContext, SYSTEM_TENANT_SLUG, Scope, SecretHash,
+    Tenant, TenantId, TenantSettings, TokenFormat,
 };
 use crate::oauth::resource::parse_resources;
 use crate::ports::{Storage, StorageError};
@@ -96,6 +96,8 @@ pub struct ClientOptions {
     pub allowed_resources: Vec<String>,
     /// Client MFA policy; `None` = the tenant's. The strictest of tenant and client wins.
     pub mfa_policy: Option<MfaPolicy>,
+    /// Organization policy (`organization` parameter, org claims); default `off`.
+    pub organization: OrgClientPolicy,
 }
 
 /// Partial update of [`ClientOptions`]. `id_token_signed_response_alg: Some(None)` resets the
@@ -113,6 +115,7 @@ pub struct ClientOptionsPatch {
     pub allowed_resources: Option<Vec<String>>,
     /// `Some(None)` falls back to the tenant policy.
     pub mfa_policy: Option<Option<MfaPolicy>>,
+    pub organization: Option<OrgClientPolicy>,
 }
 
 /// A created client. `client_secret` is the plaintext secret, returned exactly once and only for
@@ -365,6 +368,7 @@ fn options_of(client: &Client) -> ClientOptions {
         backchannel_logout_session_required: client.backchannel_logout_session_required,
         allowed_resources: client.allowed_resources.clone(),
         mfa_policy: client.mfa_policy,
+        organization: client.organization,
     }
 }
 
@@ -403,6 +407,7 @@ fn changed_fields(patch: &ClientPatch, options: &ClientOptionsPatch) -> Vec<&'st
     );
     push(options.allowed_resources.is_some(), "allowed_resources");
     push(options.mfa_policy.is_some(), "mfa_policy");
+    push(options.organization.is_some(), "organization");
     f
 }
 
@@ -647,6 +652,7 @@ impl ClientService {
                 crate::model::ClientSource::Static
             },
             registration_access_token_hash: dynamic,
+            organization: options.organization,
         };
         let action = if new.registration_access_token_hash.is_some() {
             AuditAction::ClientRegistered
@@ -830,6 +836,9 @@ impl ClientService {
         if let Some(m) = options.mfa_policy {
             merged_options.mfa_policy = m;
         }
+        if let Some(o) = options.organization {
+            merged_options.organization = o;
+        }
         validate_client_options(&merged, &merged_options, &tenant.settings)?;
         validate_client_phase4(&merged, &merged_options, self.redirect_validator)?;
         let fields = changed_fields(&patch, &options);
@@ -858,6 +867,7 @@ impl ClientService {
             mfa_policy: options.mfa_policy,
             metadata_expires_at: None,
             registration_access_token_hash: None,
+            organization: options.organization,
         };
         let client = self
             .storage

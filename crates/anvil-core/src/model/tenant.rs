@@ -164,6 +164,12 @@ pub struct ClaimMappingSettings {
     pub roles: Option<ClaimRule>,
     /// Default: claim `permissions` in the access token only, not gated by a scope.
     pub permissions: Option<ClaimRule>,
+    /// Roles held in the active organization. Default: claim `org_roles` in the access token,
+    /// ID token and userinfo, gated by scope `roles`.
+    pub org_roles: Option<ClaimRule>,
+    /// Permissions held in the active organization. Default: claim `org_permissions` in the
+    /// access token only, not gated by a scope.
+    pub org_permissions: Option<ClaimRule>,
 }
 
 impl Default for ClaimMappingSettings {
@@ -180,6 +186,20 @@ impl Default for ClaimMappingSettings {
             }),
             permissions: Some(ClaimRule {
                 claim: "permissions".to_owned(),
+                tokens: vec![TokenTarget::AccessToken],
+                scope: None,
+            }),
+            org_roles: Some(ClaimRule {
+                claim: "org_roles".to_owned(),
+                tokens: vec![
+                    TokenTarget::AccessToken,
+                    TokenTarget::IdToken,
+                    TokenTarget::Userinfo,
+                ],
+                scope: Some("roles".to_owned()),
+            }),
+            org_permissions: Some(ClaimRule {
+                claim: "org_permissions".to_owned(),
                 tokens: vec![TokenTarget::AccessToken],
                 scope: None,
             }),
@@ -590,6 +610,36 @@ mod tests {
             serde_json::from_str::<TenantSettings>(&json).unwrap(),
             TenantSettings::default()
         );
+    }
+
+    #[test]
+    fn settings_written_by_0_4_still_parse() {
+        let v04 = r#"{"registration":"open","require_verified_email":false,"signing_algs":["RS256"],"captcha":null,"mfa_policy":"optional","email_otp":false,"magic_link":false,"auto_link":true,"upstream_registration":null,"default_locale":"en","dcr":{"policy":"disabled"},"cimd":{"policy":"disabled"},"claims":{"roles":{"claim":"app_roles","tokens":["access_token"],"scope":null},"permissions":null}}"#;
+        let s: TenantSettings = serde_json::from_str(v04).unwrap();
+        let roles = s.claims.roles.clone().expect("stored roles mapping");
+        assert_eq!(roles.claim, "app_roles");
+        assert_eq!(
+            s.claims.permissions, None,
+            "a disabled mapping stays disabled"
+        );
+        let org_roles = s.claims.org_roles.expect("default org_roles mapping");
+        assert_eq!(org_roles.claim, "org_roles");
+        assert_eq!(org_roles.scope.as_deref(), Some("roles"));
+        assert_eq!(
+            org_roles.tokens,
+            vec![
+                TokenTarget::AccessToken,
+                TokenTarget::IdToken,
+                TokenTarget::Userinfo
+            ]
+        );
+        let org_perms = s
+            .claims
+            .org_permissions
+            .expect("default org_permissions mapping");
+        assert_eq!(org_perms.claim, "org_permissions");
+        assert_eq!(org_perms.tokens, vec![TokenTarget::AccessToken]);
+        assert_eq!(org_perms.scope, None);
     }
 
     #[test]

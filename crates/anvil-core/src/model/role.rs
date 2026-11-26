@@ -1,12 +1,13 @@
 //! Tenant-scoped roles and their permission sets (ADM-05).
 //!
-//! 0.4 is plain role -> permission sets; a fine-grained engine is deferred (D5). `org_id` keeps
-//! the schema ready for Phase 6 org-scoped roles and is always `None` in 0.4.
+//! 0.4 is plain role -> permission sets; a fine-grained engine is deferred (D5). Phase 6 adds
+//! organizations with a hybrid model on one assignment table: a tenant role (`org_id` `None`)
+//! can be assigned tenant-wide or inside one org, and an org-owned role (`org_id` `Some`) can
+//! only be assigned inside its org.
 
 use time::OffsetDateTime;
-use uuid::Uuid;
 
-use super::ids::{RoleId, TenantId};
+use super::ids::{OrgId, RoleId, TenantId, UserId};
 use crate::error::CoreError;
 
 /// Name of the role that grants full administration in the system tenant. System-tenant roles map
@@ -27,8 +28,8 @@ pub const MAX_ROLE_NAME_LEN: usize = 64;
 pub struct Role {
     pub id: RoleId,
     pub tenant_id: TenantId,
-    /// Phase 6 (organizations): always `None` in 0.4.
-    pub org_id: Option<Uuid>,
+    /// `None` = tenant role; `Some` = role owned by that organization.
+    pub org_id: Option<OrgId>,
     /// Unique per tenant (and org); see [`validate_role_name`].
     pub name: String,
     pub description: String,
@@ -42,12 +43,21 @@ pub struct Role {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewRole {
     pub id: RoleId,
-    /// Phase 6 (organizations): always `None` in 0.4.
-    pub org_id: Option<Uuid>,
+    /// `None` = tenant role; `Some` = role owned by that organization.
+    pub org_id: Option<OrgId>,
     pub name: String,
     pub description: String,
     pub permissions: Vec<String>,
     pub created_at: OffsetDateTime,
+}
+
+/// One role assignment: `org_id` `None` = tenant-wide; `Some` = the role holds only while the
+/// user acts in that organization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RoleAssignment {
+    pub role_id: RoleId,
+    pub user_id: UserId,
+    pub org_id: Option<OrgId>,
 }
 
 /// Partial role update; `None` leaves a field unchanged.

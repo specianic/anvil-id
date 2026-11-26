@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use super::ids::{
-    AuthRequestId, CodeHash, SecretHash, SessionId, TenantId, TokenFamilyId, UserId, str_enum,
+    AuthRequestId, CodeHash, OrgId, SecretHash, SessionId, TenantId, TokenFamilyId, UserId,
+    str_enum,
 };
 use crate::error::CoreError;
 use crate::oauth::response_mode::ResponseMode;
@@ -127,6 +128,9 @@ pub struct AuthorizationParams {
     /// RFC 8707 resource indicators (absolute URIs); absent in requests stored by 0.2.
     #[serde(default)]
     pub resource: Vec<String>,
+    /// The requested organization (id or slug); absent in requests stored by 0.4.
+    #[serde(default)]
+    pub organization: Option<String>,
 }
 
 /// A stored authorization request.
@@ -168,6 +172,8 @@ pub struct NewAuthorizationCode {
     pub acr: String,
     pub amr: Vec<String>,
     pub token_family_id: TokenFamilyId,
+    /// The active organization of this authorization (org claims); `None` = no org.
+    pub org_id: Option<OrgId>,
     /// The issuer of the authorization response and of the ID tokens issued from this code.
     /// Recorded on the RP session for back-channel logout.
     pub issuer: String,
@@ -193,6 +199,8 @@ pub struct AuthorizationCode {
     pub acr: String,
     pub amr: Vec<String>,
     pub token_family_id: TokenFamilyId,
+    /// The active organization of this authorization; `None` = no org.
+    pub org_id: Option<OrgId>,
     pub expires_at: OffsetDateTime,
     pub created_at: OffsetDateTime,
 }
@@ -241,6 +249,8 @@ pub struct TokenFamily {
     pub amr: Vec<String>,
     pub session_id: Option<SessionId>,
     pub claims: Option<ClaimsRequest>,
+    /// The active organization; refresh keeps it and recomputes the org claims.
+    pub org_id: Option<OrgId>,
     pub created_at: OffsetDateTime,
     pub absolute_expires_at: OffsetDateTime,
     pub revoked_at: Option<OffsetDateTime>,
@@ -261,6 +271,8 @@ pub struct NewTokenFamily {
     pub amr: Vec<String>,
     pub session_id: Option<SessionId>,
     pub claims: Option<ClaimsRequest>,
+    /// The active organization; `None` = no org.
+    pub org_id: Option<OrgId>,
     pub created_at: OffsetDateTime,
     pub absolute_expires_at: OffsetDateTime,
 }
@@ -325,10 +337,13 @@ pub struct NewAccessToken {
 pub enum ReplayKind {
     /// `jti` of a `private_key_jwt` client assertion.
     ClientAssertionJti,
+    /// Hash of a SAML assertion `ID` (with the IdP entity ID).
+    SamlAssertionId,
 }
 
 str_enum!(ReplayKind {
     ClientAssertionJti => "client_assertion_jti",
+    SamlAssertionId => "saml_assertion_id",
 });
 
 /// Purpose of a self-service token (sent by email).
@@ -418,6 +433,20 @@ mod tests {
         let json = r#"{"redirect_uri":"https://rp/cb","scope":"openid","state":null,"nonce":null,"code_challenge":null,"max_age":null,"login_hint":null,"ui_locales":null,"claims":null}"#;
         let p: AuthorizationParams = serde_json::from_str(json).unwrap();
         assert!(p.resource.is_empty());
+        assert_eq!(p.organization, None);
+    }
+
+    #[test]
+    fn params_stored_by_0_4_parse_without_organization() {
+        let json = r#"{"redirect_uri":"https://rp/cb","scope":"openid","state":"s","nonce":null,"code_challenge":"c","prompt":[],"max_age":null,"login_hint":null,"acr_values":[],"ui_locales":null,"claims":null,"response_mode":"query","resource":["https://api.example"]}"#;
+        let p: AuthorizationParams = serde_json::from_str(json).unwrap();
+        assert_eq!(p.organization, None);
+        assert_eq!(p.resource, vec!["https://api.example".to_owned()]);
+        let mut with_org = p.clone();
+        with_org.organization = Some("acme".into());
+        let round: AuthorizationParams =
+            serde_json::from_str(&serde_json::to_string(&with_org).unwrap()).unwrap();
+        assert_eq!(round, with_org);
     }
 
     #[test]

@@ -912,6 +912,7 @@ mod tests {
             expires_at: now() + Duration::seconds(60),
             created_at: now(),
             resource: vec![],
+            org_id: None,
         }
     }
 
@@ -999,6 +1000,7 @@ mod tests {
             revoked_at: None,
             revoked_reason: None,
             resource: vec![],
+            org_id: None,
         }
     }
 

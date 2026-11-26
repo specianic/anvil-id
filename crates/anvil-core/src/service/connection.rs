@@ -315,6 +315,9 @@ pub fn validate_config(config: &ConnectionConfig) -> Result<(), CoreError> {
         ConnectionConfig::Social(s) => validate_social(s)?,
         ConnectionConfig::Oidc(o) => return validate_oidc(o),
         ConnectionConfig::Oauth2(o) => validate_oauth2(o)?,
+        // TRANSITIONAL(06-17): SAML connections are refused until 06-17 adds the SAML rules
+        // (experimental flag, `SamlConfig::validate`, org scoping).
+        ConnectionConfig::Saml(_) => return Err(CoreError::FeatureDisabled("saml")),
     }
     let probe = Connection {
         id: ConnectionId(uuid::Uuid::nil()),
@@ -327,6 +330,7 @@ pub fn validate_config(config: &ConnectionConfig) -> Result<(), CoreError> {
         trust_email_verified: false,
         created_at: time::OffsetDateTime::UNIX_EPOCH,
         updated_at: time::OffsetDateTime::UNIX_EPOCH,
+        org_id: None,
     };
     providers::resolve(&probe, None)
         .map(|_| ())
@@ -464,6 +468,7 @@ pub fn plan_create(
             secret_enc,
             trust_email_verified: trust,
             created_at: now,
+            org_id: None,
         },
         risk,
     ))
@@ -779,6 +784,7 @@ mod tests {
             trust_email_verified: new.trust_email_verified,
             created_at: new.created_at,
             updated_at: new.created_at,
+            org_id: None,
         }
     }
 

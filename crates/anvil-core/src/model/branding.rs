@@ -4,21 +4,26 @@
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use super::ids::{SecretHash, TenantId};
+use super::ids::{OrgId, SecretHash, TenantId};
 
-/// Which pages a branding record applies to. Client branding overrides tenant branding.
+/// Which pages a branding record applies to. Precedence: client > org > tenant (the most
+/// specific record that exists wins).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum BrandingScope {
     Tenant,
     Client(String),
+    /// Pages shown while a user signs in to an organization.
+    Org(OrgId),
 }
 
 impl BrandingScope {
-    /// The stored key: `""` for the tenant, `client:{client_id}` for a client.
+    /// The stored key: `""` for the tenant, `client:{client_id}` for a client, `org:{uuid}` for
+    /// an organization.
     pub fn scope_key(&self) -> String {
         match self {
             Self::Tenant => String::new(),
             Self::Client(id) => format!("client:{id}"),
+            Self::Org(id) => format!("org:{id}"),
         }
     }
 
@@ -26,6 +31,12 @@ impl BrandingScope {
     pub fn from_key(key: &str) -> Option<Self> {
         if key.is_empty() {
             return Some(Self::Tenant);
+        }
+        if let Some(id) = key.strip_prefix("org:") {
+            return uuid::Uuid::parse_str(id)
+                .ok()
+                .filter(|u| u.hyphenated().to_string() == id)
+                .map(|u| Self::Org(OrgId(u)));
         }
         key.strip_prefix("client:")
             .filter(|id| !id.is_empty())
@@ -134,6 +145,17 @@ mod tests {
         }
         assert_eq!(BrandingScope::from_key("client:"), None);
         assert_eq!(BrandingScope::from_key("org:x"), None);
+        assert_eq!(BrandingScope::from_key("org:"), None);
+        let org = OrgId::new_v7();
+        let scope = BrandingScope::Org(org);
+        assert_eq!(scope.scope_key(), format!("org:{org}"));
+        assert_eq!(BrandingScope::from_key(&scope.scope_key()), Some(scope));
+        assert_eq!(
+            BrandingScope::from_key(&format!("org:{}", org.0.simple())),
+            None,
+            "only the canonical hyphenated form is a key"
+        );
+        assert_eq!(BrandingScope::from_key("other:x"), None);
     }
 
     #[test]

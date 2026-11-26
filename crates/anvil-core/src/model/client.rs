@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use super::ids::{ClientId, SecretHash, TenantId, str_enum};
+use super::organization::OrgClientPolicy;
 use super::registration::ClientSource;
 use super::tenant::MfaPolicy;
 
@@ -139,6 +140,8 @@ pub struct Client {
     pub metadata_expires_at: Option<OffsetDateTime>,
     /// Dynamic clients: hash of the RFC 7592 registration access token; `None` otherwise.
     pub registration_access_token_hash: Option<SecretHash>,
+    /// Organization policy (`organization` parameter, org claims); default `off`.
+    pub organization: OrgClientPolicy,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
 }
@@ -173,6 +176,8 @@ pub struct NewClient {
     pub metadata_expires_at: Option<OffsetDateTime>,
     /// Dynamic clients: hash of the RFC 7592 registration access token; `None` otherwise.
     pub registration_access_token_hash: Option<SecretHash>,
+    /// Organization policy; default `off`.
+    pub organization: OrgClientPolicy,
     pub created_at: OffsetDateTime,
 }
 
@@ -202,6 +207,7 @@ pub struct ClientUpdate {
     pub metadata_expires_at: Option<Option<OffsetDateTime>>,
     /// RFC 7592 token rotation: `Some(None)` clears the hash.
     pub registration_access_token_hash: Option<Option<SecretHash>>,
+    pub organization: Option<OrgClientPolicy>,
 }
 
 #[cfg(test)]
