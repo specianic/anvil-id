@@ -81,7 +81,12 @@ pub(super) fn seal_factor_token(
 }
 
 /// The user a second-factor token names, if it opens for this tenant and flow.
-fn open_factor_token(kek: &Kek, tenant: TenantId, flow: FlowId, token: &str) -> Option<UserId> {
+pub(super) fn open_factor_token(
+    kek: &Kek,
+    tenant: TenantId,
+    flow: FlowId,
+    token: &str,
+) -> Option<UserId> {
     let sealed = b64url_decode(token).ok()?;
     let plain = kek
         .open(FACTOR_TOKEN_PURPOSE, &token_aad(tenant, flow), &sealed)

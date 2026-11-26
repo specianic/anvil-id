@@ -85,7 +85,7 @@ fn token_aad(tenant: TenantId, flow: FlowId) -> Vec<u8> {
 }
 
 /// Seals the limiter subject and the address hash for the email page of `flow`.
-fn seal_email_token(
+pub(super) fn seal_email_token(
     kek: &Kek,
     tenant: TenantId,
     flow: FlowId,
@@ -102,7 +102,7 @@ fn seal_email_token(
 }
 
 /// The subject and address hash an email page token names, if it opens for this tenant and flow.
-fn open_email_token(
+pub(super) fn open_email_token(
     kek: &Kek,
     tenant: TenantId,
     flow: FlowId,
@@ -123,7 +123,7 @@ fn open_email_token(
 
 /// The limiter hash of a normalised address for sends (its own namespace: sends never count
 /// against the password sign-in of the same identifier).
-fn send_ident(email: &str) -> [u8; 32] {
+pub(super) fn send_ident(email: &str) -> [u8; 32] {
     identifier_hash(&format!("email-code:{email}"))
 }
 

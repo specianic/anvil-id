@@ -875,7 +875,7 @@ pub(crate) enum LoginMethod {
 /// The sign-in methods `form` offers in `tenant`, in display order. Pure: the upstream
 /// connections are passed in (`ui::upstream::upstream_buttons` lists them for a bound sign-in
 /// form). Only a form bound to a flow offers passkeys and email sign-in.
-pub(crate) fn login_methods(
+pub(super) fn login_methods(
     form: &FormDescription,
     tenant: &ResolvedTenant,
     upstream: &[UpstreamButton],
@@ -911,6 +911,187 @@ pub(crate) fn login_methods(
         methods.push(LoginMethod::Sso);
     }
     methods
+}
+
+// ---------------------------------------------------------------------------------------------
+// Second renderer support (the headless flow API, `crate::api_flows`)
+// ---------------------------------------------------------------------------------------------
+//
+// The JSON handlers encode the same outcomes as the pages. These helpers expose what the page
+// handlers read from sibling `ui` modules (binding tokens, the lock message, the sign-in
+// methods with upstream connections), so the JSON handlers never re-implement them.
+
+/// What a renderer shows about a flow besides its form.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FlowMeta {
+    pub(crate) kind: FlowKind,
+    pub(crate) expires_at: time::OffsetDateTime,
+    /// The authorization request the flow continues.
+    pub(crate) request: Option<AuthRequestId>,
+}
+
+/// The kind, expiry and authorization request of an unexpired `flow` (through the storage
+/// port; `None` when unknown or expired). Reads only: no binding is checked, nothing is
+/// returned that the caller did not already hold.
+pub(crate) async fn flow_meta(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    flow: FlowId,
+) -> Result<Option<FlowMeta>, CoreError> {
+    let found = state
+        .storage()
+        .flows()
+        .get(tenant.tenant.id, flow, state.clock().now())
+        .await?;
+    Ok(found.map(|f| FlowMeta {
+        kind: f.kind,
+        expires_at: f.expires_at,
+        request: f.auth_request_id,
+    }))
+}
+
+/// The current form of a bound, unexpired engine flow (login, registration, recovery,
+/// verification) without messages, for a renderer that shows a step again (`GET` of the
+/// headless API). Read only: the flow state is not changed and nothing is recorded. One-time
+/// display data (an enrolment secret, recovery codes) is only part of the answer that produced
+/// it. `Ok(None)`: unknown, expired or not an engine flow. A wrong binding is
+/// [`DriveRejection::Binding`].
+pub(crate) async fn current_step(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    flow: FlowId,
+    binding: &FlowBinding<'_>,
+) -> Result<Option<(FormDescription, FlowMeta)>, DriveRejection> {
+    use anvil_core::flow::engine::{FlowEnv, FlowState, current_form};
+    use anvil_core::service::flow::{BindingError, check_binding, email_code_enabled};
+
+    let now = state.clock().now();
+    let Some(stored) = state
+        .storage()
+        .flows()
+        .get(tenant.tenant.id, flow, now)
+        .await
+        .map_err(|e| DriveRejection::Failed(e.into()))?
+    else {
+        return Ok(None);
+    };
+    if !matches!(
+        stored.kind,
+        FlowKind::Login | FlowKind::Registration | FlowKind::Recovery | FlowKind::Verification
+    ) {
+        return Ok(None);
+    }
+    let token = binding.flow_token(state, tenant);
+    match check_binding(&stored, token.as_deref(), binding.csrf(), now) {
+        Ok(()) => {}
+        Err(BindingError::Expired) => return Ok(None),
+        Err(BindingError::Forbidden) => return Err(DriveRejection::Binding),
+    }
+    let flow_state: FlowState = serde_json::from_str(&stored.state).map_err(|e| {
+        DriveRejection::Failed(CoreError::Internal(format!("corrupt flow state: {e}")))
+    })?;
+    if flow_state.kind() != stored.kind {
+        return Err(DriveRejection::Failed(CoreError::Internal(
+            "flow state kind mismatch".into(),
+        )));
+    }
+    let settings = &tenant.tenant.settings;
+    let env = FlowEnv {
+        registration: settings.registration,
+        require_verified_email: settings.require_verified_email,
+        policy: state.config().password_policy,
+        email_code: email_code_enabled(&tenant.tenant),
+    };
+    let form = current_form(&flow_state, Vec::new(), &env);
+    let cx = Cx::without_rp(tenant);
+    let ctx = RequestContext::default();
+    let form = bind_form(form, &cx.flow(tenant, &ctx), stored.id, binding.csrf());
+    Ok(Some((
+        form,
+        FlowMeta {
+            kind: stored.kind,
+            expires_at: stored.expires_at,
+            request: stored.auth_request_id,
+        },
+    )))
+}
+
+/// The sign-in methods `form` offers, with the tenant's upstream connections (the same list the
+/// sign-in page renders its choices from).
+pub(crate) async fn offered_methods(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    loc: &crate::i18n::Locale,
+    form: &FormDescription,
+) -> Vec<LoginMethod> {
+    let upstream = super::upstream::upstream_buttons(state, tenant, loc, form).await;
+    login_methods(form, tenant, &upstream)
+}
+
+/// The caller's active browser session from the session cookie in `jar`.
+pub(crate) async fn session_of(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    jar: &CookieJar,
+) -> Result<Option<BrowserSession>, CoreError> {
+    current_browser_session(state, tenant, jar).await
+}
+
+/// The second-factor binding token for `user` in `flow` (`ui::mfa`); `None` (logged) when
+/// sealing fails.
+pub(crate) fn seal_factor_token(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    flow: FlowId,
+    user: UserId,
+) -> Option<String> {
+    super::login::factor_token(state, tenant, flow, user)
+}
+
+/// The user a second-factor token names, if it opens for this tenant and flow (`ui::mfa`).
+pub(crate) fn open_factor_token(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    flow: FlowId,
+    token: &str,
+) -> Option<UserId> {
+    super::mfa::open_factor_token(state.kek(), tenant.tenant.id, flow, token)
+}
+
+/// The email step's limiter token (`ui::email_code`): the rate-limit subject and address hash.
+pub(crate) fn seal_email_token(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    flow: FlowId,
+    subject: UserId,
+    ident: &[u8; 32],
+) -> Option<String> {
+    super::email_code::seal_email_token(state.kek(), tenant.tenant.id, flow, subject, ident)
+}
+
+/// The subject and address hash an email step token names (`ui::email_code`).
+pub(crate) fn open_email_token(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    flow: FlowId,
+    token: &str,
+) -> Option<(UserId, [u8; 32])> {
+    super::email_code::open_email_token(state.kek(), tenant.tenant.id, flow, token)
+}
+
+/// The limiter hash of a normalised address for sign-in email sends (`ui::email_code`).
+pub(crate) fn email_send_ident(email: &str) -> [u8; 32] {
+    super::email_code::send_ident(email)
+}
+
+/// The lock message ("try again in N seconds") of a locked form.
+pub(crate) fn lock_message(retry_after: Duration) -> FormMessage {
+    super::login::too_many_attempts(retry_after)
+}
+
+/// `Retry-After` in whole seconds (rounded up, at least 1).
+pub(crate) fn retry_after_secs(retry_after: Duration) -> u64 {
+    super::login::whole_seconds(retry_after)
 }
 
 #[cfg(test)]
