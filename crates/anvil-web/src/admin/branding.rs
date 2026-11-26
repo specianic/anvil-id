@@ -70,6 +70,27 @@ pub fn is_config_document(method: &axum::http::Method, path: &str) -> bool {
     )
 }
 
+/// Largest accepted request body of a user import (07-17): an NDJSON batch of at most
+/// `IMPORT_BATCH_MAX` records. Larger files go through `anvilid users import`, which batches.
+pub const IMPORT_BODY_LIMIT: usize = 1024 * 1024;
+
+/// Whether a request (before tenant resolution) posts a user import batch to the admin API:
+/// exactly `POST /api/admin/v1/tenants/{slug}/users/import`, one segment for the slug (the
+/// query string, `?dry_run=true` etc., is not part of the path).
+pub fn is_user_import(method: &axum::http::Method, path: &str) -> bool {
+    if method != axum::http::Method::POST {
+        return false;
+    }
+    let Some(rest) = path.strip_prefix("/api/admin/v1/tenants/") else {
+        return false;
+    };
+    let mut parts = rest.split('/');
+    matches!(
+        (parts.next(), parts.next(), parts.next(), parts.next()),
+        (Some(slug), Some("users"), Some("import"), None) if !slug.is_empty()
+    )
+}
+
 /// Largest accepted request body of the SAML assertion consumer service (06-18): the IdP's
 /// HTTP-POST binding carries a base64 `samlp:Response`, often larger than [`crate::BODY_LIMIT`].
 pub const SAML_ACS_BODY_LIMIT: usize = 256 * 1024;
@@ -95,7 +116,8 @@ pub fn is_saml_acs(method: &axum::http::Method, path: &str) -> bool {
 
 /// Request body limit layer of the whole application: [`crate::BODY_LIMIT`] for every request,
 /// [`LOGO_BODY_LIMIT`] only for the logo upload, [`CONFIG_BODY_LIMIT`] only for configuration
-/// plan/apply and [`SAML_ACS_BODY_LIMIT`] only for the SAML ACS. Both the stream limit (`RequestBodyLimit`, 413 up front for a larger
+/// plan/apply, [`IMPORT_BODY_LIMIT`] only for the user import and [`SAML_ACS_BODY_LIMIT`] only
+/// for the SAML ACS. Both the stream limit (`RequestBodyLimit`, 413 up front for a larger
 /// `Content-Length`) and the extractor limit (`DefaultBodyLimit`) are set per request, so no
 /// other route accepts more than before. The size check runs before admin authentication, as for
 /// every route.
@@ -109,6 +131,8 @@ pub(crate) async fn body_limit(
         LOGO_BODY_LIMIT
     } else if is_config_document(req.method(), path) {
         CONFIG_BODY_LIMIT
+    } else if is_user_import(req.method(), path) {
+        IMPORT_BODY_LIMIT
     } else if is_saml_acs(req.method(), path) {
         SAML_ACS_BODY_LIMIT
     } else {
@@ -1250,5 +1274,41 @@ mod tests {
         ] {
             assert!(!is_config_document(&Method::POST, p), "{p}");
         }
+    }
+
+    #[test]
+    fn user_import_paths() {
+        for p in [
+            "/api/admin/v1/tenants/default/users/import",
+            "/api/admin/v1/tenants/acme/users/import",
+        ] {
+            assert!(is_user_import(&Method::POST, p), "{p}");
+            for m in [Method::GET, Method::PUT, Method::PATCH, Method::DELETE] {
+                assert!(!is_user_import(&m, p), "{m} {p}");
+            }
+        }
+        for p in [
+            "/api/admin/v1/tenants/default/users",
+            "/api/admin/v1/tenants/default/users/export",
+            "/api/admin/v1/tenants/default/users/import/x",
+            "/api/admin/v1/tenants/default/users/importx",
+            "/api/admin/v1/tenants//users/import",
+            "/api/admin/v1/tenants/a/b/users/import",
+            "/api/admin/v1/tenants/users/import",
+            "/api/admin/v1/tenants/default/clients/import",
+            "/api/admin/v2/tenants/default/users/import",
+            "/t/default/api/admin/v1/tenants/default/users/import",
+        ] {
+            assert!(!is_user_import(&Method::POST, p), "{p}");
+        }
+        // Every other route keeps the default limit: none of the other branches matches.
+        for p in [
+            "/api/admin/v1/tenants/default/users",
+            "/api/admin/v1/tenants/default/users/import/x",
+        ] {
+            assert!(!is_logo_upload(p) && !is_config_document(&Method::POST, p));
+            assert!(!is_saml_acs(&Method::POST, p));
+        }
+        assert!(IMPORT_BODY_LIMIT > crate::BODY_LIMIT);
     }
 }
