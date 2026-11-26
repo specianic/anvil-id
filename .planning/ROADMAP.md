@@ -278,7 +278,7 @@ Plans:
 - [ ] 06-29-PLAN.md — Gap: admin API per-user organizations + listUsers ?email=, console on them, connection page uses SecretRotation (wave 8)
 - [ ] 06-30-PLAN.md — Gap: remove forwarding effective_policy, stale contract comments, Cargo.lock-based single aws-lc check (wave 8)
 - [ ] 06-31-PLAN.md — Gap: invitation return-to after sign-in (allowlisted, sealed), sign-in after invitation registration, docs (wave 9)
-- [ ] 06-26-PLAN.md — Phase gate: security map (incl. gap-plan tests), plaintext scan, just ci, version 1.0.0-beta.1 + migration pins, requirements; owner checkpoint (push + Q8 tags); all workflows green (wave 10)
+- [x] 06-26-PLAN.md — Phase gate: security map (incl. gap-plan tests), plaintext scan, just ci, version 1.0.0-beta.1 + migration pins, requirements; owner checkpoint (push + Q8 tags); all workflows green (wave 10)
 - [ ] 06-27-PLAN.md — Prerelease v1.0.0-beta.1 after owner sign-off (v0.3.0/v0.4.0 tagged first; 1.0.0 ships in Phase 7) (wave 11)
 
 ### Phase 7: Release 1.0 "Credible for business" (Certification and release)
