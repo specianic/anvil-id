@@ -3,7 +3,8 @@
 //! and the org-admin principal of decision Q1 (isolation to its own org and tenant, audience,
 //! scope, org binding, live membership and permission, opaque tokens refused), direct member
 //! adds refused for org admins, the last-org-admin lockout with the tenant-admin recovery path,
-//! and invitation privacy.
+//! and invitation privacy. Plan 06-29: the per-user membership list and the listUsers email
+//! lookup are tenant-administrator routes (org admin tokens and foreign scopes refused).
 
 mod admin_support;
 mod support;
@@ -1121,4 +1122,88 @@ async fn invitation_list_never_exposes_token_or_hash() {
             assert!(!body.contains(&b64), "{body}");
         }
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Per-user memberships and the email lookup (06-29)
+// ---------------------------------------------------------------------------------------------
+
+/// An org admin's token is not a system-tenant token, so the tenant-level extractor refuses it
+/// with 401 before any scope check (the same answer as every other tenant route).
+#[tokio::test]
+async fn org_admin_token_refused_for_user_organizations() {
+    let app = app().await;
+    let tenant = default_tenant(&app);
+    let f = org_with_admin(&app, &tenant, "acme", "admin@example.test").await;
+    // Even for their own memberships, and for another member of their org.
+    let peer = seed_user(&app, tenant.id, "peer@example.test").await;
+    add_member(&app, tenant.id, f.org.id, peer.id, &[]).await;
+    for user in [f.admin.id, peer.id] {
+        let path = format!("{API}/tenants/default/users/{user}/organizations");
+        let resp = call(&app, Method::GET, &path, Some(&f.token), None).await;
+        assert_problem(&resp, 401);
+    }
+}
+
+#[tokio::test]
+async fn org_admin_token_refused_for_user_email_lookup() {
+    let app = app().await;
+    let tenant = default_tenant(&app);
+    let f = org_with_admin(&app, &tenant, "acme", "admin@example.test").await;
+    let path = format!("{API}/tenants/default/users?email=admin@example.test");
+    let resp = call(&app, Method::GET, &path, Some(&f.token), None).await;
+    let body = assert_problem(&resp, 401);
+    assert!(!body.to_string().contains(&f.admin.id.to_string()));
+}
+
+#[tokio::test]
+async fn user_organizations_requires_users_or_admin_read_scope() {
+    let app = app().await;
+    let tenant = default_tenant(&app);
+    let org = create_org(&app, tenant.id, "acme").await;
+    let user = seed_user(&app, tenant.id, "ada@example.test").await;
+    add_member(&app, tenant.id, org.id, user.id, &[]).await;
+    let path = format!("{API}/tenants/default/users/{}/organizations", user.id);
+    let resp = call(&app, Method::GET, &path, None, None).await;
+    assert_problem(&resp, 401);
+    assert!(resp.header("www-authenticate").is_some());
+    for scope in [
+        "admin:clients:read",
+        "admin:clients:write admin:settings:write admin:sessions:write",
+    ] {
+        let token = admin_token(&app, scope).await;
+        let resp = call(&app, Method::GET, &path, Some(&token), None).await;
+        let body = assert_problem(&resp, 403);
+        assert!(!body.to_string().contains("acme"), "{scope}: {body}");
+    }
+    for scope in [
+        "admin:users:read",
+        "admin:users:write",
+        "admin:organizations:read",
+        "admin:organizations:write",
+        "admin:read",
+        "admin:write",
+    ] {
+        let token = admin_token(&app, scope).await;
+        let resp = call(&app, Method::GET, &path, Some(&token), None).await;
+        assert_eq!(resp.status, 200, "{scope}: {}", resp.text());
+    }
+}
+
+#[tokio::test]
+async fn user_email_lookup_requires_users_read_scope() {
+    let app = app().await;
+    let tenant = default_tenant(&app);
+    seed_user(&app, tenant.id, "ada@example.test").await;
+    let path = format!("{API}/tenants/default/users?email=ada@example.test");
+    for scope in ["admin:clients:read", "admin:organizations:write"] {
+        let token = admin_token(&app, scope).await;
+        let resp = call(&app, Method::GET, &path, Some(&token), None).await;
+        let body = assert_problem(&resp, 403);
+        assert!(!body.to_string().contains("ada@"), "{scope}: {body}");
+    }
+    let token = admin_token(&app, "admin:users:read").await;
+    let resp = call(&app, Method::GET, &path, Some(&token), None).await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_eq!(body_json(&resp)["items"][0]["email"], "ada@example.test");
 }

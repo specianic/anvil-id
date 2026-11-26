@@ -1129,7 +1129,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List the users of a tenant. */
+        /**
+         * List the users of a tenant, or look one up by email address (`?email=`: at most one item, no
+         *     `next_cursor`; combining it with `after` is a 422).
+         */
         get: operations["listUsers"];
         put?: never;
         /** Create a user with a password, or invite them by email. */
@@ -1212,6 +1215,27 @@ export interface paths {
          *     be removed here.
          */
         delete: operations["deleteUserCredential"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/users/{user_id}/organizations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the organizations a user is a member of, with the roles the user holds in each (tenant
+         *     administrators only; org admin tokens are refused). Readable with the users or the
+         *     organizations read scope.
+         */
+        get: operations["listUserOrganizations"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -3120,6 +3144,16 @@ export interface components {
              * @description Present if and only if more items follow.
              */
             next_cursor?: string | null;
+        };
+        /** @description The organizations a user is a member of, in slug order (not paged). */
+        UserOrganizationList: {
+            items: components["schemas"]["UserOrganizationView"][];
+        };
+        /** @description One membership of a user: the organization and the roles the user holds in it. */
+        UserOrganizationView: {
+            organization: components["schemas"]["OrganizationView"];
+            /** @description The user's roles in this org (org-owned and tenant roles assigned there), in name order. */
+            roles: components["schemas"]["OrgRoleView"][];
         };
         /**
          * @description Whether a user may sign in.
@@ -9217,10 +9251,15 @@ export interface operations {
     listUsers: {
         parameters: {
             query?: {
-                /** @description Return items after this id (the previous page's `next_cursor`). */
+                /** @description Return items after this id (the previous page's `next_cursor`). Not allowed with `email`. */
                 after?: string;
                 /** @description Page size, 1 to 200 (default 50). */
                 limit?: number;
+                /**
+                 * @description Exact address, case-insensitive (trimmed and lowercased before comparing); returns at most
+                 *     one user and no `next_cursor`. A malformed address is a 422 on `email`.
+                 */
+                email?: string;
             };
             header?: never;
             path: {
@@ -9231,7 +9270,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description One page of users */
+            /** @description One page of users, or the user with the given email (0 or 1 items) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -9748,6 +9787,58 @@ export interface operations {
                 };
             };
             /** @description Unknown tenant, user or credential (or a password) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listUserOrganizations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description User id */
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The user's memberships, in organization slug order */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserOrganizationList"];
+                };
+            };
+            /** @description Missing or invalid access token (org admin tokens included) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or user */
             404: {
                 headers: {
                     [name: string]: unknown;

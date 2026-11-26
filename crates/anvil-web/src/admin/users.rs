@@ -11,7 +11,9 @@ use axum::response::Response;
 use super::auth::{
     AdminAuth, AdminJson, AdminQuery, AdminResult, created, json, no_content, page_request,
 };
-use super::dto::{CreateUser, CredentialList, ListQuery, Problem, UpdateUser, UserList, UserView};
+use super::dto::{
+    CreateUser, CredentialList, ListQuery, Problem, UpdateUser, UserList, UserListQuery, UserView,
+};
 use crate::request_context::AuditContext;
 use crate::state::AppState;
 
@@ -33,15 +35,16 @@ fn user_id(raw: &str) -> AdminResult<UserId> {
         .map_err(|_| CoreError::NotFound.into())
 }
 
-/// List the users of a tenant.
+/// List the users of a tenant, or look one up by email address (`?email=`: at most one item, no
+/// `next_cursor`; combining it with `after` is a 422).
 #[utoipa::path(
     get,
     path = "/api/admin/v1/tenants/{slug}/users",
     tag = "users",
     operation_id = "listUsers",
-    params(("slug" = String, Path, description = "Tenant slug"), ListQuery),
+    params(("slug" = String, Path, description = "Tenant slug"), UserListQuery),
     responses(
-        (status = 200, description = "One page of users", body = UserList),
+        (status = 200, description = "One page of users, or the user with the given email (0 or 1 items)", body = UserList),
         (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
         (status = 403, description = "Insufficient scope", body = Problem, content_type = "application/problem+json"),
         (status = 404, description = "Unknown tenant", body = Problem, content_type = "application/problem+json"),
@@ -58,13 +61,32 @@ pub(crate) async fn list_users(
     auth: AdminAuth,
     State(state): State<AppState>,
     Path(slug): Path<String>,
-    AdminQuery(q): AdminQuery<ListQuery>,
+    AdminQuery(q): AdminQuery<UserListQuery>,
 ) -> AdminResult<Response> {
     let tenant = authorize(&state, &auth, &slug, Access::Read).await?;
-    let page = state
-        .admin_users()
-        .list(tenant.id, page_request(q)?)
-        .await?;
+    let page = ListQuery {
+        after: q.after,
+        limit: q.limit,
+    };
+    let page = page_request(page)?;
+    if let Some(email) = q.email {
+        if page.after.is_some() {
+            return Err(CoreError::Validation {
+                field: "after",
+                message: "cannot be combined with email".to_owned(),
+            }
+            .into());
+        }
+        let found = state.admin_users().find_by_email(tenant.id, &email).await?;
+        return Ok(json(
+            StatusCode::OK,
+            &UserList {
+                items: found.into_iter().map(Into::into).collect(),
+                next_cursor: None,
+            },
+        ));
+    }
+    let page = state.admin_users().list(tenant.id, page).await?;
     Ok(json(StatusCode::OK, &UserList::from(page)))
 }
 

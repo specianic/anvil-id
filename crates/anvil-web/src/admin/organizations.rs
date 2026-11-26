@@ -313,6 +313,20 @@ impl From<Vec<Role>> for OrgRoleList {
     }
 }
 
+/// One membership of a user: the organization and the roles the user holds in it.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct UserOrganizationView {
+    pub organization: OrganizationView,
+    /// The user's roles in this org (org-owned and tenant roles assigned there), in name order.
+    pub roles: Vec<OrgRoleView>,
+}
+
+/// The organizations a user is a member of, in slug order (not paged).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct UserOrganizationList {
+    pub items: Vec<UserOrganizationView>,
+}
+
 /// Body of `POST …/{org}/roles`.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
@@ -889,6 +903,63 @@ pub(crate) async fn list_member_roles(
         .member_roles(tenant.id, org.id, user)
         .await?;
     Ok(json(StatusCode::OK, &OrgRoleList::from(roles)))
+}
+
+/// List the organizations a user is a member of, with the roles the user holds in each (tenant
+/// administrators only; org admin tokens are refused). Readable with the users or the
+/// organizations read scope.
+#[utoipa::path(
+    get,
+    path = "/api/admin/v1/tenants/{slug}/users/{user_id}/organizations",
+    tag = "organizations",
+    operation_id = "listUserOrganizations",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("user_id" = uuid::Uuid, Path, description = "User id"),
+    ),
+    responses(
+        (status = 200, description = "The user's memberships, in organization slug order", body = UserOrganizationList),
+        (status = 401, description = "Missing or invalid access token (org admin tokens included)", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant or user", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:users:read"]),
+        ("oauth2" = ["admin:users:write"]),
+        ("oauth2" = ["admin:organizations:read"]),
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:read"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn list_user_organizations(
+    auth: AdminAuth,
+    State(state): State<AppState>,
+    Path((slug, user)): Path<(String, String)>,
+) -> AdminResult<Response> {
+    // Either read scope will do: the users scope (the user's page) or the organizations scope.
+    if let Err(e) = auth.require(Resource::Users, Access::Read) {
+        auth.require(Resource::Organizations, Access::Read)
+            .map_err(|_| e)?;
+    }
+    let tenant = state.admin_tenants().get(&slug).await?;
+    let user = UserId(path_uuid(&user)?);
+    let memberships = state
+        .admin_orgs()
+        .memberships_of_user(tenant.id, user)
+        .await?;
+    Ok(json(
+        StatusCode::OK,
+        &UserOrganizationList {
+            items: memberships
+                .into_iter()
+                .map(|(org, roles)| UserOrganizationView {
+                    organization: org.into(),
+                    roles: roles.into_iter().map(Into::into).collect(),
+                })
+                .collect(),
+        },
+    ))
 }
 
 /// Assign a role to a member within the organization (idempotent). The role is an org-owned role

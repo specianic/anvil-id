@@ -9615,7 +9615,7 @@
         "tags": [
           "users"
         ],
-        "summary": "List the users of a tenant.",
+        "summary": "List the users of a tenant, or look one up by email address (`?email=`: at most one item, no\n`next_cursor`; combining it with `after` is a 422).",
         "operationId": "listUsers",
         "parameters": [
           {
@@ -9630,7 +9630,7 @@
           {
             "name": "after",
             "in": "query",
-            "description": "Return items after this id (the previous page's `next_cursor`).",
+            "description": "Return items after this id (the previous page's `next_cursor`). Not allowed with `email`.",
             "required": false,
             "schema": {
               "type": "string",
@@ -9648,11 +9648,20 @@
               "maximum": 200,
               "minimum": 1
             }
+          },
+          {
+            "name": "email",
+            "in": "query",
+            "description": "Exact address, case-insensitive (trimmed and lowercased before comparing); returns at most\none user and no `next_cursor`. A malformed address is a 422 on `email`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "One page of users",
+            "description": "One page of users, or the user with the given email (0 or 1 items)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10494,6 +10503,110 @@
           {
             "oauth2": [
               "admin:users:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/users/{user_id}/organizations": {
+      "get": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "List the organizations a user is a member of, with the roles the user holds in each (tenant\nadministrators only; org admin tokens are refused). Readable with the users or the\norganizations read scope.",
+        "operationId": "listUserOrganizations",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "User id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The user's memberships, in organization slug order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserOrganizationList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token (org admin tokens included)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or user",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:users:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:users:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:organizations:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:read"
             ]
           },
           {
@@ -16473,6 +16586,41 @@
             ],
             "format": "uuid",
             "description": "Present if and only if more items follow."
+          }
+        }
+      },
+      "UserOrganizationList": {
+        "type": "object",
+        "description": "The organizations a user is a member of, in slug order (not paged).",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UserOrganizationView"
+            }
+          }
+        }
+      },
+      "UserOrganizationView": {
+        "type": "object",
+        "description": "One membership of a user: the organization and the roles the user holds in it.",
+        "required": [
+          "organization",
+          "roles"
+        ],
+        "properties": {
+          "organization": {
+            "$ref": "#/components/schemas/OrganizationView"
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrgRoleView"
+            },
+            "description": "The user's roles in this org (org-owned and tenant roles assigned there), in name order."
           }
         }
       },

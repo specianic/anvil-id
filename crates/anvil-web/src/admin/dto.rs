@@ -337,6 +337,21 @@ pub struct ListQuery {
     pub limit: Option<u32>,
 }
 
+/// Query of `GET /tenants/{slug}/users`: cursor pagination, or a lookup by email address.
+#[derive(Debug, Clone, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+#[serde(deny_unknown_fields)]
+pub struct UserListQuery {
+    /// Return items after this id (the previous page's `next_cursor`). Not allowed with `email`.
+    pub after: Option<Uuid>,
+    /// Page size, 1 to 200 (default 50).
+    #[param(minimum = 1, maximum = 200)]
+    pub limit: Option<u32>,
+    /// Exact address, case-insensitive (trimmed and lowercased before comparing); returns at most
+    /// one user and no `next_cursor`. A malformed address is a 422 on `email`.
+    pub email: Option<String>,
+}
+
 // ---------------------------------------------------------------------------------------------
 // Tenants
 // ---------------------------------------------------------------------------------------------

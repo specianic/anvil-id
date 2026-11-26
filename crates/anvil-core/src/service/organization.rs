@@ -632,6 +632,39 @@ impl OrgService {
         {
             return Err(CoreError::NotFound);
         }
+        self.roles_in_org(tenant, org, user).await
+    }
+
+    /// The orgs `user` is a member of (slug order), each with the roles the user holds in it.
+    /// `NotFound` unless the user exists in the tenant.
+    pub async fn memberships_of_user(
+        &self,
+        tenant: TenantId,
+        user: UserId,
+    ) -> Result<Vec<(Organization, Vec<Role>)>, CoreError> {
+        if self.storage.users().get(tenant, user).await?.is_none() {
+            return Err(CoreError::NotFound);
+        }
+        let orgs = self
+            .storage
+            .organizations()
+            .memberships_of_user(tenant, user)
+            .await?;
+        let mut out = Vec::with_capacity(orgs.len());
+        for org in orgs {
+            let roles = self.roles_in_org(tenant, org.id, user).await?;
+            out.push((org, roles));
+        }
+        Ok(out)
+    }
+
+    /// The one role lookup of a member within an org (org-owned and tenant roles assigned there).
+    async fn roles_in_org(
+        &self,
+        tenant: TenantId,
+        org: OrgId,
+        user: UserId,
+    ) -> Result<Vec<Role>, CoreError> {
         Ok(self
             .storage
             .roles()

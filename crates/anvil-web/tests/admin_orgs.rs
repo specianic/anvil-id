@@ -1,7 +1,8 @@
 //! Organization administration through the management API (ORG-02, plan 06-12): org CRUD,
 //! members, org roles, in-org assignments of tenant and org roles, member removal revoking the
 //! member's org-bound tokens, invitations, and the audit events (with their webhook
-//! classification).
+//! classification). Plan 06-29: the per-user membership list
+//! (`GET /tenants/{slug}/users/{user_id}/organizations`).
 
 mod admin_support;
 mod support;
@@ -17,7 +18,9 @@ use anvil_jose::encoding::{random_token, secret_hash};
 use axum::http::Method;
 use serde_json::{Value, json};
 use support::{TestApp, json as body_json};
-use token_support::{assert_oauth_error, default_tenant, refresh, register, seed_user, web_input};
+use token_support::{
+    acme, assert_oauth_error, default_tenant, refresh, register, seed_user, web_input,
+};
 
 const WRITE: &str = "admin:organizations:write";
 
@@ -704,4 +707,131 @@ async fn org_changes_are_audited_and_webhook_classified() {
             );
         }
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Per-user memberships (06-29)
+// ---------------------------------------------------------------------------------------------
+
+fn user_orgs(tenant: &str, user: impl std::fmt::Display) -> String {
+    format!("{API}/tenants/{tenant}/users/{user}/organizations")
+}
+
+#[tokio::test]
+async fn user_organizations_lists_memberships_with_roles() {
+    let app = app().await;
+    let token = admin_token(&app, "admin:users:read").await;
+    let tenant = default_tenant(&app);
+    // Created out of slug order: the answer is in slug order.
+    let zeta = create_org(&app, tenant, "zeta").await;
+    let alpha = create_org(&app, tenant, "alpha").await;
+    create_org(&app, tenant, "other").await;
+    let editor = create_role(&app, tenant, Some(alpha.id), "editor", &["docs:write"]).await;
+    let viewer = create_role(&app, tenant, None, "viewer", &["docs:read"]).await;
+    let ada = seed_user(&app, tenant, "ada@example.test").await;
+    admin_support::add_member(&app, tenant, alpha.id, ada.id, &[editor.id, viewer.id]).await;
+    admin_support::add_member(&app, tenant, zeta.id, ada.id, &[]).await;
+
+    let resp = call(
+        &app,
+        Method::GET,
+        &user_orgs("default", ada.id),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let items = body_json(&resp)["items"].as_array().unwrap().clone();
+    let slugs: Vec<&str> = items
+        .iter()
+        .map(|i| i["organization"]["slug"].as_str().unwrap())
+        .collect();
+    assert_eq!(slugs, ["alpha", "zeta"], "the non-member org is absent");
+    assert_eq!(items[0]["organization"]["id"], alpha.id.0.to_string());
+    let roles: Vec<(String, String)> = items[0]["roles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            (
+                r["name"].as_str().unwrap().to_owned(),
+                r["scope"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        roles,
+        vec![
+            ("editor".to_owned(), "org".to_owned()),
+            ("viewer".to_owned(), "tenant".to_owned()),
+        ]
+    );
+    assert_eq!(items[1]["roles"], json!([]));
+
+    // The organizations read scope works too.
+    let orgs_read = admin_token(&app, "admin:organizations:read").await;
+    let resp = call(
+        &app,
+        Method::GET,
+        &user_orgs("default", ada.id),
+        Some(&orgs_read),
+        None,
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_eq!(body_json(&resp)["items"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn user_organizations_empty_for_user_without_memberships() {
+    let app = app().await;
+    let token = admin_token(&app, "admin:read").await;
+    let tenant = default_tenant(&app);
+    create_org(&app, tenant, "acme").await;
+    let bob = seed_user(&app, tenant, "bob@example.test").await;
+    let resp = call(
+        &app,
+        Method::GET,
+        &user_orgs("default", bob.id),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_eq!(body_json(&resp), json!({"items": []}));
+}
+
+#[tokio::test]
+async fn user_organizations_unknown_or_foreign_user_is_404() {
+    let app = app().await;
+    let token = admin_token(&app, "admin:read").await;
+    let other = acme(&app).await;
+    let org = create_org(&app, other.id, "foreign-org").await;
+    let foreign = seed_user(&app, other.id, "eve@example.test").await;
+    admin_support::add_member(&app, other.id, org.id, foreign.id, &[]).await;
+
+    for path in [
+        user_orgs("default", uuid::Uuid::now_v7()),
+        user_orgs("default", "not-a-uuid"),
+        // A user of another tenant, asked through this tenant.
+        user_orgs("default", foreign.id),
+        user_orgs("no-such-tenant", foreign.id),
+    ] {
+        let resp = call(&app, Method::GET, &path, Some(&token), None).await;
+        assert_problem(&resp, 404);
+    }
+    // Through its own tenant the same user is found.
+    let resp = call(
+        &app,
+        Method::GET,
+        &user_orgs("acme", foreign.id),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_eq!(
+        body_json(&resp)["items"][0]["organization"]["slug"],
+        "foreign-org"
+    );
 }

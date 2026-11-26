@@ -318,6 +318,17 @@ impl UserService {
         Ok(self.storage.users().list(tenant, admin_page(page)).await?)
     }
 
+    /// The user with this address, compared after normalisation (trimmed, lowercased); a
+    /// malformed address is a `Validation` error on `email`.
+    pub async fn find_by_email(
+        &self,
+        tenant: TenantId,
+        raw: &str,
+    ) -> Result<Option<User>, CoreError> {
+        let email = normalize_email(raw)?;
+        Ok(self.storage.users().get_by_email(tenant, &email).await?)
+    }
+
     /// Applies a patch (including block/unblock through `status`). Audited as `user_updated`
     /// with the changed field names. Blocking the last active `admin:write` holder of the system
     /// tenant is refused with `LastAdministrator`.

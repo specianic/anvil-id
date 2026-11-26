@@ -183,6 +183,7 @@ fn api_router() -> OpenApiRouter<AppState> {
             users::delete_user
         ))
         .routes(routes!(users::list_user_credentials))
+        .routes(routes!(organizations::list_user_organizations))
         .routes(routes!(users::delete_user_credential))
         .routes(routes!(sessions::list_sessions))
         .routes(routes!(sessions::revoke_session))

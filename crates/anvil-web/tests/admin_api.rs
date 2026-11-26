@@ -741,3 +741,82 @@ async fn admin_client_token_from_the_token_endpoint_works_and_rotation_revokes_t
     let resp = cc_token(&app, "/t/system", &client_id, &new_secret).await;
     assert_eq!(resp.status, 200, "{}", resp.text());
 }
+
+// ---------------------------------------------------------------------------------------------
+// listUsers ?email= (06-29)
+// ---------------------------------------------------------------------------------------------
+
+async fn create_user_with_email(app: &TestApp, t: &str, email: &str) -> String {
+    let resp = call(
+        app,
+        Method::POST,
+        &format!("{API}/tenants/default/users"),
+        Some(t),
+        Some(json!({"email": email, "invite": true})),
+    )
+    .await;
+    assert_eq!(resp.status, 201, "{}", resp.text());
+    body_json(&resp)["id"].as_str().unwrap().to_owned()
+}
+
+#[tokio::test]
+async fn list_users_email_filter_returns_the_user() {
+    let (app, t) = app_and_token().await;
+    let alice = create_user_with_email(&app, &t, "alice@example.com").await;
+    create_user_with_email(&app, &t, "bob@example.com").await;
+    let resp = call(
+        &app,
+        Method::GET,
+        &format!("{API}/tenants/default/users?email=%20Alice@Example.COM&limit=1"),
+        Some(&t),
+        None,
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let page = body_json(&resp);
+    let items = page["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["id"], alice);
+    assert_eq!(items[0]["email"], "alice@example.com");
+    assert_eq!(page["next_cursor"], Value::Null);
+}
+
+#[tokio::test]
+async fn list_users_email_filter_unknown_returns_empty_page() {
+    let (app, t) = app_and_token().await;
+    create_user_with_email(&app, &t, "alice@example.com").await;
+    let resp = call(
+        &app,
+        Method::GET,
+        &format!("{API}/tenants/default/users?email=nobody@example.com"),
+        Some(&t),
+        None,
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_eq!(body_json(&resp), json!({"items": [], "next_cursor": null}));
+}
+
+#[tokio::test]
+async fn list_users_email_filter_rejects_malformed_and_after() {
+    let (app, t) = app_and_token().await;
+    create_user_with_email(&app, &t, "alice@example.com").await;
+    let with_after = format!("email=alice@example.com&after={}", uuid::Uuid::now_v7());
+    for (q, field) in [
+        ("email=not-an-address", "email"),
+        ("email=a@b@c", "email"),
+        ("email=", "email"),
+        ("email=a%20b@example.com", "email"),
+        (with_after.as_str(), "after"),
+    ] {
+        let resp = call(
+            &app,
+            Method::GET,
+            &format!("{API}/tenants/default/users?{q}"),
+            Some(&t),
+            None,
+        )
+        .await;
+        assert_field_error(&resp, field);
+    }
+}
