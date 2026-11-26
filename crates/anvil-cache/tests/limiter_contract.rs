@@ -350,26 +350,29 @@ async fn redis_outage_auth_and_gate_fail_closed_breaker_skips_then_recovers() {
     assert_eq!(capture.errors("check", "error"), 1);
     assert_eq!(*log.lock().unwrap(), vec![BackendHealth::Degraded]);
 
-    // Within the cool-down Redis is not touched at all (breaker), and still fails closed.
+    // Within the cool-down Redis is not touched at all (breaker), and still fails closed. The
+    // proof is exact rather than a wall-clock bound (a scheduler stall on a shared runner is not a
+    // Redis contact): a call that reached the paused Redis would time out, count `error` and
+    // re-open the breaker from the fake clock's current instant, so its denial would carry the
+    // full cool-down. Both calls instead deny with the rest of the original window, count only
+    // `breaker_open`, and the error count stays at the single first failure.
     clock.advance(Duration::from_secs(1));
-    let started = Instant::now();
+    let rest_of_window = BREAKER_COOL_DOWN - Duration::from_secs(1);
     assert_eq!(
         l.check(RouteClass::Auth, &ip(3)).await,
         Decision::Deny {
-            retry_after: BREAKER_COOL_DOWN - Duration::from_secs(1)
+            retry_after: rest_of_window
         }
     );
-    assert!(matches!(
+    assert_eq!(
         l.brute_force_gate(&strict(tenant, 1), &loose(tenant, 1), true)
             .await,
-        Decision::Deny { .. }
-    ));
-    assert!(
-        started.elapsed() < Duration::from_millis(40),
-        "{:?}",
-        started.elapsed()
+        Decision::Deny {
+            retry_after: rest_of_window
+        }
     );
     assert_eq!(capture.errors("check", "error"), 1);
+    assert_eq!(capture.errors("brute_force_gate", "error"), 0);
     assert_eq!(capture.errors("check", "breaker_open"), 1);
     assert_eq!(capture.errors("brute_force_gate", "breaker_open"), 1);
 
