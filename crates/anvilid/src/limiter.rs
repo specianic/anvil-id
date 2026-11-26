@@ -19,8 +19,6 @@ use anvil_cache::limiter::{
 use anvil_core::ports::Clock;
 use anvil_jose::Kek;
 use anyhow::anyhow;
-use rustls::crypto::tls13::OkmBlock;
-use rustls::{SupportedCipherSuite, Tls13CipherSuite};
 use secrecy::ExposeSecret;
 
 use crate::config::{Config, RedisFailure};
@@ -89,30 +87,11 @@ fn health_logger() -> HealthObserver {
     })
 }
 
-/// HMAC-SHA-256 keyed with `kek.derive_key(RATELIMIT_KEY_INFO)`.
-///
-/// The HMAC comes from the binary's TLS crypto provider (aws-lc-rs through rustls): the TLS 1.3
-/// SHA-256 suite's HKDF provider exposes HMAC-SHA-256 over an arbitrary key, so the binary needs
-/// no second crypto dependency.
+/// HMAC-SHA-256 keyed with `kek.derive_key(RATELIMIT_KEY_INFO)`, via `anvil_jose::hmac_sha256`
+/// (the workspace's one HMAC). The derived secret lives (zeroizing) in the closure.
 fn key_hasher(kek: &Kek) -> KeyHasher {
     let secret = kek.derive_key(RATELIMIT_KEY_INFO);
-    let key = OkmBlock::new(secret.as_ref());
-    let suite = sha256_suite();
-    Arc::new(move |bytes: &[u8]| {
-        let tag = suite.hkdf_provider.hmac_sign(&key, bytes);
-        let mut out = [0u8; 32];
-        out.copy_from_slice(tag.as_ref());
-        out
-    })
-}
-
-fn sha256_suite() -> &'static Tls13CipherSuite {
-    match rustls::crypto::aws_lc_rs::cipher_suite::TLS13_AES_128_GCM_SHA256 {
-        SupportedCipherSuite::Tls13(suite) => suite,
-        SupportedCipherSuite::Tls12(_) => {
-            unreachable!("TLS13_AES_128_GCM_SHA256 is a TLS 1.3 suite")
-        }
-    }
+    Arc::new(move |bytes: &[u8]| anvil_jose::hmac_sha256(secret.as_ref(), &[bytes]))
 }
 
 #[cfg(test)]
@@ -170,28 +149,13 @@ mod tests {
     }
 
     #[test]
-    fn hmac_sha256_matches_rfc_4231_test_case_2() {
-        let key = OkmBlock::new(b"Jefe");
-        let tag = sha256_suite()
-            .hkdf_provider
-            .hmac_sign(&key, b"what do ya want for nothing?");
-        let hex: String = tag.as_ref().iter().map(|b| format!("{b:02x}")).collect();
-        assert_eq!(
-            hex,
-            "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
-        );
-    }
-
-    #[test]
     fn key_hasher_is_hmac_under_the_derived_ratelimit_key() {
         let kek = Kek::from_bytes(&[7u8; 32]).expect("kek");
         let canon = canonical(&LimitKey::Ip("192.0.2.1".parse().expect("ip")));
         let hashed = key_hasher(&kek)(&canon);
         let derived = kek.derive_key(RATELIMIT_KEY_INFO);
-        let expected = sha256_suite()
-            .hkdf_provider
-            .hmac_sign(&OkmBlock::new(derived.as_ref()), &canon);
-        assert_eq!(hashed.as_slice(), expected.as_ref());
+        let expected = anvil_jose::hmac_sha256(derived.as_ref(), &[&canon]);
+        assert_eq!(hashed, expected);
         // Stable per KEK, different under another KEK, never the bare derived key.
         assert_eq!(hashed, key_hasher(&kek)(&canon));
         let other = Kek::from_bytes(&[8u8; 32]).expect("kek");

@@ -6,10 +6,10 @@
 //! to the flow it was sent for and a database dump alone cannot be brute-forced offline over the
 //! small code space. Same structure as [`crate::recovery_code::recovery_code_hash`].
 
-use aws_lc_rs::hmac;
 use zeroize::Zeroizing;
 
 use crate::encoding::random_bytes;
+use crate::hmac::hmac_sha256;
 use crate::kek::Kek;
 
 /// HKDF info string for the email-code pepper.
@@ -49,20 +49,17 @@ pub fn normalize_email_code(input: &str) -> Option<String> {
 #[must_use]
 pub fn email_code_hash(kek: &Kek, flow_id: &str, code: &str) -> [u8; 32] {
     let pepper = kek.derive_key(EMAIL_OTP_PEPPER_INFO);
-    let key = hmac::Key::new(hmac::HMAC_SHA256, pepper.as_ref());
-    let mut ctx = hmac::Context::with_key(&key);
-    ctx.update(flow_id.as_bytes());
-    ctx.update(&[0u8]);
-    ctx.update(code.as_bytes());
-    let tag = ctx.sign();
-    let mut out = [0u8; 32];
-    out.copy_from_slice(tag.as_ref());
-    out
+    hmac_sha256(
+        pepper.as_ref(),
+        &[flow_id.as_bytes(), &[0u8], code.as_bytes()],
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Independent oracle: aws-lc-rs directly, not crate::hmac_sha256.
+    use aws_lc_rs::hmac;
 
     #[test]
     fn email_code_generation_is_six_digits() {

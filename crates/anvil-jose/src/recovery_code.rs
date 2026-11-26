@@ -9,11 +9,11 @@
 //! (`0`, `1`, `8`, `9` are simply outside the base32 alphabet and rejected); users type what they
 //! were shown.
 
-use aws_lc_rs::hmac;
 use zeroize::Zeroizing;
 
 use crate::JoseError;
 use crate::encoding::random_bytes;
+use crate::hmac::hmac_sha256;
 use crate::kek::Kek;
 
 /// HKDF info string for the recovery-code pepper.
@@ -96,16 +96,14 @@ pub fn normalize_recovery_code(input: &str) -> Result<Zeroizing<String>, JoseErr
 #[must_use]
 pub fn recovery_code_hash(kek: &Kek, normalized: &str) -> [u8; 32] {
     let pepper = kek.derive_key(RECOVERY_CODE_PEPPER_INFO);
-    let key = hmac::Key::new(hmac::HMAC_SHA256, pepper.as_ref());
-    let tag = hmac::sign(&key, normalized.as_bytes());
-    let mut out = [0u8; 32];
-    out.copy_from_slice(tag.as_ref());
-    out
+    hmac_sha256(pepper.as_ref(), &[normalized.as_bytes()])
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Independent oracle: aws-lc-rs directly, not crate::hmac_sha256.
+    use aws_lc_rs::hmac;
 
     #[test]
     fn base32_encoding_vector() {

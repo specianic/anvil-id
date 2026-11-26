@@ -6,6 +6,7 @@
 //! - [`kek`]: AES-256-GCM envelope with HKDF-derived per-purpose keys.
 //! - [`jwk`]: public JWKs, JWK Sets, RFC 7638 thumbprints.
 //! - [`keys`]: RS256/ES256/Ed25519 key generation and JWT signing.
+//! - [`hmac`]: THE HMAC-SHA-256 ([`hmac_sha256`]).
 //! - [`hash`]: per-algorithm `at_hash`/`c_hash`.
 //! - [`otp`]: TOTP secrets, `otpauth://` URIs and code checks (totp-rs).
 //! - [`recovery_code`]: MFA recovery-code generation, normalisation and peppered hashing.
@@ -24,6 +25,7 @@ pub mod email_code;
 pub mod encoding;
 pub mod error;
 pub mod hash;
+pub mod hmac;
 pub mod jwk;
 pub mod jws;
 pub mod kek;
@@ -41,6 +43,7 @@ pub use email_code::{
 };
 pub use error::JoseError;
 pub use hash::token_hash;
+pub use hmac::hmac_sha256;
 pub use jwk::{Jwk, Jwks, thumbprint};
 pub use jws::{JoseHeader, VerifiedJwt, decode_header, verify_jwt};
 pub use kek::Kek;

@@ -5,13 +5,14 @@
 //! - Secret: `whsec_` + base64 of the key bytes. The HMAC key is the decoded part, never the
 //!   string itself. AnvilID generates 32-byte keys; the spec allows 24 to 64 bytes.
 //!
-//! aws-lc-rs HMAC and the workspace's single base64 implementation ([`crate::encoding`]).
+//! The workspace's single HMAC-SHA-256 ([`crate::hmac_sha256`]) and single base64
+//! implementation ([`crate::encoding`]).
 
-use aws_lc_rs::hmac;
 use zeroize::Zeroizing;
 
 use crate::JoseError;
 use crate::encoding::{b64std, b64std_decode, random_bytes};
+use crate::hmac::hmac_sha256;
 
 /// Prefix of a Standard Webhooks signing secret.
 pub const WEBHOOK_SECRET_PREFIX: &str = "whsec_";
@@ -31,14 +32,12 @@ pub const WEBHOOK_SECRET_MAX_BYTES: usize = 64;
 /// unix seconds and `body` the exact bytes sent.
 #[must_use]
 pub fn signature_v1(secret: &[u8], msg_id: &str, ts: i64, body: &[u8]) -> String {
-    let key = hmac::Key::new(hmac::HMAC_SHA256, secret);
-    let mut ctx = hmac::Context::with_key(&key);
-    ctx.update(msg_id.as_bytes());
-    ctx.update(b".");
-    ctx.update(ts.to_string().as_bytes());
-    ctx.update(b".");
-    ctx.update(body);
-    format!("v1,{}", b64std(ctx.sign().as_ref()))
+    let ts = ts.to_string();
+    let tag = hmac_sha256(
+        secret,
+        &[msg_id.as_bytes(), b".", ts.as_bytes(), b".", body],
+    );
+    format!("v1,{}", b64std(&tag))
 }
 
 /// A new signing secret: `whsec_` + base64 of [`WEBHOOK_SECRET_BYTES`] random bytes. Shown to
