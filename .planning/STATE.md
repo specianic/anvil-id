@@ -6,14 +6,14 @@ current_phase: 05
 current_phase_name: release 0 4 operate it
 current_plan: 33
 status: executing
-stopped_at: Completed 06-18-PLAN.md
-last_updated: "2026-11-26T12:06:17.625Z"
+stopped_at: Completed 06-20-PLAN.md
+last_updated: "2026-11-26T12:08:33.471Z"
 last_activity: 2026-11-26
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 162
-  completed_plans: 152
+  completed_plans: 153
   percent: 94
 ---
 
@@ -209,6 +209,7 @@ done before 05-29 tags v0.4.0.
 | Phase 06 P21 | 45min | 2 tasks | 16 files |
 | Phase 06 P19 | 50min | 2 tasks | 8 files |
 | Phase 06 P18 | 75min | 2 tasks | 8 files |
+| Phase 06 P20 | 50min | 2 tasks | 17 files |
 
 ## Accumulated Context
 
@@ -487,6 +488,8 @@ Recent decisions affecting current work:
 - [Phase 06]: 06-19: effective MFA = strictest(tenant, active org, client) once the session user selects an org; during first password login the org is unknown, so a stricter org adds a step-up before the code
 - [Phase 06]: 06-18: SAML ACS consumes the pending request by CAS once the RelayState hash matches, before any XML; DB replay_guard as defence in depth
 - [Phase 06]: 06-18: SAML ACS 256 KiB limit is a branch of the single body-limit middleware (admin/branding.rs)
+- [Phase 06]: 06-20: invitation pages use a browser-bound CSRF (nonce cookie + KEK-derived HMAC over the token); acceptance audits org_invitation_accepted + org_member_added; registration via invite does not sign in
+- [Phase 06]: 06-20: domain re-check is a leased daily job (cutoff 23 h); 7-day failure streak -> pending + org_domain_unverified webhook
 
 ### Pending Todos
 
@@ -499,6 +502,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-26T12:06:17.622Z
-Stopped at: Completed 06-18-PLAN.md
+Last session: 2026-11-26T12:08:33.468Z
+Stopped at: Completed 06-20-PLAN.md
 Resume file: None
