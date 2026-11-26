@@ -12,6 +12,7 @@ export const EMAIL_KIND_LABELS: Record<EmailKind, string> = {
   login_code: "Sign-in code",
   email_change: "Email change confirmation",
   email_changed: "Email changed",
+  org_invitation: "Organization invitation",
 };
 
 export function isEmailKind(value: string): value is EmailKind {

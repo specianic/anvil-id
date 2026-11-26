@@ -7829,7 +7829,25 @@
           "initial_access_token_created",
           "initial_access_token_revoked",
           "tenant_config_applied",
-          "admin_recovery_issued"
+          "admin_recovery_issued",
+          "organization_created",
+          "organization_updated",
+          "organization_deleted",
+          "org_member_added",
+          "org_member_removed",
+          "org_role_assigned",
+          "org_role_unassigned",
+          "org_invitation_created",
+          "org_invitation_revoked",
+          "org_invitation_accepted",
+          "org_domain_created",
+          "org_domain_verified",
+          "org_domain_verification_failed",
+          "org_domain_unverified",
+          "org_domain_updated",
+          "org_domain_deleted",
+          "saml_login_succeeded",
+          "saml_login_failed"
         ]
       },
       "AuditActorView": {
@@ -8607,7 +8625,8 @@
           "microsoft",
           "github",
           "oidc",
-          "oauth2"
+          "oauth2",
+          "saml"
         ]
       },
       "ConnectionList": {
@@ -9134,7 +9153,8 @@
           "recovery_code_used",
           "login_code",
           "email_change",
-          "email_changed"
+          "email_changed",
+          "org_invitation"
         ]
       },
       "EmailTemplateList": {
@@ -11445,6 +11465,12 @@
           "session.created",
           "session.revoked",
           "session.logged_out",
+          "organization.created",
+          "organization.deleted",
+          "organization.member_added",
+          "organization.member_removed",
+          "organization.domain_verified",
+          "organization.domain_unverified",
           "test"
         ]
       }
@@ -11460,6 +11486,8 @@
               "admin:audit:write": "Read and write audit",
               "admin:clients:read": "Read clients",
               "admin:clients:write": "Read and write clients",
+              "admin:organizations:read": "Read organizations",
+              "admin:organizations:write": "Read and write organizations",
               "admin:read": "Read everything: tenants and their settings, clients, users and their credentials, sessions, the audit log, email templates and SMTP settings",
               "admin:sessions:read": "Read sessions",
               "admin:sessions:write": "Read and write sessions",

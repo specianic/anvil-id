@@ -977,7 +977,7 @@ export interface components {
          * @description An audited action.
          * @enum {string}
          */
-        AuditAction: "login_succeeded" | "login_failed" | "second_factor_failed" | "passkey_registered" | "passkey_removed" | "passkey_clone_suspected" | "totp_enrolled" | "totp_removed" | "recovery_code_used" | "recovery_codes_regenerated" | "password_changed" | "user_registered" | "email_verified" | "consent_granted" | "consent_revoked" | "session_revoked" | "sessions_revoked_all" | "token_revoked" | "refresh_reuse_detected" | "code_reuse_detected" | "key_generated" | "key_activated" | "key_retired" | "key_rotation_requested" | "rate_limit_lockout" | "captcha_failed" | "user_created" | "user_updated" | "user_deleted" | "client_created" | "client_updated" | "client_deleted" | "client_secret_rotated" | "tenant_created" | "tenant_updated" | "tenant_deleted" | "email_template_updated" | "email_template_reset" | "smtp_settings_updated" | "smtp_test_sent" | "admin_setup_completed" | "identity_linked" | "identity_unlinked" | "upstream_login_failed" | "connection_created" | "connection_updated" | "connection_deleted" | "connection_secret_rotated" | "branding_updated" | "logout" | "backchannel_logout_failed" | "email_change_requested" | "email_changed" | "profile_updated" | "step_up_completed" | "email_code_sent" | "role_created" | "role_updated" | "role_deleted" | "role_assigned" | "role_unassigned" | "attribute_defined" | "attribute_deleted" | "user_attributes_updated" | "webhook_endpoint_created" | "webhook_endpoint_updated" | "webhook_endpoint_deleted" | "webhook_secret_rotated" | "webhook_endpoint_disabled" | "webhook_delivery_failed" | "webhook_test_sent" | "webhook_redelivered" | "client_registered" | "client_registration_updated" | "client_registration_deleted" | "cimd_client_refreshed" | "initial_access_token_created" | "initial_access_token_revoked" | "tenant_config_applied" | "admin_recovery_issued";
+        AuditAction: "login_succeeded" | "login_failed" | "second_factor_failed" | "passkey_registered" | "passkey_removed" | "passkey_clone_suspected" | "totp_enrolled" | "totp_removed" | "recovery_code_used" | "recovery_codes_regenerated" | "password_changed" | "user_registered" | "email_verified" | "consent_granted" | "consent_revoked" | "session_revoked" | "sessions_revoked_all" | "token_revoked" | "refresh_reuse_detected" | "code_reuse_detected" | "key_generated" | "key_activated" | "key_retired" | "key_rotation_requested" | "rate_limit_lockout" | "captcha_failed" | "user_created" | "user_updated" | "user_deleted" | "client_created" | "client_updated" | "client_deleted" | "client_secret_rotated" | "tenant_created" | "tenant_updated" | "tenant_deleted" | "email_template_updated" | "email_template_reset" | "smtp_settings_updated" | "smtp_test_sent" | "admin_setup_completed" | "identity_linked" | "identity_unlinked" | "upstream_login_failed" | "connection_created" | "connection_updated" | "connection_deleted" | "connection_secret_rotated" | "branding_updated" | "logout" | "backchannel_logout_failed" | "email_change_requested" | "email_changed" | "profile_updated" | "step_up_completed" | "email_code_sent" | "role_created" | "role_updated" | "role_deleted" | "role_assigned" | "role_unassigned" | "attribute_defined" | "attribute_deleted" | "user_attributes_updated" | "webhook_endpoint_created" | "webhook_endpoint_updated" | "webhook_endpoint_deleted" | "webhook_secret_rotated" | "webhook_endpoint_disabled" | "webhook_delivery_failed" | "webhook_test_sent" | "webhook_redelivered" | "client_registered" | "client_registration_updated" | "client_registration_deleted" | "cimd_client_refreshed" | "initial_access_token_created" | "initial_access_token_revoked" | "tenant_config_applied" | "admin_recovery_issued" | "organization_created" | "organization_updated" | "organization_deleted" | "org_member_added" | "org_member_removed" | "org_role_assigned" | "org_role_unassigned" | "org_invitation_created" | "org_invitation_revoked" | "org_invitation_accepted" | "org_domain_created" | "org_domain_verified" | "org_domain_verification_failed" | "org_domain_unverified" | "org_domain_updated" | "org_domain_deleted" | "saml_login_succeeded" | "saml_login_failed";
         /** @description Who performed an audited action. */
         AuditActorView: {
             id?: string | null;
@@ -1262,7 +1262,7 @@ export interface components {
          * @description Kind of an upstream connection (derived from its config).
          * @enum {string}
          */
-        ConnectionKind: "google" | "apple" | "microsoft" | "github" | "oidc" | "oauth2";
+        ConnectionKind: "google" | "apple" | "microsoft" | "github" | "oidc" | "oauth2" | "saml";
         /** @description Every connection of a tenant, in slug order. */
         ConnectionList: {
             items: components["schemas"]["ConnectionView"][];
@@ -1458,7 +1458,7 @@ export interface components {
          * @description Kind of a transactional email.
          * @enum {string}
          */
-        EmailKind: "verification" | "recovery" | "invitation" | "password_changed" | "recovery_code_used" | "login_code" | "email_change" | "email_changed";
+        EmailKind: "verification" | "recovery" | "invitation" | "password_changed" | "recovery_code_used" | "login_code" | "email_change" | "email_changed" | "org_invitation";
         /** @description Every email template of a tenant. */
         EmailTemplateList: {
             items: components["schemas"]["EmailTemplateView"][];
@@ -2348,7 +2348,7 @@ export interface components {
          * @description A webhook event type. `test` is only sent by the test action and cannot be subscribed to.
          * @enum {string}
          */
-        WebhookEventType: "user.created" | "user.updated" | "user.deleted" | "user.email_verified" | "user.email_changed" | "user.password_changed" | "session.created" | "session.revoked" | "session.logged_out" | "test";
+        WebhookEventType: "user.created" | "user.updated" | "user.deleted" | "user.email_verified" | "user.email_changed" | "user.password_changed" | "session.created" | "session.revoked" | "session.logged_out" | "organization.created" | "organization.deleted" | "organization.member_added" | "organization.member_removed" | "organization.domain_verified" | "organization.domain_unverified" | "test";
     };
     responses: never;
     parameters: never;

@@ -22,6 +22,12 @@ export const WEBHOOK_EVENTS: readonly { value: SubscribableEvent; label: string 
   { value: "session.created", label: "session.created" },
   { value: "session.revoked", label: "session.revoked" },
   { value: "session.logged_out", label: "session.logged_out" },
+  { value: "organization.created", label: "organization.created" },
+  { value: "organization.deleted", label: "organization.deleted" },
+  { value: "organization.member_added", label: "organization.member_added" },
+  { value: "organization.member_removed", label: "organization.member_removed" },
+  { value: "organization.domain_verified", label: "organization.domain_verified" },
+  { value: "organization.domain_unverified", label: "organization.domain_unverified" },
 ];
 
 /** Client-side mirror of the API's endpoint name rule. The API decides. */

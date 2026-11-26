@@ -35,6 +35,7 @@ export const KIND_LABELS: Record<ConnectionKind, string> = {
   github: "GitHub",
   oidc: "Generic OpenID Connect",
   oauth2: "Generic OAuth2",
+  saml: "SAML 2.0 (experimental)",
 };
 
 export const KIND_DESCRIPTIONS: Record<ConnectionKind, string> = {
@@ -44,9 +45,11 @@ export const KIND_DESCRIPTIONS: Record<ConnectionKind, string> = {
   github: "GitHub.com or GitHub Enterprise Server.",
   oidc: "Any OpenID Connect provider with a discovery document.",
   oauth2: "An OAuth2 provider without ID tokens; the identity comes from a profile endpoint.",
+  saml: "An organization's SAML 2.0 identity provider.",
 };
 
-export const KINDS = Object.keys(KIND_LABELS) as ConnectionKind[];
+/** The kinds this form can create. SAML connections get their own form with organizations. */
+export const KINDS = (Object.keys(KIND_LABELS) as ConnectionKind[]).filter((k) => k !== "saml");
 
 /** Scopes the server requests when a social connection has none (shown as the starting value). */
 const PRESET_SCOPES: Record<ConnectionKind, string> = {
@@ -56,6 +59,7 @@ const PRESET_SCOPES: Record<ConnectionKind, string> = {
   github: "read:user user:email",
   oidc: "openid email profile",
   oauth2: "",
+  saml: "",
 };
 
 /** Whether the provider's verified-email claim is trusted by default (matches the API default). */
@@ -66,6 +70,7 @@ const TRUST_DEFAULT: Record<ConnectionKind, boolean> = {
   microsoft: false,
   oidc: false,
   oauth2: false,
+  saml: false,
 };
 
 const NO_OVERRIDES: EndpointOverrides = {
@@ -200,6 +205,10 @@ export function configFromValues(v: ConnectionFormValues): ConnectionConfig {
         name: orNull(v.mapping_name),
       },
     };
+  }
+  if (v.kind === "saml") {
+    // Not offered by this form (see KINDS).
+    throw new Error("SAML connections cannot be configured with this form");
   }
   const provider: SocialProvider = v.kind;
   return {
