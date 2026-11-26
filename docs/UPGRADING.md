@@ -315,7 +315,7 @@ same database is not supported: 0.4 does not know the new columns and constraint
 The upgrade is automatic and keeps all data. None of the migrations is destructive, so no
 `--allow-destructive-migrations` flag is needed.
 
-- **SQLite:** two migrations.
+- **SQLite:** three migrations.
   - `0008_release_1_0` (one transaction, additive): the tables `organization`, `org_membership`,
     `org_invitation` and `org_domain`; `org_id` on `authorization_code` and `token_family`;
     `organization` on `client` (default `off`).
@@ -329,15 +329,23 @@ The upgrade is automatic and keeps all data. None of the migrations is destructi
     `pragma_foreign_key_check` before `COMMIT` (any violation rolls everything back), then turns
     foreign keys on again. Re-running it after a crash between its commit and sqlx's bookkeeping
     is safe. This is why a backup matters most for SQLite.
-- **Postgres:** `0007_release_1_0`, one transaction, in place: the same four tables, new columns,
-  swapped CHECK constraints for the new kinds, the role-assignment primary key replaced by two
-  partial unique indexes, and composite foreign keys. Rows are not copied.
+  - `0010_release_1_0_par_import` (one transaction, additive): the tables
+    `pushed_authorization_request` and `password_hash_profile`, and the client columns
+    `require_pushed_authorization_requests` (default false), `client_kind` (default `application`)
+    and `headless_native` (default false).
+- **Postgres:** two migrations, each one transaction, in place.
+  - `0007_release_1_0`: the same four organization tables, new columns, swapped CHECK constraints
+    for the new kinds, the role-assignment primary key replaced by two partial unique indexes, and
+    composite foreign keys. Rows are not copied.
+  - `0008_release_1_0_par_import` (additive): the same two tables and three client columns as
+    SQLite `0010`.
 
 The CI upgrade tests build a populated 0.4 database on each backend (tenants, users, roles and
 assignments, connections of several kinds with identity links, replay entries, email templates,
 a client, a token family and a code), upgrade it, compare every row and run the full storage
 contract suite on the result. Every 0.4 row becomes tenant-level: `org_id` is null and every
-client's `organization` policy is `off`.
+client's `organization` policy is `off`. Every client keeps its behaviour: PAR is not required,
+the client is an `application` and not a native headless client. The two new tables start empty.
 
 ### Tenants without organizations behave as in 0.4
 
@@ -376,6 +384,41 @@ Changes that do apply to every tenant:
   without `/t/{tenant}`) no longer redirect to the `default` tenant; they show the console's
   not-found page. Update bookmarks to `/console/t/{tenant}/…`.
 
+### New in the final 1.0
+
+These arrived after 1.0.0-beta.1. All of them are off or unused until you turn them on, so an
+upgraded installation behaves as before.
+
+- **Pushed authorization requests (RFC 9126).** Each tenant has a `/par` endpoint, advertised in
+  discovery as `pushed_authorization_request_endpoint`. PAR can be required per client
+  (`require_pushed_authorization_requests`) or for the whole tenant (tenant setting
+  `par.require_pushed_authorization_requests`); both default to off ([PAR.md](PAR.md)).
+- **Headless flow API** (`/api/flows/v1`): your own single-page app or first-party native app
+  drives login, registration, recovery and verification with JSON. Browser mode admits only the
+  tenant's own origin and the origins in the tenant setting `headless.allowed_origins` (empty by
+  default). Native mode is limited to clients with `headless_native` set (default false)
+  ([HEADLESS.md](HEADLESS.md)).
+- **User import and export.** `anvilid users import` / `anvilid users export` and the management
+  API routes `POST …/users/import`, `GET …/users/export`, `GET …/users/{user_id}/export` (with
+  `?profile=gdpr` for a GDPR bundle). Imported password hashes (bcrypt, Argon2, scrypt, Firebase
+  scrypt, PBKDF2 variants and salted SHA-2) are verified at first sign-in and replaced with
+  Argon2id. Firebase parameters live in per-tenant password hash
+  profiles (`…/password-hash-profiles`, scopes `admin:settings:read|write`)
+  ([IMPORT-EXPORT.md](IMPORT-EXPORT.md)).
+- **New admin scope `admin:users:export`.** Export needs `admin:users:export` or `admin:write`.
+  Full administrators already hold `admin:write`, so they can export without any change.
+  `admin:users:read` and `admin:users:write` do **not** grant export, and `admin:users:export`
+  grants nothing else. Give automation that must export users the new scope explicitly.
+  Import needs `admin:users:write`.
+- **Agent marker.** The client field `client_kind` is `application` (default) or `agent`. An agent
+  is an AI agent acting for the user: the consent page says so and agent clients never skip
+  consent ([CONFIG-YAML.md](CONFIG-YAML.md)).
+- **Admin API and tenant YAML:** the client fields `require_pushed_authorization_requests`,
+  `client_kind` and `headless_native`, and the tenant settings `par` and `headless`. They are
+  additive and optional; documents and requests without them keep working.
+
+No new operator configuration keys were added after 1.0.0-beta.1.
+
 ### New configuration keys
 
 | Key | Default | Effect of the default |
@@ -395,8 +438,15 @@ unknown claims should allow them before you turn on organizations for their clie
 ### Limitations in 1.0
 
 - SAML 2.0 is experimental and off by default; IdP-initiated SSO, encrypted assertions and Single
-  Logout are not supported.
-- Tenant-restricted system administrators are deferred to Phase 7.
+  Logout are not supported. Whether SAML leaves experimental status in 1.0 is an open owner
+  decision, taken after the external security review and the real-IdP interop checklist
+  ([SAML.md](SAML.md)). Until then, treat it as experimental.
+- Tenant-restricted system administrators (system roles limited to some tenants) are deferred to
+  a later 1.x release. They need a second administrator principal shape that every tenant-level
+  and installation-level route would have to check. That is security-sensitive surface which
+  should not be added right before the external security review. Organization administrators
+  already cover delegated administration per organization ([ORGANIZATIONS.md](ORGANIZATIONS.md)).
+  Adding the feature later is additive and does not change existing roles.
 - KEK rotation is still not supported, and `jwks_uri` is still refused for dynamic and CIMD
   clients.
 - The other open items are listed in [ORGANIZATIONS.md](ORGANIZATIONS.md#limitations-in-10).
@@ -411,3 +461,43 @@ unknown claims should allow them before you turn on organizations for their clie
   ([ORGANIZATIONS.md](ORGANIZATIONS.md#enterprise-oidc-connections)).
 - Behind a firewall that blocks outbound DNS, set `domain_verification_resolvers`.
 - Subscribe to the `organization.*` webhook events ([WEBHOOKS.md](WEBHOOKS.md)).
+- Require PAR for clients that handle sensitive authorization requests ([PAR.md](PAR.md)).
+- Migrating from another identity system: import users with their password hashes
+  ([IMPORT-EXPORT.md](IMPORT-EXPORT.md)).
+
+## 1.0.0-beta.1 to 1.0
+
+This section is for installations that ran a 1.0.0-beta.1 build. Coming from 0.4, follow
+[0.4 to 1.0](#04-to-10) instead; it includes everything here.
+
+**Back up first**, as for every upgrade, and stop every beta.1 node before you start a 1.0 node.
+
+### Migrations
+
+The upgrade is automatic, additive and keeps all data. No `--allow-destructive-migrations` flag is
+needed, and no table is rebuilt.
+
+- **SQLite:** `0010_release_1_0_par_import` (one transaction). `0008` and `0009` already ran on
+  beta.1 and are unchanged.
+- **Postgres:** `0008_release_1_0_par_import` (one transaction). `0007` already ran on beta.1 and
+  is unchanged.
+
+Both add the tables `pushed_authorization_request` and `password_hash_profile` and the client
+columns `require_pushed_authorization_requests`, `client_kind` and `headless_native`, with
+defaults that keep every existing client's behaviour. The CI upgrade tests build a populated
+beta.1 database on each backend, upgrade it, compare every table, check the defaults of the new
+columns, restart twice to prove the upgrade is idempotent and run the full storage contract suite
+on the result.
+
+### What changes
+
+Everything in [New in the final 1.0](#new-in-the-final-10). In short:
+
+- PAR, the headless flow API, user import and export, password hash profiles and the agent marker
+  are new and off or unused until configured.
+- The admin scope `admin:users:export` is new. Full administrators (`admin:write`) can export
+  without changes; other tokens need the new scope.
+- The management API and the headless flow API are now covered by the compatibility policy
+  ([COMPATIBILITY.md](COMPATIBILITY.md)): from 1.0 on, changes within 1.x are additive only.
+
+The [Limitations in 1.0](#limitations-in-10) apply.
