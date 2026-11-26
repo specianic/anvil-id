@@ -13,7 +13,7 @@ use anvil_core::service::key_rotation::KeyRotationService;
 use anvil_jose::Kek;
 use anvil_web::adapters::backchannel::LogoutDeliveryWorker;
 use anvil_web::adapters::{Argon2Pool, OutboundClient, breach_checker_with};
-use anvil_web::observability::MetricsEndpoint;
+use anvil_web::observability::{MetricsEndpoint, TraceContextHook};
 use anvil_web::{AppConfig, AppDeps, AppState};
 use anyhow::{Context, bail};
 use axum::Router;
@@ -138,10 +138,18 @@ fn argon2_permits() -> usize {
     std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
 }
 
-/// Runs startup up to (not including) binding the listener. `metrics` is the installed
-/// exporter's renderer (when metrics are exposed); the main router serves it only with
-/// `metrics_on_main_port`.
-pub async fn start(cfg: &Config, metrics: Option<MetricsEndpoint>) -> anyhow::Result<Started> {
+/// What telemetry hands to the web layer.
+#[derive(Default)]
+pub struct Observability {
+    /// The installed exporter's renderer (when metrics are exposed); the main router serves it
+    /// only with `metrics_on_main_port`.
+    pub metrics: Option<MetricsEndpoint>,
+    /// Continues trusted proxies' trace context (when traces are exported).
+    pub trace_context: Option<TraceContextHook>,
+}
+
+/// Runs startup up to (not including) binding the listener.
+pub async fn start(cfg: &Config, observability: Observability) -> anyhow::Result<Started> {
     let url = cfg.database_url.expose_secret();
     let backend = Backend::from_url(url)?;
     let (lock, kek) = prepare_data_dir(cfg, backend)?;
@@ -197,7 +205,8 @@ pub async fn start(cfg: &Config, metrics: Option<MetricsEndpoint>) -> anyhow::Re
     app_config.installation_smtp = cfg.smtp_url.is_some();
     app_config.trusted_proxies = cfg.trusted_proxies.clone();
     app_config.rate_limits = cfg.rate_limits.clone();
-    app_config.metrics = metrics.filter(|_| cfg.metrics_on_main_port);
+    app_config.metrics = observability.metrics.filter(|_| cfg.metrics_on_main_port);
+    app_config.trace_context = observability.trace_context;
     // Outbound (SSRF guard): an explicit allow-list replaces the dev-mode loopback default;
     // plain http (to allow-listed destinations only) follows development mode, including
     // `insecure_http` setups.

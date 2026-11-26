@@ -97,7 +97,10 @@ pub fn router(state: AppState) -> Router {
         // BODY_LIMIT everywhere; only the admin logo upload gets its larger limit (UI-03).
         .layer(axum::middleware::from_fn(admin::branding::body_limit))
         // The one request span/log/metrics layer (route templates only, never the raw URI).
-        .layer(axum::middleware::from_fn(observability::observe))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            observability::observe,
+        ))
         .layer(PropagateRequestIdLayer::x_request_id())
         .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
 }

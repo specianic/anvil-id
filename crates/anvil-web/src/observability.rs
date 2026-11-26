@@ -19,6 +19,9 @@
 //!   there is axum's `MatchedPath` known; it hands the template back on the response.
 //! - [`tenant_context`] runs right after tenant resolution: it records the tenant slug on the
 //!   current span and hands the tenant-relative route class back on the response.
+//! - Incoming trace context (`traceparent`) is continued only when the TCP peer is a trusted
+//!   proxy ([`AppConfig::trusted_proxies`](crate::AppConfig)) and the binary installed a
+//!   [`TraceContextHook`] (OTLP export configured). Anyone else cannot choose our trace ids.
 //!
 //! # Metric owners
 //!
@@ -34,13 +37,14 @@
 //! | [`WEBHOOK_DELIVERIES_TOTAL`] | `outcome` | the webhook worker (05-14) |
 //! | [`RATELIMIT_BACKEND_ERRORS_TOTAL`] | none | the shared limiter backend (05-08) |
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anvil_cache::limiter::RouteClass;
 use axum::Router;
-use axum::extract::{MatchedPath, Request};
-use axum::http::{HeaderValue, Method, StatusCode, header};
+use axum::extract::{ConnectInfo, MatchedPath, Request, State};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -48,6 +52,7 @@ use tracing::Instrument as _;
 use tracing::field::Empty;
 
 use crate::layers::ratelimit::classify;
+use crate::state::AppState;
 use crate::tenant::ResolvedTenant;
 
 /// Requests served, by `route_class` and `status_class`.
@@ -231,8 +236,34 @@ fn request_id(req: &Request) -> Option<String> {
     ok.then(|| id.to_owned())
 }
 
-/// The request span/log/metrics layer (`axum::middleware::from_fn`, around the whole router).
-pub(crate) async fn observe(req: Request, next: Next) -> Response {
+/// Continues an incoming trace on the request span (the binary extracts W3C trace context from
+/// the headers). Called only for requests from trusted proxies.
+#[derive(Clone)]
+pub struct TraceContextHook(Arc<TraceContextFn>);
+
+/// The function behind a [`TraceContextHook`].
+type TraceContextFn = dyn Fn(&HeaderMap, &tracing::Span) + Send + Sync;
+
+impl TraceContextHook {
+    pub fn new(hook: impl Fn(&HeaderMap, &tracing::Span) + Send + Sync + 'static) -> Self {
+        Self(Arc::new(hook))
+    }
+
+    /// Applies the hook to `span`.
+    pub fn call(&self, headers: &HeaderMap, span: &tracing::Span) {
+        (self.0)(headers, span);
+    }
+}
+
+impl std::fmt::Debug for TraceContextHook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("TraceContextHook")
+    }
+}
+
+/// The request span/log/metrics layer (`axum::middleware::from_fn_with_state`, around the
+/// whole router).
+pub(crate) async fn observe(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let start = Instant::now();
     let fallback_class = outer_route_class(req.uri().path());
     let span = tracing::info_span!(
@@ -247,6 +278,15 @@ pub(crate) async fn observe(req: Request, next: Next) -> Response {
     );
     if let Some(id) = request_id(&req) {
         span.record("request_id", id.as_str());
+    }
+    if let Some(hook) = &state.config().trace_context {
+        let trusted_peer = req
+            .extensions()
+            .get::<ConnectInfo<SocketAddr>>()
+            .is_some_and(|ConnectInfo(peer)| state.config().trusted_proxies.is_trusted(peer.ip()));
+        if trusted_peer {
+            hook.call(req.headers(), &span);
+        }
     }
     let resp = next.run(req).instrument(span.clone()).await;
 

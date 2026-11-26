@@ -20,7 +20,7 @@ use anvil_core::ports::Clock;
 use anvil_jose::kek::Kek;
 use anvil_web::adapters::argon2::Argon2Pool;
 use anvil_web::adapters::hibp::{BreachCheckMode, breach_checker};
-use anvil_web::observability::MetricsEndpoint;
+use anvil_web::observability::{MetricsEndpoint, TraceContextHook};
 use anvil_web::{AppConfig, AppDeps, AppState};
 use axum::Router;
 use axum::body::Body;
@@ -547,4 +547,59 @@ async fn request_span_carries_the_route_template_not_the_uri() {
             "{forbidden} in telemetry: {everything}"
         );
     }
+}
+
+#[tokio::test]
+async fn trace_context_is_continued_only_from_trusted_proxies() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let hook = {
+        let calls = Arc::clone(&calls);
+        TraceContextHook::new(move |headers, _| {
+            assert!(headers.contains_key("traceparent"));
+            calls.fetch_add(1, Ordering::SeqCst);
+        })
+    };
+    let traced = |router: Router, peer: [u8; 4]| async move {
+        let mut req = Request::get("/healthz")
+            .header(header::HOST, "op.test")
+            .header(
+                "traceparent",
+                "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+            )
+            .body(Body::empty())
+            .expect("request");
+        req.extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from((peer, 40000))));
+        router.oneshot(req).await.expect("infallible").status()
+    };
+
+    // Production default: no trusted proxies, so nobody can choose our trace ids.
+    let (_, router) = app_with_state({
+        let hook = hook.clone();
+        |c| c.trace_context = Some(hook)
+    })
+    .await;
+    assert_eq!(traced(router, [203, 0, 113, 10]).await, 200);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "untrusted peer was honoured"
+    );
+
+    // A trusted proxy's trace context is continued; other peers are still ignored.
+    let (_, router) = app_with_state(|c| {
+        c.trusted_proxies.cidrs = vec!["10.0.0.0/8".parse().expect("cidr")];
+        c.trace_context = Some(hook);
+    })
+    .await;
+    assert_eq!(traced(router.clone(), [203, 0, 113, 10]).await, 200);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "untrusted peer was honoured"
+    );
+    assert_eq!(traced(router, [10, 1, 2, 3]).await, 200);
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "trusted proxy was ignored");
 }

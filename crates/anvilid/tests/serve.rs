@@ -347,6 +347,67 @@ fn metrics_on_main_port_serves_metrics_there() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn otel_endpoint_receives_protobuf_spans_flushed_on_shutdown() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let collector = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/traces"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&collector)
+        .await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let port = free_port();
+    let endpoint = collector.uri();
+    let mut server = Server {
+        child: spawn(
+            dir.path(),
+            None,
+            port,
+            &[
+                "--otel-endpoint",
+                &endpoint,
+                "--otel-service-name",
+                "anvilid-serve-test",
+            ],
+        ),
+        port,
+    };
+    wait_ready(&mut server, healthy);
+    let (status, _) =
+        http_get(port, "/authorize?login_hint=otel-probe%40example.com").expect("authorize");
+    assert!(!status.is_empty());
+    // The batch exporter would wait up to 5 s; shutdown must flush it.
+    let status = server.terminate();
+    let stderr = server.stderr();
+    assert!(status.success(), "exit status {status}: {stderr}");
+
+    let requests = collector.received_requests().await.expect("recording on");
+    let traces: Vec<_> = requests
+        .iter()
+        .filter(|r| r.url.path() == "/v1/traces")
+        .collect();
+    assert!(!traces.is_empty(), "no OTLP export received: {stderr}");
+    let body: Vec<u8> = traces.iter().flat_map(|r| r.body.clone()).collect();
+    assert!(
+        traces.iter().all(|r| r
+            .headers
+            .get("content-type")
+            .is_some_and(|v| v.to_str().is_ok_and(|v| v == "application/x-protobuf"))),
+        "OTLP/HTTP protobuf expected"
+    );
+    let contains = |needle: &str| body.windows(needle.len()).any(|w| w == needle.as_bytes());
+    assert!(contains("service.name"), "resource attribute missing");
+    assert!(contains("anvilid-serve-test"), "service name missing");
+    assert!(contains("http.request"), "request span missing");
+    assert!(contains("/authorize"), "route template missing");
+    for leaked in ["otel-probe", "login_hint", "127.0.0.1"] {
+        assert!(!contains(leaked), "{leaked} exported in a span");
+    }
+}
+
 /// Generates a self-signed P-256 certificate for localhost with openssl, or returns `None` (and
 /// says why) when openssl is not available.
 fn self_signed_cert(dir: &Path) -> Option<(std::path::PathBuf, std::path::PathBuf)> {

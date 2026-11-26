@@ -10,7 +10,7 @@ use anvil_core::policy::PasswordPolicy;
 use crate::adapters::captcha::CaptchaEndpoints;
 use crate::adapters::outbound::OutboundPolicy;
 use crate::client_ip::TrustedProxies;
-use crate::observability::MetricsEndpoint;
+use crate::observability::{MetricsEndpoint, TraceContextHook};
 
 /// Settings the web layer needs. The binary builds it from its own configuration (02-18).
 #[derive(Debug, Clone)]
@@ -49,6 +49,9 @@ pub struct AppConfig {
     /// `/metrics` on the main router (`metrics_on_main_port`), rendering the binary's exporter.
     /// `None` (default): the main router has no `/metrics` route.
     pub metrics: Option<MetricsEndpoint>,
+    /// Continues incoming W3C trace context from trusted proxies (set by the binary when OTLP
+    /// export is configured). `None`: every request starts a new trace.
+    pub trace_context: Option<TraceContextHook>,
 }
 
 /// Default lifetime of a negative "unknown host" cache entry.
@@ -74,6 +77,7 @@ impl AppConfig {
             installation_smtp: false,
             unknown_host_ttl: DEFAULT_UNKNOWN_HOST_TTL,
             metrics: None,
+            trace_context: None,
         }
     }
 

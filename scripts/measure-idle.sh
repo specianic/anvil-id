@@ -7,6 +7,9 @@
 #
 # Output: a markdown table row on stdout (and in $GITHUB_STEP_SUMMARY when set) and
 # ${MEASURE_OUT:-target/measure}/measure-$TARGET.json.
+#
+# Gate (QUAL-05): exits 1 after reporting when idle VmRSS is at or above IDLE_RSS_LIMIT_KB
+# (102400 kB = 100 MiB).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -23,6 +26,9 @@ REPO_CSS="$ROOT/themes/default/static/anvil.css"
 
 [[ -x "$BIN" ]] || { echo "error: $BIN is not an executable" >&2; exit 1; }
 [[ -f "$REPO_CSS" ]] || { echo "error: $REPO_CSS missing" >&2; exit 1; }
+
+# QUAL-05: idle memory below 100 MB.
+IDLE_RSS_LIMIT_KB=102400
 
 TOOLCHAIN=$(sed -nE 's/^channel *= *"([^"]+)".*/\1/p' "$ROOT/rust-toolchain.toml")
 COMMIT=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -95,3 +101,9 @@ cat >"$OUT_DIR/measure-$TARGET.json" <<EOF
 {"target":"$TARGET","size_bytes":$size_bytes,"vmrss_kb":$vmrss_kb,"vmhwm_kb":$vmhwm_kb,"pss_kb":$pss_kb,"rust_toolchain":"$TOOLCHAIN","commit":"$COMMIT"}
 EOF
 echo "wrote $OUT_DIR/measure-$TARGET.json"
+
+if (( vmrss_kb >= IDLE_RSS_LIMIT_KB )); then
+    echo "error: idle VmRSS ${vmrss_kb} kB is at or above the QUAL-05 limit of ${IDLE_RSS_LIMIT_KB} kB (100 MiB)" >&2
+    exit 1
+fi
+echo "idle VmRSS ${vmrss_kb} kB is below the QUAL-05 limit of ${IDLE_RSS_LIMIT_KB} kB"
