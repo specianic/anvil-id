@@ -258,6 +258,7 @@ pub fn new_client() -> NewClient {
         registration_source: anvil_core::model::ClientSource::Static,
         metadata_expires_at: None,
         registration_access_token_hash: None,
+        organization: anvil_core::model::OrgClientPolicy::Off,
     }
 }
 
@@ -291,6 +292,7 @@ pub fn expected_client(tenant: TenantId, c: &NewClient) -> Client {
         registration_source: c.registration_source,
         metadata_expires_at: c.metadata_expires_at,
         registration_access_token_hash: c.registration_access_token_hash,
+        organization: anvil_core::model::OrgClientPolicy::Off,
     }
 }
 
@@ -390,6 +392,7 @@ pub fn full_params() -> AuthorizationParams {
         claims: Some(full_claims_request()),
         response_mode: anvil_core::oauth::response_mode::ResponseMode::FormPost,
         resource: vec![],
+        organization: None,
     }
 }
 
@@ -471,6 +474,7 @@ pub fn new_family(ctx: &GrantCtx, absolute_in: Duration) -> NewTokenFamily {
         created_at: now,
         absolute_expires_at: now + absolute_in,
         resource: vec![],
+        org_id: None,
     }
 }
 
@@ -498,6 +502,7 @@ pub fn new_code(
         expires_at: now + expires_in,
         created_at: now,
         resource: vec![],
+        org_id: None,
     }
 }
 
@@ -523,6 +528,7 @@ pub fn expected_code(tenant: TenantId, code: &NewAuthorizationCode) -> Authoriza
         expires_at: code.expires_at,
         created_at: code.created_at,
         resource: code.resource.clone(),
+        org_id: None,
     }
 }
 
@@ -544,6 +550,7 @@ pub fn expected_family(tenant: TenantId, f: &NewTokenFamily) -> TokenFamily {
         revoked_at: None,
         revoked_reason: None,
         resource: f.resource.clone(),
+        org_id: None,
     }
 }
 
@@ -700,6 +707,7 @@ pub fn new_service_family(client_id: &str, absolute_in: Duration) -> NewTokenFam
         created_at: now,
         absolute_expires_at: now + absolute_in,
         resource: vec![],
+        org_id: None,
     }
 }
 
@@ -851,6 +859,7 @@ pub fn new_connection() -> NewConnection {
         secret_enc: Some(Uuid::now_v7().as_bytes().repeat(3)),
         trust_email_verified: false,
         created_at: now_ms(),
+        org_id: None,
     }
 }
 
@@ -878,6 +887,7 @@ pub fn new_social_connection() -> NewConnection {
         secret_enc: None,
         trust_email_verified: true,
         created_at: now_ms(),
+        org_id: None,
     }
 }
 
@@ -894,6 +904,7 @@ pub fn expected_connection(tenant: TenantId, c: &NewConnection) -> anvil_core::m
         trust_email_verified: c.trust_email_verified,
         created_at: c.created_at,
         updated_at: c.created_at,
+        org_id: None,
     }
 }
 

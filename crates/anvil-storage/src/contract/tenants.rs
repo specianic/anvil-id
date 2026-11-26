@@ -207,6 +207,8 @@ pub async fn tenant_update_settings_round_trip(s: &TestStorage) {
                 tokens: vec![anvil_core::model::TokenTarget::IdToken],
                 scope: Some("perms".to_owned()),
             }),
+            org_roles: None,
+            org_permissions: None,
         },
     };
     let updated = repo
