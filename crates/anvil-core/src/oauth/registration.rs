@@ -93,7 +93,184 @@ impl ValidatedRegistration {
     /// The registered client metadata for the RFC 7591 §3.2.1 response, with every substituted
     /// value (without `client_id`, secrets or registration-access fields, which the service adds).
     pub fn metadata(&self) -> Map<String, Value> {
-        todo!("05-09 GREEN")
+        let c = &self.client;
+        let o = &self.options;
+        let strings = |v: &[String]| Value::Array(v.iter().cloned().map(Value::String).collect());
+        let mut m = Map::new();
+        m.insert("redirect_uris".into(), strings(&c.redirect_uris));
+        m.insert(
+            "token_endpoint_auth_method".into(),
+            c.auth_method.as_str().into(),
+        );
+        m.insert(
+            "grant_types".into(),
+            Value::Array(c.grant_types.iter().map(|g| g.as_str().into()).collect()),
+        );
+        m.insert("response_types".into(), strings(&self.response_types));
+        m.insert(
+            "application_type".into(),
+            c.application_type.as_str().into(),
+        );
+        m.insert("scope".into(), c.scopes.join(" ").into());
+        m.insert("allowed_resources".into(), strings(&o.allowed_resources));
+        if let Some(name) = &self.client_name {
+            m.insert("client_name".into(), name.clone().into());
+        }
+        if let Some(jwks) = c.jwks.as_deref().and_then(|j| serde_json::from_str(j).ok()) {
+            m.insert("jwks".into(), jwks);
+        }
+        if !o.post_logout_redirect_uris.is_empty() {
+            m.insert(
+                "post_logout_redirect_uris".into(),
+                strings(&o.post_logout_redirect_uris),
+            );
+        }
+        if let Some(uri) = &o.backchannel_logout_uri {
+            m.insert("backchannel_logout_uri".into(), uri.clone().into());
+            m.insert(
+                "backchannel_logout_session_required".into(),
+                o.backchannel_logout_session_required.into(),
+            );
+        }
+        for (key, value) in [
+            ("logo_uri", &self.logo_uri),
+            ("client_uri", &self.client_uri),
+            ("policy_uri", &self.policy_uri),
+            ("tos_uri", &self.tos_uri),
+        ] {
+            if let Some(v) = value {
+                m.insert(key.into(), v.clone().into());
+            }
+        }
+        m
+    }
+}
+
+fn meta(message: impl Into<String>) -> CoreError {
+    CoreError::InvalidClientMetadata(message.into())
+}
+
+fn redirect_error(message: impl Into<String>) -> CoreError {
+    CoreError::InvalidRedirectUri(message.into())
+}
+
+/// A metadata member; JSON `null` counts as absent.
+fn member<'a>(obj: &'a Map<String, Value>, key: &str) -> Option<&'a Value> {
+    obj.get(key).filter(|v| !v.is_null())
+}
+
+fn opt_str<'a>(obj: &'a Map<String, Value>, key: &str) -> Result<Option<&'a str>, CoreError> {
+    match member(obj, key) {
+        None => Ok(None),
+        Some(Value::String(s)) => Ok(Some(s)),
+        Some(_) => Err(meta(format!("{key} must be a string"))),
+    }
+}
+
+fn opt_bool(obj: &Map<String, Value>, key: &str) -> Result<Option<bool>, CoreError> {
+    match member(obj, key) {
+        None => Ok(None),
+        Some(Value::Bool(b)) => Ok(Some(*b)),
+        Some(_) => Err(meta(format!("{key} must be a boolean"))),
+    }
+}
+
+fn opt_str_array(
+    obj: &Map<String, Value>,
+    key: &str,
+    error: fn(String) -> CoreError,
+) -> Result<Option<Vec<String>>, CoreError> {
+    let Some(value) = member(obj, key) else {
+        return Ok(None);
+    };
+    let not_strings = || error(format!("{key} must be an array of strings"));
+    let items = value.as_array().ok_or_else(not_strings)?;
+    items
+        .iter()
+        .map(|v| v.as_str().map(str::to_owned).ok_or_else(not_strings))
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
+
+fn dedup(items: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::with_capacity(items.len());
+    for item in items {
+        if !out.contains(&item) {
+            out.push(item);
+        }
+    }
+    out
+}
+
+/// The shared redirect URI rules plus the application-type rule of OIDC Dynamic Client
+/// Registration 1.0 §2: web clients use https only (no loopback http), native clients use a
+/// loopback http or private-use scheme URI (never https). Returns the error message.
+fn check_redirect(uri: &str, app: ApplicationType) -> Result<(), String> {
+    validate_redirect_uri(uri, app).map_err(|e| match e {
+        CoreError::Validation { message, .. } => message,
+        other => other.to_string(),
+    })?;
+    // `validate_redirect_uri` succeeded, so the URI parses.
+    let scheme = url::Url::parse(uri)
+        .map(|u| u.scheme().to_owned())
+        .unwrap_or_default();
+    match (app, scheme.as_str()) {
+        (ApplicationType::Web, "https") => Ok(()),
+        (ApplicationType::Web, _) => Err("web clients must use https redirect URIs".to_owned()),
+        (ApplicationType::Native, "https") => Err(
+            "native clients must use a loopback http or a private-use scheme redirect URI"
+                .to_owned(),
+        ),
+        (ApplicationType::Native, _) => Ok(()),
+    }
+}
+
+/// Whether the URI's host is on the allow-list (ASCII case-insensitive). URIs without a host
+/// (private-use schemes) are never allow-listed.
+fn host_allowed(uri: &str, allowed: &[String]) -> bool {
+    let Ok(parsed) = url::Url::parse(uri) else {
+        return false;
+    };
+    match parsed.host_str() {
+        Some(host) if !host.is_empty() => allowed.iter().any(|a| a.eq_ignore_ascii_case(host)),
+        _ => false,
+    }
+}
+
+/// `logo_uri`, `client_uri`, `policy_uri`, `tos_uri`: absolute https, with a host, no userinfo,
+/// no whitespace, at most [`MAX_METADATA_URI_LEN`] bytes.
+fn check_https_uri(key: &str, value: &str) -> Result<(), CoreError> {
+    let bad = || meta(format!("{key} must be an absolute https URI"));
+    if value.is_empty()
+        || value.len() > MAX_METADATA_URI_LEN
+        || value.chars().any(|c| c.is_whitespace() || c.is_control())
+    {
+        return Err(bad());
+    }
+    let parsed = url::Url::parse(value).map_err(|_| bad())?;
+    if parsed.scheme() != "https"
+        || parsed.host_str().is_none_or(str::is_empty)
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+    {
+        return Err(bad());
+    }
+    Ok(())
+}
+
+fn is_forbidden_scope(token: &str) -> bool {
+    token == "admin" || token.starts_with("admin:") || is_admin_scope(token)
+}
+
+/// Maps a `ClientService` validation error to its RFC 7591 error.
+fn map_client_error(e: CoreError) -> CoreError {
+    match e {
+        CoreError::Validation {
+            field: "redirect_uris",
+            message,
+        } => redirect_error(message),
+        CoreError::Validation { field, message } => meta(format!("{field}: {message}")),
+        other => meta(other.to_string()),
     }
 }
 
@@ -103,8 +280,247 @@ pub fn validate(
     settings: &DcrSettings,
     mode: DcrMode,
 ) -> Result<ValidatedRegistration, CoreError> {
-    let _ = (request, settings, mode);
-    todo!("05-09 GREEN")
+    let obj = request
+        .as_object()
+        .ok_or_else(|| meta("the registration request must be a JSON object"))?;
+
+    // RFC 7591 §3.2.2: we verify no software statements, so we accept none.
+    if member(obj, "software_statement").is_some() {
+        return Err(CoreError::InvalidSoftwareStatement);
+    }
+    // 0.4: no remote key fetching for dynamic clients.
+    if member(obj, "jwks_uri").is_some() {
+        return Err(meta(
+            "jwks_uri is not supported in this release; register the keys inline with jwks",
+        ));
+    }
+
+    let application_type = match opt_str(obj, "application_type")? {
+        None | Some("web") => ApplicationType::Web,
+        Some("native") => ApplicationType::Native,
+        Some(_) => return Err(meta("application_type must be web or native")),
+    };
+
+    let auth_method = match opt_str(obj, "token_endpoint_auth_method")? {
+        None => ClientAuthMethod::ClientSecretBasic,
+        Some(s) => ClientAuthMethod::parse(s)
+            .ok_or_else(|| meta("token_endpoint_auth_method is not supported"))?,
+    };
+    let client_type = if auth_method == ClientAuthMethod::None {
+        ClientType::Public
+    } else {
+        ClientType::Confidential
+    };
+
+    // Grants.
+    let grant_names = opt_str_array(obj, "grant_types", meta)?
+        .unwrap_or_else(|| vec![GrantType::AuthorizationCode.as_str().to_owned()]);
+    if grant_names.is_empty() {
+        return Err(meta("grant_types must not be empty"));
+    }
+    let mut grant_types: Vec<GrantType> = Vec::with_capacity(grant_names.len());
+    for name in &grant_names {
+        let grant = GrantType::parse(name)
+            .ok_or_else(|| meta("grant_types contains an unsupported grant type"))?;
+        if grant == GrantType::ClientCredentials && !settings.allow_client_credentials {
+            return Err(meta(
+                "client_credentials is not allowed for dynamically registered clients",
+            ));
+        }
+        if !grant_types.contains(&grant) {
+            grant_types.push(grant);
+        }
+    }
+    let has_code_grant = grant_types.contains(&GrantType::AuthorizationCode);
+
+    // Response types (RFC 7591 §2.1: `code` <-> `authorization_code`).
+    let response_types = dedup(
+        opt_str_array(obj, "response_types", meta)?.unwrap_or_else(|| {
+            if has_code_grant {
+                vec!["code".to_owned()]
+            } else {
+                Vec::new()
+            }
+        }),
+    );
+    if response_types.iter().any(|r| r != "code") {
+        return Err(meta("response_types contains an unsupported response type"));
+    }
+    if response_types.is_empty() == has_code_grant {
+        return Err(meta(
+            "response_types and grant_types are inconsistent: code requires authorization_code and vice versa",
+        ));
+    }
+
+    // Redirect URIs.
+    let allow_list = match mode {
+        DcrMode::AllowListed if !settings.allowed_redirect_hosts.is_empty() => {
+            Some(settings.allowed_redirect_hosts.as_slice())
+        }
+        _ => None,
+    };
+    let raw_redirects = opt_str_array(obj, "redirect_uris", redirect_error)?.unwrap_or_default();
+    if has_code_grant && raw_redirects.is_empty() {
+        return Err(redirect_error(
+            "redirect_uris is required for the authorization_code grant",
+        ));
+    }
+    if raw_redirects.len() > MAX_REDIRECT_URIS {
+        return Err(redirect_error("too many redirect URIs"));
+    }
+    for uri in &raw_redirects {
+        check_redirect(uri, application_type).map_err(redirect_error)?;
+        if let Some(hosts) = allow_list
+            && !host_allowed(uri, hosts)
+        {
+            return Err(redirect_error(
+                "redirect URI host is not on the registration allow-list",
+            ));
+        }
+    }
+    let redirect_uris = dedup(raw_redirects);
+
+    let post_logout_redirect_uris =
+        dedup(opt_str_array(obj, "post_logout_redirect_uris", meta)?.unwrap_or_default());
+    for uri in &post_logout_redirect_uris {
+        check_redirect(uri, application_type)
+            .map_err(|m| meta(format!("post_logout_redirect_uris: {m}")))?;
+        if let Some(hosts) = allow_list
+            && !host_allowed(uri, hosts)
+        {
+            return Err(meta(
+                "post_logout_redirect_uris: host is not on the registration allow-list",
+            ));
+        }
+    }
+
+    // Scopes.
+    let scopes: Vec<String> = match opt_str(obj, "scope")? {
+        Some(raw) => {
+            Scope::parse(raw).map_err(|_| meta("scope is not a valid scope string"))?;
+            let tokens = dedup(raw.split(' ').map(str::to_owned).collect());
+            if tokens.iter().any(|t| is_forbidden_scope(t)) {
+                return Err(meta("admin scopes cannot be registered"));
+            }
+            if tokens.iter().any(|t| !settings.allowed_scopes.contains(t)) {
+                return Err(meta(
+                    "scope contains a value not allowed for dynamic registration",
+                ));
+            }
+            tokens
+        }
+        None => dedup(
+            settings
+                .allowed_scopes
+                .iter()
+                .filter(|t| !is_forbidden_scope(t) && Scope::parse(t).is_ok() && !t.contains(' '))
+                .cloned()
+                .collect(),
+        ),
+    };
+
+    // RFC 8707 resources.
+    let allowed_resources = match opt_str_array(obj, "allowed_resources", meta)? {
+        Some(requested) => {
+            let parsed = parse_resources(&requested).map_err(|e| match e {
+                CoreError::InvalidTarget(m) => meta(format!("allowed_resources: {m}")),
+                other => meta(other.to_string()),
+            })?;
+            if parsed
+                .iter()
+                .any(|r| !settings.allowed_resources.contains(r))
+            {
+                return Err(meta(
+                    "allowed_resources contains a resource not allowed for dynamic registration",
+                ));
+            }
+            parsed
+        }
+        None => dedup(settings.allowed_resources.clone()),
+    };
+
+    // Keys: inline JWK Set object only.
+    let jwks = match member(obj, "jwks") {
+        None => None,
+        Some(v @ Value::Object(_)) => Some(v.to_string()),
+        Some(_) => return Err(meta("jwks must be a JWK Set object")),
+    };
+
+    // Back-channel logout: https only.
+    let backchannel_logout_uri = opt_str(obj, "backchannel_logout_uri")?.map(str::to_owned);
+    if let Some(uri) = &backchannel_logout_uri
+        && url::Url::parse(uri)
+            .map(|u| u.scheme() != "https")
+            .unwrap_or(true)
+    {
+        return Err(meta("backchannel_logout_uri must be an https URI"));
+    }
+    let backchannel_logout_session_required =
+        opt_bool(obj, "backchannel_logout_session_required")?.unwrap_or(false);
+
+    // Display metadata.
+    let client_name = match opt_str(obj, "client_name")? {
+        None => None,
+        Some(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return Err(meta("client_name must not be empty"));
+            }
+            Some(trimmed.to_owned())
+        }
+    };
+    let mut info = [None, None, None, None];
+    for (slot, key) in info
+        .iter_mut()
+        .zip(["logo_uri", "client_uri", "policy_uri", "tos_uri"])
+    {
+        if let Some(value) = opt_str(obj, key)? {
+            check_https_uri(key, value)?;
+            *slot = Some(value.to_owned());
+        }
+    }
+    let [logo_uri, client_uri, policy_uri, tos_uri] = info;
+
+    let client = ClientInput {
+        name: client_name
+            .clone()
+            .unwrap_or_else(|| DEFAULT_CLIENT_NAME.to_owned()),
+        client_type,
+        application_type,
+        auth_method,
+        redirect_uris,
+        grant_types,
+        scopes,
+        require_pkce: Some(true),
+        jwks,
+        jwks_uri: None,
+    };
+    let options = ClientOptions {
+        token_format: TokenFormat::Jwt,
+        consent_mode: ConsentMode::Required,
+        id_token_signed_response_alg: None,
+        can_introspect: false,
+        post_logout_redirect_uris,
+        backchannel_logout_uri,
+        backchannel_logout_session_required,
+        allowed_resources,
+        mfa_policy: None,
+    };
+
+    // The client rules every client obeys (one implementation: `service::client`).
+    validate_client(&client, validate_redirect_uri).map_err(map_client_error)?;
+    validate_client_phase4(&client, &options, validate_redirect_uri).map_err(map_client_error)?;
+
+    Ok(ValidatedRegistration {
+        client,
+        options,
+        client_name,
+        response_types,
+        logo_uri,
+        client_uri,
+        policy_uri,
+        tos_uri,
+    })
 }
 
 #[cfg(test)]
