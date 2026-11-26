@@ -1,6 +1,10 @@
 //! Helpers for driving upstream sign-in through the built-in pages against a [`MockProvider`]
-//! (test code only). Used by `upstream_login.rs` and `security_linking.rs` next to
-//! `mod support; mod ui_helpers; mod upstream_support;`.
+//! (test code only). Used by `upstream_login.rs`, `security_linking.rs` and `enterprise_oidc.rs`
+//! next to `mod support; mod ui_helpers; mod upstream_support;`.
+//!
+//! Enterprise (org) connections: [`create_org`], [`verify_domain`] and [`add_org_connection`]
+//! seed them through the storage traits (the org connection admin API is 06-17). Org connections
+//! have no sign-in button, so [`start_at`] posts the start route of any slug directly.
 //!
 //! The app runs with the production public URL (`https://op.test`, `__Host-` cookies) and the
 //! development outbound policy so it can reach the mock on loopback; the route-class limit for
@@ -11,8 +15,9 @@
 use anvil_cache::limiter::RateQuota;
 use anvil_core::model::{
     AuditAction, AuditEvent, AuditQuery, BrowserSession, Connection, ConnectionConfig,
-    ConnectionId, IdentityLink, NewConnection, OidcConfig, SecretHash, Tenant, TenantSettings,
-    User, UserUpdate,
+    ConnectionId, IdentityLink, IdentityLinkId, NewConnection, NewIdentityLink, NewOrgDomain,
+    NewOrganization, NewRole, OidcConfig, OrgDomain, OrgDomainId, OrgId, OrgSettings, Organization,
+    OrganizationUpdate, Role, RoleId, SecretHash, Tenant, TenantSettings, User, UserUpdate,
 };
 use anvil_core::ports::Clock as _;
 use anvil_core::service::connection::seal_secret;
@@ -73,6 +78,191 @@ pub async fn add_connection(
     config: ConnectionConfig,
     trust: bool,
 ) -> Connection {
+    create_connection(app, slug, name, config, trust, None).await
+}
+
+/// A generic OIDC configuration pointing at `mock`.
+pub fn mock_oidc_config(mock: &MockProvider) -> ConnectionConfig {
+    ConnectionConfig::Oidc(OidcConfig {
+        issuer: mock.issuer(),
+        client_id: MOCK_CLIENT_ID.into(),
+        scopes: vec![],
+        use_pkce: true,
+        fetch_userinfo: false,
+    })
+}
+
+/// Creates an organization on the default tenant (no MFA requirement) whose just-in-time
+/// members get `default_roles`.
+pub async fn create_org(app: &TestApp, slug: &str, default_roles: &[RoleId]) -> Organization {
+    app.storage()
+        .organizations()
+        .create(
+            default_tenant(app).id,
+            &NewOrganization {
+                id: OrgId::new_v7(),
+                slug: slug.into(),
+                display_name: format!("Org {slug}"),
+                mfa_policy: None,
+                settings: OrgSettings {
+                    default_role_ids: default_roles.to_vec(),
+                },
+                metadata: json!({}),
+                created_at: app.clock().now(),
+            },
+        )
+        .await
+        .expect("create org")
+}
+
+/// Sets the roles just-in-time members of `org` get.
+pub async fn set_default_roles(app: &TestApp, org: &Organization, roles: &[RoleId]) {
+    app.storage()
+        .organizations()
+        .update(
+            default_tenant(app).id,
+            org.id,
+            &OrganizationUpdate {
+                settings: Some(OrgSettings {
+                    default_role_ids: roles.to_vec(),
+                }),
+                ..OrganizationUpdate::default()
+            },
+            app.clock().now(),
+        )
+        .await
+        .expect("update org")
+        .expect("org exists");
+}
+
+/// Links `user` to `subject` at `conn` directly in storage.
+pub async fn link_identity(app: &TestApp, user: &User, conn: &Connection, subject: &str) {
+    app.storage()
+        .connections()
+        .create_link(
+            default_tenant(app).id,
+            &NewIdentityLink {
+                id: IdentityLinkId::new_v7(),
+                user_id: user.id,
+                connection_id: conn.id,
+                subject: subject.into(),
+                email_at_link: None,
+                metadata: serde_json::Map::new(),
+                created_at: app.clock().now(),
+            },
+        )
+        .await
+        .expect("create link");
+}
+
+/// Creates a role owned by `org` (`org = None`: a tenant role).
+pub async fn create_role(app: &TestApp, org: Option<OrgId>, name: &str) -> Role {
+    app.storage()
+        .roles()
+        .create(
+            default_tenant(app).id,
+            &NewRole {
+                id: RoleId::new_v7(),
+                org_id: org,
+                name: name.into(),
+                description: String::new(),
+                permissions: vec![format!("{name}:read")],
+                created_at: app.clock().now(),
+            },
+        )
+        .await
+        .expect("create role")
+}
+
+/// Claims `domain` for `org`; `verified` also marks the claim verified (storage intent, as the
+/// DNS check would).
+pub async fn claim_domain(
+    app: &TestApp,
+    org: &Organization,
+    domain: &str,
+    verified: bool,
+) -> OrgDomain {
+    let tenant = default_tenant(app).id;
+    let orgs = app.storage().organizations();
+    let claim = orgs
+        .create_domain(
+            tenant,
+            &NewOrgDomain {
+                id: OrgDomainId::new_v7(),
+                org_id: org.id,
+                domain: domain.into(),
+                token: "test-challenge-token".into(),
+                connection_id: None,
+                routing: false,
+                allow_local_password: true,
+                created_at: app.clock().now(),
+            },
+        )
+        .await
+        .expect("create domain");
+    if !verified {
+        return claim;
+    }
+    orgs.mark_verified(tenant, claim.id, app.clock().now())
+        .await
+        .expect("mark verified")
+        .expect("domain exists")
+}
+
+/// Claims and verifies `domain` for `org`.
+pub async fn verify_domain(app: &TestApp, org: &Organization, domain: &str) -> OrgDomain {
+    claim_domain(app, org, domain, true).await
+}
+
+/// Creates an enabled OIDC connection owned by `org`, pointing at `mock`.
+pub async fn add_org_connection(
+    app: &TestApp,
+    mock: &MockProvider,
+    org: &Organization,
+    slug: &str,
+    trust: bool,
+) -> Connection {
+    create_connection(
+        app,
+        slug,
+        &format!("{} SSO", org.display_name),
+        mock_oidc_config(mock),
+        trust,
+        Some(org.id),
+    )
+    .await
+}
+
+/// Whether `user` is a member of `org`.
+pub async fn is_member(app: &TestApp, org: &Organization, user: &User) -> bool {
+    app.storage()
+        .organizations()
+        .is_member(default_tenant(app).id, org.id, user.id)
+        .await
+        .expect("is_member")
+}
+
+/// The role names `user` holds in `org`.
+pub async fn org_role_names(app: &TestApp, org: &Organization, user: &User) -> Vec<String> {
+    app.storage()
+        .roles()
+        .roles_for_user_in_org(default_tenant(app).id, user.id, org.id)
+        .await
+        .expect("roles in org")
+        .into_iter()
+        .map(|r| r.name)
+        .collect()
+}
+
+/// Creates an enabled connection (tenant or org) with [`SECRET`] sealed like production.
+async fn create_connection(
+    app: &TestApp,
+    slug: &str,
+    name: &str,
+    config: ConnectionConfig,
+    trust: bool,
+    org_id: Option<OrgId>,
+) -> Connection {
     let tenant = default_tenant(app).id;
     let id = ConnectionId::new_v7();
     let secret = seal_secret(app.kek(), tenant, id, &SecretString::from(SECRET)).expect("seal");
@@ -89,7 +279,7 @@ pub async fn add_connection(
                 secret_enc: Some(secret),
                 trust_email_verified: trust,
                 created_at: app.clock().now(),
-                org_id: None,
+                org_id,
             },
         )
         .await
@@ -157,6 +347,45 @@ pub async fn start(app: &TestApp, slug: &str) -> Started {
     post_start(app, &action, &csrf_from(&html)).await
 }
 
+/// Opens the sign-in page and posts the start route of `slug` directly (with the page's flow and
+/// CSRF token), as home-realm discovery will for org connections, which have no button.
+pub async fn start_at(app: &TestApp, slug: &str) -> Started {
+    let page = app.get("/ui/login").await;
+    assert_eq!(page.status, 200, "{}", page.text());
+    let html = page.html();
+    let action = url::Url::parse(&format!("https://op.test{}", form_action(app, &html)))
+        .expect("login form action");
+    let flow = action
+        .query_pairs()
+        .find(|(k, _)| k == "flow")
+        .map(|(_, v)| v.into_owned())
+        .expect("login form carries the flow");
+    post_start(
+        app,
+        &format!("/ui/login/upstream/{slug}?flow={flow}"),
+        &csrf_from(&html),
+    )
+    .await
+}
+
+/// The provider returns to the callback of `slug` (`GET`, with the jar's cookies).
+pub async fn callback_at(u: &Upstream, slug: &str, started: &Started) -> TestResponse {
+    let iss = u.mock.issuer();
+    u.app
+        .get(&callback_path(
+            slug,
+            &[("code", "code-1"), ("state", &started.state), ("iss", &iss)],
+        ))
+        .await
+}
+
+/// A full upstream sign-in through connection `slug` started with [`start_at`].
+pub async fn sign_in_at(u: &Upstream, slug: &str, overrides: Value) -> TestResponse {
+    let started = start_at(&u.app, slug).await;
+    reply_for(u, &started, overrides);
+    callback_at(u, slug, &started).await
+}
+
 /// The callback path of `slug` with query `pairs`.
 pub fn callback_path(slug: &str, pairs: &[(&str, &str)]) -> String {
     let q = url::form_urlencoded::Serializer::new(String::new())
@@ -168,13 +397,7 @@ pub fn callback_path(slug: &str, pairs: &[(&str, &str)]) -> String {
 /// The provider returns to the callback (`GET`, with the jar's cookies) with `code`, `state`
 /// and the mock's `iss`.
 pub async fn callback(u: &Upstream, started: &Started) -> TestResponse {
-    let iss = u.mock.issuer();
-    u.app
-        .get(&callback_path(
-            SLUG,
-            &[("code", "code-1"), ("state", &started.state), ("iss", &iss)],
-        ))
-        .await
+    callback_at(u, SLUG, started).await
 }
 
 /// The token endpoint answers with an ID token for the started flow's nonce plus `overrides`.

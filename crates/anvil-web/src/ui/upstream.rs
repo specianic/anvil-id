@@ -97,7 +97,9 @@ pub(super) async fn upstream_buttons(
     match state.storage().connections().list(tenant.tenant.id).await {
         Ok(list) => list
             .into_iter()
-            .filter(|c| c.enabled)
+            // Org connections (enterprise SSO) are reached through home-realm discovery or the
+            // `organization` parameter, never as buttons on the tenant's sign-in page.
+            .filter(|c| c.enabled && c.org_id.is_none())
             .map(|c| UpstreamButton {
                 action: carry_ui_locales(
                     &format!("{base}/login/upstream/{}?flow={flow}", c.slug),

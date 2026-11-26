@@ -2,8 +2,9 @@
 //! selected backend (`ANVILID_TEST_DB`): a locked (429) password sign-in, before and after the
 //! flow runs, the CAPTCHA-required and CAPTCHA-failed pages, a failed passkey assertion and a
 //! passkey lockout all list the tenant's enabled connections, so a gated user still sees the
-//! other ways to sign in. Disabled connections are never listed, and a tenant without
-//! connections renders no button group.
+//! other ways to sign in. Disabled connections are never listed, org (enterprise SSO)
+//! connections are never listed on the tenant's page, and a tenant without connections renders
+//! no button group.
 
 mod support;
 mod ui_helpers;
@@ -241,6 +242,23 @@ async fn passkey_failures(app: &TestApp) -> (TestResponse, TestResponse, TestRes
 async fn the_sign_in_page_lists_only_enabled_connections() {
     let app = app_with(true, |_| {}).await;
     assert_buttons(&app.get("/ui/login").await);
+}
+
+#[tokio::test]
+async fn org_connection_not_listed_on_tenant_sign_in_page() {
+    let app = app_with(true, |_| {}).await;
+    let org = upstream_flow::create_org(&app, "acme", &[]).await;
+    let mock = upstream_support::MockProvider::start(upstream_support::MockKind::Oidc).await;
+    upstream_flow::add_org_connection(&app, &mock, &org, "acme-sso", true).await;
+    let page = app.get("/ui/login").await;
+    // The tenant connection is still listed.
+    assert_buttons(&page);
+    let html = page.html();
+    assert!(
+        !html.contains("upstream-acme-sso"),
+        "the org connection is not a button: {html}"
+    );
+    assert!(!html.contains("Org acme SSO"), "{html}");
 }
 
 #[tokio::test]

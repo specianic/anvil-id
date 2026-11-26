@@ -15,7 +15,10 @@
 //! - under `require_verified_email`, an upstream sign-in to an account whose email is not
 //!   verified (just created from an untrusted upstream, or through an existing link) creates no
 //!   session;
-//! - the UserInfo fallback refuses a UserInfo `sub` that differs from the ID token's.
+//! - the UserInfo fallback refuses a UserInfo `sub` that differs from the ID token's;
+//! - an organization's IdP is trusted only for its own org's verified domains: org A's IdP
+//!   asserting an address on a domain verified by org B never auto-links to the org B user and
+//!   never makes that account a member of org A.
 
 mod support;
 mod ui_helpers;
@@ -694,4 +697,115 @@ async fn userinfo_fallback_rejects_another_subject() {
     assert_rejected(&u, &resp, "userinfo_subject").await;
     assert!(user(&u.app, "mallory@example.com").await.is_none());
     assert!(user(&u.app, MOCK_EMAIL).await.is_none());
+}
+
+#[tokio::test]
+async fn foreign_domain_email_never_auto_links() {
+    const VICTIM: &str = "victim@orgb.example";
+    let u = setup(true).await;
+    tenant_settings(&u.app, |s| s.auto_link = true).await;
+    let org_a = create_org(&u.app, "org-a", &[]).await;
+    let org_b = create_org(&u.app, "org-b", &[]).await;
+    verify_domain(&u.app, &org_a, "orga.example").await;
+    verify_domain(&u.app, &org_b, "orgb.example").await;
+    // Org A's IdP, trusted for email_verified (the strongest setting an org admin can pick).
+    add_org_connection(&u.app, &u.mock, &org_a, "org-a-sso", true).await;
+    // The victim: a verified local account on org B's domain, member of org B.
+    register(&u.app, "", VICTIM, PASSWORD).await;
+    mark_verified(&u.app, VICTIM).await;
+    let victim = user(&u.app, VICTIM).await.expect("victim");
+    u.app
+        .storage()
+        .organizations()
+        .add_member(
+            tenant(&u.app).id,
+            &anvil_core::model::NewMembership {
+                org_id: org_b.id,
+                user_id: victim.id,
+                role_ids: vec![],
+                created_at: u.app.clock().now(),
+            },
+        )
+        .await
+        .expect("add member");
+
+    let resp = sign_in_at(
+        &u,
+        "org-a-sso",
+        json!({ "email": VICTIM, "email_verified": true }),
+    )
+    .await;
+    // The Phase 4 confirmation, without revealing the account.
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let html = resp.html();
+    assert_eq!(form_id(&html), "upstream-link", "{html}");
+    assert!(!html.contains(VICTIM), "{html}");
+    assert!(links(&u.app, &victim).await.is_empty(), "never auto-linked");
+    assert!(session(&u.app).await.is_none(), "no session");
+    assert!(audit(&u.app, AuditAction::IdentityLinked).await.is_empty());
+    assert!(
+        !is_member(&u.app, &org_a, &victim).await,
+        "no org A membership for the victim"
+    );
+    assert!(audit(&u.app, AuditAction::OrgMemberAdded).await.is_empty());
+
+    // The same address from org B's own IdP is trusted (control).
+    add_org_connection(&u.app, &u.mock, &org_b, "org-b-sso", true).await;
+    let resp = sign_in_at(
+        &u,
+        "org-b-sso",
+        json!({ "sub": "b-subject", "email": VICTIM, "email_verified": true }),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_eq!(links(&u.app, &victim).await.len(), 1, "org B's IdP links");
+    assert!(!is_member(&u.app, &org_a, &victim).await);
+}
+
+#[tokio::test]
+async fn foreign_domain_jit_account_is_unverified_and_cannot_claim_the_address() {
+    // Org A's IdP asserting a not-yet-registered address on org B's domain: the JIT account gets
+    // an unverified email (verification email sent), so it can never be auto-linked to later.
+    let u = setup(true).await;
+    let org_a = create_org(&u.app, "org-a", &[]).await;
+    let org_b = create_org(&u.app, "org-b", &[]).await;
+    verify_domain(&u.app, &org_a, "orga.example").await;
+    verify_domain(&u.app, &org_b, "orgb.example").await;
+    add_org_connection(&u.app, &u.mock, &org_a, "org-a-sso", true).await;
+    let resp = sign_in_at(
+        &u,
+        "org-a-sso",
+        json!({ "email": "ceo@orgb.example", "email_verified": true }),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let jit = user(&u.app, "ceo@orgb.example").await.expect("jit user");
+    assert!(!jit.email_verified, "foreign domain is never verified");
+    assert!(!is_member(&u.app, &org_b, &jit).await);
+    let emails = take_emails(&u.app).await;
+    assert_eq!(emails.len(), 1, "verification email: {emails:?}");
+}
+
+#[tokio::test]
+async fn tenant_connection_trust_is_unchanged_by_org_domains() {
+    // A tenant (non-org) connection keeps the Phase 4 trust: an org's verified domain neither
+    // grants nor removes trust there.
+    let u = setup(true).await;
+    tenant_settings(&u.app, |s| s.auto_link = true).await;
+    let org = create_org(&u.app, "org-b", &[]).await;
+    verify_domain(&u.app, &org, "orgb.example").await;
+    register(&u.app, "", "pat@orgb.example", PASSWORD).await;
+    mark_verified(&u.app, "pat@orgb.example").await;
+    let pat = user(&u.app, "pat@orgb.example").await.expect("pat");
+    let resp = sign_in(
+        &u,
+        json!({ "email": "pat@orgb.example", "email_verified": true }),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_eq!(links(&u.app, &pat).await.len(), 1, "Phase 4 auto-link");
+    assert!(
+        !is_member(&u.app, &org, &pat).await,
+        "tenant connections add no membership"
+    );
 }
