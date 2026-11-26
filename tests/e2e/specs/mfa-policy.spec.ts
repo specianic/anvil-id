@@ -8,6 +8,10 @@
 //   page (no password field), and the ID token has acr mfa with otp + mfa in amr, on the same
 //   session.
 // - Client override: tenant `optional`, one client `required`: only that client forces enrolment.
+// - Tenant policy `required`, passkey choice: a fresh user picks "Add a passkey" on the enrolment
+//   page, the CDP virtual authenticator (fixtures/webauthn.ts) registers it, and the RP's ID token
+//   has acr mfa and mfa in amr; the next sign-in uses that passkey (usernameless, from the sign-in
+//   page), which satisfies `required` on its own.
 //
 // The tenant policy is shared by every spec of the run (one worker, one instance), so each test
 // sets it through withTenantSettings, which restores the previous value even on failure. ID token
@@ -17,6 +21,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 import { expectNoA11yViolations } from '../fixtures/axe';
+import { addVirtualAuthenticator, removeVirtualAuthenticator } from '../fixtures/webauthn';
 import {
   adminToken,
   anvilUrl,
@@ -228,4 +233,53 @@ test('a client override to required applies only to that client', async ({ page 
     await passwordAtRp(page, strictRp.base, user.email, user.password);
     await expectEnrolmentPage(page);
   });
+});
+
+test('policy required: a passkey chosen at enrolment signs in with mfa, then signs in again', async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  const token = await adminToken(creds);
+  const user = await newUser('mfa-passkey');
+  const authenticator = await addVirtualAuthenticator(page);
+  try {
+    await withTenantSettings(token, { mfa_policy: 'required' }, async () => {
+      await page.context().clearCookies();
+      const enrolled = await signInForIdToken(page, codeClient, async (p) => {
+        await login(p, user.email, user.password);
+        // The enrolment page offers both choices; the passkey button appears once webauthn.js
+        // finds WebAuthn support.
+        await expectEnrolmentPage(p);
+        await expect(p.locator('#mfa-enroll-passkey')).toBeVisible();
+        await expectNoA11yViolations(p);
+        const button = p.locator('#mfa-enroll-passkey-submit');
+        await expect(button).toBeVisible();
+        await button.click();
+      });
+      expect(enrolled.sub).toBe(user.id);
+      expect(enrolled.acr).toBe(ACR_MFA);
+      const amr = enrolled.amr as string[];
+      expect(amr).toEqual(expect.arrayContaining(['user', 'mfa']));
+      expect(amr.some((m) => m === 'hwk' || m === 'swk')).toBe(true);
+      expect(amr).not.toContain('otp');
+
+      const stored = await authenticator.getCredentials();
+      expect(stored).toHaveLength(1);
+      expect(stored[0].isResidentCredential).toBe(true);
+      expect(stored[0].rpId).toBe(new URL(anvilUrl()).hostname);
+
+      // Next sign-in: the enrolled passkey alone satisfies `required` (no password, no enrolment).
+      await page.context().clearCookies();
+      const again = await signInForIdToken(page, codeClient, async (p) => {
+        const passkey = p.locator('#login-passkey-submit');
+        await expect(passkey).toBeVisible();
+        await passkey.click();
+      });
+      expect(again.sub).toBe(user.id);
+      expect(again.acr).toBe(ACR_MFA);
+      expect(again.amr).toEqual(expect.arrayContaining(['mfa']));
+    });
+  } finally {
+    await removeVirtualAuthenticator(authenticator);
+  }
 });
