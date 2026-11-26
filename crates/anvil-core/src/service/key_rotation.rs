@@ -391,7 +391,9 @@ impl KeyRotationService {
     }
 
     /// Generates and stores a key. `false` if an `Active` key lost a race against another
-    /// runner (the index refused a second active key).
+    /// runner (several nodes starting together on one database): the index refused a second
+    /// active key and the winner's key is now active. Only the winner audits. A conflict with no
+    /// active key behind it is a real error and is returned, never treated as success.
     async fn generate(
         &self,
         tenant: TenantId,
@@ -403,7 +405,12 @@ impl KeyRotationService {
         let key = seal_new_key_for(&self.kek, tenant, alg, now, state)?;
         match self.storage.keys().insert(tenant, &key).await {
             Ok(()) => {}
-            Err(StorageError::Conflict(_)) if state == KeyState::Active => return Ok(false),
+            Err(StorageError::Conflict(msg)) if state == KeyState::Active => {
+                return match self.storage.keys().active(tenant, alg.as_str()).await? {
+                    Some(_) => Ok(false),
+                    None => Err(StorageError::Conflict(msg).into()),
+                };
+            }
             Err(e) => return Err(e.into()),
         }
         self.record(
@@ -836,5 +843,91 @@ mod tests {
             now += Duration::hours(1);
         }
         assert_eq!(promotions, 4, "400 days / 90-day period");
+    }
+
+    // --- concurrent first start (OPS-03) ---------------------------------------------------
+
+    use crate::service::bootstrap::race_fake::RaceFake;
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+
+    fn race_rotation(fake: Arc<RaceFake>) -> KeyRotationService {
+        KeyRotationService {
+            storage: fake,
+            kek: Arc::new(Kek::generate()),
+            clock: Arc::new(crate::clock::SystemClock),
+            policy: p(),
+        }
+    }
+
+    fn tenant() -> Tenant {
+        Tenant {
+            id: TenantId::new_v7(),
+            slug: "default".to_owned(),
+            display_name: "Default".to_owned(),
+            host: None,
+            settings: crate::model::TenantSettings::default(),
+            created_at: t0(),
+        }
+    }
+
+    #[tokio::test]
+    async fn ensure_tenant_treats_a_concurrent_winners_active_key_as_success() {
+        let tenant = tenant();
+        let algs = enabled_algs(&tenant).unwrap();
+        // Per alg: no active key at first; after the conflict the winner's key is active.
+        let mut answers = VecDeque::new();
+        for alg in &algs {
+            answers.push_back(None);
+            answers.push_back(Some(key(*alg, KeyState::Active, t0())));
+        }
+        let fake = Arc::new(RaceFake {
+            active_keys: Mutex::new(answers),
+            key_insert_conflict: true,
+            ..RaceFake::default()
+        });
+        let generated = race_rotation(fake.clone())
+            .ensure_tenant(&tenant)
+            .await
+            .expect("losing the one-active-key race is success");
+        assert_eq!(generated, 0);
+        assert_eq!(*fake.key_inserts.lock().unwrap() as usize, algs.len());
+        assert_eq!(
+            fake.audit_count(),
+            0,
+            "only the winner audits key_generated"
+        );
+    }
+
+    #[tokio::test]
+    async fn ensure_tenant_conflict_without_an_active_key_is_an_error() {
+        let fake = Arc::new(RaceFake {
+            // No active key before or after the conflict (e.g. a duplicate kid).
+            key_insert_conflict: true,
+            ..RaceFake::default()
+        });
+        let err = race_rotation(fake.clone())
+            .ensure_tenant(&tenant())
+            .await
+            .expect_err("a conflict nobody won is not hidden");
+        assert!(
+            matches!(err, CoreError::Storage(StorageError::Conflict(_))),
+            "{err:?}"
+        );
+        assert_eq!(fake.audit_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn ensure_tenant_winner_generates_and_audits() {
+        let tenant = tenant();
+        let algs = enabled_algs(&tenant).unwrap();
+        let fake = Arc::new(RaceFake::default());
+        let generated = race_rotation(fake.clone())
+            .ensure_tenant(&tenant)
+            .await
+            .unwrap();
+        assert_eq!(generated as usize, algs.len());
+        // key_generated + key_activated per alg.
+        assert_eq!(fake.audit_count(), 2 * algs.len());
     }
 }

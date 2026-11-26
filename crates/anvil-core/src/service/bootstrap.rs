@@ -782,4 +782,417 @@ mod tests {
         assert_eq!(r.mgmt_client_id, new_client.client_id);
         assert_eq!(r.mgmt_client_secret.expose_secret(), expected_secret);
     }
+
+    // --- concurrent first start (OPS-03): this node loses every race ---------------------
+
+    use super::race_fake::RaceFake;
+    use crate::ports::PasswordCheck;
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+
+    /// Never reached by install or console reconciliation.
+    struct NoHasher;
+
+    #[async_trait::async_trait]
+    impl PasswordHasher for NoHasher {
+        async fn hash(&self, _password: &str) -> Result<String, CoreError> {
+            Err(CoreError::Internal("race test: no hashing".into()))
+        }
+        async fn verify(
+            &self,
+            _phc: Option<&str>,
+            _password: &str,
+        ) -> Result<PasswordCheck, CoreError> {
+            Err(CoreError::Internal("race test: no hashing".into()))
+        }
+    }
+
+    fn race_service(fake: Arc<RaceFake>) -> BootstrapService {
+        BootstrapService {
+            storage: fake,
+            clock: Arc::new(crate::clock::SystemClock),
+            kek: Arc::new(Kek::generate()),
+            hasher: Arc::new(NoHasher),
+            policy: PasswordPolicy::default(),
+            public_url: PublicUrl::parse("https://id.example/").unwrap(),
+        }
+    }
+
+    fn system_tenant() -> Tenant {
+        Tenant {
+            id: TenantId::new_v7(),
+            slug: SYSTEM_TENANT_SLUG.to_owned(),
+            display_name: "System".to_owned(),
+            host: None,
+            settings: TenantSettings {
+                registration: RegistrationMode::Disabled,
+                ..TenantSettings::default()
+            },
+            created_at: NOW,
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_install_loser_gets_already_installed_and_no_setup_url() {
+        let fake = Arc::new(RaceFake {
+            installed: false,
+            install: Some(InstallOutcome::AlreadyInstalled),
+            ..RaceFake::default()
+        });
+        let result = race_service(fake.clone()).ensure_installed().await.unwrap();
+        assert!(matches!(result, InstallResult::AlreadyInstalled));
+        assert_eq!(fake.audit_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn console_client_conflict_rereads_the_winners_row_and_does_not_audit() {
+        let url = PublicUrl::parse("https://id.example/").unwrap();
+        // What the winner wrote: exactly what this node wants.
+        let winner = stored(&build_console_client(NOW, &url));
+        let fake = Arc::new(RaceFake {
+            system: Some(system_tenant()),
+            client_gets: Mutex::new(VecDeque::from([None, Some(winner)])),
+            client_create_conflict: true,
+            ..RaceFake::default()
+        });
+        race_service(fake.clone())
+            .ensure_console_client(&url)
+            .await
+            .expect("a concurrent winner's unique violation is success");
+        assert_eq!(
+            fake.audit_count(),
+            0,
+            "only the winner audits client_created"
+        );
+    }
+
+    #[tokio::test]
+    async fn console_client_conflict_without_a_row_is_an_error() {
+        let url = PublicUrl::parse("https://id.example/").unwrap();
+        let fake = Arc::new(RaceFake {
+            system: Some(system_tenant()),
+            client_gets: Mutex::new(VecDeque::from([None, None])),
+            client_create_conflict: true,
+            ..RaceFake::default()
+        });
+        let err = race_service(fake.clone())
+            .ensure_console_client(&url)
+            .await
+            .expect_err("a conflict nobody won is not hidden");
+        assert!(matches!(err, CoreError::Internal(_)), "{err:?}");
+        assert_eq!(fake.audit_count(), 0);
+    }
+}
+
+/// A storage fake that plays the loser of a concurrent first start (several nodes on one empty
+/// database, OPS-03): the client, key and setup repositories answer as if another node had just
+/// won. Shared by the bootstrap and key-rotation tests; only the methods those use are backed.
+#[cfg(test)]
+pub(crate) mod race_fake {
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+
+    use time::OffsetDateTime;
+
+    use crate::model::{
+        AuditEvent, AuditQuery, Client, InstallPlan, NewAuditEvent, NewClient,
+        NewPasswordCredential, NewSetupToken, NewSigningKey, NewTenant, NewUser, Page, PageRequest,
+        SecretHash, SigningKey, SigningKeyId, Tenant, TenantId, TenantUpdate,
+    };
+    use crate::ports::{
+        AttributeRepo, AuditRepo, BrandingRepo, ClientRepo, ConnectionRepo, FlowRepo, GrantRepo,
+        InstallOutcome, JobRepo, KeyRepo, LogoutRepo, MailSettingsRepo, OutboxRepo,
+        RegistrationRepo, RoleRepo, SessionRepo, SetupOutcome, SetupRepo, Storage, StorageError,
+        TenantRepo, UserRepo, WebhookRepo,
+    };
+
+    fn unsupported<T>() -> Result<T, StorageError> {
+        Err(StorageError::Unsupported("race fake"))
+    }
+
+    /// Scripted answers, consumed in order; an exhausted queue answers `None`.
+    #[derive(Default)]
+    pub(crate) struct RaceFake {
+        pub system: Option<Tenant>,
+        pub installed: bool,
+        pub install: Option<InstallOutcome>,
+        /// `clients().get` answers.
+        pub client_gets: Mutex<VecDeque<Option<Client>>>,
+        /// `clients().create` fails with `Conflict` (a concurrent winner's unique violation).
+        pub client_create_conflict: bool,
+        /// `keys().active` answers.
+        pub active_keys: Mutex<VecDeque<Option<SigningKey>>>,
+        /// `keys().insert` fails with `Conflict` (the one-active-key index).
+        pub key_insert_conflict: bool,
+        pub key_inserts: Mutex<u32>,
+        pub audits: Mutex<Vec<NewAuditEvent>>,
+    }
+
+    impl RaceFake {
+        pub(crate) fn audit_count(&self) -> usize {
+            self.audits.lock().unwrap().len()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl TenantRepo for RaceFake {
+        async fn create(&self, _tenant: &NewTenant) -> Result<Tenant, StorageError> {
+            unsupported()
+        }
+        async fn get(&self, _id: TenantId) -> Result<Option<Tenant>, StorageError> {
+            unsupported()
+        }
+        async fn get_by_slug(&self, slug: &str) -> Result<Option<Tenant>, StorageError> {
+            Ok(self.system.clone().filter(|t| t.slug == slug))
+        }
+        async fn get_by_host(&self, _host: &str) -> Result<Option<Tenant>, StorageError> {
+            unsupported()
+        }
+        async fn list(&self, _page: PageRequest) -> Result<Page<Tenant>, StorageError> {
+            unsupported()
+        }
+        async fn update(
+            &self,
+            _id: TenantId,
+            _update: &TenantUpdate,
+        ) -> Result<Option<Tenant>, StorageError> {
+            unsupported()
+        }
+        async fn delete(&self, _id: TenantId) -> Result<bool, StorageError> {
+            unsupported()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ClientRepo for RaceFake {
+        async fn create(&self, _t: TenantId, _client: &NewClient) -> Result<Client, StorageError> {
+            if self.client_create_conflict {
+                Err(StorageError::Conflict("client_id".into()))
+            } else {
+                unsupported()
+            }
+        }
+        async fn get(
+            &self,
+            _t: TenantId,
+            _client_id: &str,
+        ) -> Result<Option<Client>, StorageError> {
+            Ok(self.client_gets.lock().unwrap().pop_front().flatten())
+        }
+        async fn list(
+            &self,
+            _t: TenantId,
+            _page: PageRequest,
+        ) -> Result<Page<Client>, StorageError> {
+            unsupported()
+        }
+        async fn update(
+            &self,
+            _t: TenantId,
+            _client_id: &str,
+            _update: &crate::model::ClientUpdate,
+            _now: OffsetDateTime,
+        ) -> Result<Option<Client>, StorageError> {
+            unsupported()
+        }
+        async fn set_secret_hash(
+            &self,
+            _t: TenantId,
+            _client_id: &str,
+            _secret_hash: Option<SecretHash>,
+            _now: OffsetDateTime,
+        ) -> Result<bool, StorageError> {
+            unsupported()
+        }
+        async fn delete(&self, _t: TenantId, _client_id: &str) -> Result<bool, StorageError> {
+            unsupported()
+        }
+        async fn upsert_cimd(
+            &self,
+            _t: TenantId,
+            _client: &NewClient,
+            _metadata_expires_at: OffsetDateTime,
+            _now: OffsetDateTime,
+        ) -> Result<Client, StorageError> {
+            unsupported()
+        }
+        async fn get_by_registration_token(
+            &self,
+            _t: TenantId,
+            _client_id: &str,
+            _token_hash: &SecretHash,
+        ) -> Result<Option<Client>, StorageError> {
+            unsupported()
+        }
+        async fn set_registration_token(
+            &self,
+            _t: TenantId,
+            _client_id: &str,
+            _token_hash: Option<&SecretHash>,
+            _now: OffsetDateTime,
+        ) -> Result<bool, StorageError> {
+            unsupported()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl KeyRepo for RaceFake {
+        async fn insert(&self, _t: TenantId, _key: &NewSigningKey) -> Result<(), StorageError> {
+            *self.key_inserts.lock().unwrap() += 1;
+            if self.key_insert_conflict {
+                Err(StorageError::Conflict("one active key per alg".into()))
+            } else {
+                Ok(())
+            }
+        }
+        async fn active(
+            &self,
+            _t: TenantId,
+            _alg: &str,
+        ) -> Result<Option<SigningKey>, StorageError> {
+            Ok(self.active_keys.lock().unwrap().pop_front().flatten())
+        }
+        async fn published(
+            &self,
+            _t: TenantId,
+            _now: OffsetDateTime,
+        ) -> Result<Vec<SigningKey>, StorageError> {
+            unsupported()
+        }
+        async fn list(&self, _t: TenantId) -> Result<Vec<SigningKey>, StorageError> {
+            unsupported()
+        }
+        async fn promote(
+            &self,
+            _t: TenantId,
+            _retire: Option<(SigningKeyId, OffsetDateTime)>,
+            _activate: SigningKeyId,
+            _now: OffsetDateTime,
+        ) -> Result<bool, StorageError> {
+            unsupported()
+        }
+        async fn delete_expired(
+            &self,
+            _t: TenantId,
+            _now: OffsetDateTime,
+        ) -> Result<u64, StorageError> {
+            unsupported()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl SetupRepo for RaceFake {
+        async fn is_installed(&self) -> Result<bool, StorageError> {
+            Ok(self.installed)
+        }
+        async fn install(&self, _plan: &InstallPlan) -> Result<InstallOutcome, StorageError> {
+            self.install
+                .ok_or(StorageError::Unsupported("race fake: install"))
+        }
+        async fn create_setup_token(&self, _token: &NewSetupToken) -> Result<(), StorageError> {
+            unsupported()
+        }
+        async fn peek_setup_token(
+            &self,
+            _hash: &SecretHash,
+            _now: OffsetDateTime,
+        ) -> Result<bool, StorageError> {
+            unsupported()
+        }
+        async fn complete_setup(
+            &self,
+            _hash: &SecretHash,
+            _now: OffsetDateTime,
+            _admin_tenant: TenantId,
+            _admin: &NewUser,
+            _password: &NewPasswordCredential,
+            _client_tenant: TenantId,
+            _client: &NewClient,
+        ) -> Result<SetupOutcome, StorageError> {
+            unsupported()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl AuditRepo for RaceFake {
+        async fn append(&self, _t: TenantId, event: &NewAuditEvent) -> Result<(), StorageError> {
+            self.audits.lock().unwrap().push(event.clone());
+            Ok(())
+        }
+        async fn query(
+            &self,
+            _t: TenantId,
+            _query: &AuditQuery,
+        ) -> Result<Page<AuditEvent>, StorageError> {
+            unsupported()
+        }
+        async fn purge_before(&self, _cutoff: OffsetDateTime) -> Result<u64, StorageError> {
+            unsupported()
+        }
+    }
+
+    /// Tenants, clients, keys, setup and audit are backed; nothing else is reached.
+    #[async_trait::async_trait]
+    impl Storage for RaceFake {
+        fn tenants(&self) -> &dyn TenantRepo {
+            self
+        }
+        fn users(&self) -> &dyn UserRepo {
+            unreachable!("race fake: users")
+        }
+        fn clients(&self) -> &dyn ClientRepo {
+            self
+        }
+        fn keys(&self) -> &dyn KeyRepo {
+            self
+        }
+        fn sessions(&self) -> &dyn SessionRepo {
+            unreachable!("race fake: sessions")
+        }
+        fn flows(&self) -> &dyn FlowRepo {
+            unreachable!("race fake: flows")
+        }
+        fn grants(&self) -> &dyn GrantRepo {
+            unreachable!("race fake: grants")
+        }
+        fn setup(&self) -> &dyn SetupRepo {
+            self
+        }
+        fn outbox(&self) -> &dyn OutboxRepo {
+            unreachable!("race fake: outbox")
+        }
+        fn audit(&self) -> &dyn AuditRepo {
+            self
+        }
+        fn mail_settings(&self) -> &dyn MailSettingsRepo {
+            unreachable!("race fake: mail settings")
+        }
+        fn jobs(&self) -> &dyn JobRepo {
+            unreachable!("race fake: jobs")
+        }
+        fn connections(&self) -> &dyn ConnectionRepo {
+            unreachable!("race fake: connections")
+        }
+        fn branding(&self) -> &dyn BrandingRepo {
+            unreachable!("race fake: branding")
+        }
+        fn logout(&self) -> &dyn LogoutRepo {
+            unreachable!("race fake: logout")
+        }
+        fn roles(&self) -> &dyn RoleRepo {
+            unreachable!("race fake: roles")
+        }
+        fn attributes(&self) -> &dyn AttributeRepo {
+            unreachable!("race fake: attributes")
+        }
+        fn webhooks(&self) -> &dyn WebhookRepo {
+            unreachable!("race fake: webhooks")
+        }
+        fn registration(&self) -> &dyn RegistrationRepo {
+            unreachable!("race fake: registration")
+        }
+        async fn purge_expired(&self, _now: OffsetDateTime) -> Result<u64, StorageError> {
+            unsupported()
+        }
+    }
 }
