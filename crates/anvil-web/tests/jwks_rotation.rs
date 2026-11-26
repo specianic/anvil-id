@@ -380,3 +380,55 @@ async fn rotate_now_rejects_an_alg_the_tenant_has_not_enabled() {
         1
     );
 }
+
+/// The signer cache (05-18) never outlives a rotation: tokens from `POST /token` carry the active
+/// kid before, and the new kid on the very first request after an immediate rotation; once the
+/// retired key is deleted, tokens still verify against the published set.
+#[tokio::test]
+async fn token_endpoint_signs_with_the_new_key_right_after_immediate_rotation() {
+    use anvil_core::model::ClientAuthMethod;
+
+    let app = TestApp::new().await;
+    let tenant = default(&app);
+    let rp = register(
+        &app,
+        tenant.id,
+        cc_input(ClientAuthMethod::ClientSecretBasic),
+    )
+    .await;
+    let kid_of_new_token = || async {
+        let resp = token(&app, &rp.auth(), &[("grant_type", "client_credentials")]).await;
+        assert_eq!(resp.status, 200, "{}", resp.text());
+        let at = json(&resp)["access_token"]
+            .as_str()
+            .expect("access_token")
+            .to_owned();
+        let jwks = published(&app, tenant.id).await;
+        verify_jwt(&at, &jwks, &[Alg::RS256]).expect("token verifies against the JWKS");
+        jwt_header(&at)["kid"].as_str().expect("kid").to_owned()
+    };
+
+    let original = active_kid(&app, tenant.id, Alg::RS256).await;
+    assert_eq!(kid_of_new_token().await, original);
+    assert_eq!(kid_of_new_token().await, original);
+
+    let rotated = rotation(&app)
+        .rotate_now(&tenant, Alg::RS256, true, AuditActor::admin("ops"))
+        .await
+        .expect("rotate");
+    assert_ne!(rotated, original);
+    assert_eq!(kid_of_new_token().await, rotated);
+
+    // The retired key row is deleted by the next run; signing is unaffected.
+    assert_eq!(rotation(&app).run_once().await.expect("run").deleted, 1);
+    assert_eq!(kid_of_new_token().await, rotated);
+    assert_eq!(jwks_kids(&app).await, vec![rotated.clone()]);
+
+    // A second immediate rotation is picked up just as fast.
+    let again = rotation(&app)
+        .rotate_now(&tenant, Alg::RS256, true, AuditActor::admin("ops"))
+        .await
+        .expect("rotate");
+    assert_ne!(again, rotated);
+    assert_eq!(kid_of_new_token().await, again);
+}
