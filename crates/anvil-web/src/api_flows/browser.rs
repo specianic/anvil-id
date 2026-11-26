@@ -25,8 +25,8 @@
 //! | problem `captcha_required` / `captcha_failed` (with the site key) | 403 |
 //! | problem `csrf` (missing or wrong token or flow cookie), `forbidden_origin` | 403 |
 //! | problem `registration_disabled` | 403 |
-//! | problem `invalid_request` (malformed JSON or ids), `method_not_available`, `invalid_flow_state`, `passkey_failed` | 400 |
-//! | problem `not_found` (unknown kind or path), `flow_not_found` (unknown or expired flow on `GET`) | 404 |
+//! | problem `invalid_request` (malformed JSON or ids), `method_not_available` (another kind's method), `invalid_flow_state`, `passkey_failed` | 400 |
+//! | problem `not_found` (unknown kind or path), `method_not_available` (email sign-in off), `flow_not_found` (unknown or expired flow on `GET`) | 404 |
 //! | problem `unsupported_media_type` (a `POST` without `application/json`) | 415 |
 //!
 //! On completion the session cookie is set on the AnvilID origin and the JSON carries

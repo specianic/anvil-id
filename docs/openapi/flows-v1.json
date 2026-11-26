@@ -1,0 +1,1335 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "AnvilID headless flow API",
+    "description": "Drives the login, registration, recovery and verification flows of a tenant with JSON: the same flow engine, brute-force limits, CAPTCHA and sessions as the built-in pages. Paths are relative to the tenant base (`/t/{slug}`, the root for the default tenant, or the tenant host). Browser mode only: a same-site single-page app on an origin in the tenant's `headless.allowed_origins`, the flow cookie, the `X-CSRF-Token` header and `application/json` bodies. Clients must ignore unknown fields, steps, field kinds and methods. Errors are RFC 9457 problem details. See docs/HEADLESS.md.",
+    "version": "v1"
+  },
+  "paths": {
+    "/api/flows/v1/login/{flow_id}/enroll/passkey/finish": {
+      "post": {
+        "tags": [
+          "flows"
+        ],
+        "summary": "The registration response at the enrolment step.",
+        "operationId": "enrolmentPasskeyFinish",
+        "parameters": [
+          {
+            "name": "flow_id",
+            "in": "path",
+            "description": "Flow id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasskeyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Completed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The enrolment form with mfa_enroll.passkey_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "csrf or forbidden_origin",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowProblem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrf": []
+          }
+        ]
+      }
+    },
+    "/api/flows/v1/login/{flow_id}/enroll/passkey/start": {
+      "post": {
+        "tags": [
+          "flows"
+        ],
+        "summary": "Passkey creation options at the enrolment step.",
+        "operationId": "enrolmentPasskeyStart",
+        "parameters": [
+          {
+            "name": "flow_id",
+            "in": "path",
+            "description": "Flow id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasskeyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "WebAuthn creation options (JSON)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "passkey_failed (not the enrolment step)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowProblem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "csrf or forbidden_origin",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowProblem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrf": []
+          }
+        ]
+      }
+    },
+    "/api/flows/v1/login/{flow_id}/passkey": {
+      "post": {
+        "tags": [
+          "flows"
+        ],
+        "summary": "The passkey assertion of a sign-in (throttled per client IP, as the page).",
+        "operationId": "passkeyAssertion",
+        "parameters": [
+          {
+            "name": "flow_id",
+            "in": "path",
+            "description": "Flow id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasskeyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Completed, or the next step",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The sign-in form with login.passkey_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "csrf or forbidden_origin",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowProblem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrf": []
+          }
+        ]
+      }
+    },
+    "/api/flows/v1/login/{flow_id}/passkey/options": {
+      "post": {
+        "tags": [
+          "flows"
+        ],
+        "summary": "Discoverable passkey sign-in options (the sign-in or email-first step).",
+        "operationId": "passkeyOptions",
+        "parameters": [
+          {
+            "name": "flow_id",
+            "in": "path",
+            "description": "Flow id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasskeyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "WebAuthn request options (JSON)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "passkey_failed (not a sign-in step)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowProblem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "csrf or forbidden_origin",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowProblem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrf": []
+          }
+        ]
+      }
+    },
+    "/api/flows/v1/login/{flow_id}/second-factor/passkey/finish": {
+      "post": {
+        "tags": [
+          "flows"
+        ],
+        "summary": "The assertion at the second-factor step.",
+        "operationId": "secondFactorPasskeyFinish",
+        "parameters": [
+          {
+            "name": "flow_id",
+            "in": "path",
+            "description": "Flow id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasskeyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Completed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The second-factor form with second_factor.passkey_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "csrf or forbidden_origin",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowProblem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrf": []
+          }
+        ]
+      }
+    },
+    "/api/flows/v1/login/{flow_id}/second-factor/passkey/start": {
+      "post": {
+        "tags": [
+          "flows"
+        ],
+        "summary": "Passkey request options at the second-factor step.",
+        "operationId": "secondFactorPasskeyStart",
+        "parameters": [
+          {
+            "name": "flow_id",
+            "in": "path",
+            "description": "Flow id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasskeyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "WebAuthn request options (JSON)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "passkey_failed (not a second-factor step with a passkey)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowProblem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "csrf or forbidden_origin",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowProblem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrf": []
+          }
+        ]
+      }
+    },
+    "/api/flows/v1/{kind}": {
+      "post": {
+        "tags": [
+          "flows"
+        ],
+        "summary": "Starts a flow.",
+        "operationId": "startFlow",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "description": "Flow kind",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FlowKindDto"
+            }
+          },
+          {
+            "name": "ui_locales",
+            "in": "query",
+            "description": "Fill `label`/`text` in this locale (space-separated tags)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The flow's first step; sets the flow cookie",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request id",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowProblem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Foreign origin, or registration disabled",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowProblem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown kind",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowProblem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not application/json",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowProblem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/flows/v1/{kind}/{flow_id}": {
+      "get": {
+        "tags": [
+          "flows"
+        ],
+        "summary": "The current step of a flow (without one-time values: keep the hidden fields of the answer\nthat produced the step).",
+        "operationId": "getFlow",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "description": "Flow kind",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FlowKindDto"
+            }
+          },
+          {
+            "name": "flow_id",
+            "in": "path",
+            "description": "Flow id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "ui_locales",
+            "in": "query",
+            "description": "Fill `label`/`text` in this locale",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The current step",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing or wrong CSRF token or flow cookie, or foreign origin",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowProblem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown or expired flow",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowProblem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrf": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "flows"
+        ],
+        "summary": "Submits the current step.",
+        "operationId": "submitFlow",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "description": "Flow kind",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FlowKindDto"
+            }
+          },
+          {
+            "name": "flow_id",
+            "in": "path",
+            "description": "Flow id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "ui_locales",
+            "in": "query",
+            "description": "Fill `label`/`text` in this locale",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The next step, a message, a completed sign-in (sets the session cookie) or browser_required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The form again with an error message, or a problem (invalid_request, method_not_available, invalid_flow_state)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "csrf, forbidden_origin, captcha_required or captcha_failed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowProblem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown kind, or the method's feature is off",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowProblem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not application/json",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowProblem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Locked: the form with retry_after, or a too_many_requests problem; Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrf": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CaptchaAnswerDto": {
+        "type": "object",
+        "description": "A CAPTCHA widget response.",
+        "properties": {
+          "hcaptcha": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "hCaptcha (`h-captcha-response`)."
+          },
+          "turnstile": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cloudflare Turnstile (`cf-turnstile-response`)."
+          }
+        }
+      },
+      "CaptchaDto": {
+        "type": "object",
+        "description": "The CAPTCHA widget to show.",
+        "required": [
+          "provider",
+          "site_key"
+        ],
+        "properties": {
+          "provider": {
+            "$ref": "#/components/schemas/CaptchaProviderDto"
+          },
+          "site_key": {
+            "type": "string"
+          }
+        }
+      },
+      "CaptchaProviderDto": {
+        "type": "string",
+        "description": "CAPTCHA providers.",
+        "enum": [
+          "turnstile",
+          "hcaptcha"
+        ]
+      },
+      "FieldDto": {
+        "type": "object",
+        "description": "One input field. Hidden fields (for example `factor_token`) are submitted back unchanged.",
+        "required": [
+          "name",
+          "kind",
+          "label_key",
+          "required",
+          "messages"
+        ],
+        "properties": {
+          "autocomplete": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "HTML `autocomplete` token."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/FieldKindDto"
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The label in the requested locale (only with `?ui_locales=`)."
+          },
+          "label_key": {
+            "type": "string",
+            "description": "Message key of the label (`field.email`)."
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MessageDto"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "value": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Prefill value. Never present for `password` fields."
+          }
+        }
+      },
+      "FieldKindDto": {
+        "type": "string",
+        "description": "Input kind. `unknown` stands for any kind a newer server may add: clients must not render\nit and must not submit a value for it.",
+        "enum": [
+          "text",
+          "email",
+          "password",
+          "hidden",
+          "unknown"
+        ]
+      },
+      "FlowKindDto": {
+        "type": "string",
+        "description": "The flow kinds of the API (the `{kind}` path segment).",
+        "enum": [
+          "login",
+          "registration",
+          "recovery",
+          "verification"
+        ]
+      },
+      "FlowProblem": {
+        "type": "object",
+        "description": "RFC 9457 problem details (`application/problem+json`) of the flow API.",
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code"
+        ],
+        "properties": {
+          "captcha": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CaptchaDto",
+                "description": "The CAPTCHA to solve (`captcha_required`, `captcha_failed`)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "code": {
+            "type": "string",
+            "description": "Stable error code (`forbidden_origin`, `csrf`, `unsupported_media_type`,\n`invalid_request`, `not_found`, `flow_not_found`, `invalid_flow_state`,\n`registration_disabled`, `method_not_available`, `captcha_required`, `captcha_failed`,\n`passkey_failed`, `too_many_requests`, `server_error`; more may be added)."
+          },
+          "retry_after": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Seconds to wait (`too_many_requests`; also `Retry-After`).",
+            "minimum": 0
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "title": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "description": "`urn:anvilid:problem:flows:{code}`."
+          }
+        }
+      },
+      "FlowRef": {
+        "type": "object",
+        "description": "The flow a response belongs to.",
+        "required": [
+          "id",
+          "kind"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the flow expires (RFC 3339). Absent once the flow has finished."
+          },
+          "id": {
+            "type": "string",
+            "description": "Flow id (UUID): the `{flow_id}` of the follow-up requests."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/FlowKindDto"
+          }
+        }
+      },
+      "FlowResponse": {
+        "type": "object",
+        "description": "The answer to every flow request that is not a problem.",
+        "required": [
+          "flow",
+          "step"
+        ],
+        "properties": {
+          "csrf_token": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Browser mode: the flow's CSRF token. Send it back in the `X-CSRF-Token` header with every\nrequest about this flow. Present while the flow continues."
+          },
+          "flow": {
+            "$ref": "#/components/schemas/FlowRef"
+          },
+          "form": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/FormDto",
+                "description": "`step = form`: what to show and submit."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MessageDto",
+                "description": "`step = message`: the flow finished with this message (for example \"check your email\")."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "result": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ResultDto",
+                "description": "`step = completed`: where the browser goes next."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "retry_after": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Seconds until the form can be submitted again (a lock, HTTP 429; also `Retry-After`).",
+            "minimum": 0
+          },
+          "step": {
+            "$ref": "#/components/schemas/Step"
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`step = browser_required`: navigate the top-level browser window here (the built-in\npages finish the step: upstream, SAML and enterprise single sign-on)."
+          }
+        }
+      },
+      "FormDto": {
+        "type": "object",
+        "description": "A form to render (`form.id` names the step: `login`, `login-identify`, `login-sso-choice`,\n`second-factor`, `mfa-enroll`, `email-code`, `registration`, `recovery`, `recovery-reset`,\n`verification`; more may be added).",
+        "required": [
+          "id",
+          "fields",
+          "messages",
+          "methods"
+        ],
+        "properties": {
+          "captcha": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CaptchaDto",
+                "description": "The next submission must carry a CAPTCHA response of this provider."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FieldDto"
+            }
+          },
+          "id": {
+            "type": "string"
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MessageDto"
+            },
+            "description": "Form-level messages."
+          },
+          "methods": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MethodDto"
+            },
+            "description": "Ways to sign in this form offers (sign-in forms only; empty otherwise)."
+          },
+          "totp": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TotpDto",
+                "description": "`mfa-enroll`: the authenticator-app secret to show once (as text and as a QR code of\n`otpauth_uri`)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "MessageDto": {
+        "type": "object",
+        "description": "A message on a form or field.",
+        "required": [
+          "level",
+          "key",
+          "args"
+        ],
+        "properties": {
+          "args": {
+            "type": "object",
+            "description": "Values interpolated into the text, by argument name.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "key": {
+            "type": "string",
+            "description": "Stable message key (`login.invalid_credentials`)."
+          },
+          "level": {
+            "$ref": "#/components/schemas/MessageLevelDto"
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The text in the requested locale (only with `?ui_locales=`)."
+          }
+        }
+      },
+      "MessageLevelDto": {
+        "type": "string",
+        "description": "Message severity.",
+        "enum": [
+          "info",
+          "error"
+        ]
+      },
+      "MethodDto": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Submit `method: password` with `identifier` and `password`.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "password"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "WebAuthn: `POST …/login/{flow_id}/passkey/options`, then `POST …/login/{flow_id}/passkey`.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "passkey"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Submit `method: email_code_request` with `email`.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "email_code"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The emailed link (sent by the same `email_code_request`); it opens the built-in page.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "magic_link"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A social or OIDC connection: submit `method: upstream` with `slug` for the\n`browser_required` URL.",
+            "required": [
+              "slug",
+              "name",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "upstream"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "slug": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "\"Continue with single sign-on\" (submit `method: identify` with `choice: sso`).",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "sso"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "A way to sign in. New kinds may be added (clients must ignore unknown kinds)."
+      },
+      "PasskeyRequest": {
+        "type": "object",
+        "description": "Passkey sub-routes: the WebAuthn response from `navigator.credentials.*` (its `toJSON()`).",
+        "required": [
+          "response"
+        ],
+        "properties": {
+          "factor_token": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The second-factor token of the enrolment or second-factor form (finish routes)."
+          },
+          "response": {
+            "type": "object",
+            "description": "`PublicKeyCredential.toJSON()` (object). Not needed for the options requests."
+          }
+        }
+      },
+      "ResultDto": {
+        "type": "object",
+        "description": "The outcome of a completed sign-in.",
+        "properties": {
+          "continue_to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Absolute URL on the AnvilID origin: navigate the top-level window there (the\nauthorization request continues and the client receives its code). Absent when the\nsign-in continues nothing."
+          },
+          "recovery_codes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Recovery codes of a second factor enrolled in this flow: show them once before\nfollowing `continue_to`."
+          }
+        }
+      },
+      "StartRequest": {
+        "type": "object",
+        "description": "`POST /api/flows/v1/{kind}`: start a flow. Every member is optional; an empty object starts a\nplain flow.",
+        "properties": {
+          "request": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The authorization request (`request` query parameter of the sign-in redirect) the flow\ncontinues."
+          },
+          "token": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Verification and recovery: the token from the emailed link."
+          }
+        }
+      },
+      "Step": {
+        "type": "string",
+        "description": "What the client does next. New values may be added (clients must ignore unknown steps).",
+        "enum": [
+          "form",
+          "message",
+          "completed",
+          "browser_required"
+        ]
+      },
+      "SubmitMethod": {
+        "type": "string",
+        "description": "What a submission is.",
+        "enum": [
+          "password",
+          "identify",
+          "totp",
+          "recovery_code",
+          "email_code_request",
+          "email_code",
+          "upstream",
+          "register",
+          "recovery_request",
+          "recovery_reset",
+          "verify"
+        ]
+      },
+      "SubmitRequest": {
+        "type": "object",
+        "description": "`POST /api/flows/v1/{kind}/{flow_id}`: submit the current step.",
+        "properties": {
+          "captcha": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CaptchaAnswerDto",
+                "description": "CAPTCHA widget response, when the form asked for one."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "method": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SubmitMethod",
+                "description": "What is submitted. Defaults: `password` (login), `register` (registration), `verify`\n(verification), `recovery_reset` when `values.token` is present, else `recovery_request`\n(recovery)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "values": {
+            "type": "object",
+            "description": "The form's field values by field name (hidden fields included).",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "TotpDto": {
+        "type": "object",
+        "description": "The pending authenticator-app secret of the enrolment step.",
+        "required": [
+          "secret",
+          "otpauth_uri"
+        ],
+        "properties": {
+          "otpauth_uri": {
+            "type": "string"
+          },
+          "secret": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "csrf": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-CSRF-Token",
+        "description": "Browser mode: the flow's `csrf_token` from the previous answer, together with the flow cookie the start answer set on the AnvilID origin (`credentials: \"include\"`)."
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "flows",
+      "description": "Self-service flows (browser mode)"
+    }
+  ]
+}

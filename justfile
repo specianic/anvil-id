@@ -129,9 +129,9 @@ migrations-check:
     scripts/check-migrations.sh
     scripts/check-migrations.sh --self-test
 
-# Regenerate the committed OpenAPI document (plan 02-16).
+# Regenerate the committed OpenAPI documents (admin API, plan 02-16; headless flow API, plan 07-10).
 openapi-update:
-    UPDATE_OPENAPI=1 cargo test -p anvil-web --test openapi_drift
+    UPDATE_OPENAPI=1 cargo test -p anvil-web --test openapi_drift --test openapi_flows_drift
 
 # --- Admin console (admin-ui/, Node >= 22.12). console-check runs in `ci`; CI runs the same steps
 # plus the build in the `console` job. Release builds embed the console and fail without it
