@@ -89,6 +89,7 @@ pub async fn add_connection(
                 secret_enc: Some(secret),
                 trust_email_verified: trust,
                 created_at: app.clock().now(),
+                org_id: None,
             },
         )
         .await

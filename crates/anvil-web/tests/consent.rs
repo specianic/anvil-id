@@ -940,6 +940,7 @@ async fn revoking_consent_revokes_families_and_clears_resources() {
                 claims: None,
                 created_at: now,
                 absolute_expires_at: now + time::Duration::days(1),
+                org_id: None,
             },
         )
         .await
@@ -1019,6 +1020,7 @@ async fn cimd_request(f: &Fixture, name: &str, resources: &[&str]) -> AuthReques
                 metadata_expires_at: Some(now + time::Duration::hours(1)),
                 registration_access_token_hash: None,
                 registration_source: ClientSource::Cimd,
+                organization: anvil_core::model::OrgClientPolicy::Off,
             },
             now + time::Duration::hours(1),
             now,
@@ -1049,6 +1051,7 @@ async fn cimd_request(f: &Fixture, name: &str, resources: &[&str]) -> AuthReques
                     claims: None,
                     response_mode: anvil_core::oauth::response_mode::ResponseMode::default(),
                     resource: resources.iter().map(|r| (*r).to_owned()).collect(),
+                    organization: None,
                 },
                 created_at: now,
                 expires_at: now + time::Duration::minutes(10),

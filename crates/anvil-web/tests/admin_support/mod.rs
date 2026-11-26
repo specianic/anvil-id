@@ -67,6 +67,7 @@ pub async fn system_client(app: &TestApp, scopes: &[&str]) -> String {
                 metadata_expires_at: None,
                 registration_access_token_hash: None,
                 registration_source: anvil_core::model::ClientSource::Static,
+                organization: anvil_core::model::OrgClientPolicy::Off,
             },
         )
         .await

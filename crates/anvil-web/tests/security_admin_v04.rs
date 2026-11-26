@@ -916,6 +916,7 @@ async fn legacy_admin_scope_client_stays_editable() {
                 metadata_expires_at: None,
                 registration_access_token_hash: None,
                 registration_source: ClientSource::Static,
+                organization: anvil_core::model::OrgClientPolicy::Off,
             },
         )
         .await

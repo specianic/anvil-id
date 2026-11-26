@@ -173,6 +173,7 @@ async fn seed_runtime_client(
         registration_access_token_hash: (source == ClientSource::Dynamic)
             .then_some(SecretHash([3; 32])),
         registration_source: source,
+        organization: anvil_core::model::OrgClientPolicy::Off,
     };
     match source {
         ClientSource::Cimd => {

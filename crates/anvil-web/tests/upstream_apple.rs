@@ -102,6 +102,7 @@ async fn apple_with(audience: Option<&str>, check_key: Option<Jwk>) -> Upstream 
                 secret_enc: Some(secret),
                 trust_email_verified: true,
                 created_at: app.clock().now(),
+                org_id: None,
             },
         )
         .await

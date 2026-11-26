@@ -165,7 +165,9 @@
           "type": "object",
           "properties": {
             "roles": { "$ref": "#/$defs/optional_claim_rule" },
-            "permissions": { "$ref": "#/$defs/optional_claim_rule" }
+            "permissions": { "$ref": "#/$defs/optional_claim_rule" },
+            "org_roles": { "$ref": "#/$defs/optional_claim_rule" },
+            "org_permissions": { "$ref": "#/$defs/optional_claim_rule" }
           }
         }
       }
@@ -201,7 +203,8 @@
         "allowed_resources": { "$ref": "#/$defs/string_list" },
         "mfa_policy": {
           "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/mfa_policy" }]
-        }
+        },
+        "organization": { "enum": ["off", "optional", "required"] }
       }
     },
     "connection": {

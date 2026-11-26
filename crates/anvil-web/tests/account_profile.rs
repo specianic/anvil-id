@@ -714,6 +714,7 @@ async fn rp_session_for(app: &TestApp, user: UserId, session: SessionId) -> Stri
                 metadata_expires_at: None,
                 registration_access_token_hash: None,
                 registration_source: anvil_core::model::ClientSource::Static,
+                organization: anvil_core::model::OrgClientPolicy::Off,
             },
         )
         .await
@@ -740,6 +741,7 @@ async fn rp_session_for(app: &TestApp, user: UserId, session: SessionId) -> Stri
                 issuer: "https://op.test".into(),
                 expires_at: now + time::Duration::minutes(1),
                 created_at: now,
+                org_id: None,
             },
             &NewTokenFamily {
                 id: family,
@@ -754,6 +756,7 @@ async fn rp_session_for(app: &TestApp, user: UserId, session: SessionId) -> Stri
                 claims: None,
                 created_at: now,
                 absolute_expires_at: now + time::Duration::days(1),
+                org_id: None,
             },
         )
         .await
