@@ -200,7 +200,37 @@ Plans:
   3. An MCP client completes authorization using a Client ID Metadata Document and resource indicators, and dynamic client registration obeys the admin policy (disabled / allow-listed / open)
   4. An operator manages multiple isolated tenants (each with its own issuer) from the console, defines roles, permissions and custom attributes that appear in tokens, and receives signed, retried webhooks for lifecycle events
   5. The in-repo Helm chart and Docker Compose examples deploy a working instance that exposes health endpoints, Prometheus metrics, OpenTelemetry traces and JSON logs
-**Plans**: TBD
+**Plans**: 28 plans in 8 waves
+
+Plans:
+- [ ] 05-01-PLAN.md — Core foundation: all Phase 5 deps, model (roles, attributes, webhooks, registration/CIMD, consent resources, tenant settings, config document), ports, errors, audit actions, contract suite, backend shims, pre-declared modules + OpenAPI (wave 1)
+- [ ] 05-02-PLAN.md — CI hygiene: fuzz build on push, unified 413 for streamed bodies, k6 load/HA harness skeleton + HA compose (wave 1)
+- [ ] 05-03-PLAN.md — Multi-tenant console: $tenant routes, tenant switcher, tenants list/create, redirects, e2e (wave 1)
+- [ ] 05-04-PLAN.md — Installation config + observability: health aliases, readiness drain, Prometheus metrics, OTLP traces, request layer, pool size, worker abstraction, limiter hook, idle-memory gate (wave 2)
+- [ ] 05-05-PLAN.md — SQLite 0007 + Phase 5 repos, webhook enqueue in audit append, administrator backfill, upgrade test (wave 2)
+- [ ] 05-06-PLAN.md — Postgres 0006 + Phase 5 repos (SKIP LOCKED webhook claims), backfill, upgrade test (wave 2)
+- [ ] 05-07-PLAN.md — Redis limiter backend behind the one RateLimiter trait + limiter contract suite + failure policy (wave 2)
+- [ ] 05-08-PLAN.md — Pure RFC 7591 registration and CIMD draft-03 validators (TDD) + fuzz targets (wave 2)
+- [ ] 05-09-PLAN.md — Pure claim mapping, webhook event mapping, Standard Webhooks signature, config plan diff, offline JSON Schema adapter (wave 2)
+- [ ] 05-10-PLAN.md — Carry-over: in-flow passkey enrolment under MFA required (wave 2)
+- [ ] 05-11-PLAN.md — RBAC end to end: RoleService, roles/permissions/attribute claims, system admin scopes bounded by roles, role admin API (wave 3)
+- [ ] 05-12-PLAN.md — Carry-over: resource-aware remembered consent + CIMD consent display (wave 3)
+- [ ] 05-13-PLAN.md — Webhooks: WebhookService, enqueue from AuditService, leased signed delivery worker (wave 3)
+- [ ] 05-14-PLAN.md — CIMD: ClientResolver, fetcher on OutboundClient, materialised clients, discovery flag, abuse controls (wave 3)
+- [ ] 05-15-PLAN.md — Shared limiter wiring + failure modes, concurrency-safe first start for N nodes (wave 3)
+- [ ] 05-16-PLAN.md — CLI: online SQLite backup/restore, Postgres guidance, admin recover, healthcheck (wave 3)
+- [ ] 05-17-PLAN.md — Token-endpoint performance: signer cache, optional direct aws-lc signing, host negative cache (wave 3)
+- [ ] 05-18-PLAN.md — Custom attributes: AttributeService + account-page editing (wave 3)
+- [ ] 05-19-PLAN.md — Declarative tenant config: export/plan/apply, admin JSON routes, YAML CLI, JSON Schema (wave 4)
+- [ ] 05-20-PLAN.md — DCR: RFC 7591/7592 endpoints under policy, initial access tokens (wave 4)
+- [ ] 05-21-PLAN.md — Helm chart, Compose examples, Docker HEALTHCHECK, deploy CI (kind + compose smoke) (wave 4)
+- [ ] 05-22-PLAN.md — Admin API: attributes, webhooks + delivery log, DCR/CIMD policy, IATs, client/tenant DTO fields (wave 5)
+- [ ] 05-23-PLAN.md — Console pages: roles, attributes, webhooks, registration policy, config, e2e (wave 6)
+- [ ] 05-24-PLAN.md — MCP: mock client/resource server e2e with CIMD + resource indicators, docs/MCP.md (wave 6)
+- [ ] 05-25-PLAN.md — HA + perf gates in CI (restarts, shared limit, exactly-once webhooks, PRD targets), telemetry redaction test (wave 6)
+- [ ] 05-26-PLAN.md — Feature e2e (attributes, webhooks, DCR, RBAC claims) + UPGRADING/OPERATIONS/WEBHOOKS/ARCHITECTURE docs (wave 6)
+- [ ] 05-27-PLAN.md — Phase gate: security map, just ci, version 0.4.0 + migration pins, requirements, all workflows green incl. deploy + load (wave 7)
+- [ ] 05-28-PLAN.md — Release v0.4.0 after owner sign-off (v0.3.0 tagged first) (wave 8)
 
 ### Phase 6: Release 1.0 "Credible for business" (Organizations and SSO)
 **Goal**: SaaS builders can serve business customers: organizations with members and roles, each able to bring its own SAML or OIDC identity provider, with users routed automatically by email domain
