@@ -6,14 +6,14 @@ current_phase: 05
 current_phase_name: release 0 4 operate it
 current_plan: 33
 status: executing
-stopped_at: Completed 06-04-PLAN.md
-last_updated: "2026-11-26T10:02:11.025Z"
+stopped_at: Completed 06-10-PLAN.md
+last_updated: "2026-11-26T10:11:23.756Z"
 last_activity: 2026-11-26
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 162
-  completed_plans: 139
+  completed_plans: 140
   percent: 86
 ---
 
@@ -196,6 +196,7 @@ done before 05-29 tags v0.4.0.
 | Phase 06 P05 | 20min | 3 tasks | 12 files |
 | Phase 06 P06 | 30min | 1 tasks | 3 files |
 | Phase 06 P04 | 60min | 3 tasks | 65 files |
+| Phase 06 P10 | 35min | 1 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -457,6 +458,7 @@ Recent decisions affecting current work:
 - [Phase 06]: 06-06: second-factor allowCredentials injected into options JSON in core from PasskeyCredential.credential_id; no port change, finish path unchanged
 - [Phase 06]: 06-04: OrgRepo::add_member returns AddMemberOutcome {Added, AlreadyMember, NotFound}; storage-level not-found stays bool/Option (no StorageError::NotFound)
 - [Phase 06]: 06-04: operator keys saml_experimental (off; warning via Config.warnings) and domain_verification_resolvers (ip or ip:port, port 53 default, empty = system)
+- [Phase 06]: 06-10: HickoryTxtLookup without readable system resolver config logs a warning and fails every lookup (startup continues); explicit resolvers fail startup on setup error
 
 ### Pending Todos
 
@@ -469,6 +471,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-26T10:02:11.023Z
-Stopped at: Completed 06-04-PLAN.md
+Last session: 2026-11-26T10:11:23.753Z
+Stopped at: Completed 06-10-PLAN.md
 Resume file: None
