@@ -7,7 +7,11 @@
 //! request from the resolved issuer; it is small and cheap, so it is not cached.
 //!
 //! Only capabilities that are implemented are advertised. `request_uri_parameter_supported`
-//! defaults to `true` when omitted, so it is published explicitly as `false`.
+//! defaults to `true` when omitted, so it is published explicitly as `false`: that OIDC flag
+//! means request objects passed by reference, which are never fetched. Pushed authorization
+//! requests (RFC 9126) are advertised separately with `pushed_authorization_request_endpoint`
+//! (`{issuer}/par`) and `require_pushed_authorization_requests` (the tenant's
+//! `par.require_pushed_authorization_requests`, default `false`).
 //!
 //! - `response_modes_supported` is [`response_mode::SUPPORTED`] (`query`, `form_post`).
 //! - `id_token_signing_alg_values_supported` is the tenant's enabled algorithms
@@ -134,6 +138,10 @@ struct ProviderMetadata {
     request_parameter_supported: bool,
     request_uri_parameter_supported: bool,
     claims_supported: &'static [&'static str],
+    /// RFC 9126 §5: the PAR endpoint, `{issuer}/par`.
+    pushed_authorization_request_endpoint: String,
+    /// RFC 9126 §5: whether every client of the tenant must use pushed requests.
+    require_pushed_authorization_requests: bool,
     /// The locales of the page catalogs ([`crate::i18n::Catalogs::available`]).
     ui_locales_supported: Vec<String>,
     /// Back-Channel Logout 1.0 §2.1: logout tokens are sent to registered
@@ -190,6 +198,8 @@ impl ProviderMetadata {
             request_parameter_supported: false,
             request_uri_parameter_supported: false,
             claims_supported: CLAIMS_SUPPORTED,
+            pushed_authorization_request_endpoint: endpoint("/par"),
+            require_pushed_authorization_requests: false,
             ui_locales_supported: ui_locales,
             backchannel_logout_supported: true,
             backchannel_logout_session_supported: true,
@@ -218,6 +228,11 @@ async fn metadata(State(state): State<AppState>, tenant: ResolvedTenant) -> Resp
         supported_prompt_values(tenant.tenant.settings.registration),
         state.renderer().catalogs().available(),
     );
+    doc.require_pushed_authorization_requests = tenant
+        .tenant
+        .settings
+        .par
+        .require_pushed_authorization_requests;
     if tenant.tenant.effective_cimd().policy != CimdPolicy::Disabled {
         doc.client_id_metadata_document_supported = Some(true);
     }
@@ -262,6 +277,12 @@ mod tests {
         );
         assert_eq!(m.revocation_endpoint, "https://op.test/t/acme/revoke");
         assert_eq!(m.end_session_endpoint, "https://op.test/t/acme/logout");
+        assert_eq!(
+            m.pushed_authorization_request_endpoint,
+            "https://op.test/t/acme/par"
+        );
+        assert!(!m.require_pushed_authorization_requests);
+        assert!(!m.request_uri_parameter_supported);
         assert!(m.backchannel_logout_supported);
         assert!(m.backchannel_logout_session_supported);
     }

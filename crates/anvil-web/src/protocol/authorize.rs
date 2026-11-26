@@ -18,6 +18,11 @@
 //! - `ErrorPage` → the themed `400` error page, never a redirect (unknown client, unregistered
 //!   redirect URI, malformed request before the redirect URI is trusted, expired request).
 //!
+//! A pushed request (`client_id` + `request_uri=urn:ietf:params:oauth:request_uri:…`, RFC 9126)
+//! goes through the same handlers: the service consumes it and every other query parameter is
+//! ignored. An unknown, expired, used or mismatched `request_uri` is an `ErrorPage` (no trusted
+//! redirect URI yet), rendered like any other.
+//!
 //! No CORS here, and no browser CSRF layer either: an authorization request is a cross-site
 //! front-channel request by design.
 

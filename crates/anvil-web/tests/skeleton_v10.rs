@@ -1,6 +1,7 @@
 //! Phase 7 route skeletons (plan 07-04): the pre-declared routes of later plans answer 404 until
 //! the owning plan implements them, never a fake success. Each owning plan deletes its case here
-//! when it ships the route: 07-13 (`/par`), 07-17 (admin user export). 07-10 shipped
+//! when it ships the route: 07-17 (admin user export). 07-13 shipped `/par` (tests in `par.rs`,
+//! `security_par.rs`); 07-10 shipped
 //! `/api/flows/v1`; its placement outside the UI Fetch-Metadata layer is pinned in
 //! `security_headless.rs` (`headless_api_not_behind_ui_fetch_metadata`).
 
@@ -18,18 +19,6 @@ fn assert_not_found(resp: &TestResponse, what: &str) {
         "{what}: {}",
         resp.text()
     );
-}
-
-#[tokio::test]
-async fn par_is_not_served_yet() {
-    let app = TestApp::new().await;
-    let resp = app
-        .post_form(
-            "/t/default/par",
-            &[("client_id", "app"), ("response_type", "code")],
-        )
-        .await;
-    assert_not_found(&resp, "POST /t/default/par");
 }
 
 #[tokio::test]

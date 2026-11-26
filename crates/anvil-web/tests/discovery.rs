@@ -60,6 +60,10 @@ const ALLOWED_METADATA: &[&str] = &[
     "code_challenge_methods_supported",
     // RFC 9207 §3
     "authorization_response_iss_parameter_supported",
+    // RFC 9126 §5 (pushed authorization requests; registered AS metadata, also known to the
+    // conformance suite's FAPI plans)
+    "pushed_authorization_request_endpoint",
+    "require_pushed_authorization_requests",
     // OIDC Discovery (prompt=create spec)
     "prompt_values_supported",
     // OIDC RP-Initiated Logout 1.0 §2.1
@@ -536,4 +540,60 @@ async fn claims_supported_lists_the_org_claims() {
         assert!(claims.contains(&c), "{c} missing: {claims:?}");
     }
     insta::assert_snapshot!("claims_supported", claims.join("\n"));
+}
+
+#[tokio::test]
+async fn par_metadata_is_published() {
+    use anvil_core::model::TenantUpdate;
+    let app = TestApp::new().await;
+    let iss = app.issuer(None);
+    for path in [
+        "/.well-known/openid-configuration",
+        "/.well-known/oauth-authorization-server",
+    ] {
+        let doc = json(&app.get(path).await);
+        assert_eq!(
+            doc["pushed_authorization_request_endpoint"],
+            format!("{iss}/par"),
+            "{path}"
+        );
+        assert_eq!(
+            doc["require_pushed_authorization_requests"], false,
+            "{path}"
+        );
+        // Request objects by reference are still never fetched.
+        assert_eq!(doc["request_uri_parameter_supported"], false, "{path}");
+        assert_eq!(doc["request_parameter_supported"], false, "{path}");
+    }
+
+    // The tenant flag drives require_pushed_authorization_requests.
+    let tenant = app.default.as_ref().expect("default tenant").tenant.clone();
+    let mut settings = tenant.settings.clone();
+    settings.par.require_pushed_authorization_requests = true;
+    app.storage()
+        .tenants()
+        .update(
+            tenant.id,
+            &TenantUpdate {
+                settings: Some(settings),
+                ..TenantUpdate::default()
+            },
+        )
+        .await
+        .expect("tenant update")
+        .expect("tenant exists");
+    let doc = json(&app.get("/.well-known/openid-configuration").await);
+    assert_eq!(doc["require_pushed_authorization_requests"], true);
+    assert_eq!(doc["request_uri_parameter_supported"], false);
+}
+
+#[tokio::test]
+async fn par_metadata_follows_the_path_tenant_issuer() {
+    let app = TestApp::new().await;
+    create_acme(&app).await;
+    let doc = json(&app.get("/t/acme/.well-known/openid-configuration").await);
+    assert_eq!(
+        doc["pushed_authorization_request_endpoint"],
+        format!("{}/par", app.issuer(Some("acme")))
+    );
 }
