@@ -334,6 +334,7 @@ async fn serve(cfg: &Config) -> anyhow::Result<()> {
         theme_dir: cfg.theme_dir.clone(),
         rotation: cfg.rotation,
         audit_retention: cfg.audit_retention,
+        domain_txt: started.state.domain_txt_arc(),
     };
     let mut jobs = jobs::spawn(
         &jobs_config,

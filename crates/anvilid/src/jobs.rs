@@ -1,7 +1,8 @@
 //! Background jobs (ARCHITECTURE.md §14).
 //!
 //! - **Leased periodic jobs**: signing-key rotation (hourly), the expired-row purge (every
-//!   5 minutes) and audit retention (daily, only when a retention is configured). Each run is
+//!   5 minutes), audit retention (daily, only when a retention is configured) and the re-check of
+//!   verified organization domains (daily, [`DomainRecheckJob`]). Each run is
 //!   wrapped in lease acquire → run → release through [`JobRepo`](anvil_core::ports::JobRepo):
 //!   when several nodes share one Postgres database, at most one of them runs a given job at a
 //!   time. Each process has a random node id. Intervals have a small random start delay
@@ -29,7 +30,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anvil_core::model::JobName;
-use anvil_core::ports::{Clock, Storage};
+use anvil_core::ports::{Clock, DomainTxtLookup, Storage};
+use anvil_core::service::domain_recheck::{
+    DOMAIN_RECHECK_JOB, DomainRecheckService, RECHECK_BATCH, RECHECK_INTERVAL,
+};
 use anvil_core::service::key_rotation::{KeyRotationService, RotationPolicy};
 use anvil_jose::Kek;
 use anvil_mail::worker::SmtpTransportFactory;
@@ -61,6 +65,7 @@ pub struct JobIntervals {
     pub rotation: Duration,
     pub purge: Duration,
     pub audit_retention: Duration,
+    pub domain_recheck: Duration,
 }
 
 impl Default for JobIntervals {
@@ -69,6 +74,7 @@ impl Default for JobIntervals {
             rotation: ROTATION_INTERVAL,
             purge: PURGE_INTERVAL,
             audit_retention: AUDIT_RETENTION_INTERVAL,
+            domain_recheck: RECHECK_INTERVAL,
         }
     }
 }
@@ -81,6 +87,9 @@ pub struct JobsConfig {
     pub rotation: RotationPolicy,
     /// `None` keeps audit events forever (no retention job).
     pub audit_retention: Option<time::Duration>,
+    /// The DNS TXT lookup of domain verification (the web layer's `AppState::domain_txt_arc`,
+    /// built from `domain_verification_resolvers`), used by the domain re-check job.
+    pub domain_txt: Arc<dyn DomainTxtLookup>,
 }
 
 /// A future a worker runs on (boxed, owned).
@@ -311,13 +320,56 @@ impl PeriodicJob for AuditRetentionJob {
     }
 }
 
+/// Re-validation of verified organization domains (ORG-04).
+///
+/// Runs once a day ([`RECHECK_INTERVAL`]) under its lease, so one node per period re-checks every
+/// verified domain whose last check is older than 23 hours (each domain about once a day). A
+/// domain whose `_anvilid-challenge` TXT record has been missing for 7 consecutive days
+/// (`DOMAIN_RECHECK_GRACE`) drops back to pending: routing stops, the change is audited
+/// `org_domain_unverified` and sent as the `organization.domain_unverified` webhook. A passing
+/// check clears the failure streak. Details: `anvil_core::service::domain_recheck`.
+pub struct DomainRecheckJob(pub DomainRecheckService);
+
+impl PeriodicJob for DomainRecheckJob {
+    fn name(&self) -> &'static str {
+        DOMAIN_RECHECK_JOB
+    }
+
+    fn run(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            match self.0.recheck_due(RECHECK_BATCH).await {
+                Ok(report) => {
+                    for (domain, error) in &report.failures {
+                        tracing::warn!(%domain, %error, "domain re-check failed for a domain");
+                    }
+                    if report.checked > 0 {
+                        tracing::info!(
+                            checked = report.checked,
+                            passed = report.passed,
+                            failed = report.failed,
+                            unverified = report.unverified,
+                            "domain re-check ran"
+                        );
+                    }
+                }
+                Err(e) => tracing::warn!(error = %e, "domain re-check failed"),
+            }
+        })
+    }
+}
+
 /// Spawns the leased periodic jobs on `runner` into `jobs`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one argument per job dependency; the tests pass short intervals"
+)]
 pub fn spawn_periodic(
     jobs: &mut JoinSet<()>,
     runner: &Arc<LeaseRunner>,
     kek: &Arc<Kek>,
     rotation: RotationPolicy,
     audit_retention: Option<time::Duration>,
+    domain_txt: &Arc<dyn DomainTxtLookup>,
     intervals: JobIntervals,
     shutdown: &watch::Receiver<bool>,
 ) {
@@ -350,6 +402,12 @@ pub fn spawn_periodic(
         }
         None => tracing::info!("audit retention is 0: audit events are kept forever"),
     }
+    let recheck: Arc<dyn PeriodicJob> = Arc::new(DomainRecheckJob(DomainRecheckService {
+        storage: Arc::clone(storage),
+        clock: Arc::clone(clock),
+        lookup: Arc::clone(domain_txt),
+    }));
+    jobs.spawn(Arc::clone(runner).schedule(recheck, intervals.domain_recheck, shutdown.clone()));
 }
 
 /// Starts the background jobs. Must run inside the Tokio runtime (the SMTP connection pool
@@ -370,6 +428,7 @@ pub fn spawn(
         kek,
         cfg.rotation,
         cfg.audit_retention,
+        &cfg.domain_txt,
         JobIntervals::default(),
         shutdown,
     );
