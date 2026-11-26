@@ -1,10 +1,15 @@
 //! Headless flow API (`/api/flows/v1`, UI-05): JSON login, registration, recovery and
-//! verification flows for single-page apps (browser mode, plan 07-10; native apps follow in
-//! 07-18). See docs/HEADLESS.md.
+//! verification flows for single-page apps (browser mode, [`browser`]) and sign-in for
+//! first-party native apps (native mode, [`native`]). See docs/HEADLESS.md.
 //!
 //! A second renderer over the shared `ui::flow_driver`: every handler in [`browser`]
 //! calls the driver, so throttling, CAPTCHA, the flow binding and session handling exist once.
 //! The handlers only map the driver's typed outcomes to the versioned DTO ([`dto`]).
+//!
+//! Both modes share the routes and the submission dispatch. A start body with `client_id` or
+//! `request_uri`, or an `Authorization: AnvilFlow <flow_token>` header, selects native mode
+//! (flow token binding, PAR-bound start, the code as JSON, no cookies); everything else is
+//! browser mode (flow cookie and `X-CSRF-Token`).
 //!
 //! | Route (tenant-relative) | |
 //! |---|---|
@@ -20,12 +25,14 @@
 //! Fetch-Metadata layer and outside `public_cors()`. It brings its own router-local layers:
 //! [`headless_origin_layer`] (the tenant's own origin or an exact entry of
 //! `headless.allowed_origins`; JSON bodies only) inside [`headless_cors`] (credentialed CORS for
-//! allow-listed origins only). The rate-limit class of `POST` below `/api/flows` is `Auth`
+//! allow-listed origins only). Native requests carry no `Origin` (the handlers refuse any
+//! browser signal), so the CORS layer never applies to them. The rate-limit class of `POST` below `/api/flows` is `Auth`
 //! ([`crate::layers::ratelimit`]); its 429 is JSON. Unknown paths below [`BASE_PATH`] answer a
 //! JSON 404 problem.
 
 pub mod browser;
 pub mod dto;
+pub mod native;
 pub mod openapi;
 
 use axum::Router;

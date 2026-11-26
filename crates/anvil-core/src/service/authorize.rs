@@ -90,6 +90,7 @@ use crate::oauth::response_mode::AuthorizationResponse;
 use crate::policy::mfa::effective_policy_for;
 use crate::policy::org_claims::{ActiveOrg, resolve_active_org};
 use crate::ports::{ClientMetadataFetcher, Clock, Storage};
+use crate::service::client::{ClientPolicyView, validate_client_policy};
 use crate::service::client_resolver::{ClientResolver, is_url_client_id};
 use crate::service::par::{ParService, PushedRequestRefused};
 
@@ -223,6 +224,36 @@ impl Completion {
             },
         }
     }
+}
+
+/// Whether `client` may start a native headless sign-in (research Pitfall 9: never a password
+/// API for third parties): flagged `headless_native` by an administrator and still satisfying
+/// every rule of [`validate_client_policy`] for that flag (administrator-registered, not an
+/// agent, first-party consent, PKCE required). Checked again at use, so a stored client that
+/// bypassed the write-path validation is still refused.
+pub fn native_eligible(client: &Client) -> bool {
+    let view = ClientPolicyView {
+        consent_mode: client.consent_mode,
+        require_pkce: client.require_pkce,
+        client_kind: client.client_kind,
+        headless_native: client.headless_native,
+    };
+    client.headless_native
+        && client.grant_types.contains(&GrantType::AuthorizationCode)
+        && validate_client_policy(&view, client.registration_source).is_ok()
+}
+
+/// Why a native headless start was refused ([`AuthorizeService::start_native`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NativeStartRefused {
+    /// The client is unknown or not eligible ([`native_eligible`]). The `request_uri` was not
+    /// consumed when the client was refused before the resume.
+    NotEligible,
+    /// The pushed request is unusable (unknown, expired, used, another client's) or failed its
+    /// policy re-check: the outcome `/authorize` would show.
+    Pushed(AuthorizeOutcome),
+    /// The pushed request carries no PKCE challenge.
+    PkceRequired,
 }
 
 /// The error response for `params` (its redirect URI, state and response mode).
@@ -846,6 +877,42 @@ impl AuthorizeService {
             client,
             params,
         }))
+    }
+
+    /// The start of a native headless sign-in: the client must be [`native_eligible`] (checked
+    /// before the pushed request is consumed, and again on the client as registered after the
+    /// resume), then the pushed request is resumed through [`Self::resume_pushed_request`]
+    /// (single use, the same consume and policy re-check as `/authorize`) and must carry a PKCE
+    /// challenge. The stored request is then continued by a token-bound login flow and finished
+    /// with [`Self::complete`].
+    pub async fn start_native(
+        &self,
+        tenant: &Tenant,
+        issuer: &str,
+        client_id: &str,
+        request_uri: &str,
+    ) -> Result<Result<ResumedPushedRequest, NativeStartRefused>, CoreError> {
+        if client_id.len() > MAX_CLIENT_ID_LEN || is_url_client_id(client_id) {
+            return Ok(Err(NativeStartRefused::NotEligible));
+        }
+        match self.storage.clients().get(tenant.id, client_id).await? {
+            Some(client) if native_eligible(&client) => {}
+            _ => return Ok(Err(NativeStartRefused::NotEligible)),
+        }
+        let resumed = match self
+            .resume_pushed_request(tenant, issuer, client_id, request_uri)
+            .await?
+        {
+            Ok(r) => r,
+            Err(outcome) => return Ok(Err(NativeStartRefused::Pushed(outcome))),
+        };
+        if !native_eligible(&resumed.client) {
+            return Ok(Err(NativeStartRefused::NotEligible));
+        }
+        if resumed.params.code_challenge.is_none() {
+            return Ok(Err(NativeStartRefused::PkceRequired));
+        }
+        Ok(Ok(resumed))
     }
 
     /// `/authorize` with a pushed `request_uri`: only `client_id` and `request_uri` are read
@@ -1566,6 +1633,72 @@ mod tests {
 
     const ISSUER: &str = "https://id.example.test/t/acme";
     const NOW: OffsetDateTime = datetime!(2026-11-25 12:00:00 UTC);
+
+    #[test]
+    fn native_eligibility_follows_the_client_policy() {
+        use crate::model::{ClientKind, ClientSource, ConsentMode};
+        let eligible = || Client {
+            headless_native: true,
+            consent_mode: ConsentMode::SkipFirstParty,
+            require_pkce: true,
+            ..client()
+        };
+        assert!(native_eligible(&eligible()));
+        let refused: Vec<(&str, Client)> = vec![
+            (
+                "flag off",
+                Client {
+                    headless_native: false,
+                    ..eligible()
+                },
+            ),
+            (
+                "dynamic",
+                Client {
+                    registration_source: ClientSource::Dynamic,
+                    ..eligible()
+                },
+            ),
+            (
+                "cimd",
+                Client {
+                    registration_source: ClientSource::Cimd,
+                    ..eligible()
+                },
+            ),
+            (
+                "agent",
+                Client {
+                    client_kind: ClientKind::Agent,
+                    ..eligible()
+                },
+            ),
+            (
+                "third party",
+                Client {
+                    consent_mode: ConsentMode::Required,
+                    ..eligible()
+                },
+            ),
+            (
+                "no pkce",
+                Client {
+                    require_pkce: false,
+                    ..eligible()
+                },
+            ),
+            (
+                "no code grant",
+                Client {
+                    grant_types: vec![GrantType::ClientCredentials],
+                    ..eligible()
+                },
+            ),
+        ];
+        for (name, c) in refused {
+            assert!(!native_eligible(&c), "{name}");
+        }
+    }
 
     #[test]
     fn completion_carries_the_redirect_responses_parameters() {

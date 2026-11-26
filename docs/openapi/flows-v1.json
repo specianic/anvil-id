@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "AnvilID headless flow API",
-    "description": "Drives the login, registration, recovery and verification flows of a tenant with JSON: the same flow engine, brute-force limits, CAPTCHA and sessions as the built-in pages. Paths are relative to the tenant base (`/t/{slug}`, the root for the default tenant, or the tenant host). Browser mode only: a same-site single-page app on an origin in the tenant's `headless.allowed_origins`, the flow cookie, the `X-CSRF-Token` header and `application/json` bodies. Clients must ignore unknown fields, steps, field kinds and methods. Errors are RFC 9457 problem details. See docs/HEADLESS.md.",
+    "description": "Drives the login, registration, recovery and verification flows of a tenant with JSON: the same flow engine, brute-force limits, CAPTCHA and sessions as the built-in pages. Paths are relative to the tenant base (`/t/{slug}`, the root for the default tenant, or the tenant host). Browser mode: a same-site single-page app on an origin in the tenant's `headless.allowed_origins`, the flow cookie, the `X-CSRF-Token` header and `application/json` bodies. Native mode (first-party native apps only): start a login with a PAR `request_uri` of a `headless_native` client, send `Authorization: AnvilFlow <flow_token>`, receive the authorization code as JSON and redeem it at the token endpoint with the PKCE verifier. Clients must ignore unknown fields, steps, field kinds and methods. Errors are RFC 9457 problem details. See docs/HEADLESS.md.",
     "version": "v1"
   },
   "paths": {
@@ -457,7 +457,7 @@
         },
         "responses": {
           "200": {
-            "description": "The flow's first step; sets the flow cookie",
+            "description": "The flow's first step; sets the flow cookie (browser mode) or carries the flow_token once (native mode, a body with client_id and request_uri)",
             "content": {
               "application/json": {
                 "schema": {
@@ -467,7 +467,7 @@
             }
           },
           "400": {
-            "description": "Malformed request id",
+            "description": "Malformed request id; native mode: invalid_request, invalid_request_uri (unknown, expired, used or another client's), pkce_required, login_required",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -477,7 +477,7 @@
             }
           },
           "403": {
-            "description": "Foreign origin, or registration disabled",
+            "description": "Foreign origin, or registration disabled; native mode: client_not_eligible (not a headless_native first-party client), browser_signals (Origin or Sec-Fetch-Site present)",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -566,8 +566,18 @@
               }
             }
           },
+          "401": {
+            "description": "Native mode: missing or malformed AnvilFlow token (flow_token)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowProblem"
+                }
+              }
+            }
+          },
           "403": {
-            "description": "Missing or wrong CSRF token or flow cookie, or foreign origin",
+            "description": "Missing or wrong CSRF token or flow cookie, or foreign origin; native mode: wrong flow token (flow_token), browser_signals",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -590,6 +600,9 @@
         "security": [
           {
             "csrf": []
+          },
+          {
+            "flow_token": []
           }
         ]
       },
@@ -640,7 +653,7 @@
         },
         "responses": {
           "200": {
-            "description": "The next step, a message, a completed sign-in (sets the session cookie) or browser_required",
+            "description": "The next step, a message, a completed sign-in (browser mode: sets the session cookie; native mode: result.code, iss, state and no cookie) or browser_required",
             "content": {
               "application/json": {
                 "schema": {
@@ -659,8 +672,18 @@
               }
             }
           },
+          "401": {
+            "description": "Native mode: missing or malformed AnvilFlow token (flow_token)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowProblem"
+                }
+              }
+            }
+          },
           "403": {
-            "description": "csrf, forbidden_origin, captcha_required or captcha_failed",
+            "description": "csrf, forbidden_origin, captcha_required or captcha_failed; native mode: flow_token, browser_signals",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -703,6 +726,9 @@
         "security": [
           {
             "csrf": []
+          },
+          {
+            "flow_token": []
           }
         ]
       }
@@ -851,7 +877,7 @@
           },
           "code": {
             "type": "string",
-            "description": "Stable error code (`forbidden_origin`, `csrf`, `unsupported_media_type`,\n`invalid_request`, `not_found`, `flow_not_found`, `invalid_flow_state`,\n`registration_disabled`, `method_not_available`, `captcha_required`, `captcha_failed`,\n`passkey_failed`, `too_many_requests`, `server_error`; more may be added)."
+            "description": "Stable error code (`forbidden_origin`, `csrf`, `unsupported_media_type`,\n`invalid_request`, `not_found`, `flow_not_found`, `invalid_flow_state`,\n`registration_disabled`, `method_not_available`, `captcha_required`, `captcha_failed`,\n`passkey_failed`, `too_many_requests`, `server_error`; native mode: `browser_signals`,\n`flow_token`, `client_not_eligible`, `invalid_request_uri`, `pkce_required`,\n`login_required`, `authorization_failed`; more may be added)."
           },
           "retry_after": {
             "type": [
@@ -918,6 +944,13 @@
           "flow": {
             "$ref": "#/components/schemas/FlowRef"
           },
+          "flow_token": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Native mode, start answer only: the flow token (high entropy, returned once). Send it in\nthe `Authorization: AnvilFlow <flow_token>` header with every later request about this\nflow; keep it in memory only and never log it."
+          },
           "form": {
             "oneOf": [
               {
@@ -944,7 +977,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/ResultDto",
-                "description": "`step = completed`: where the browser goes next."
+                "description": "`step = completed`: where the browser goes next (browser mode), or the authorization\ncode (native mode)."
               },
               {
                 "type": "null"
@@ -968,7 +1001,7 @@
               "string",
               "null"
             ],
-            "description": "`step = browser_required`: navigate the top-level browser window here (the built-in\npages finish the step: upstream, SAML and enterprise single sign-on)."
+            "description": "`step = browser_required`: navigate the top-level browser window here (the built-in\npages finish the step: upstream, SAML and enterprise single sign-on). Native mode: open\nthis authorization URL in the system browser (RFC 8252); the same authorization request\ncontinues there and the code arrives at the app's redirect URI."
           }
         }
       },
@@ -1199,12 +1232,39 @@
         "type": "object",
         "description": "The outcome of a completed sign-in.",
         "properties": {
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Native mode: the authorization code. Redeem it at the token endpoint with the PKCE\n`code_verifier` of the pushed request (single use, 60 seconds)."
+          },
           "continue_to": {
             "type": [
               "string",
               "null"
             ],
-            "description": "Absolute URL on the AnvilID origin: navigate the top-level window there (the\nauthorization request continues and the client receives its code). Absent when the\nsign-in continues nothing."
+            "description": "Browser mode: absolute URL on the AnvilID origin: navigate the top-level window there\n(the authorization request continues and the client receives its code). Absent when the\nsign-in continues nothing."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Native mode: the authorization ended with this OAuth error instead of a code (for\nexample `access_denied`); `error_description` is client-safe."
+          },
+          "error_description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "iss": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Native mode: the issuer of the response (RFC 9207); compare it with the expected issuer."
           },
           "recovery_codes": {
             "type": "array",
@@ -1212,19 +1272,40 @@
               "type": "string"
             },
             "description": "Recovery codes of a second factor enrolled in this flow: show them once before\nfollowing `continue_to`."
+          },
+          "state": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Native mode: the pushed request's `state`, when it had one."
           }
         }
       },
       "StartRequest": {
         "type": "object",
-        "description": "`POST /api/flows/v1/{kind}`: start a flow. Every member is optional; an empty object starts a\nplain flow.",
+        "description": "`POST /api/flows/v1/{kind}`: start a flow. Every member is optional; an empty object starts a\nplain flow. A body with `client_id` or `request_uri` is a native start (login only, both\nrequired).",
         "properties": {
+          "client_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Native mode: the client the `request_uri` was pushed by (a `headless_native` client)."
+          },
           "request": {
             "type": [
               "string",
               "null"
             ],
             "description": "The authorization request (`request` query parameter of the sign-in redirect) the flow\ncontinues."
+          },
+          "request_uri": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Native mode: the `request_uri` from the client's `POST /par` (single use)."
           },
           "token": {
             "type": [
@@ -1323,13 +1404,19 @@
         "in": "header",
         "name": "X-CSRF-Token",
         "description": "Browser mode: the flow's `csrf_token` from the previous answer, together with the flow cookie the start answer set on the AnvilID origin (`credentials: \"include\"`)."
+      },
+      "flow_token": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "Authorization",
+        "description": "Native mode: `AnvilFlow <flow_token>`, the token from the native start answer (PAR-bound start of a `headless_native` first-party client). No cookies, no CSRF token, no `Origin` or `Sec-Fetch-Site` header."
       }
     }
   },
   "tags": [
     {
       "name": "flows",
-      "description": "Self-service flows (browser mode)"
+      "description": "Self-service flows (browser and native mode)"
     }
   ]
 }

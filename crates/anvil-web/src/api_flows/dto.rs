@@ -44,17 +44,25 @@ pub struct FlowResponse {
     /// request about this flow. Present while the flow continues.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub csrf_token: Option<String>,
+    /// Native mode, start answer only: the flow token (high entropy, returned once). Send it in
+    /// the `Authorization: AnvilFlow <flow_token>` header with every later request about this
+    /// flow; keep it in memory only and never log it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flow_token: Option<String>,
     /// `step = form`: what to show and submit.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub form: Option<FormDto>,
     /// `step = message`: the flow finished with this message (for example "check your email").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<MessageDto>,
-    /// `step = completed`: where the browser goes next.
+    /// `step = completed`: where the browser goes next (browser mode), or the authorization
+    /// code (native mode).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<ResultDto>,
     /// `step = browser_required`: navigate the top-level browser window here (the built-in
-    /// pages finish the step: upstream, SAML and enterprise single sign-on).
+    /// pages finish the step: upstream, SAML and enterprise single sign-on). Native mode: open
+    /// this authorization URL in the system browser (RFC 8252); the same authorization request
+    /// continues there and the code arrives at the app's redirect URI.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     /// Seconds until the form can be submitted again (a lock, HTTP 429; also `Retry-After`).
@@ -281,13 +289,29 @@ impl From<&CaptchaSettings> for CaptchaDto {
 }
 
 /// The outcome of a completed sign-in.
-#[derive(Clone, Serialize, ToSchema)]
+#[derive(Clone, Default, Serialize, ToSchema)]
 pub struct ResultDto {
-    /// Absolute URL on the AnvilID origin: navigate the top-level window there (the
-    /// authorization request continues and the client receives its code). Absent when the
+    /// Browser mode: absolute URL on the AnvilID origin: navigate the top-level window there
+    /// (the authorization request continues and the client receives its code). Absent when the
     /// sign-in continues nothing.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub continue_to: Option<String>,
+    /// Native mode: the authorization code. Redeem it at the token endpoint with the PKCE
+    /// `code_verifier` of the pushed request (single use, 60 seconds).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    /// Native mode: the issuer of the response (RFC 9207); compare it with the expected issuer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub iss: Option<String>,
+    /// Native mode: the pushed request's `state`, when it had one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    /// Native mode: the authorization ended with this OAuth error instead of a code (for
+    /// example `access_denied`); `error_description` is client-safe.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_description: Option<String>,
     /// Recovery codes of a second factor enrolled in this flow: show them once before
     /// following `continue_to`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -298,6 +322,10 @@ impl std::fmt::Debug for ResultDto {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ResultDto")
             .field("continue_to", &self.continue_to)
+            .field("code", &self.code.as_ref().map(|_| "[redacted]"))
+            .field("iss", &self.iss)
+            .field("state", &self.state)
+            .field("error", &self.error)
             .field("recovery_codes", &self.recovery_codes.len())
             .finish()
     }
@@ -314,7 +342,9 @@ pub struct FlowProblem {
     /// Stable error code (`forbidden_origin`, `csrf`, `unsupported_media_type`,
     /// `invalid_request`, `not_found`, `flow_not_found`, `invalid_flow_state`,
     /// `registration_disabled`, `method_not_available`, `captcha_required`, `captcha_failed`,
-    /// `passkey_failed`, `too_many_requests`, `server_error`; more may be added).
+    /// `passkey_failed`, `too_many_requests`, `server_error`; native mode: `browser_signals`,
+    /// `flow_token`, `client_not_eligible`, `invalid_request_uri`, `pkce_required`,
+    /// `login_required`, `authorization_failed`; more may be added).
     pub code: String,
     /// Seconds to wait (`too_many_requests`; also `Retry-After`).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -329,7 +359,8 @@ pub struct FlowProblem {
 // ---------------------------------------------------------------------------------------------
 
 /// `POST /api/flows/v1/{kind}`: start a flow. Every member is optional; an empty object starts a
-/// plain flow.
+/// plain flow. A body with `client_id` or `request_uri` is a native start (login only, both
+/// required).
 #[derive(Debug, Clone, Default, Deserialize, ToSchema)]
 pub struct StartRequest {
     /// The authorization request (`request` query parameter of the sign-in redirect) the flow
@@ -337,6 +368,17 @@ pub struct StartRequest {
     pub request: Option<String>,
     /// Verification and recovery: the token from the emailed link.
     pub token: Option<String>,
+    /// Native mode: the client the `request_uri` was pushed by (a `headless_native` client).
+    pub client_id: Option<String>,
+    /// Native mode: the `request_uri` from the client's `POST /par` (single use).
+    pub request_uri: Option<String>,
+}
+
+impl StartRequest {
+    /// Whether the body asks for a native start.
+    pub(crate) fn is_native(&self) -> bool {
+        self.client_id.is_some() || self.request_uri.is_some()
+    }
 }
 
 /// `POST /api/flows/v1/{kind}/{flow_id}`: submit the current step.
@@ -432,6 +474,9 @@ pub(crate) struct FormExtras {
     pub(crate) factor_token: Option<String>,
     pub(crate) totp: Option<TotpDto>,
     pub(crate) captcha: Option<CaptchaDto>,
+    /// Native start only: the flow token, answered once as [`FlowResponse::flow_token`] (never
+    /// part of the form).
+    pub(crate) flow_token: Option<String>,
 }
 
 /// The hidden field that carries the step's binding token.

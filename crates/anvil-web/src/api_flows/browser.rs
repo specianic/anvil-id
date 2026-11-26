@@ -67,7 +67,7 @@ use crate::state::AppState;
 use crate::tenant::ResolvedTenant;
 use crate::ui::flow_driver::{
     self, CaptchaAnswer, DriveOutcome, DriveRejection, FlowBinding, Identified, InFlowPasskey,
-    PasskeyStep, Throttle,
+    LoginMethod, PasskeyStep, Throttle,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -76,7 +76,7 @@ use crate::ui::flow_driver::{
 
 /// A refusal before the driver runs: the status and problem code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Refused(StatusCode, &'static str);
+pub(super) struct Refused(pub(super) StatusCode, pub(super) &'static str);
 
 impl IntoResponse for Refused {
     fn into_response(self) -> Response {
@@ -85,13 +85,13 @@ impl IntoResponse for Refused {
 }
 
 /// The `{kind}` path segment (unknown: 404).
-fn parse_kind(kind: &str) -> Result<FlowKindDto, Refused> {
+pub(super) fn parse_kind(kind: &str) -> Result<FlowKindDto, Refused> {
     serde_json::from_value(serde_json::Value::String(kind.to_owned()))
         .map_err(|_| Refused(StatusCode::NOT_FOUND, "not_found"))
 }
 
 /// The `{flow_id}` path segment (malformed: 404, like an unknown flow).
-fn parse_flow(flow: &str) -> Result<FlowId, Refused> {
+pub(super) fn parse_flow(flow: &str) -> Result<FlowId, Refused> {
     uuid::Uuid::parse_str(flow)
         .map(FlowId)
         .map_err(|_| Refused(StatusCode::NOT_FOUND, "flow_not_found"))
@@ -110,7 +110,7 @@ fn csrf_header(headers: &HeaderMap) -> Result<String, Refused> {
 
 /// A JSON body (`Content-Type` is checked by the layer). An empty body is the default value;
 /// malformed JSON is 400 `invalid_request`.
-fn parse_body<T: DeserializeOwned + Default>(body: &Bytes) -> Result<T, Refused> {
+pub(super) fn parse_body<T: DeserializeOwned + Default>(body: &Bytes) -> Result<T, Refused> {
     if body.iter().all(u8::is_ascii_whitespace) {
         return Ok(T::default());
     }
@@ -118,7 +118,7 @@ fn parse_body<T: DeserializeOwned + Default>(body: &Bytes) -> Result<T, Refused>
 }
 
 /// A JSON answer, never cached.
-fn json(status: StatusCode, body: &impl Serialize, jar: CookieJar) -> Response {
+pub(super) fn json(status: StatusCode, body: &impl Serialize, jar: CookieJar) -> Response {
     let text = serde_json::to_string(body).unwrap_or_default();
     let mut resp = (
         status,
@@ -143,7 +143,7 @@ fn rejection(r: DriveRejection) -> Response {
     }
 }
 
-fn core_problem(e: &CoreError) -> Response {
+pub(super) fn core_problem(e: &CoreError) -> Response {
     match e {
         CoreError::InvalidRequest(_) => problem(StatusCode::BAD_REQUEST, "invalid_flow_state"),
         CoreError::NotFound => problem(StatusCode::NOT_FOUND, "flow_not_found"),
@@ -160,22 +160,37 @@ fn core_problem(e: &CoreError) -> Response {
 // ---------------------------------------------------------------------------------------------
 
 /// The per-request encoding context.
-struct Out<'a> {
-    state: &'a AppState,
-    tenant: &'a ResolvedTenant,
-    loc: &'a Locale,
+pub(super) struct Out<'a> {
+    pub(super) state: &'a AppState,
+    pub(super) tenant: &'a ResolvedTenant,
+    pub(super) loc: &'a Locale,
     /// The path's flow kind (used when the flow is gone).
-    kind: FlowKindDto,
+    pub(super) kind: FlowKindDto,
+    /// Native mode ([`super::native`]): no cookies and no CSRF token in answers, passkeys and
+    /// the emailed link are not offered, a CAPTCHA demand and every browser-only step answer
+    /// `browser_required` with the authorization URL, and a completed sign-in answers the
+    /// authorization code as JSON.
+    pub(super) native: bool,
 }
 
 impl Out<'_> {
+    /// The problem of a refused step (`csrf` in browser mode, `flow_token` in native mode).
+    pub(super) fn reject(&self, r: DriveRejection) -> Response {
+        match r {
+            DriveRejection::Binding if self.native => {
+                problem(StatusCode::FORBIDDEN, super::native::FLOW_TOKEN_PROBLEM)
+            }
+            r => rejection(r),
+        }
+    }
+
     /// Display texts are filled only for an explicit `ui_locales`.
     fn localized(&self) -> bool {
         self.loc.ui_locales.is_some()
     }
 
     /// The flow reference of `flow` (its expiry and kind from storage while it exists).
-    async fn flow_ref(&self, flow: FlowId) -> FlowRef {
+    pub(super) async fn flow_ref(&self, flow: FlowId) -> FlowRef {
         let meta = flow_driver::flow_meta(self.state, self.tenant, flow)
             .await
             .inspect_err(|e| tracing::warn!(error = %e, "loading the flow for its expiry failed"))
@@ -200,7 +215,7 @@ impl Out<'_> {
 
     /// A form answer: localised for an explicit `ui_locales`, with the sign-in methods of a
     /// sign-in form, the CSRF token it is bound to and the given extras.
-    async fn form(
+    pub(super) async fn form(
         &self,
         flow: FlowId,
         form: FormDescription,
@@ -217,14 +232,15 @@ impl Out<'_> {
         flow: FlowId,
         mut form: FormDescription,
         status: StatusCode,
-        extras: FormExtras,
+        mut extras: FormExtras,
         jar: CookieJar,
         retry_after: Option<u64>,
     ) -> Response {
+        let flow_token = extras.flow_token.take();
         if self.localized() {
             localize_form(self.state.renderer().catalogs(), self.loc, &mut form);
         }
-        let methods = if matches!(
+        let mut methods = if matches!(
             form.id.as_str(),
             "login" | IDENTIFY_FORM_ID | SSO_CHOICE_FORM_ID
         ) {
@@ -232,10 +248,15 @@ impl Out<'_> {
         } else {
             Vec::new()
         };
+        if self.native {
+            // WebAuthn and the emailed link need the AnvilID origin in a browser.
+            methods.retain(|m| !matches!(m, LoginMethod::Passkey | LoginMethod::MagicLink));
+        }
         let body = FlowResponse {
             flow: self.flow_ref(flow).await,
             step: Step::Form,
-            csrf_token: Some(form.csrf_token.clone()),
+            csrf_token: (!self.native).then(|| form.csrf_token.clone()),
+            flow_token,
             form: Some(form_dto(&form, &methods, self.localized(), extras)),
             message: None,
             result: None,
@@ -253,6 +274,10 @@ impl Out<'_> {
         mut extras: FormExtras,
         jar: CookieJar,
     ) -> Response {
+        if self.native {
+            // A token-bound flow is never restarted (the flow service answers not found).
+            return problem(StatusCode::NOT_FOUND, "flow_not_found");
+        }
         let jar = jar.add(
             self.state
                 .cookies()
@@ -271,7 +296,7 @@ impl Out<'_> {
 
     /// `browser_required`: the built-in sign-in page continues (upstream, SAML and enterprise
     /// single sign-on need top-level redirects and the provider's callback).
-    async fn browser_required(&self, flow: FlowId) -> Response {
+    pub(super) async fn browser_required(&self, flow: FlowId) -> Response {
         let request = flow_driver::flow_meta(self.state, self.tenant, flow)
             .await
             .ok()
@@ -281,12 +306,15 @@ impl Out<'_> {
             .await
     }
 
-    async fn browser_required_for(
+    pub(super) async fn browser_required_for(
         &self,
         flow: FlowId,
         request: Option<AuthRequestId>,
         jar: CookieJar,
     ) -> Response {
+        if self.native {
+            return super::native::browser_required(self, flow, request).await;
+        }
         let page = match request {
             Some(r) => format!("/ui/login?request={r}"),
             None => "/ui/login".to_owned(),
@@ -295,6 +323,7 @@ impl Out<'_> {
             flow: self.flow_ref(flow).await,
             step: Step::BrowserRequired,
             csrf_token: None,
+            flow_token: None,
             form: None,
             message: None,
             result: None,
@@ -329,6 +358,7 @@ impl Out<'_> {
             flow: self.finished_ref(flow),
             step: Step::Completed,
             csrf_token: None,
+            flow_token: None,
             form: None,
             message: None,
             result: Some(ResultDto {
@@ -337,6 +367,7 @@ impl Out<'_> {
                     .iter()
                     .map(|c| c.expose_secret().to_owned())
                     .collect(),
+                ..ResultDto::default()
             }),
             url: None,
             retry_after: None,
@@ -345,7 +376,7 @@ impl Out<'_> {
     }
 
     /// Encodes a flow outcome (the pages' `outcome_response_with`).
-    async fn outcome(
+    pub(super) async fn outcome(
         &self,
         flow: FlowId,
         outcome: FlowOutcome,
@@ -371,7 +402,11 @@ impl Out<'_> {
                     .await
             }
             FlowOutcome::Message { key } => {
-                let jar = CookieJar::new().add(cookies.clear_flow(tenant));
+                let jar = if self.native {
+                    CookieJar::new()
+                } else {
+                    CookieJar::new().add(cookies.clear_flow(tenant))
+                };
                 let text = self
                     .localized()
                     .then(|| self.state.renderer().catalogs().text(self.loc, key, &[]));
@@ -379,6 +414,7 @@ impl Out<'_> {
                     flow: self.finished_ref(flow),
                     step: Step::Message,
                     csrf_token: None,
+                    flow_token: None,
                     form: None,
                     message: Some(MessageDto {
                         level: MessageLevelDto::Info,
@@ -392,6 +428,18 @@ impl Out<'_> {
                 };
                 json(StatusCode::OK, &body, jar)
             }
+            FlowOutcome::SignedIn {
+                cookie,
+                continue_to,
+                recovery_codes,
+            } if self.native => {
+                // The session cookie never leaves the server (no single sign-on).
+                super::native::completed(self, flow, cookie.session, continue_to, &recovery_codes)
+                    .await
+            }
+            FlowOutcome::SteppedUp { .. } if self.native => core_problem(&CoreError::Internal(
+                "step-up outcome on a token-bound flow".into(),
+            )),
             FlowOutcome::SignedIn {
                 cookie,
                 continue_to,
@@ -418,7 +466,7 @@ impl Out<'_> {
 
     /// Encodes a driver outcome (the pages' `drive_response` / `sign_in_gate_page`).
     /// `locked_token`: the binding token a locked form keeps.
-    async fn drive(
+    pub(super) async fn drive(
         &self,
         flow: FlowId,
         outcome: DriveOutcome,
@@ -432,6 +480,10 @@ impl Out<'_> {
                 captcha: c,
                 ..
             } => {
+                if c && self.native && captcha.is_some() {
+                    // A CAPTCHA widget needs a browser: the app falls back to browser sign-in.
+                    return self.browser_required(flow).await;
+                }
                 if c {
                     extras.captcha = captcha.map(CaptchaDto::from);
                 }
@@ -468,6 +520,9 @@ impl Out<'_> {
                 Some(flow_driver::retry_after_secs(retry_after)),
                 None,
             ),
+            DriveOutcome::CaptchaRejected { .. } if self.native => {
+                self.browser_required(flow).await
+            }
             DriveOutcome::CaptchaRejected { form } => {
                 let code = if form
                     .messages
@@ -485,7 +540,7 @@ impl Out<'_> {
                     captcha.map(CaptchaDto::from),
                 )
             }
-            DriveOutcome::Rejected(r) => rejection(r),
+            DriveOutcome::Rejected(r) => self.reject(r),
         }
     }
 }
@@ -538,9 +593,9 @@ fn carries_token(outcome: &DriveOutcome) -> Option<&str> {
     ),
     request_body(content = StartRequest, content_type = "application/json"),
     responses(
-        (status = 200, description = "The flow's first step; sets the flow cookie", body = FlowResponse),
-        (status = 400, description = "Malformed request id", body = super::dto::FlowProblem, content_type = "application/problem+json"),
-        (status = 403, description = "Foreign origin, or registration disabled", body = super::dto::FlowProblem, content_type = "application/problem+json"),
+        (status = 200, description = "The flow's first step; sets the flow cookie (browser mode) or carries the flow_token once (native mode, a body with client_id and request_uri)", body = FlowResponse),
+        (status = 400, description = "Malformed request id; native mode: invalid_request, invalid_request_uri (unknown, expired, used or another client's), pkce_required, login_required", body = super::dto::FlowProblem, content_type = "application/problem+json"),
+        (status = 403, description = "Foreign origin, or registration disabled; native mode: client_not_eligible (not a headless_native first-party client), browser_signals (Origin or Sec-Fetch-Site present)", body = super::dto::FlowProblem, content_type = "application/problem+json"),
         (status = 404, description = "Unknown kind", body = super::dto::FlowProblem, content_type = "application/problem+json"),
         (status = 415, description = "Body is not application/json", body = super::dto::FlowProblem, content_type = "application/problem+json"),
         (status = 429, description = "Rate limited", body = super::dto::FlowProblem, content_type = "application/problem+json"),
@@ -550,6 +605,7 @@ pub(crate) async fn start_flow(
     State(state): State<AppState>,
     tenant: ResolvedTenant,
     RequestLocale(loc, _): RequestLocale,
+    headers: HeaderMap,
     jar: CookieJar,
     Path(kind): Path<String>,
     body: Bytes,
@@ -562,6 +618,16 @@ pub(crate) async fn start_flow(
         Ok(r) => r,
         Err(r) => return r.into_response(),
     };
+    // A native start names the client and its pushed request (docs/HEADLESS.md, native apps).
+    if req.is_native() || super::native::selected(&headers) {
+        let request = super::native::NativeRequest {
+            state: &state,
+            tenant: &tenant,
+            loc: &loc,
+            headers: &headers,
+        };
+        return super::native::start(request, kind, &req).await;
+    }
     let request = match req.request.as_deref().map(str::trim) {
         None | Some("") => None,
         Some(s) => match uuid::Uuid::parse_str(s) {
@@ -574,6 +640,7 @@ pub(crate) async fn start_flow(
         tenant: &tenant,
         loc: &loc,
         kind,
+        native: false,
     };
     let started = match kind {
         FlowKindDto::Login => {
@@ -633,10 +700,11 @@ pub(crate) async fn start_flow(
     ),
     responses(
         (status = 200, description = "The current step", body = FlowResponse),
-        (status = 403, description = "Missing or wrong CSRF token or flow cookie, or foreign origin", body = super::dto::FlowProblem, content_type = "application/problem+json"),
+        (status = 401, description = "Native mode: missing or malformed AnvilFlow token (flow_token)", body = super::dto::FlowProblem, content_type = "application/problem+json"),
+        (status = 403, description = "Missing or wrong CSRF token or flow cookie, or foreign origin; native mode: wrong flow token (flow_token), browser_signals", body = super::dto::FlowProblem, content_type = "application/problem+json"),
         (status = 404, description = "Unknown or expired flow", body = super::dto::FlowProblem, content_type = "application/problem+json"),
     ),
-    security(("csrf" = []))
+    security(("csrf" = []), ("flow_token" = []))
 )]
 pub(crate) async fn get_flow(
     State(state): State<AppState>,
@@ -646,6 +714,15 @@ pub(crate) async fn get_flow(
     jar: CookieJar,
     Path((kind, flow)): Path<(String, String)>,
 ) -> Response {
+    if super::native::selected(&headers) {
+        let request = super::native::NativeRequest {
+            state: &state,
+            tenant: &tenant,
+            loc: &loc,
+            headers: &headers,
+        };
+        return super::native::get_flow(request, &kind, &flow).await;
+    }
     let (kind, flow, csrf) = match (parse_kind(&kind), parse_flow(&flow), csrf_header(&headers)) {
         (Ok(k), Ok(f), Ok(c)) => (k, f, c),
         (Err(r), _, _) | (_, Err(r), _) | (_, _, Err(r)) => return r.into_response(),
@@ -659,6 +736,7 @@ pub(crate) async fn get_flow(
         tenant: &tenant,
         loc: &loc,
         kind,
+        native: false,
     };
     match flow_driver::current_step(&state, &tenant, flow, &binding).await {
         Ok(Some((form, meta))) if FlowKindDto::from_core(meta.kind) == Some(kind) => {
@@ -689,14 +767,15 @@ pub(crate) async fn get_flow(
     ),
     request_body(content = SubmitRequest, content_type = "application/json"),
     responses(
-        (status = 200, description = "The next step, a message, a completed sign-in (sets the session cookie) or browser_required", body = FlowResponse),
+        (status = 200, description = "The next step, a message, a completed sign-in (browser mode: sets the session cookie; native mode: result.code, iss, state and no cookie) or browser_required", body = FlowResponse),
         (status = 400, description = "The form again with an error message, or a problem (invalid_request, method_not_available, invalid_flow_state)", body = FlowResponse),
-        (status = 403, description = "csrf, forbidden_origin, captcha_required or captcha_failed", body = super::dto::FlowProblem, content_type = "application/problem+json"),
+        (status = 401, description = "Native mode: missing or malformed AnvilFlow token (flow_token)", body = super::dto::FlowProblem, content_type = "application/problem+json"),
+        (status = 403, description = "csrf, forbidden_origin, captcha_required or captcha_failed; native mode: flow_token, browser_signals", body = super::dto::FlowProblem, content_type = "application/problem+json"),
         (status = 404, description = "Unknown kind, or the method's feature is off", body = super::dto::FlowProblem, content_type = "application/problem+json"),
         (status = 415, description = "Body is not application/json", body = super::dto::FlowProblem, content_type = "application/problem+json"),
         (status = 429, description = "Locked: the form with retry_after, or a too_many_requests problem; Retry-After", body = FlowResponse),
     ),
-    security(("csrf" = []))
+    security(("csrf" = []), ("flow_token" = []))
 )]
 #[expect(
     clippy::too_many_arguments,
@@ -713,6 +792,15 @@ pub(crate) async fn submit_flow(
     Path((kind, flow)): Path<(String, String)>,
     body: Bytes,
 ) -> Response {
+    if super::native::selected(&headers) {
+        let request = super::native::NativeRequest {
+            state: &state,
+            tenant: &tenant,
+            loc: &loc,
+            headers: &headers,
+        };
+        return super::native::submit_flow(request, ip, &ctx, &kind, &flow, &body).await;
+    }
     let (kind, flow, csrf) = match (parse_kind(&kind), parse_flow(&flow), csrf_header(&headers)) {
         (Ok(k), Ok(f), Ok(c)) => (k, f, c),
         (Err(r), _, _) | (_, Err(r), _) | (_, _, Err(r)) => return r.into_response(),
@@ -721,6 +809,32 @@ pub(crate) async fn submit_flow(
         Ok(r) => r,
         Err(r) => return r.into_response(),
     };
+    let out = Out {
+        state: &state,
+        tenant: &tenant,
+        loc: &loc,
+        kind,
+        native: false,
+    };
+    let binding = FlowBinding::Cookie {
+        jar: &jar,
+        csrf: &csrf,
+    };
+    dispatch(&out, &ctx, flow, ip, &req, binding).await
+}
+
+/// Runs a submission of `req` to `flow` with `binding`, in either mode: the submission method
+/// (or the kind's default) picks the driver call and its throttle class, exactly as the page
+/// handlers of each step.
+pub(super) async fn dispatch(
+    out: &Out<'_>,
+    ctx: &RequestContext,
+    flow: FlowId,
+    ip: std::net::IpAddr,
+    req: &SubmitRequest,
+    binding: FlowBinding<'_>,
+) -> Response {
+    let (state, kind) = (out.state, out.kind);
     let method = req.method.unwrap_or(match kind {
         FlowKindDto::Login => SubmitMethod::Password,
         FlowKindDto::Registration => SubmitMethod::Register,
@@ -731,22 +845,12 @@ pub(crate) async fn submit_flow(
     if method_kind(method) != kind {
         return problem(StatusCode::BAD_REQUEST, "method_not_available");
     }
-    let out = Out {
-        state: &state,
-        tenant: &tenant,
-        loc: &loc,
-        kind,
-    };
-    let binding = FlowBinding::Cookie {
-        jar: &jar,
-        csrf: &csrf,
-    };
     let s = Submission {
-        out: &out,
-        ctx: &ctx,
+        out,
+        ctx,
         flow,
         ip,
-        req: &req,
+        req,
     };
     match method {
         SubmitMethod::Password => s.password(binding).await,
@@ -919,7 +1023,7 @@ impl Submission<'_> {
             }
             // Routed to an org IdP: the built-in page runs the redirect and the callback.
             Ok(Identified::StartIdp(_)) => self.out.browser_required(self.flow).await,
-            Err(r) => rejection(r),
+            Err(r) => self.out.reject(r),
         }
     }
 
@@ -1198,6 +1302,7 @@ pub(crate) async fn passkey_assertion(
         tenant: &tenant,
         loc: &loc,
         kind: FlowKindDto::Login,
+        native: false,
     };
     out.drive(flow, outcome, FormExtras::default(), None).await
 }
@@ -1236,6 +1341,7 @@ async fn finish_response(
         tenant,
         loc,
         kind: FlowKindDto::Login,
+        native: false,
     };
     // A refused ceremony shows the step again; it keeps the posted token.
     let extras = FormExtras {

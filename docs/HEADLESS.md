@@ -9,8 +9,8 @@ client renders it.
 - Contract: [`docs/openapi/flows-v1.json`](openapi/flows-v1.json) (OpenAPI 3.1, generated from the
   handlers and checked by a drift test).
 - Version: `v1`, in the path (`/api/flows/v1`).
-- Supported clients: single-page apps in the browser ("browser mode", below). Native apps are
-  covered in [Native apps](#native-apps).
+- Supported clients: single-page apps in the browser ("browser mode", below) and first-party
+  native apps ("native mode", see [Native apps](#native-apps)).
 
 ## Endpoints
 
@@ -194,4 +194,122 @@ the new `flow.id` and `csrf_token` and the message `flow.expired`.
 
 ## Native apps
 
-Covered by a later release step (plan 07-18).
+Native mode lets your own first-party mobile or desktop app sign users in through the API, with
+its own login screen and without a browser session. It is AnvilID's own API. Its shape follows
+the IETF Internet-Draft "OAuth 2.0 for First-Party Applications", which is a draft and not an
+RFC. AnvilID claims no conformance to that draft.
+
+Native mode is for first-party apps only. A third-party app must never collect a user's password,
+so third-party apps keep using the browser (RFC 8252: the system browser, a claimed `https`
+redirect URI or a loopback redirect, and PKCE).
+
+### Who may use it
+
+A client can start a native flow only if an administrator registered it with:
+
+- `headless_native: true` (admin API, console or tenant YAML; never through dynamic registration
+  or a Client ID Metadata Document);
+- `consent_mode: skip_first_party` (first-party);
+- `require_pkce: true`;
+- `client_kind: application` (never an agent);
+- the `authorization_code` grant.
+
+The server checks these rules when the client is written and again at every native start. A
+client stored any other way is refused with 403 `client_not_eligible`.
+
+### Sequence
+
+```text
+App                                   AnvilID
+ |-- POST {issuer}/par -------------------->|  response_type=code, client_id, redirect_uri,
+ |   (client authentication as at /token)   |  scope, state, nonce, code_challenge (S256)
+ |<-- 201 {request_uri, expires_in: 60} ----|
+ |                                          |
+ |-- POST /api/flows/v1/login ------------->|  {"client_id": "...", "request_uri": "urn:..."}
+ |<-- 200 {flow, step: form, form,          |  flow_token is returned once
+ |         flow_token} ---------------------|
+ |                                          |
+ |-- POST /api/flows/v1/login/{flow_id} --->|  Authorization: AnvilFlow <flow_token>
+ |   {"method": "password", "values": ...}  |  (repeat for the second factor or email code)
+ |<-- 200 {step: completed,                 |
+ |         result: {code, iss, state}} -----|
+ |                                          |
+ |-- POST {issuer}/token ------------------>|  grant_type=authorization_code, code,
+ |   (with code_verifier)                   |  redirect_uri, code_verifier
+ |<-- 200 {access_token, id_token, ...} ----|
+```
+
+1. Push the authorization request to `POST {issuer}/par` (see [PAR](PAR.md)) with a PKCE
+   challenge. The pushed parameters are the request; nothing else is read later.
+2. Start the flow with `POST /api/flows/v1/login` and the body `{"client_id", "request_uri"}`.
+   The `request_uri` is consumed here, through the same code path as `/authorize`, so it works
+   once: it cannot be used again at `/authorize` or for a second native start. The answer is the
+   first form, with `flow_token`. It has no `csrf_token` and sets no cookie.
+3. Read the current step with `GET /api/flows/v1/login/{flow_id}` and submit steps with
+   `POST /api/flows/v1/login/{flow_id}`. Both send `Authorization: AnvilFlow <flow_token>`. The
+   submission body and the methods are the same as in browser mode (`password`, `identify`,
+   `totp`, `recovery_code`, `email_code_request`, `email_code`). Hidden fields such as
+   `factor_token` are sent back unchanged.
+4. When sign-in completes, the answer is `step: completed` with `result.code`, `result.iss`
+   and `result.state`. Check that `iss` is the issuer you expect and that `state` matches.
+   Redeem the code at the token endpoint with your `code_verifier`. The code is single use and
+   expires after 60 seconds. If the authorization ends with an OAuth error instead (for example
+   `access_denied` from an organization policy), the answer has status 400 and
+   `result.error` / `result.error_description` instead of `result.code`.
+
+How a request selects the mode: a start body with `client_id` or `request_uri`, or any request
+with an `Authorization: AnvilFlow …` header, is native. Everything else is browser mode.
+
+### The flow token
+
+- It is 256 bits from the system random generator. It is returned once, in the start answer.
+  The server stores only its SHA-256 hash and the flow records that it is token-bound.
+- A token-bound flow never accepts the flow cookie and CSRF token, and a browser flow never
+  accepts a flow token, even when the secret is correct.
+- Keep the token in memory for the duration of the sign-in (at most 15 minutes, the flow
+  lifetime). Do not persist it, put it in a URL or log it. It is useless once the flow completes
+  or expires.
+- A missing or malformed token is 401 `flow_token` (with `WWW-Authenticate: AnvilFlow`). A wrong
+  token, or a token sent to a browser flow, is 403 `flow_token`. An expired flow is 404
+  `flow_not_found`: native flows are not restarted, so start again with a new pushed request.
+
+### No browser signals, no session
+
+- Native requests must not carry `Origin` or `Sec-Fetch-Site`. A request with either is refused
+  with 403 `browser_signals`, so a web page cannot use native mode. The browser-mode CORS
+  allow-list never applies to native requests.
+- No session cookie is ever sent, so the sign-in creates no single sign-on for a browser. The
+  server records a session for the sign-in because codes and token families are anchored to one
+  (back-channel logout, session revocation). Its cookie secret never leaves the server, so no
+  browser can present it.
+- Brute-force limits, lockouts, CAPTCHA demands and audit events are the same as on the built-in
+  pages: failures in native mode lock the built-in page for the same identifier and client IP,
+  and the other way round.
+
+### Falling back to the browser
+
+Some steps need a browser. The answer is then `step: browser_required` with `url`, the
+authorization URL `{issuer}/authorize/continue?request=…` of the same authorization request.
+Open it in the system browser (RFC 8252; not an embedded web view). The user finishes there and
+the code arrives at your redirect URI, to be redeemed with the same `code_verifier`. This
+happens for:
+
+- a CAPTCHA demand (after repeated failures for the identifier);
+- upstream, SAML and enterprise single sign-on (the `upstream` method, or an email that routes
+  to an organization's identity provider);
+- a pushed request with `prompt=create` (registration);
+- anything the authorization needs after sign-in: consent, the account or organization choice,
+  or a step-up.
+
+Passkeys and the emailed sign-in link are not offered in native mode (WebAuthn and the link need
+the AnvilID origin in a browser). A pushed request with `prompt=none` is refused with 400
+`login_required`, because an interactive sign-in can never answer it.
+
+### Native mode errors
+
+| Status | `code` |
+|---|---|
+| 400 | `invalid_request` (missing `client_id` or `request_uri`, or a non-login kind), `invalid_request_uri` (unknown, expired, already used or another client's), `pkce_required`, `login_required`, `authorization_failed` |
+| 401 | `flow_token` (missing or malformed) |
+| 403 | `client_not_eligible`, `browser_signals`, `flow_token` (wrong token or a browser flow) |
+| 404 | `flow_not_found` |
