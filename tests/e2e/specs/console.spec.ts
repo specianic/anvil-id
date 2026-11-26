@@ -13,6 +13,7 @@ import { expectNoA11yViolations } from '../fixtures/axe';
 import {
   adminToken,
   anvilUrl,
+  createConsoleAdmin,
   createUser,
   login,
   randomEmail,
@@ -43,9 +44,9 @@ test('admin console: users, sessions, audit, clients, email and SMTP', async ({ 
   const creds = await sharedManagementCredential(browser);
   const token = await adminToken(creds);
 
-  // Admins are users of the system tenant.
+  // Admins are users of the system tenant holding the administrator role.
   const admin: AdminAccount = { email: randomEmail('console-admin'), password: randomPassword() };
-  await createUser(token, { ...admin, email_verified: true }, 'system');
+  await createConsoleAdmin(token, admin);
 
   // A default-tenant user signed in at a relying party in a separate browser context.
   const userEmail = randomEmail('console-user');

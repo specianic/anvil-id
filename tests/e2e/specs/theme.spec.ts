@@ -18,7 +18,7 @@ import { expectNoA11yViolations } from '../fixtures/axe';
 import {
   adminToken,
   anvilUrl,
-  createUser,
+  createConsoleAdmin,
   randomEmail,
   randomPassword,
   sharedManagementCredential,
@@ -96,7 +96,7 @@ test('console theme editor: live preview, publish to the sign-in page, warnings,
 }) => {
   test.setTimeout(180_000);
   const admin: AdminAccount = { email: randomEmail('theme-admin'), password: randomPassword() };
-  await createUser(await adminToken(creds), { ...admin, email_verified: true }, 'system');
+  await createConsoleAdmin(await adminToken(creds), admin);
 
   await test.step('open Branding in the console', async () => {
     await consoleLogin(page, admin);

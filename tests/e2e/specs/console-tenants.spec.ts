@@ -13,7 +13,7 @@ import { tenantSettings } from '../lib/admin';
 import {
   adminToken,
   anvilUrl,
-  createUser,
+  createConsoleAdmin,
   randomEmail,
   randomPassword,
   sharedManagementCredential,
@@ -58,7 +58,7 @@ test('admin console: create, switch to and delete a tenant', async ({ page, brow
   const token = await adminToken(await sharedManagementCredential(browser));
   cleanupToken = token;
   const admin: AdminAccount = { email: randomEmail('tenants-admin'), password: randomPassword() };
-  await createUser(token, { ...admin, email_verified: true }, 'system');
+  await createConsoleAdmin(token, admin);
 
   const csp = watchCsp(page);
   const switcher = page.getByLabel('Tenant', { exact: true });

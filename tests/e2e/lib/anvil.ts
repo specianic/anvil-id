@@ -241,6 +241,26 @@ export function createUser(
   return adminPost<CreatedUser>(token, `/tenants/${encodeURIComponent(tenant)}/users`, body);
 }
 
+/**
+ * Creates a console administrator: a verified user of the system tenant holding the system
+ * tenant's `administrator` role. Since 05-12 the admin scopes of a console token are bounded by
+ * the user's roles, so a system user without a role signs in but gets no admin access.
+ */
+export async function createConsoleAdmin(token: string, admin: AdminAccount): Promise<CreatedUser> {
+  const user = await createUser(token, { ...admin, email_verified: true }, 'system');
+  if (!user.id) throw new Error('POST /tenants/system/users returned no user id');
+  const path = `/tenants/system/users/${encodeURIComponent(user.id)}/roles/administrator`;
+  const res = await fetch(`${anvilUrl()}/api/admin/v1${path}`, {
+    method: 'PUT',
+    headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
+  });
+  if (res.status !== 200) {
+    throw new Error(`PUT ${path} failed: HTTP ${res.status} ${await res.text()}`);
+  }
+  await res.body?.cancel();
+  return user;
+}
+
 /** Fills the hosted login page the browser is currently on and submits it. */
 export async function login(page: Page, identifier: string, password: string): Promise<void> {
   await page.locator('#identifier').fill(identifier);

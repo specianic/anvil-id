@@ -1,7 +1,8 @@
 // Helpers for driving the admin console at /console/ (03-25) and a sample relying party next to it.
 //
 // The console signs in as the public client `anvil-console` of the system tenant (authorization
-// code + PKCE); admins are users of the system tenant. Endpoints come from ANVIL_URL only.
+// code + PKCE); admins are users of the system tenant holding the `administrator` role
+// (`createConsoleAdmin`). Endpoints come from ANVIL_URL only.
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createServer } from 'node:net';

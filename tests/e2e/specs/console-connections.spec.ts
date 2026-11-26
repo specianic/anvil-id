@@ -17,7 +17,7 @@ import { expectNoA11yViolations } from '../fixtures/axe';
 import {
   adminToken,
   anvilUrl,
-  createUser,
+  createConsoleAdmin,
   randomEmail,
   randomPassword,
   sharedManagementCredential,
@@ -55,7 +55,7 @@ test('admin console: create, edit, rotate and delete a connection', async ({ pag
   const tok = await adminToken(await sharedManagementCredential(browser));
   cleanupToken = tok;
   const admin: AdminAccount = { email: randomEmail('conn-admin'), password: randomPassword() };
-  await createUser(tok, { ...admin, email_verified: true }, 'system');
+  await createConsoleAdmin(tok, admin);
 
   const secret = `e2e-first-${randomBytes(18).toString('base64url')}`;
   const rotated = `e2e-rotated-${randomBytes(18).toString('base64url')}`;
