@@ -84,3 +84,31 @@ Roadmap success criteria:
 
 ---
 *Phase: 05-release-0-4-operate-it*
+
+## Decisions after research (orchestrator defaults, 2026-11-26 — owner may override)
+
+Taken from 05-RESEARCH.md's open questions; each is the researcher's recommendation unless noted.
+- **Q1 DCR "allow-listed":** registration requires an admin-issued initial access token (RFC 7591 §3), optionally with a
+  redirect-URI host allow-list. Policies: disabled (default) / allow-listed (initial access token) / open.
+  `software_statement` is rejected with `invalid_software_statement`.
+- **Q2 performance runner:** public GitHub-hosted runners (no paid runners — cost decision left to the owner). The 4 vCPU
+  are shared by the load generator, Postgres and AnvilID; the job takes the median of 3 runs, records the numbers, and
+  fails below target. Document that the PRD §6.3 figure is measured on this shared 4-vCPU runner. Runs on push to main,
+  nightly and on demand, not on every PR.
+- **Q3 RBAC and console admins:** system-tenant roles map to admin API scopes; tenant-restricted admins arrive with
+  Phase 6 organizations.
+- **Q4 webhook payloads:** ids only (event type, tenant, subject ids, timestamps) — no email, name or other personal data.
+- **Q5 operator infrastructure:** the OTLP exporter, Redis and the local healthcheck command are operator-configured
+  infrastructure (like SMTP and Postgres) and do not go through `OutboundClient`. Everything driven by tenant or
+  third-party input (webhooks, CIMD, DCR jwks_uri/logo fetches, upstream IdPs) still does.
+- **Q6 Postgres backup:** document pg_dump; `anvilid backup create` fails explicitly on Postgres with a pointer to the
+  docs; the tenant YAML export covers configuration. SQLite backup uses `VACUUM INTO`.
+- **Q7 KEK rotation:** deferred (re-seals every encrypted column and invalidates HMAC-derived codes). Signing-key
+  rotation is in scope.
+- **Q8 Redis down:** auth endpoints fail closed; token, admin and default classes fall back to the per-node limiter so an
+  outage does not stop token issuance. Logged and exposed as a metric.
+- **Q9:** the v0.3.0 tag lands before the 0.4 gate (owner checklist pending at 04-33).
+- **Q10 CIMD:** disabled by default per tenant; one admin setting enables it.
+- Planner may adjust the researcher's own design choices (health route aliases, webhook_delivery table, CIMD clients as
+  client rows, JSON admin API with YAML only in the CLI and `--prune` for deletions, no client IPs in logs/spans/metrics,
+  Redis/OTel/metrics compiled in and enabled at runtime, k6 + HAProxy).
