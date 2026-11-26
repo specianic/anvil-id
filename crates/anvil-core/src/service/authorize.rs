@@ -50,6 +50,15 @@
 //! and the client's org policy select an org, its `mfa_policy` takes part in the step-up decision
 //! before a code is issued.
 //!
+//! Pushed authorization requests (OIDC-18, RFC 9126): a `request_uri` with the PAR URN prefix is
+//! handled before any parameter validation. [`AuthorizeService::resume_pushed_request`] is the
+//! single resume path (also used by the native headless start): it consumes the pushed request
+//! once ([`ParService::consume`]), checks the `client_id`, re-checks the client's current policy
+//! ([`recheck_client_policy`]) and stores the request, which then continues like any stored
+//! request. Every other front-channel parameter is ignored. A client with
+//! `require_pushed_authorization_requests`, or any client of a tenant with
+//! `par.require_pushed_authorization_requests`, is refused a plain request (`invalid_request`).
+//!
 //! The protocol decisions live in pure functions ([`crate::oauth::authorize_request::validate`],
 //! [`crate::oauth::decision::decide`], [`build_code`], [`AuthorizationResponse`]);
 //! this service only orchestrates the ports. It is tested end to end over HTTP on both backends.
@@ -75,12 +84,14 @@ use crate::model::{
 };
 use crate::oauth::authorize_request::{AuthorizeError, PROMPT_CREATE, RawParams, validate};
 use crate::oauth::decision::{MfaContext, SessionDecision, decide, requested_acr, session_is_mfa};
+use crate::oauth::par::{is_pushed_request_uri, recheck_client_policy};
 use crate::oauth::redirect::redirect_matches;
 use crate::oauth::response_mode::AuthorizationResponse;
 use crate::policy::mfa::effective_policy_for;
 use crate::policy::org_claims::{ActiveOrg, resolve_active_org};
 use crate::ports::{ClientMetadataFetcher, Clock, Storage};
 use crate::service::client_resolver::{ClientResolver, is_url_client_id};
+use crate::service::par::{ParService, PushedRequestRefused};
 
 /// Lifetime of an authorization code.
 pub const CODE_TTL: Duration = Duration::seconds(60);
@@ -117,6 +128,18 @@ pub enum AuthorizeOutcome {
         error_key: &'static str,
         detail: String,
     },
+}
+
+/// A pushed authorization request that was consumed, matched to its client, re-checked against
+/// the client's current policy and stored as an authorization request
+/// ([`AuthorizeService::resume_pushed_request`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResumedPushedRequest {
+    pub request_id: AuthRequestId,
+    /// The client as registered now.
+    pub client: Client,
+    /// The pushed parameters after the policy re-check.
+    pub params: AuthorizationParams,
 }
 
 /// The error response for `params` (its redirect URI, state and response mode).
@@ -517,6 +540,15 @@ impl AuthorizeService {
         raw: RawParams,
         session: Option<BrowserSession>,
     ) -> Result<AuthorizeOutcome, CoreError> {
+        // RFC 9126 §4: a pushed request replaces the front-channel parameters. Any other
+        // `request_uri` value is refused by `validate` (`request_uri_not_supported`).
+        if raw
+            .0
+            .iter()
+            .any(|(k, v)| k == "request_uri" && is_pushed_request_uri(v))
+        {
+            return self.authorize_pushed(tenant, issuer, &raw, session).await;
+        }
         let now = self.clock.now();
         let client = match raw.single("client_id") {
             Some(id) if id.len() <= MAX_CLIENT_ID_LEN || is_url_client_id(id) => {
@@ -559,6 +591,16 @@ impl AuthorizeService {
         let client = validated.client;
         let params = validated.params;
         let fail = |error: CoreError| error_response(&params, &error, issuer);
+
+        // RFC 9126 §5/§6: a client (or a whole tenant) that requires pushed requests never
+        // accepts the parameters on the front channel.
+        if client.require_pushed_authorization_requests
+            || tenant.settings.par.require_pushed_authorization_requests
+        {
+            return Ok(fail(CoreError::InvalidRequest(
+                "this client must use a pushed authorization request".to_owned(),
+            )));
+        }
 
         if !client.grant_types.contains(&GrantType::AuthorizationCode) {
             return Ok(fail(CoreError::UnauthorizedClient(
@@ -646,6 +688,123 @@ impl AuthorizeService {
             }
             SessionDecision::Fail(error) => Ok(fail(error)),
         }
+    }
+
+    fn par(&self) -> ParService {
+        ParService {
+            storage: self.storage.clone(),
+            clock: self.clock.clone(),
+            metadata_fetcher: self.metadata_fetcher.clone(),
+        }
+    }
+
+    /// The single resume path of a pushed authorization request (RFC 9126 §4), shared by
+    /// `/authorize` and the native headless start: consumes the request (atomically, once),
+    /// checks that `client_id` is the client that pushed it, re-checks the client's current
+    /// policy (RFC 9126 §7.4) and stores the parameters as an authorization request through the
+    /// normal path. `Ok(Err(outcome))` is the refusal to show: an error page while no redirect
+    /// URI is trusted (unusable or mismatched `request_uri`, client gone, redirect URI removed),
+    /// else an error response to the stored redirect URI.
+    pub async fn resume_pushed_request(
+        &self,
+        tenant: &Tenant,
+        issuer: &str,
+        client_id: &str,
+        request_uri: &str,
+    ) -> Result<Result<ResumedPushedRequest, AuthorizeOutcome>, CoreError> {
+        let params = match self.par().consume(tenant, client_id, request_uri).await? {
+            Ok(params) => params,
+            Err(PushedRequestRefused::Unusable) => {
+                return Ok(Err(AuthorizeOutcome::ErrorPage {
+                    error_key: "invalid_request",
+                    detail: "the request_uri is unknown, expired or already used".to_owned(),
+                }));
+            }
+            Err(PushedRequestRefused::ClientMismatch) => {
+                return Ok(Err(AuthorizeOutcome::ErrorPage {
+                    error_key: "invalid_request",
+                    detail: "the request_uri was not issued to this client".to_owned(),
+                }));
+            }
+        };
+        let Some(client) = self.storage.clients().get(tenant.id, client_id).await? else {
+            return Ok(Err(AuthorizeOutcome::ErrorPage {
+                error_key: "unknown_client",
+                detail: "the client is no longer registered".to_owned(),
+            }));
+        };
+        let params = match recheck_client_policy(&client, &params, tenant.settings.registration) {
+            Ok(p) => p,
+            Err(AuthorizeError::ErrorPage { error_key, detail }) => {
+                return Ok(Err(AuthorizeOutcome::ErrorPage { error_key, detail }));
+            }
+            Err(AuthorizeError::Redirect {
+                redirect_uri,
+                state,
+                response_mode,
+                error,
+            }) => {
+                return Ok(Err(AuthorizeOutcome::Respond(
+                    AuthorizationResponse::error(
+                        &redirect_uri,
+                        &error,
+                        state.as_deref(),
+                        issuer,
+                        response_mode,
+                    ),
+                )));
+            }
+        };
+        let request_id = self
+            .store_request(tenant, &client, &params, self.clock.now())
+            .await?;
+        Ok(Ok(ResumedPushedRequest {
+            request_id,
+            client,
+            params,
+        }))
+    }
+
+    /// `/authorize` with a pushed `request_uri`: only `client_id` and `request_uri` are read
+    /// ([`crate::oauth::par::FRONT_CHANNEL_PARAMETERS`]); the pushed parameters are the request.
+    /// After [`Self::resume_pushed_request`] the request continues exactly like a stored one.
+    async fn authorize_pushed(
+        &self,
+        tenant: &Tenant,
+        issuer: &str,
+        raw: &RawParams,
+        session: Option<BrowserSession>,
+    ) -> Result<AuthorizeOutcome, CoreError> {
+        let page = |detail: &str| AuthorizeOutcome::ErrorPage {
+            error_key: "invalid_request",
+            detail: detail.to_owned(),
+        };
+        let Some(request_uri) = raw.single("request_uri") else {
+            return Ok(page("request_uri is repeated"));
+        };
+        let Some(client_id) = raw.single("client_id") else {
+            return Ok(page("client_id is missing or repeated"));
+        };
+        let resumed = match self
+            .resume_pushed_request(tenant, issuer, client_id, request_uri)
+            .await?
+        {
+            Ok(r) => r,
+            Err(refusal) => return Ok(refusal),
+        };
+        if resumed.params.prompt.iter().any(|p| p == PROMPT_CREATE) {
+            return Ok(AuthorizeOutcome::Register {
+                request_id: resumed.request_id,
+            });
+        }
+        self.continue_request(
+            tenant,
+            issuer,
+            resumed.request_id,
+            session,
+            Stage::AfterLogin,
+        )
+        .await
     }
 
     /// Continues a stored authorization request after the login flow.

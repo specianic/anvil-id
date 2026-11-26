@@ -253,6 +253,9 @@ pub fn validate(
             error: CoreError::RequestNotSupported,
         });
     }
+    // A pushed `request_uri` (RFC 9126, `urn:ietf:params:oauth:request_uri:`) is resolved by
+    // the service layer before validation (`AuthorizeService::resume_pushed_request`) and never
+    // reaches this function; every value that does is a request object by reference.
     if raw.get("request_uri").is_some() {
         return Err(fail(CoreError::RequestUriNotSupported));
     }
