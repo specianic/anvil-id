@@ -41,6 +41,12 @@ const MFA_LABELS: Record<NonNullable<ClientView["mfa_policy"]>, string> = {
   required: "Required",
 };
 
+const ORG_POLICY_LABELS: Record<ClientView["organization"], string> = {
+  off: "Off",
+  optional: "Optional",
+  required: "Required",
+};
+
 function ClientDetails({ client }: { client: ClientView }) {
   return (
     <div className="space-y-4">
@@ -112,6 +118,9 @@ function ClientDetails({ client }: { client: ClientView }) {
               <List items={client.allowed_resources} empty="None: tokens are for this client" />
             </Field>
             <Field label="MFA policy">{client.mfa_policy ? MFA_LABELS[client.mfa_policy] : "Tenant default"}</Field>
+            <Field label="Organizations">
+              <span data-testid="client-organization">{ORG_POLICY_LABELS[client.organization]}</span>
+            </Field>
           </dl>
         </CardContent>
       </Card>

@@ -114,6 +114,7 @@ export function useTenantView(slug: string) {
 /** The tenant-scoped console sections (main navigation; the switcher keeps the section). */
 export const TENANT_PAGES = [
   { to: "/t/$tenant/users", label: "Users" },
+  { to: "/t/$tenant/organizations", label: "Organizations" },
   { to: "/t/$tenant/clients", label: "Clients" },
   { to: "/t/$tenant/connections", label: "Connections" },
   { to: "/t/$tenant/sessions", label: "Sessions" },

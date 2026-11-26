@@ -46,6 +46,9 @@ import { Route as TTenantEmailIndexRouteImport } from './routes/t/$tenant/email/
 import { Route as TTenantEmailKindRouteImport } from './routes/t/$tenant/email/$kind'
 import { Route as TTenantEmailSmtpRouteImport } from './routes/t/$tenant/email/smtp'
 import { Route as TTenantKeysIndexRouteImport } from './routes/t/$tenant/keys/index'
+import { Route as TTenantOrganizationsIndexRouteImport } from './routes/t/$tenant/organizations/index'
+import { Route as TTenantOrganizationsOrgIdRouteImport } from './routes/t/$tenant/organizations/$orgId'
+import { Route as TTenantOrganizationsNewRouteImport } from './routes/t/$tenant/organizations/new'
 import { Route as TTenantRolesIndexRouteImport } from './routes/t/$tenant/roles/index'
 import { Route as TTenantRolesRoleNameRouteImport } from './routes/t/$tenant/roles/$roleName'
 import { Route as TTenantRolesNewRouteImport } from './routes/t/$tenant/roles/new'
@@ -58,6 +61,10 @@ import { Route as TTenantUsersUserIdRouteImport } from './routes/t/$tenant/users
 import { Route as TTenantWebhooksIndexRouteImport } from './routes/t/$tenant/webhooks/index'
 import { Route as TTenantWebhooksWebhookIdRouteImport } from './routes/t/$tenant/webhooks/$webhookId'
 import { Route as TTenantWebhooksNewRouteImport } from './routes/t/$tenant/webhooks/new'
+import { Route as TTenantOrganizationsOrgIdIndexRouteImport } from './routes/t/$tenant/organizations/$orgId/index'
+import { Route as TTenantOrganizationsOrgIdInvitationsRouteImport } from './routes/t/$tenant/organizations/$orgId/invitations'
+import { Route as TTenantOrganizationsOrgIdMembersRouteImport } from './routes/t/$tenant/organizations/$orgId/members'
+import { Route as TTenantOrganizationsOrgIdRolesRouteImport } from './routes/t/$tenant/organizations/$orgId/roles'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -246,6 +253,23 @@ const TTenantKeysIndexRoute = TTenantKeysIndexRouteImport.update({
   path: '/keys/',
   getParentRoute: () => TTenantRoute,
 } as any)
+const TTenantOrganizationsIndexRoute =
+  TTenantOrganizationsIndexRouteImport.update({
+    id: '/organizations/',
+    path: '/organizations/',
+    getParentRoute: () => TTenantRoute,
+  } as any)
+const TTenantOrganizationsOrgIdRoute =
+  TTenantOrganizationsOrgIdRouteImport.update({
+    id: '/organizations/$orgId',
+    path: '/organizations/$orgId',
+    getParentRoute: () => TTenantRoute,
+  } as any)
+const TTenantOrganizationsNewRoute = TTenantOrganizationsNewRouteImport.update({
+  id: '/organizations/new',
+  path: '/organizations/new',
+  getParentRoute: () => TTenantRoute,
+} as any)
 const TTenantRolesIndexRoute = TTenantRolesIndexRouteImport.update({
   id: '/roles/',
   path: '/roles/',
@@ -308,6 +332,30 @@ const TTenantWebhooksNewRoute = TTenantWebhooksNewRouteImport.update({
   path: '/webhooks/new',
   getParentRoute: () => TTenantRoute,
 } as any)
+const TTenantOrganizationsOrgIdIndexRoute =
+  TTenantOrganizationsOrgIdIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => TTenantOrganizationsOrgIdRoute,
+  } as any)
+const TTenantOrganizationsOrgIdInvitationsRoute =
+  TTenantOrganizationsOrgIdInvitationsRouteImport.update({
+    id: '/invitations',
+    path: '/invitations',
+    getParentRoute: () => TTenantOrganizationsOrgIdRoute,
+  } as any)
+const TTenantOrganizationsOrgIdMembersRoute =
+  TTenantOrganizationsOrgIdMembersRouteImport.update({
+    id: '/members',
+    path: '/members',
+    getParentRoute: () => TTenantOrganizationsOrgIdRoute,
+  } as any)
+const TTenantOrganizationsOrgIdRolesRoute =
+  TTenantOrganizationsOrgIdRolesRouteImport.update({
+    id: '/roles',
+    path: '/roles',
+    getParentRoute: () => TTenantOrganizationsOrgIdRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -340,6 +388,8 @@ export interface FileRoutesByFullPath {
   '/t/$tenant/connections/new': typeof TTenantConnectionsNewRoute
   '/t/$tenant/email/$kind': typeof TTenantEmailKindRoute
   '/t/$tenant/email/smtp': typeof TTenantEmailSmtpRoute
+  '/t/$tenant/organizations/$orgId': typeof TTenantOrganizationsOrgIdRouteWithChildren
+  '/t/$tenant/organizations/new': typeof TTenantOrganizationsNewRoute
   '/t/$tenant/roles/$roleName': typeof TTenantRolesRoleNameRoute
   '/t/$tenant/roles/new': typeof TTenantRolesNewRoute
   '/t/$tenant/settings/config': typeof TTenantSettingsConfigRoute
@@ -354,11 +404,16 @@ export interface FileRoutesByFullPath {
   '/t/$tenant/connections/': typeof TTenantConnectionsIndexRoute
   '/t/$tenant/email/': typeof TTenantEmailIndexRoute
   '/t/$tenant/keys/': typeof TTenantKeysIndexRoute
+  '/t/$tenant/organizations/': typeof TTenantOrganizationsIndexRoute
   '/t/$tenant/roles/': typeof TTenantRolesIndexRoute
   '/t/$tenant/sessions/': typeof TTenantSessionsIndexRoute
   '/t/$tenant/settings/': typeof TTenantSettingsIndexRoute
   '/t/$tenant/users/': typeof TTenantUsersIndexRoute
   '/t/$tenant/webhooks/': typeof TTenantWebhooksIndexRoute
+  '/t/$tenant/organizations/$orgId/invitations': typeof TTenantOrganizationsOrgIdInvitationsRoute
+  '/t/$tenant/organizations/$orgId/members': typeof TTenantOrganizationsOrgIdMembersRoute
+  '/t/$tenant/organizations/$orgId/roles': typeof TTenantOrganizationsOrgIdRolesRoute
+  '/t/$tenant/organizations/$orgId/': typeof TTenantOrganizationsOrgIdIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -390,6 +445,7 @@ export interface FileRoutesByTo {
   '/t/$tenant/connections/new': typeof TTenantConnectionsNewRoute
   '/t/$tenant/email/$kind': typeof TTenantEmailKindRoute
   '/t/$tenant/email/smtp': typeof TTenantEmailSmtpRoute
+  '/t/$tenant/organizations/new': typeof TTenantOrganizationsNewRoute
   '/t/$tenant/roles/$roleName': typeof TTenantRolesRoleNameRoute
   '/t/$tenant/roles/new': typeof TTenantRolesNewRoute
   '/t/$tenant/settings/config': typeof TTenantSettingsConfigRoute
@@ -404,11 +460,16 @@ export interface FileRoutesByTo {
   '/t/$tenant/connections': typeof TTenantConnectionsIndexRoute
   '/t/$tenant/email': typeof TTenantEmailIndexRoute
   '/t/$tenant/keys': typeof TTenantKeysIndexRoute
+  '/t/$tenant/organizations': typeof TTenantOrganizationsIndexRoute
   '/t/$tenant/roles': typeof TTenantRolesIndexRoute
   '/t/$tenant/sessions': typeof TTenantSessionsIndexRoute
   '/t/$tenant/settings': typeof TTenantSettingsIndexRoute
   '/t/$tenant/users': typeof TTenantUsersIndexRoute
   '/t/$tenant/webhooks': typeof TTenantWebhooksIndexRoute
+  '/t/$tenant/organizations/$orgId/invitations': typeof TTenantOrganizationsOrgIdInvitationsRoute
+  '/t/$tenant/organizations/$orgId/members': typeof TTenantOrganizationsOrgIdMembersRoute
+  '/t/$tenant/organizations/$orgId/roles': typeof TTenantOrganizationsOrgIdRolesRoute
+  '/t/$tenant/organizations/$orgId': typeof TTenantOrganizationsOrgIdIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -442,6 +503,8 @@ export interface FileRoutesById {
   '/t/$tenant/connections/new': typeof TTenantConnectionsNewRoute
   '/t/$tenant/email/$kind': typeof TTenantEmailKindRoute
   '/t/$tenant/email/smtp': typeof TTenantEmailSmtpRoute
+  '/t/$tenant/organizations/$orgId': typeof TTenantOrganizationsOrgIdRouteWithChildren
+  '/t/$tenant/organizations/new': typeof TTenantOrganizationsNewRoute
   '/t/$tenant/roles/$roleName': typeof TTenantRolesRoleNameRoute
   '/t/$tenant/roles/new': typeof TTenantRolesNewRoute
   '/t/$tenant/settings/config': typeof TTenantSettingsConfigRoute
@@ -456,11 +519,16 @@ export interface FileRoutesById {
   '/t/$tenant/connections/': typeof TTenantConnectionsIndexRoute
   '/t/$tenant/email/': typeof TTenantEmailIndexRoute
   '/t/$tenant/keys/': typeof TTenantKeysIndexRoute
+  '/t/$tenant/organizations/': typeof TTenantOrganizationsIndexRoute
   '/t/$tenant/roles/': typeof TTenantRolesIndexRoute
   '/t/$tenant/sessions/': typeof TTenantSessionsIndexRoute
   '/t/$tenant/settings/': typeof TTenantSettingsIndexRoute
   '/t/$tenant/users/': typeof TTenantUsersIndexRoute
   '/t/$tenant/webhooks/': typeof TTenantWebhooksIndexRoute
+  '/t/$tenant/organizations/$orgId/invitations': typeof TTenantOrganizationsOrgIdInvitationsRoute
+  '/t/$tenant/organizations/$orgId/members': typeof TTenantOrganizationsOrgIdMembersRoute
+  '/t/$tenant/organizations/$orgId/roles': typeof TTenantOrganizationsOrgIdRolesRoute
+  '/t/$tenant/organizations/$orgId/': typeof TTenantOrganizationsOrgIdIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -495,6 +563,8 @@ export interface FileRouteTypes {
     | '/t/$tenant/connections/new'
     | '/t/$tenant/email/$kind'
     | '/t/$tenant/email/smtp'
+    | '/t/$tenant/organizations/$orgId'
+    | '/t/$tenant/organizations/new'
     | '/t/$tenant/roles/$roleName'
     | '/t/$tenant/roles/new'
     | '/t/$tenant/settings/config'
@@ -509,11 +579,16 @@ export interface FileRouteTypes {
     | '/t/$tenant/connections/'
     | '/t/$tenant/email/'
     | '/t/$tenant/keys/'
+    | '/t/$tenant/organizations/'
     | '/t/$tenant/roles/'
     | '/t/$tenant/sessions/'
     | '/t/$tenant/settings/'
     | '/t/$tenant/users/'
     | '/t/$tenant/webhooks/'
+    | '/t/$tenant/organizations/$orgId/invitations'
+    | '/t/$tenant/organizations/$orgId/members'
+    | '/t/$tenant/organizations/$orgId/roles'
+    | '/t/$tenant/organizations/$orgId/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -545,6 +620,7 @@ export interface FileRouteTypes {
     | '/t/$tenant/connections/new'
     | '/t/$tenant/email/$kind'
     | '/t/$tenant/email/smtp'
+    | '/t/$tenant/organizations/new'
     | '/t/$tenant/roles/$roleName'
     | '/t/$tenant/roles/new'
     | '/t/$tenant/settings/config'
@@ -559,11 +635,16 @@ export interface FileRouteTypes {
     | '/t/$tenant/connections'
     | '/t/$tenant/email'
     | '/t/$tenant/keys'
+    | '/t/$tenant/organizations'
     | '/t/$tenant/roles'
     | '/t/$tenant/sessions'
     | '/t/$tenant/settings'
     | '/t/$tenant/users'
     | '/t/$tenant/webhooks'
+    | '/t/$tenant/organizations/$orgId/invitations'
+    | '/t/$tenant/organizations/$orgId/members'
+    | '/t/$tenant/organizations/$orgId/roles'
+    | '/t/$tenant/organizations/$orgId'
   id:
     | '__root__'
     | '/'
@@ -596,6 +677,8 @@ export interface FileRouteTypes {
     | '/t/$tenant/connections/new'
     | '/t/$tenant/email/$kind'
     | '/t/$tenant/email/smtp'
+    | '/t/$tenant/organizations/$orgId'
+    | '/t/$tenant/organizations/new'
     | '/t/$tenant/roles/$roleName'
     | '/t/$tenant/roles/new'
     | '/t/$tenant/settings/config'
@@ -610,11 +693,16 @@ export interface FileRouteTypes {
     | '/t/$tenant/connections/'
     | '/t/$tenant/email/'
     | '/t/$tenant/keys/'
+    | '/t/$tenant/organizations/'
     | '/t/$tenant/roles/'
     | '/t/$tenant/sessions/'
     | '/t/$tenant/settings/'
     | '/t/$tenant/users/'
     | '/t/$tenant/webhooks/'
+    | '/t/$tenant/organizations/$orgId/invitations'
+    | '/t/$tenant/organizations/$orgId/members'
+    | '/t/$tenant/organizations/$orgId/roles'
+    | '/t/$tenant/organizations/$orgId/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -902,6 +990,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof TTenantKeysIndexRouteImport
       parentRoute: typeof TTenantRoute
     }
+    '/t/$tenant/organizations/': {
+      id: '/t/$tenant/organizations/'
+      path: '/organizations'
+      fullPath: '/t/$tenant/organizations/'
+      preLoaderRoute: typeof TTenantOrganizationsIndexRouteImport
+      parentRoute: typeof TTenantRoute
+    }
+    '/t/$tenant/organizations/$orgId': {
+      id: '/t/$tenant/organizations/$orgId'
+      path: '/organizations/$orgId'
+      fullPath: '/t/$tenant/organizations/$orgId'
+      preLoaderRoute: typeof TTenantOrganizationsOrgIdRouteImport
+      parentRoute: typeof TTenantRoute
+    }
+    '/t/$tenant/organizations/new': {
+      id: '/t/$tenant/organizations/new'
+      path: '/organizations/new'
+      fullPath: '/t/$tenant/organizations/new'
+      preLoaderRoute: typeof TTenantOrganizationsNewRouteImport
+      parentRoute: typeof TTenantRoute
+    }
     '/t/$tenant/roles/': {
       id: '/t/$tenant/roles/'
       path: '/roles'
@@ -986,8 +1095,58 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof TTenantWebhooksNewRouteImport
       parentRoute: typeof TTenantRoute
     }
+    '/t/$tenant/organizations/$orgId/': {
+      id: '/t/$tenant/organizations/$orgId/'
+      path: '/'
+      fullPath: '/t/$tenant/organizations/$orgId/'
+      preLoaderRoute: typeof TTenantOrganizationsOrgIdIndexRouteImport
+      parentRoute: typeof TTenantOrganizationsOrgIdRoute
+    }
+    '/t/$tenant/organizations/$orgId/invitations': {
+      id: '/t/$tenant/organizations/$orgId/invitations'
+      path: '/invitations'
+      fullPath: '/t/$tenant/organizations/$orgId/invitations'
+      preLoaderRoute: typeof TTenantOrganizationsOrgIdInvitationsRouteImport
+      parentRoute: typeof TTenantOrganizationsOrgIdRoute
+    }
+    '/t/$tenant/organizations/$orgId/members': {
+      id: '/t/$tenant/organizations/$orgId/members'
+      path: '/members'
+      fullPath: '/t/$tenant/organizations/$orgId/members'
+      preLoaderRoute: typeof TTenantOrganizationsOrgIdMembersRouteImport
+      parentRoute: typeof TTenantOrganizationsOrgIdRoute
+    }
+    '/t/$tenant/organizations/$orgId/roles': {
+      id: '/t/$tenant/organizations/$orgId/roles'
+      path: '/roles'
+      fullPath: '/t/$tenant/organizations/$orgId/roles'
+      preLoaderRoute: typeof TTenantOrganizationsOrgIdRolesRouteImport
+      parentRoute: typeof TTenantOrganizationsOrgIdRoute
+    }
   }
 }
+
+interface TTenantOrganizationsOrgIdRouteChildren {
+  TTenantOrganizationsOrgIdInvitationsRoute: typeof TTenantOrganizationsOrgIdInvitationsRoute
+  TTenantOrganizationsOrgIdMembersRoute: typeof TTenantOrganizationsOrgIdMembersRoute
+  TTenantOrganizationsOrgIdRolesRoute: typeof TTenantOrganizationsOrgIdRolesRoute
+  TTenantOrganizationsOrgIdIndexRoute: typeof TTenantOrganizationsOrgIdIndexRoute
+}
+
+const TTenantOrganizationsOrgIdRouteChildren: TTenantOrganizationsOrgIdRouteChildren =
+  {
+    TTenantOrganizationsOrgIdInvitationsRoute:
+      TTenantOrganizationsOrgIdInvitationsRoute,
+    TTenantOrganizationsOrgIdMembersRoute:
+      TTenantOrganizationsOrgIdMembersRoute,
+    TTenantOrganizationsOrgIdRolesRoute: TTenantOrganizationsOrgIdRolesRoute,
+    TTenantOrganizationsOrgIdIndexRoute: TTenantOrganizationsOrgIdIndexRoute,
+  }
+
+const TTenantOrganizationsOrgIdRouteWithChildren =
+  TTenantOrganizationsOrgIdRoute._addFileChildren(
+    TTenantOrganizationsOrgIdRouteChildren,
+  )
 
 interface TTenantRouteChildren {
   TTenantIndexRoute: typeof TTenantIndexRoute
@@ -999,6 +1158,8 @@ interface TTenantRouteChildren {
   TTenantConnectionsNewRoute: typeof TTenantConnectionsNewRoute
   TTenantEmailKindRoute: typeof TTenantEmailKindRoute
   TTenantEmailSmtpRoute: typeof TTenantEmailSmtpRoute
+  TTenantOrganizationsOrgIdRoute: typeof TTenantOrganizationsOrgIdRouteWithChildren
+  TTenantOrganizationsNewRoute: typeof TTenantOrganizationsNewRoute
   TTenantRolesRoleNameRoute: typeof TTenantRolesRoleNameRoute
   TTenantRolesNewRoute: typeof TTenantRolesNewRoute
   TTenantSettingsConfigRoute: typeof TTenantSettingsConfigRoute
@@ -1013,6 +1174,7 @@ interface TTenantRouteChildren {
   TTenantConnectionsIndexRoute: typeof TTenantConnectionsIndexRoute
   TTenantEmailIndexRoute: typeof TTenantEmailIndexRoute
   TTenantKeysIndexRoute: typeof TTenantKeysIndexRoute
+  TTenantOrganizationsIndexRoute: typeof TTenantOrganizationsIndexRoute
   TTenantRolesIndexRoute: typeof TTenantRolesIndexRoute
   TTenantSessionsIndexRoute: typeof TTenantSessionsIndexRoute
   TTenantSettingsIndexRoute: typeof TTenantSettingsIndexRoute
@@ -1030,6 +1192,8 @@ const TTenantRouteChildren: TTenantRouteChildren = {
   TTenantConnectionsNewRoute: TTenantConnectionsNewRoute,
   TTenantEmailKindRoute: TTenantEmailKindRoute,
   TTenantEmailSmtpRoute: TTenantEmailSmtpRoute,
+  TTenantOrganizationsOrgIdRoute: TTenantOrganizationsOrgIdRouteWithChildren,
+  TTenantOrganizationsNewRoute: TTenantOrganizationsNewRoute,
   TTenantRolesRoleNameRoute: TTenantRolesRoleNameRoute,
   TTenantRolesNewRoute: TTenantRolesNewRoute,
   TTenantSettingsConfigRoute: TTenantSettingsConfigRoute,
@@ -1044,6 +1208,7 @@ const TTenantRouteChildren: TTenantRouteChildren = {
   TTenantConnectionsIndexRoute: TTenantConnectionsIndexRoute,
   TTenantEmailIndexRoute: TTenantEmailIndexRoute,
   TTenantKeysIndexRoute: TTenantKeysIndexRoute,
+  TTenantOrganizationsIndexRoute: TTenantOrganizationsIndexRoute,
   TTenantRolesIndexRoute: TTenantRolesIndexRoute,
   TTenantSessionsIndexRoute: TTenantSessionsIndexRoute,
   TTenantSettingsIndexRoute: TTenantSettingsIndexRoute,

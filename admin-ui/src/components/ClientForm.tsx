@@ -2,7 +2,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { type FormEvent, useState } from "react";
 import { ApiError, api, unwrap } from "@/api/client";
-import { useTenant } from "@/lib/tenant";
+import { SYSTEM_TENANT, useTenant } from "@/lib/tenant";
 import type { components } from "@/api/schema";
 import { ProblemAlert } from "@/components/ProblemAlert";
 import {
@@ -26,6 +26,7 @@ type GrantType = components["schemas"]["GrantType"];
 type TokenFormat = components["schemas"]["TokenFormat"];
 type ConsentMode = components["schemas"]["ConsentMode"];
 type MfaPolicy = components["schemas"]["MfaPolicy"];
+type OrgClientPolicy = components["schemas"]["OrgClientPolicy"];
 export type CreateClient = components["schemas"]["CreateClient"];
 export type UpdateClient = components["schemas"]["UpdateClient"];
 
@@ -49,6 +50,7 @@ export interface ClientFormValues {
   allowed_resources: string;
   /** `inherit` = no client override (the tenant policy applies). */
   mfa_policy: MfaPolicy | "inherit";
+  organization: OrgClientPolicy;
 }
 
 export const NEW_CLIENT: ClientFormValues = {
@@ -70,6 +72,7 @@ export const NEW_CLIENT: ClientFormValues = {
   backchannel_logout_session_required: false,
   allowed_resources: "",
   mfa_policy: "inherit",
+  organization: "off",
 };
 
 export function valuesFromClient(client: ClientView): ClientFormValues {
@@ -92,6 +95,7 @@ export function valuesFromClient(client: ClientView): ClientFormValues {
     backchannel_logout_session_required: client.backchannel_logout_session_required,
     allowed_resources: client.allowed_resources.join("\n"),
     mfa_policy: client.mfa_policy ?? "inherit",
+    organization: client.organization,
   };
 }
 
@@ -104,6 +108,7 @@ function logoutAndPolicy(values: ClientFormValues) {
     backchannel_logout_session_required: values.backchannel_logout_session_required,
     allowed_resources: lines(values.allowed_resources),
     mfa_policy: values.mfa_policy === "inherit" ? null : values.mfa_policy,
+    organization: values.organization,
   };
 }
 
@@ -192,6 +197,7 @@ const FORM_FIELDS = new Set([
   "backchannel_logout_session_required",
   "allowed_resources",
   "mfa_policy",
+  "organization",
 ]);
 
 const MFA_OPTIONS: readonly { value: MfaPolicy | "inherit"; label: string }[] = [
@@ -200,6 +206,20 @@ const MFA_OPTIONS: readonly { value: MfaPolicy | "inherit"; label: string }[] = 
   { value: "optional", label: "Optional (users who enrolled a second factor)" },
   { value: "required", label: "Required" },
 ];
+
+const ORG_POLICY_OPTIONS: readonly { value: OrgClientPolicy; label: string }[] = [
+  { value: "off", label: "Off (no organizations)" },
+  { value: "optional", label: "Optional" },
+  { value: "required", label: "Required" },
+];
+
+const ORG_POLICY_HINTS: Record<OrgClientPolicy, string> = {
+  off: "Tokens carry no organization claims and the organization authorization parameter is refused.",
+  optional:
+    "Users who belong to an organization sign in to one (the organization parameter or their own choice) and tokens carry its claims; users without organizations still sign in.",
+  required:
+    "Every sign-in needs an organization (the organization parameter or a choice among the user's own memberships); users in no organization are denied.",
+};
 
 /** The tenant's enabled ID-token signing algorithms (RS256 first). */
 function useSigningAlgs(): string[] {
@@ -223,6 +243,7 @@ interface ClientFormProps {
 
 export function ClientForm({ mode, initial, submitLabel, pending, error, onSubmit }: ClientFormProps) {
   const [values, setValues] = useState<ClientFormValues>(initial);
+  const tenant = useTenant();
   const algs = useSigningAlgs();
   const set = <K extends keyof ClientFormValues>(key: K, value: ClientFormValues[K]) =>
     setValues((v) => ({ ...v, [key]: value }));
@@ -478,6 +499,18 @@ export function ClientForm({ mode, initial, submitLabel, pending, error, onSubmi
           hint="The strictest of tenant and client policy applies."
           errors={errors.mfa_policy}
         />
+        {tenant === SYSTEM_TENANT ? null : (
+          <SelectField
+            label="Organizations"
+            name="organization"
+            value={values.organization}
+            onChange={(e) => set("organization", e.target.value as OrgClientPolicy)}
+            options={ORG_POLICY_OPTIONS}
+            hint={ORG_POLICY_HINTS[values.organization]}
+            errors={errors.organization}
+            data-testid="client-organization-policy"
+          />
+        )}
       </fieldset>
 
       <Button type="submit" disabled={pending}>

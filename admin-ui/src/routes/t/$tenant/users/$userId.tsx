@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { type FormEvent, type KeyboardEvent, type ReactNode, useRef, useState } from "react";
 import { ApiError, type UserView, api, unwrap } from "@/api/client";
-import { useTenant } from "@/lib/tenant";
+import { SYSTEM_TENANT, useTenant } from "@/lib/tenant";
 import type { components } from "@/api/schema";
 import {
   type AttributeDefinition,
@@ -25,6 +25,8 @@ import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, Tabl
 import { formatDateTime } from "@/lib/format";
 
 type SessionView = components["schemas"]["SessionView"];
+type OrganizationView = components["schemas"]["OrganizationView"];
+type OrgRoleView = components["schemas"]["OrgRoleView"];
 type CredentialView = components["schemas"]["CredentialView"];
 
 const TABS = [
@@ -100,6 +102,102 @@ function UserDetails({ user }: { user: UserView }) {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+/** Organizations scanned at most for the memberships card. */
+const MAX_ORG_PAGES = 10;
+
+/**
+ * The user's organization memberships. The API has no per-user membership list, so this asks each
+ * organization of the tenant for the user's roles there (404 = not a member).
+ */
+async function fetchMemberships(
+  tenant: string,
+  userId: string,
+  signal: AbortSignal,
+): Promise<{ memberships: { org: OrganizationView; roles: OrgRoleView[] }[]; truncated: boolean }> {
+  const orgs: OrganizationView[] = [];
+  let after: string | undefined;
+  let truncated = false;
+  for (let page = 0; ; page++) {
+    if (page === MAX_ORG_PAGES) {
+      truncated = true;
+      break;
+    }
+    const result = unwrap(
+      await api.GET("/api/admin/v1/tenants/{slug}/organizations", {
+        params: { path: { slug: tenant }, query: { limit: 200, after } },
+        signal,
+      }),
+    );
+    orgs.push(...result.items);
+    if (!result.next_cursor) break;
+    after = result.next_cursor;
+  }
+  const checked = await Promise.all(
+    orgs.map(async (org) => {
+      try {
+        const roles = unwrap(
+          await api.GET("/api/admin/v1/tenants/{slug}/organizations/{org}/members/{user_id}/roles", {
+            params: { path: { slug: tenant, org: org.id, user_id: userId } },
+            signal,
+          }),
+        );
+        return { org, roles: roles.items };
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 404) return null;
+        throw error;
+      }
+    }),
+  );
+  return { memberships: checked.filter((m) => m !== null), truncated };
+}
+
+function UserOrganizations({ userId }: { userId: string }) {
+  const tenant = useTenant();
+  const query = useQuery({
+    queryKey: ["user-orgs", tenant, userId],
+    queryFn: ({ signal }) => fetchMemberships(tenant, userId, signal),
+    enabled: tenant !== SYSTEM_TENANT,
+  });
+  if (tenant === SYSTEM_TENANT) return null;
+  return (
+    <Card data-testid="user-organizations">
+      <CardHeader>
+        <CardTitle>Organizations</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {query.isError ? (
+          <ProblemAlert error={query.error} />
+        ) : query.isPending ? (
+          <Skeleton className="h-5 w-1/2" />
+        ) : query.data.memberships.length === 0 ? (
+          <p className="text-muted-foreground text-sm">Not a member of any organization.</p>
+        ) : (
+          <ul className="divide-y">
+            {query.data.memberships.map(({ org, roles }) => (
+              <li key={org.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 py-2 text-sm">
+                <Link
+                  to="/t/$tenant/organizations/$orgId/members"
+                  params={{ tenant, orgId: org.id }}
+                  className="font-medium underline-offset-4 hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+                >
+                  {org.display_name}
+                </Link>
+                <code className="text-muted-foreground text-xs">{org.slug}</code>
+                <span className="text-muted-foreground">
+                  {roles.length === 0 ? "No roles" : `Roles: ${roles.map((r) => r.name).join(", ")}`}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {query.data?.truncated && (
+          <p className="text-muted-foreground mt-2 text-xs">Only the first {MAX_ORG_PAGES * 200} organizations were checked.</p>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -742,7 +840,12 @@ function UserPage() {
             onSelect={(next) => void navigate({ search: next === "overview" ? {} : { tab: next }, replace: true })}
           />
           <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} tabIndex={0} className="focus:outline-none">
-            {tab === "overview" && <UserDetails user={query.data} />}
+            {tab === "overview" && (
+              <div className="space-y-4">
+                <UserDetails user={query.data} />
+                <UserOrganizations userId={userId} />
+              </div>
+            )}
             {tab === "sessions" && <UserSessions userId={userId} />}
             {tab === "credentials" && <UserCredentials userId={userId} />}
             {tab === "roles" && <UserRoles userId={userId} />}
