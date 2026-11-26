@@ -9,7 +9,9 @@
 //!
 //! Later releases add their own upgrade tests below (0.2 → 0.3, the 0.3 logout issuer,
 //! 0.3 → 0.4 from `fixtures/release_0_3.sql`, which also checks the administrator backfill, and
-//! 0.4 → 1.0 from `fixtures/release_0_4.sql`, which counts the rows of every table 0007 changes).
+//! 0.4 → 1.0 from `fixtures/release_0_4.sql`, which counts the rows of every table 0007 changes,
+//! and 1.0.0-beta.1 → final from `fixtures/release_1_0_beta1.sql`, which compares the row count and
+//! every beta.1 column value of every table before and after 0008).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -1172,6 +1174,10 @@ async fn upgrade_from_0_4_keeps_every_row() {
         .expect("get client")
         .expect("client survives");
     assert_eq!(client.organization, OrgClientPolicy::Off);
+    assert_client_phase7_defaults(&client);
+    let mut conn = connect(&url).await;
+    assert_new_1_0_tables_empty(&mut conn).await;
+    conn.close().await.expect("close");
 
     // Replay guards: the 0.4 entries still block replays; the new kind is accepted.
     let jti = SecretHash::from_slice(&[0x41; 32]).expect("hash");
@@ -1346,4 +1352,480 @@ pub async fn upgraded_postgres() -> TestStorage {
 
 mod upgraded_contract {
     anvil_storage::storage_contract_tests!(crate::upgraded_postgres);
+}
+
+// ---------------------------------------------------------------------------------------------
+// 1.0.0-beta.1 → final (migration 0008: pushed_authorization_request and password_hash_profile
+// tables, client columns require_pushed_authorization_requests, client_kind and
+// headless_native). Additive only: every beta.1 row must survive unchanged.
+
+/// Schema version shipped in 1.0.0-beta.1 (0007_release_1_0).
+const BETA1_VERSION: i64 = 7;
+
+const B1_SYSTEM: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0010_0001);
+const B1_DEFAULT: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0010_0002);
+const B1_ALICE: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0010_0011);
+const B1_BOB: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0010_0012);
+const B1_ORG: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0010_0020);
+const B1_ORG_ROLE: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0010_0031);
+const B1_SAML: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0010_0050);
+const B1_FAMILY: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0010_0080);
+
+/// Tables the beta.1 fixture must populate (at least one row each).
+const B1_POPULATED: [&str; 17] = [
+    "tenant",
+    "user",
+    "credential",
+    "client",
+    "organization",
+    "org_membership",
+    "org_invitation",
+    "connection",
+    "identity_link",
+    "org_domain",
+    "role",
+    "role_assignment",
+    "browser_session",
+    "token_family",
+    "authorization_code",
+    "replay_guard",
+    "audit_event",
+];
+
+/// Highest migration version this binary embeds.
+fn latest_version() -> i64 {
+    sqlx::migrate!()
+        .iter()
+        .map(|m| m.version)
+        .max()
+        .expect("at least one migration")
+}
+
+/// The tables 0008 adds; they must exist and be empty right after the upgrade.
+async fn assert_new_1_0_tables_empty(conn: &mut PgConnection) {
+    for table in ["pushed_authorization_request", "password_hash_profile"] {
+        // Table names are compile-time constants of this test.
+        let n: i64 =
+            sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {table}")))
+                .fetch_one(&mut *conn)
+                .await
+                .unwrap_or_else(|e| panic!("{table} must exist after the upgrade: {e}"));
+        assert_eq!(n, 0, "{table} starts empty");
+    }
+}
+
+/// The 0008 client columns read as their defaults on pre-0008 rows.
+fn assert_client_phase7_defaults(client: &anvil_core::model::Client) {
+    assert!(!client.require_pushed_authorization_requests);
+    assert_eq!(
+        client.client_kind,
+        anvil_core::model::ClientKind::Application
+    );
+    assert!(!client.headless_native);
+}
+
+/// Every table of the `public` schema (except sqlx's bookkeeping) with its columns in ordinal
+/// order, as they are at the time of the call.
+async fn table_columns(conn: &mut PgConnection) -> BTreeMap<String, Vec<String>> {
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT c.table_name::text, c.column_name::text
+           FROM information_schema.columns c
+           JOIN information_schema.tables t
+             ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+          WHERE c.table_schema = 'public' AND t.table_type = 'BASE TABLE'
+            AND c.table_name <> '_sqlx_migrations'
+          ORDER BY c.table_name, c.ordinal_position",
+    )
+    .fetch_all(&mut *conn)
+    .await
+    .expect("columns");
+    let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (table, column) in rows {
+        out.entry(table).or_default().push(column);
+    }
+    out
+}
+
+/// Double-quoted identifier (names come from the test database's own catalog).
+fn ident(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+/// `count(*)` of every table in `columns`.
+async fn table_counts(
+    conn: &mut PgConnection,
+    columns: &BTreeMap<String, Vec<String>>,
+) -> BTreeMap<String, i64> {
+    let mut out = BTreeMap::new();
+    for table in columns.keys() {
+        let n: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT count(*) FROM {}",
+            ident(table)
+        )))
+        .fetch_one(&mut *conn)
+        .await
+        .unwrap_or_else(|e| panic!("count {table}: {e}"));
+        out.insert(table.clone(), n);
+    }
+    out
+}
+
+/// Every value of the given columns of every table, one sorted text line per row. Only the
+/// columns passed in are read, so columns a later migration adds do not change the snapshot.
+async fn snapshot(
+    conn: &mut PgConnection,
+    columns: &BTreeMap<String, Vec<String>>,
+) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for (table, cols) in columns {
+        let list = cols.iter().map(|c| ident(c)).collect::<Vec<_>>().join(", ");
+        let text: String = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT coalesce(string_agg(r, E'\\n' ORDER BY r), '')
+               FROM (SELECT ROW({list})::text AS r FROM {}) s",
+            ident(table)
+        )))
+        .fetch_one(&mut *conn)
+        .await
+        .unwrap_or_else(|e| panic!("snapshot {table}: {e}"));
+        out.insert(table.clone(), text);
+    }
+    out
+}
+
+/// Rows whose composite references no longer resolve (checked on the beta.1 relations that
+/// 0008 could have touched: clients and everything hanging off users, orgs and connections).
+async fn dangling_references(conn: &mut PgConnection) -> i64 {
+    sqlx::query_scalar(
+        "SELECT (SELECT count(*) FROM token_family f
+                  WHERE NOT EXISTS (SELECT 1 FROM client c
+                                     WHERE c.tenant_id = f.tenant_id
+                                       AND c.client_id = f.client_id))
+              + (SELECT count(*) FROM authorization_code a
+                  WHERE NOT EXISTS (SELECT 1 FROM token_family f
+                                     WHERE f.id = a.token_family_id))
+              + (SELECT count(*) FROM org_membership m
+                  WHERE NOT EXISTS (SELECT 1 FROM organization o
+                                     WHERE o.tenant_id = m.tenant_id AND o.id = m.org_id)
+                     OR NOT EXISTS (SELECT 1 FROM \"user\" u
+                                     WHERE u.tenant_id = m.tenant_id AND u.id = m.user_id))
+              + (SELECT count(*) FROM identity_link l
+                  WHERE NOT EXISTS (SELECT 1 FROM connection c
+                                     WHERE c.tenant_id = l.tenant_id AND c.id = l.connection_id))
+              + (SELECT count(*) FROM org_domain d
+                  WHERE d.connection_id IS NOT NULL
+                    AND NOT EXISTS (SELECT 1 FROM connection c
+                                     WHERE c.tenant_id = d.tenant_id AND c.org_id = d.org_id
+                                       AND c.id = d.connection_id))",
+    )
+    .fetch_one(&mut *conn)
+    .await
+    .expect("reference check")
+}
+
+struct UpgradedBeta1 {
+    storage: PostgresStorage,
+    url: String,
+    before: BTreeMap<String, String>,
+    columns: BTreeMap<String, Vec<String>>,
+    counts_before: BTreeMap<String, i64>,
+}
+
+/// A database at the beta.1 schema, populated from `fixtures/release_1_0_beta1.sql`, then
+/// upgraded exactly like the final 1.0 binary does on start.
+async fn upgraded_from_beta1() -> UpgradedBeta1 {
+    let url = fresh_database().await;
+    let mut conn = connect(&url).await;
+    sqlx::migrate!()
+        .run_to(BETA1_VERSION, &mut conn)
+        .await
+        .expect("beta.1 migrations apply");
+    let version: i64 = sqlx::query_scalar("SELECT max(version) FROM _sqlx_migrations")
+        .fetch_one(&mut conn)
+        .await
+        .expect("version");
+    assert_eq!(version, BETA1_VERSION);
+    sqlx::raw_sql(include_str!("fixtures/release_1_0_beta1.sql"))
+        .execute(&mut conn)
+        .await
+        .expect("beta.1 fixtures load (every foreign key holds)");
+    let columns = table_columns(&mut conn).await;
+    let before = snapshot(&mut conn, &columns).await;
+    let counts_before = table_counts(&mut conn, &columns).await;
+    for table in B1_POPULATED {
+        assert!(
+            counts_before.get(table).copied().unwrap_or(0) >= 1,
+            "the beta.1 fixture must populate {table}"
+        );
+    }
+    conn.close().await.expect("close");
+
+    // The final 1.0 binary starts: connect and migrate with the defaults (destructive refused).
+    let storage = PostgresStorage::connect(&url, MAX_CONNECTIONS)
+        .await
+        .expect("connect");
+    storage
+        .migrate_with(MigrateOptions::default())
+        .await
+        .expect("beta.1 → latest upgrade applies without the destructive flag");
+    UpgradedBeta1 {
+        storage,
+        url,
+        before,
+        columns,
+        counts_before,
+    }
+}
+
+#[tokio::test]
+async fn upgrade_from_1_0_beta1_keeps_every_row_and_defaults_new_columns() {
+    use anvil_core::model::{
+        ConnectionConfig, ConnectionId, ConnectionKind, NameIdFormat, NewPushedRequest,
+        OrgClientPolicy, OrgId, PageRequest, ReplayKind, RoleId,
+    };
+    use anvil_core::ports::JtiOutcome;
+
+    let up = upgraded_from_beta1().await;
+    let s = &up.storage;
+    let default = TenantId(B1_DEFAULT);
+    let mut conn = connect(&up.url).await;
+
+    // Row counts per table and every value of every beta.1 column are unchanged.
+    assert_eq!(
+        table_counts(&mut conn, &up.columns).await,
+        up.counts_before,
+        "0008 must not add or lose a row in any beta.1 table"
+    );
+    assert_eq!(
+        snapshot(&mut conn, &up.columns).await,
+        up.before,
+        "the upgrade must not lose or change any row"
+    );
+    assert_eq!(dangling_references(&mut conn).await, 0);
+    let version: i64 = sqlx::query_scalar("SELECT max(version) FROM _sqlx_migrations")
+        .fetch_one(&mut conn)
+        .await
+        .expect("version");
+    assert_eq!(version, latest_version());
+    assert_new_1_0_tables_empty(&mut conn).await;
+    // The new columns carry their defaults in the rows themselves, not only through the reader.
+    let defaults: (bool, String, bool) = sqlx::query_as(
+        "SELECT require_pushed_authorization_requests, client_kind, headless_native
+           FROM client WHERE client_id = 'beta1-web'",
+    )
+    .fetch_one(&mut conn)
+    .await
+    .expect("client defaults");
+    assert_eq!(defaults, (false, "application".to_owned(), false));
+    conn.close().await.expect("close");
+
+    // The client keeps its beta.1 policy and defaults the new columns.
+    let web = s
+        .clients()
+        .get(default, "beta1-web")
+        .await
+        .expect("get client")
+        .expect("client survives");
+    assert_eq!(web.organization, OrgClientPolicy::Optional);
+    assert_client_phase7_defaults(&web);
+
+    // The beta.1 organization data reads back through the traits.
+    let org = s
+        .organizations()
+        .get(default, OrgId(B1_ORG))
+        .await
+        .expect("get org")
+        .expect("org survives");
+    assert_eq!(org.slug, "acme");
+    assert!(
+        s.organizations()
+            .is_member(default, OrgId(B1_ORG), UserId(B1_ALICE))
+            .await
+            .expect("is_member")
+    );
+    assert_eq!(
+        s.organizations()
+            .list_members(
+                default,
+                OrgId(B1_ORG),
+                PageRequest {
+                    after: None,
+                    limit: 10
+                }
+            )
+            .await
+            .expect("members")
+            .items
+            .len(),
+        1
+    );
+    let invitations = s
+        .organizations()
+        .list_invitations(default, OrgId(B1_ORG), false)
+        .await
+        .expect("invitations");
+    assert_eq!(invitations.len(), 1);
+    assert_eq!(invitations[0].role_ids, vec![RoleId(B1_ORG_ROLE)]);
+    let saml = s
+        .connections()
+        .get(default, ConnectionId(B1_SAML))
+        .await
+        .expect("get connection")
+        .expect("SAML connection survives");
+    assert_eq!(saml.kind(), ConnectionKind::Saml);
+    assert_eq!(saml.org_id, Some(OrgId(B1_ORG)));
+    match &saml.config {
+        ConnectionConfig::Saml(c) => assert_eq!(c.name_id_format, NameIdFormat::EmailAddress),
+        other => panic!("SAML config expected, got {other:?}"),
+    }
+    let domains = s
+        .organizations()
+        .list_domains(default, OrgId(B1_ORG))
+        .await
+        .expect("domains");
+    assert_eq!(domains.len(), 1);
+    assert_eq!(domains[0].connection_id, Some(ConnectionId(B1_SAML)));
+    assert!(
+        s.organizations()
+            .routed_domain(default, "acme.example.test")
+            .await
+            .expect("routed_domain")
+            .is_some(),
+        "the verified routing domain still routes"
+    );
+    let org_roles: Vec<RoleId> = s
+        .roles()
+        .roles_for_user_in_org(default, UserId(B1_ALICE), OrgId(B1_ORG))
+        .await
+        .expect("org roles")
+        .into_iter()
+        .map(|r| r.id)
+        .collect();
+    assert!(org_roles.contains(&RoleId(B1_ORG_ROLE)));
+    assert_eq!(
+        s.connections()
+            .links_for_user(default, UserId(B1_BOB))
+            .await
+            .expect("links")
+            .len(),
+        1
+    );
+    assert_eq!(
+        s.grants()
+            .record_jti(
+                default,
+                ReplayKind::SamlAssertionId,
+                &SecretHash([0x53; 32]),
+                now() + time::Duration::hours(1),
+                now(),
+            )
+            .await
+            .expect("record_jti"),
+        JtiOutcome::Replayed,
+        "the beta.1 SAML replay guard still blocks"
+    );
+    match s
+        .grants()
+        .consume_code(default, &SecretHash([0x52; 32]), now())
+        .await
+        .expect("consume")
+    {
+        ConsumeOutcome::Consumed(code) => assert_eq!(code.org_id, Some(OrgId(B1_ORG))),
+        other => panic!("the beta.1 code must survive: {other:?}"),
+    }
+
+    // The Phase 7 methods work on the upgraded beta.1 rows.
+    let families = s
+        .grants()
+        .families_for_user(default, UserId(B1_ALICE))
+        .await
+        .expect("families_for_user");
+    assert_eq!(families.len(), 1);
+    assert_eq!(families[0].id, TokenFamilyId(B1_FAMILY));
+    assert_eq!(families[0].org_id, Some(OrgId(B1_ORG)));
+    assert!(
+        s.users()
+            .replace_password_if(
+                default,
+                UserId(B1_ALICE),
+                "$argon2id$v=19$beta1-alice",
+                "$argon2id$v=19$rehashed",
+                now(),
+            )
+            .await
+            .expect("replace_password_if"),
+        "the beta.1 password can be swapped"
+    );
+    let at = anvil_core::model::truncate_to_ms(now());
+    let pushed = NewPushedRequest {
+        request_uri_hash: SecretHash([0x54; 32]),
+        client_id: "beta1-web".to_owned(),
+        params: serde_json::json!({"redirect_uri": "https://rp.acme.example.test/cb"}),
+        created_at: at,
+        expires_at: at + time::Duration::seconds(60),
+    };
+    s.grants()
+        .create_pushed_request(default, &pushed)
+        .await
+        .expect("PAR on the upgraded client");
+    assert!(
+        s.grants()
+            .consume_pushed_request(default, &pushed.request_uri_hash, at)
+            .await
+            .expect("consume")
+            .is_some()
+    );
+    assert!(
+        s.password_profiles()
+            .list(default)
+            .await
+            .expect("profiles")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn upgrade_from_1_0_beta1_is_idempotent_on_restart() {
+    let up = upgraded_from_beta1().await;
+    up.storage
+        .migrate()
+        .await
+        .expect("a second start finds nothing pending");
+    let again = PostgresStorage::connect(&up.url, MAX_CONNECTIONS)
+        .await
+        .expect("reconnect");
+    again.migrate().await.expect("third start");
+    let mut conn = connect(&up.url).await;
+    assert_eq!(table_counts(&mut conn, &up.columns).await, up.counts_before);
+    assert_eq!(snapshot(&mut conn, &up.columns).await, up.before);
+    let applied: i64 = sqlx::query_scalar("SELECT count(*) FROM _sqlx_migrations")
+        .fetch_one(&mut conn)
+        .await
+        .expect("count");
+    assert_eq!(applied, latest_version(), "every migration recorded once");
+    assert_new_1_0_tables_empty(&mut conn).await;
+    conn.close().await.expect("close");
+}
+
+/// Contract-suite factory: a database built through the beta.1 upgrade path, with the fixture
+/// tenants deleted through the storage traits (the contract tests start uninstalled).
+pub async fn upgraded_beta1_postgres() -> TestStorage {
+    let up = upgraded_from_beta1().await;
+    for id in [B1_DEFAULT, B1_SYSTEM] {
+        assert!(
+            up.storage
+                .tenants()
+                .delete(TenantId(id))
+                .await
+                .expect("delete fixture tenant"),
+            "fixture tenant {id} missing"
+        );
+    }
+    TestStorage {
+        storage: Arc::new(up.storage),
+        _guard: Box::new(up.url),
+    }
+}
+
+mod upgraded_beta1_contract {
+    anvil_storage::storage_contract_tests!(crate::upgraded_beta1_postgres);
 }
