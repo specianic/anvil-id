@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Headless SPA fixture</title>
+    <!-- Test fixture for tests/e2e/specs/headless.spec.ts: a minimal single-page app that drives
+         the AnvilID headless flow API (browser mode). Plain HTML and fetch, no external scripts. -->
+  </head>
+  <body>
+    <main>
+      <h1>Sign in (headless SPA fixture)</h1>
+      <p id="spa-status" role="status">starting</p>
+      <p id="spa-error" role="alert"></p>
+      <ul id="spa-methods"></ul>
+      <form id="spa-form" hidden></form>
+    </main>
+    <script src="app.js"></script>
+  </body>
+</html>
