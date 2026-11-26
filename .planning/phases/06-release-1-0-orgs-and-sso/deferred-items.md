@@ -87,3 +87,4 @@ Additional items (orchestrator, not logged above):
   return target in flow state) — (c) 06-26 must-haves.
 
 Counts for the 16 logged entries: (a) 6, (b) 9, (c) 1, (d) 0. With the three additional items: (b) 11, (c) 2.
+- (from 06-30, gate) `TRANSITIONAL: remove in 0.5.` legacy redirect pages remain in 16 files under admin-ui/src/routes/ (old non-tenant routes from 05-04); decide at the gate whether 1.0 keeps them (update the marker to a dated deprecation note) or removes them.

@@ -15,7 +15,7 @@
 //! 1. a fetcher is configured (`metadata_fetcher` is `Some`);
 //! 2. the tenant's effective CIMD policy is not `disabled` (the default; always disabled for the
 //!    system tenant);
-//! 3. the URL passes [`oauth::cimd::check_url`] with the fetcher's
+//! 3. the URL passes [`crate::oauth::cimd::check_url`] with the fetcher's
 //!    [`ClientMetadataFetcher::allow_http_loopback`] flag (the development-mode outbound policy;
 //!    never a tenant setting or request input), so production refuses every `http://` id;
 //! 4. under `allow_listed`, the URL host is one of `allowed_hosts` (ASCII case-insensitive).
@@ -31,7 +31,7 @@
 //! A CIMD row is fresh while `metadata_expires_at > now`; a fresh row is returned without a fetch.
 //! Otherwise the document is fetched (through the single SSRF-guarded outbound client in the
 //! adapter: 5 KiB cap, no redirects, the outbound timeouts), validated by
-//! [`oauth::cimd::validate`] and upserted with `metadata_expires_at = now + ttl`, where `ttl` is
+//! [`crate::oauth::cimd::validate`] and upserted with `metadata_expires_at = now + ttl`, where `ttl` is
 //! the response's `Cache-Control: max-age` clamped to `[min_cache_secs, max_cache_secs]` (no
 //! header = `min_cache_secs`). Every upsert is audited as `cimd_client_refreshed`.
 //!
