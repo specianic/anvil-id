@@ -8,6 +8,15 @@
 //! returned to the caller (and the event is not mirrored); callers that must not fail after a
 //! committed change log it at error level and continue.
 //!
+//! # Webhooks
+//!
+//! The audit event is the single event path for webhooks (ADM-05). [`AuditService::record`]
+//! computes the ids-only webhook payload with the pure
+//! [`webhook_event`](crate::policy::webhook_event::webhook_event) (lifecycle actions with a
+//! success outcome only) and sets `NewAuditEvent::webhook`; storage then enqueues one delivery
+//! per enabled, subscribed endpoint of the tenant **in the audit transaction**. The payload names
+//! the tenant by id (the data already in the event), so recording needs no extra read.
+//!
 //! # Stdout mirror
 //!
 //! The core has no logging dependency. The binary installs an
@@ -25,6 +34,7 @@ use crate::model::{
     AuditAction, AuditActor, AuditDetails, AuditEvent, AuditEventId, AuditOutcome, AuditQuery,
     NewAuditEvent, Page, PageRequest, RequestContext, TenantId, truncate_to_ms,
 };
+use crate::policy::webhook_event::webhook_event;
 use crate::ports::{AuditMirror, Clock, Storage};
 use crate::service::tenant::admin_page;
 
@@ -44,8 +54,9 @@ pub struct AuditService {
 }
 
 impl AuditService {
-    /// Records one event: a new UUIDv7 id and `at = now`, appended through
-    /// `storage.audit().append`, then mirrored. See the module docs for the write order.
+    /// Records one event: a new UUIDv7 id and `at = now`, with its webhook payload (if it is a
+    /// successful lifecycle event), appended through `storage.audit().append` (which enqueues the
+    /// webhook deliveries in the same transaction), then mirrored. See the module docs.
     #[expect(
         clippy::too_many_arguments,
         reason = "one call per audited action; every argument is a typed part of the event"
@@ -60,7 +71,7 @@ impl AuditService {
         ctx: &RequestContext,
         details: AuditDetails,
     ) -> Result<(), CoreError> {
-        let event = NewAuditEvent {
+        let mut event = NewAuditEvent {
             id: AuditEventId::new_v7(),
             at: truncate_to_ms(self.clock.now()),
             actor,
@@ -71,6 +82,7 @@ impl AuditService {
             details,
             webhook: None,
         };
+        event.webhook = webhook_event(&tenant.to_string(), &event);
         self.storage.audit().append(tenant, &event).await?;
         if let Some(mirror) = MIRROR.get() {
             mirror.emit(&event_json(tenant, &event));
