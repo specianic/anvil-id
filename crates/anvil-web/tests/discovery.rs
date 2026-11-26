@@ -272,6 +272,43 @@ async fn only_registered_metadata_is_published() {
     }
 }
 
+/// Published only when the tenant enables Client ID Metadata Documents
+/// (draft-ietf-oauth-client-id-metadata-document-03). The default policy is disabled, so the
+/// default document (the one the conformance suite reads) stays within [`ALLOWED_METADATA`].
+const CIMD_METADATA: &str = "client_id_metadata_document_supported";
+
+#[tokio::test]
+async fn cimd_flag_follows_the_tenant_policy() {
+    use anvil_core::model::{CimdPolicy, TenantUpdate};
+    let app = TestApp::new().await;
+    let doc = json(&app.get("/.well-known/openid-configuration").await);
+    assert!(doc.get(CIMD_METADATA).is_none(), "disabled by default");
+
+    let tenant = app.default.as_ref().expect("default tenant").tenant.clone();
+    let mut settings = tenant.settings.clone();
+    settings.cimd.policy = CimdPolicy::Open;
+    app.storage()
+        .tenants()
+        .update(
+            tenant.id,
+            &TenantUpdate {
+                settings: Some(settings),
+                ..TenantUpdate::default()
+            },
+        )
+        .await
+        .expect("tenant update")
+        .expect("tenant exists");
+    let doc = json(&app.get("/.well-known/openid-configuration").await);
+    assert_eq!(doc[CIMD_METADATA], true);
+    for key in doc.as_object().expect("object").keys() {
+        assert!(
+            ALLOWED_METADATA.contains(&key.as_str()) || key == CIMD_METADATA,
+            "unregistered metadata field {key}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn cors_on_discovery_and_jwks() {
     let app = TestApp::new().await;

@@ -21,6 +21,7 @@ use time::{Duration, OffsetDateTime};
 use crate::error::CoreError;
 use crate::model::{Client, ClientAuthMethod, ClientType, ReplayKind, SecretHash, Tenant};
 use crate::ports::{ClientMetadataFetcher, Clock, JtiOutcome, Storage};
+use crate::service::client_resolver::ClientResolver;
 
 /// RFC 7523 `client_assertion_type` for JWT bearer client assertions.
 pub const JWT_BEARER_ASSERTION_TYPE: &str =
@@ -312,12 +313,21 @@ pub fn verify_assertion(
 pub struct ClientAuthenticator {
     pub storage: Arc<dyn Storage>,
     pub clock: Arc<dyn Clock>,
-    /// Client ID Metadata Document fetcher (used from plan 05-15; `None` = URL client ids are
-    /// not resolved).
+    /// Client ID Metadata Document fetcher (`None` = URL client ids are not resolved).
     pub metadata_fetcher: Option<Arc<dyn ClientMetadataFetcher>>,
 }
 
 impl ClientAuthenticator {
+    /// The client lookup (materialises Client ID Metadata Document clients under the tenant's
+    /// policy; a transient document fetch failure is `ClientMetadataUnavailable`, 503).
+    fn resolver(&self) -> ClientResolver {
+        ClientResolver {
+            storage: self.storage.clone(),
+            clock: self.clock.clone(),
+            fetcher: self.metadata_fetcher.clone(),
+        }
+    }
+
     /// Authenticates the client of a token request in `tenant`.
     pub async fn authenticate(
         &self,
@@ -328,10 +338,14 @@ impl ClientAuthenticator {
         let presented = select_method(input)?;
         let basic = presented.basic_auth_used();
         let client = self
-            .storage
-            .clients()
-            .get(tenant.id, presented.client_id())
-            .await?;
+            .resolver()
+            .resolve(tenant, presented.client_id(), self.clock.now())
+            .await
+            .map_err(|e| match e {
+                // A refused metadata document is a credential failure like any other.
+                CoreError::InvalidClient { .. } => invalid_client(AUTH_FAILED, basic),
+                other => other,
+            })?;
 
         match &presented {
             PresentedAuth::Basic { secret, .. } | PresentedAuth::Post { secret, .. } => {

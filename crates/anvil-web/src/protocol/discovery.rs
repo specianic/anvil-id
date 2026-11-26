@@ -19,7 +19,7 @@
 //!   tenant's registration is open, which is exactly what `/authorize` accepts.
 //! - `acr_values_supported` lists the single-factor and the multi-factor `acr`.
 
-use anvil_core::model::{ACR_MFA, ACR_PWD, Tenant};
+use anvil_core::model::{ACR_MFA, ACR_PWD, CimdPolicy, Tenant};
 use anvil_core::oauth::authorize_request::supported_prompt_values;
 use anvil_core::oauth::response_mode;
 use anvil_core::service::key_rotation::enabled_algs;
@@ -129,6 +129,10 @@ struct ProviderMetadata {
     /// management are not implemented and not advertised.
     backchannel_logout_supported: bool,
     backchannel_logout_session_supported: bool,
+    /// draft-ietf-oauth-client-id-metadata-document-03: URL client ids are accepted. Present
+    /// (`true`) only when the tenant's effective CIMD policy is not `disabled`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    client_id_metadata_document_supported: Option<bool>,
 }
 
 impl ProviderMetadata {
@@ -173,6 +177,7 @@ impl ProviderMetadata {
             ui_locales_supported: ui_locales,
             backchannel_logout_supported: true,
             backchannel_logout_session_supported: true,
+            client_id_metadata_document_supported: None,
         }
     }
 }
@@ -190,13 +195,16 @@ async fn metadata(State(state): State<AppState>, tenant: ResolvedTenant) -> Resp
         Ok(a) => a,
         Err(e) => return oauth_json(&e),
     };
-    let mut resp = axum::Json(ProviderMetadata::for_issuer(
+    let mut doc = ProviderMetadata::for_issuer(
         &tenant.issuer,
         algs,
         supported_prompt_values(tenant.tenant.settings.registration),
         state.renderer().catalogs().available(),
-    ))
-    .into_response();
+    );
+    if tenant.tenant.effective_cimd().policy != CimdPolicy::Disabled {
+        doc.client_id_metadata_document_supported = Some(true);
+    }
+    let mut resp = axum::Json(doc).into_response();
     resp.headers_mut().insert(
         header::CACHE_CONTROL,
         HeaderValue::from_static("public, max-age=300"),

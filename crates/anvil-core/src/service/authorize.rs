@@ -59,6 +59,7 @@ use crate::oauth::redirect::redirect_matches;
 use crate::oauth::response_mode::AuthorizationResponse;
 use crate::policy::mfa::effective_policy;
 use crate::ports::{ClientMetadataFetcher, Clock, Storage};
+use crate::service::client_resolver::{ClientResolver, is_url_client_id};
 
 /// Lifetime of an authorization code.
 pub const CODE_TTL: Duration = Duration::seconds(60);
@@ -263,12 +264,21 @@ impl Stage {
 pub struct AuthorizeService {
     pub storage: Arc<dyn Storage>,
     pub clock: Arc<dyn Clock>,
-    /// Client ID Metadata Document fetcher (used from plan 05-15; `None` = URL client ids are
-    /// not resolved).
+    /// Client ID Metadata Document fetcher (`None` = URL client ids are not resolved).
     pub metadata_fetcher: Option<Arc<dyn ClientMetadataFetcher>>,
 }
 
 impl AuthorizeService {
+    /// The client lookup at the authorization endpoint (materialises Client ID Metadata
+    /// Document clients under the tenant's policy).
+    fn resolver(&self) -> ClientResolver {
+        ClientResolver {
+            storage: self.storage.clone(),
+            clock: self.clock.clone(),
+            fetcher: self.metadata_fetcher.clone(),
+        }
+    }
+
     fn consent(&self) -> ConsentService {
         ConsentService {
             storage: self.storage.clone(),
@@ -338,8 +348,20 @@ impl AuthorizeService {
     ) -> Result<AuthorizeOutcome, CoreError> {
         let now = self.clock.now();
         let client = match raw.single("client_id") {
-            Some(id) if id.len() <= MAX_CLIENT_ID_LEN => {
-                self.storage.clients().get(tenant.id, id).await?
+            Some(id) if id.len() <= MAX_CLIENT_ID_LEN || is_url_client_id(id) => {
+                match self.resolver().resolve(tenant, id, now).await {
+                    Ok(c) => c,
+                    // A refused metadata document: the error page, never a redirect (the
+                    // redirect URI is unverified). A transient failure is returned as is (503
+                    // error page).
+                    Err(CoreError::InvalidClient { .. }) => {
+                        return Ok(AuthorizeOutcome::ErrorPage {
+                            error_key: "unknown_client",
+                            detail: "the client metadata document was refused".to_owned(),
+                        });
+                    }
+                    Err(e) => return Err(e),
+                }
             }
             _ => None,
         };
