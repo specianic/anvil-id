@@ -13,6 +13,8 @@ mod startup;
 mod storage;
 mod telemetry;
 mod tenant_config;
+mod users_export;
+mod users_import;
 
 use std::sync::Arc;
 
@@ -84,6 +86,20 @@ enum Command {
     /// Probe the local server's readiness (exit 0 ready, 1 not ready, 2 usage error); loopback
     /// only, for container health checks.
     Healthcheck(healthcheck::HealthcheckArgs),
+    /// Bulk user import and export (NDJSON) through the same services as the management API.
+    /// Audited.
+    Users {
+        #[command(subcommand)]
+        cmd: UsersCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum UsersCommand {
+    /// Import users from an NDJSON file into a tenant.
+    Import(users_import::ImportArgs),
+    /// Export a tenant's users, one user, or one user's GDPR bundle.
+    Export(users_export::ExportArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -177,6 +193,12 @@ fn main() -> anyhow::Result<()> {
         Command::Tenant {
             cmd: TenantCommand::Apply(args),
         } => tenant_apply(&load(&args.config)?, &args),
+        Command::Users {
+            cmd: UsersCommand::Import(args),
+        } => users_import(&load(&args.config)?, &args),
+        Command::Users {
+            cmd: UsersCommand::Export(args),
+        } => users_export(&load(&args.config)?, &args),
         Command::Healthcheck(args) => {
             let target = match &args.url {
                 Some(url) => healthcheck::target_from_url(url),
@@ -269,6 +291,18 @@ async fn admin_recover(cfg: &Config, args: &recover::RecoverArgs) -> anyhow::Res
 async fn tenant_export(cfg: &Config, args: &tenant_config::ExportArgs) -> anyhow::Result<()> {
     let _telemetry = telemetry::init_tracing(cfg.log_format, None)?;
     tenant_config::export(cfg, args).await
+}
+
+#[tokio::main(flavor = "multi_thread")]
+async fn users_import(cfg: &Config, args: &users_import::ImportArgs) -> anyhow::Result<()> {
+    let _telemetry = telemetry::init_tracing(cfg.log_format, None)?;
+    users_import::run(cfg, args).await
+}
+
+#[tokio::main(flavor = "multi_thread")]
+async fn users_export(cfg: &Config, args: &users_export::ExportArgs) -> anyhow::Result<()> {
+    let _telemetry = telemetry::init_tracing(cfg.log_format, None)?;
+    users_export::run(cfg, args).await
 }
 
 #[tokio::main(flavor = "multi_thread")]
