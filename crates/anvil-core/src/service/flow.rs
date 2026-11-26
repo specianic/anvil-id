@@ -951,8 +951,20 @@ impl FlowService {
         old: Option<&Flow>,
         key: &str,
     ) -> Result<StartedFlow, CoreError> {
+        self.restart_login_with_message(cx, old, FormMessage::error(key))
+            .await
+    }
+
+    /// A fresh login flow whose sign-in form shows `message` first (bound to the old flow's
+    /// authorization request, which is deleted).
+    pub(crate) async fn restart_login_with_message(
+        &self,
+        cx: &FlowContext<'_>,
+        old: Option<&Flow>,
+        message: FormMessage,
+    ) -> Result<StartedFlow, CoreError> {
         let (state, mut form) = FlowState::initial(FlowKind::Login, None, &self.env(cx))?;
-        form.messages.insert(0, FormMessage::error(key));
+        form.messages.insert(0, message);
         self.continue_login(cx, old, FlowId::new_v7(), &state, form)
             .await
     }
@@ -2085,8 +2097,9 @@ impl FlowService {
 }
 
 /// A new self-service token for `user` and the email carrying its link. The payload is sealed
-/// with the KEK because the link carries the token.
-fn self_service_email(
+/// with the KEK because the link carries the token. Also used by just-in-time upstream
+/// registration (`service::upstream`).
+pub(crate) fn self_service_email(
     kek: &Kek,
     cx: &FlowContext<'_>,
     kind: SelfServiceKind,

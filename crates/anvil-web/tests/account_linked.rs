@@ -169,7 +169,12 @@ async fn connect_links_the_signed_in_user() {
     let u = setup(true).await;
     let bob = bob_signed_in(&u).await;
     let resp = connect(&u).await;
-    assert_eq!(resp.status, 200, "{}", resp.text());
+    // Back to the linked accounts page.
+    assert_eq!(resp.status, 303, "{}", resp.text());
+    assert_eq!(
+        support::location(&resp),
+        format!("{}/ui/account/linked", u.app.issuer(None))
+    );
     let l = links(&u.app, &bob).await;
     assert_eq!(l.len(), 1);
     let linked = audit(&u.app, AuditAction::IdentityLinked).await;
@@ -381,7 +386,7 @@ async fn unlink_with_another_link_left_is_allowed() {
             &[("code", "code-2"), ("state", &started.state), ("iss", &iss)],
         ))
         .await;
-    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_eq!(resp.status, 303, "{}", resp.text());
     assert_eq!(links(&u.app, &user).await.len(), 2);
 
     let first = links(&u.app, &user)

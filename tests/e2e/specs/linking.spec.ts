@@ -7,14 +7,10 @@
 //   2. confirmation: the same with auto_link off -> the link confirmation page -> password sign-in
 //      -> linked (mode confirmed); the next upstream sign-in goes straight in
 //   3. account page: connect the Apple-like provider from /ui/account/linked (form_post hop) ->
-//      the `upstream.linked` message page -> listed; disconnect -> removed; a user whose only
-//      sign-in method is the link cannot disconnect it
+//      303 back to /ui/account/linked, where the new identity is listed; disconnect -> removed; a
+//      user whose only sign-in method is the link cannot disconnect it
 //
-// Note: after a successful Connect the browser lands on the `upstream.linked` message page (not
-// back on /ui/account/linked); the spec asserts that page, then opens the linked accounts page.
-//
-// The confirmation page, the message page and the linked accounts page pass the axe WCAG 2.2 AA
-// audit. Each test uses its own tenant. No-JS coverage: nojs-linking.spec.ts.
+// The confirmation page and the linked accounts page pass the axe WCAG 2.2 AA audit. Each test uses its own tenant. No-JS coverage: nojs-linking.spec.ts.
 //
 // Env: ANVIL_URL, SETUP_URL, E2E_STATE_FILE (see tests/e2e/run.sh).
 
@@ -195,9 +191,10 @@ test('account page: connect and disconnect, last method refused', async ({ page,
     await page.locator('#linked-connect-apple-submit').click();
     await expect(page).toHaveURL((url) => url.origin === mock.url && url.pathname === '/auth/authorize');
     await page.locator('#mock-continue').click();
-    // Current behaviour: the upstream.linked message page (no redirect to the linked page yet).
-    await expect(page.locator('#message-body')).toHaveAttribute('data-message-key', 'upstream.linked');
-    await expectNoA11yViolations(page);
+    // The callback answers 303 back to the linked accounts page, which lists the new identity.
+    await expect(page).toHaveURL((url) => url.href.startsWith(linkedPage));
+    await expect(page.locator('#linked-list tbody tr')).toHaveCount(1);
+    await expect(page.locator('#linked-none')).toHaveCount(0);
     expect(await linkModes(tok, tenant)).toEqual(['account']);
     // Linking created no account.
     expect((await tenantUsers(tok, tenant)).map((u) => u.id)).toEqual([user.id]);

@@ -1,8 +1,8 @@
 // AUTH-11, UI-01: the linked accounts page without JavaScript (Playwright project `nojs`). A
 // password user connects a GitHub-like provider (mock IdP on 127.0.0.1, plain links and forms, no
 // script) from /ui/account/linked, sees it listed and disconnects it again, all with JavaScript
-// disabled. After the provider returns, the browser shows the `upstream.linked` message page
-// (current behaviour); the spec then opens the linked accounts page itself.
+// disabled. After the provider returns, the callback answers 303 back to /ui/account/linked, which
+// lists the new identity.
 //
 // axe needs script injection, so the audits live in linking.spec.ts (chromium project).
 //
@@ -53,11 +53,10 @@ test('connect and disconnect on /ui/account/linked without JavaScript', async ({
     await page.locator('#linked-connect-github-submit').click();
     await expect(page).toHaveURL((url) => url.origin === idp.url && url.pathname === '/login/oauth/authorize');
     await page.locator('#mock-continue').click();
-    await expect(page.locator('#message-body')).toHaveAttribute('data-message-key', 'upstream.linked');
+    await expect(page).toHaveURL((url) => url.href.startsWith(linkedPage));
   });
 
   await test.step('the link is listed', async () => {
-    await page.goto(linkedPage);
     const rows = page.locator('#linked-list tbody tr');
     await expect(rows).toHaveCount(1);
     await expect(rows.first()).toContainText('GitHub');

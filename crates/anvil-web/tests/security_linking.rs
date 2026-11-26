@@ -9,7 +9,13 @@
 //!   no session;
 //! - the start is a CSRF-protected form POST; the callback is the only UI route that accepts a
 //!   cross-site POST;
-//! - an upstream identity linked to one user cannot be linked to another from the account page.
+//! - an upstream identity linked to one user cannot be linked to another from the account page;
+//! - a forged or mismatched callback never clears the binding cookie, so it cannot cancel the
+//!   browser's pending sign-in; only a callback whose `state` and binding cookie match does;
+//! - under `require_verified_email`, an upstream sign-in to an account whose email is not
+//!   verified (just created from an untrusted upstream, or through an existing link) creates no
+//!   session;
+//! - the UserInfo fallback refuses a UserInfo `sub` that differs from the ID token's.
 
 mod support;
 mod ui_helpers;
@@ -253,11 +259,11 @@ async fn a_replayed_callback_is_rejected() {
     let u = setup(true).await;
     let started = start(&u.app, SLUG).await;
     reply_for(&u, &started, json!({}));
-    let binding = u.app.cookies()[&binding_cookie_name(&u.app)].clone();
+    let name = binding_cookie_name(&u.app);
+    let binding = u.app.cookies()[&name].clone();
     let first = callback(&u, &started).await;
     assert_eq!(first.status, 200, "{}", first.text());
     // Same state again (with the binding cookie restored and without the new session).
-    let name = binding_cookie_name_for(&u);
     u.app.clear_cookies();
     let iss = u.mock.issuer();
     let path = callback_path(
@@ -273,12 +279,6 @@ async fn a_replayed_callback_is_rejected() {
         "one exchange"
     );
     assert_eq!(audit(&u.app, AuditAction::LoginSucceeded).await.len(), 1);
-}
-
-/// The binding cookie name for the default tenant (`__Host-` on the test's https URL).
-fn binding_cookie_name_for(u: &Upstream) -> String {
-    let id = tenant(&u.app).id.0.simple().to_string();
-    format!("__Host-anvil_upstream_{}", &id[..12])
 }
 
 #[tokio::test]
@@ -485,4 +485,213 @@ async fn link_from_the_account_page_needs_the_owner_signed_in() {
         failure_reasons(&u.app).await.first().map(String::as_str),
         Some("reauth_required")
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// The binding cookie is cleared only when the callback proved the binding
+// ---------------------------------------------------------------------------------------------
+
+/// Whether a response clears (expires) the cookie `name`.
+fn clears_cookie(resp: &TestResponse, name: &str) -> bool {
+    resp.headers
+        .get_all(axum::http::header::SET_COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .any(|v| v.starts_with(&format!("{name}=")) && v.contains("Max-Age=0"))
+}
+
+#[tokio::test]
+async fn forged_callback_does_not_cancel_pending_sign_in() {
+    let u = setup(true).await;
+    let iss = u.mock.issuer();
+    // An earlier sign-in of this browser that it abandoned: its state is "another flow's state".
+    let other = start(&u.app, SLUG).await;
+    let started = start(&u.app, SLUG).await;
+    reply_for(&u, &started, json!({}));
+    let binding = binding_cookie_name(&u.app);
+    let value = u.app.cookies()[&binding].clone();
+    let (flow, _) = started.state.split_once('.').expect("state");
+    let forged_states = [
+        "no-flow-id".to_owned(),
+        format!("{}.whatever", uuid::Uuid::now_v7()),
+        format!("{flow}.tampered-random-part-0123456789abcdef"),
+        other.state.clone(),
+    ];
+    for state in &forged_states {
+        let path = callback_path(SLUG, &[("code", "code-x"), ("state", state), ("iss", &iss)]);
+        let resp = u.app.get(&path).await;
+        assert_eq!(resp.status, 400, "{state}: {}", resp.text());
+        assert!(
+            !clears_cookie(&resp, &binding),
+            "{state}: {:?}",
+            resp.headers
+        );
+        assert_eq!(u.app.cookies().get(&binding), Some(&value), "{state}");
+    }
+    let path = callback_path(
+        SLUG,
+        &[("code", "code-1"), ("state", &started.state), ("iss", &iss)],
+    );
+    // The right state without the binding cookie, and with another binding cookie.
+    let without = get_with_cookies(&u.app, &path, |k| k != binding, None).await;
+    assert_eq!(without.status, 400, "{}", without.text());
+    assert!(!clears_cookie(&without, &binding));
+    let wrong = get_with_cookies(
+        &u.app,
+        &path,
+        |k| k != binding,
+        Some((&binding, "attacker-binding-value")),
+    )
+    .await;
+    assert_eq!(wrong.status, 400, "{}", wrong.text());
+    assert!(!clears_cookie(&wrong, &binding));
+    assert!(session(&u.app).await.is_none());
+    assert!(u.mock.received_token_requests().await.is_empty());
+    assert_eq!(
+        failure_reasons(&u.app).await[..2],
+        ["binding_invalid".to_owned(), "binding_invalid".to_owned()]
+    );
+
+    // The genuine callback still signs in, and clears the cookie.
+    assert_eq!(u.app.cookies().get(&binding), Some(&value));
+    let ok = u.app.get(&path).await;
+    assert_eq!(ok.status, 200, "{}", ok.text());
+    assert!(clears_cookie(&ok, &binding));
+    assert!(session(&u.app).await.is_some());
+    assert!(!u.app.cookies().contains_key(&binding));
+}
+
+#[tokio::test]
+async fn matching_callback_clears_the_binding_cookie_even_when_it_fails_later() {
+    let u = setup(true).await;
+    let started = start(&u.app, SLUG).await;
+    let binding = binding_cookie_name(&u.app);
+    let resp = u
+        .app
+        .get(&callback_path(
+            SLUG,
+            &[
+                ("error", "access_denied"),
+                ("state", &started.state),
+                ("iss", &u.mock.issuer()),
+            ],
+        ))
+        .await;
+    assert_rejected(&u, &resp, "provider_error").await;
+    assert!(clears_cookie(&resp, &binding), "{:?}", resp.headers);
+    assert!(!u.app.cookies().contains_key(&binding));
+}
+
+// ---------------------------------------------------------------------------------------------
+// require_verified_email applies to upstream accounts
+// ---------------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn untrusted_jit_account_must_verify_before_sign_in() {
+    let u = setup(false).await;
+    tenant_settings(&u.app, |s| s.require_verified_email = true).await;
+    let resp = sign_in(&u, json!({})).await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let html = resp.html();
+    assert_eq!(form_id(&html), "login", "{html}");
+    assert!(
+        message_keys(&html).contains(&"registration.check_email".to_owned()),
+        "{html}"
+    );
+    assert!(session(&u.app).await.is_none(), "no session");
+    assert!(
+        crate::ui_helpers::session_cookie(&u.app).is_none(),
+        "no session cookie"
+    );
+    let alice = user(&u.app, MOCK_EMAIL).await.expect("account created");
+    assert!(!alice.email_verified);
+    assert_eq!(links(&u.app, &alice).await.len(), 1);
+    assert_eq!(audit(&u.app, AuditAction::UserRegistered).await.len(), 1);
+    assert_eq!(
+        failure_reasons(&u.app).await.first().map(String::as_str),
+        Some("email_not_verified")
+    );
+    assert!(audit(&u.app, AuditAction::LoginSucceeded).await.is_empty());
+    let emails = take_emails(&u.app).await;
+    assert_eq!(emails.len(), 1, "{emails:?}");
+    assert_eq!(emails[0].to, MOCK_EMAIL);
+    let link = link_of(&u.app, &emails, "verification");
+
+    // A second upstream sign-in before verifying is refused with the sign-in error, and sends
+    // nothing new.
+    u.app.clear_cookies();
+    let again = sign_in(&u, json!({})).await;
+    assert_eq!(again.status, 400, "{}", again.text());
+    assert!(
+        message_keys(&again.html()).contains(&"login.email_not_verified".to_owned()),
+        "{}",
+        again.text()
+    );
+    assert!(session(&u.app).await.is_none());
+    assert!(take_emails(&u.app).await.is_empty());
+
+    // After the verification link, the upstream sign-in signs in.
+    let done = submit_form(&u.app, &link, &[]).await;
+    assert_eq!(done.status, 200, "{}", done.text());
+    assert!(
+        user(&u.app, MOCK_EMAIL)
+            .await
+            .expect("alice")
+            .email_verified
+    );
+    u.app.clear_cookies();
+    let ok = sign_in(&u, json!({})).await;
+    assert_eq!(ok.status, 200, "{}", ok.text());
+    assert_eq!(session(&u.app).await.expect("session").user_id, alice.id);
+}
+
+#[tokio::test]
+async fn linked_unverified_account_is_refused_under_require_verified_email() {
+    // Created while verification was not required; the tenant turns it on afterwards.
+    let u = setup(false).await;
+    let first = sign_in(&u, json!({})).await;
+    assert_eq!(first.status, 200, "{}", first.text());
+    assert!(session(&u.app).await.is_some());
+    take_emails(&u.app).await;
+    tenant_settings(&u.app, |s| s.require_verified_email = true).await;
+    u.app.clear_cookies();
+    let resp = sign_in(&u, json!({})).await;
+    assert_eq!(resp.status, 400, "{}", resp.text());
+    let html = resp.html();
+    assert_eq!(form_id(&html), "login", "{html}");
+    assert!(
+        message_keys(&html).contains(&"login.email_not_verified".to_owned()),
+        "{html}"
+    );
+    assert!(session(&u.app).await.is_none(), "no session");
+    assert_eq!(
+        failure_reasons(&u.app).await.first().map(String::as_str),
+        Some("email_not_verified")
+    );
+    assert!(take_emails(&u.app).await.is_empty(), "no new email");
+    assert_eq!(audit(&u.app, AuditAction::LoginSucceeded).await.len(), 1);
+}
+
+// ---------------------------------------------------------------------------------------------
+// UserInfo fallback (generic OIDC, email only in UserInfo)
+// ---------------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn userinfo_fallback_rejects_another_subject() {
+    let u = setup(true).await;
+    u.mock.set_userinfo(json!({
+        "sub": "someone-else",
+        "email": "mallory@example.com",
+        "email_verified": true,
+    }));
+    let started = start(&u.app, SLUG).await;
+    reply_for(
+        &u,
+        &started,
+        json!({ "email": null, "email_verified": null }),
+    );
+    let resp = callback(&u, &started).await;
+    assert_rejected(&u, &resp, "userinfo_subject").await;
+    assert!(user(&u.app, "mallory@example.com").await.is_none());
+    assert!(user(&u.app, MOCK_EMAIL).await.is_none());
 }

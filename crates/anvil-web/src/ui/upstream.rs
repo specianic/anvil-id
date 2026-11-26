@@ -8,8 +8,14 @@
 //!
 //! The start answers 303 to the provider and sets the SameSite=Lax binding cookie
 //! (`cookies::CookiePolicy::upstream_binding_cookie`, 10 minutes). The callback is checked and
-//! run by `anvil_core::service::upstream::UpstreamService`; every answer clears the binding
-//! cookie.
+//! run by `anvil_core::service::upstream::UpstreamService`.
+//!
+//! | Cookie | Set | Cleared |
+//! |---|---|---|
+//! | upstream binding | start (303 to the provider) | by the `GET` callback only when its `state` and the binding cookie matched the pending sign-in (`CallbackResult::binding_proved`), on success and on any later failure. A forged or mismatched callback (missing or foreign `state`, no or another binding cookie, replay before the check) leaves it in place, so the genuine callback that follows still succeeds. The `form_post` hop never touches it. |
+//!
+//! Linking from the account page ends with 303 to `/ui/account/linked`, where the new identity
+//! is listed.
 //!
 //! Two routers:
 //! - [`routes`] (the start POST) is merged inside the Fetch-Metadata CSRF layer like every UI route.
@@ -26,7 +32,7 @@ use anvil_core::flow::upstream::PostedResponse;
 use anvil_core::model::RequestContext;
 use anvil_core::service::account::SettingsBinding;
 use anvil_core::service::upstream::{
-    CallbackParams, StartResult, UpstreamOutcome, UpstreamService,
+    CallbackParams, CallbackResult, StartResult, UpstreamOutcome, UpstreamService,
 };
 use axum::Router;
 use axum::extract::rejection::{FormRejection, QueryRejection};
@@ -49,8 +55,8 @@ use crate::request_context::AuditContext;
 use crate::state::AppState;
 use crate::tenant::ResolvedTenant;
 
-/// Message key of the page shown after a provider identity was linked from the account page.
-const LINKED_KEY: &str = "upstream.linked";
+/// Where linking from the account page returns to.
+const LINKED_PAGE: &str = "/ui/account/linked";
 
 /// Upstream start routes, behind the Fetch-Metadata layer.
 pub(super) fn routes() -> Router<AppState> {
@@ -200,7 +206,10 @@ async fn start(
             )
                 .into_response()
         }
-        Ok(StartResult::Done(outcome)) => outcome_page(&state, &tenant, &loc, *outcome).await,
+        // Nothing proved a pending sign-in of this browser: the binding cookie stays.
+        Ok(StartResult::Done(outcome)) => {
+            outcome_page(&state, &tenant, &loc, *outcome, false).await
+        }
         Err(CoreError::Forbidden) => csrf_page(&state, Some(&tenant), &loc),
         Err(CoreError::NotFound) => error_page_in(
             &state,
@@ -275,7 +284,10 @@ async fn callback_get(
         .callback(&cx, &slug, params, binding.as_deref(), current.as_ref())
         .await
     {
-        Ok(outcome) => outcome_page(&state, &tenant, &loc, outcome).await,
+        Ok(CallbackResult {
+            outcome,
+            binding_proved,
+        }) => outcome_page(&state, &tenant, &loc, outcome, binding_proved).await,
         Err(e) => core_error_page_in(&state, Some(&tenant), &loc, &e),
     }
 }
@@ -337,15 +349,21 @@ async fn callback_post(
     }
 }
 
-/// The response to an upstream outcome. Every answer clears the binding cookie.
+/// The response to an upstream outcome. The binding cookie is cleared only when
+/// `clear_binding` (the callback proved the binding; module docs).
 async fn outcome_page(
     state: &AppState,
     tenant: &ResolvedTenant,
     loc: &Locale,
     outcome: UpstreamOutcome,
+    clear_binding: bool,
 ) -> Response {
     let cookies = state.cookies();
-    let jar = CookieJar::new().add(cookies.clear_upstream_binding(&tenant.tenant));
+    let jar = if clear_binding {
+        CookieJar::new().add(cookies.clear_upstream_binding(&tenant.tenant))
+    } else {
+        CookieJar::new()
+    };
     let mut resp = match outcome {
         UpstreamOutcome::SignedIn {
             cookie,
@@ -368,7 +386,20 @@ async fn outcome_page(
             let status = form_status(&started.form);
             started_response_in(state, tenant, loc, &started, request, status, &extras, jar)
         }
-        UpstreamOutcome::Linked => message_page(state, tenant, loc, LINKED_KEY, jar),
+        UpstreamOutcome::Linked => {
+            let location = carry_ui_locales(&tenant.ui_url(LINKED_PAGE), loc);
+            match HeaderValue::from_str(&location) {
+                Ok(location) => {
+                    (StatusCode::SEE_OTHER, jar, [(header::LOCATION, location)]).into_response()
+                }
+                Err(_) => core_error_page_in(
+                    state,
+                    Some(tenant),
+                    loc,
+                    &CoreError::Internal("unusable linked accounts URL".into()),
+                ),
+            }
+        }
         UpstreamOutcome::LinkFailed { key } => {
             let mut resp = message_page(state, tenant, loc, key, jar);
             *resp.status_mut() = StatusCode::BAD_REQUEST;

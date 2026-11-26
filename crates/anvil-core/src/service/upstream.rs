@@ -34,6 +34,25 @@
 //!   an existing account there links it ([`confirm_link`], mode `confirmed`);
 //! - no match: just-in-time registration when `upstream_registration` allows it (email verified
 //!   only for a verified and trusted upstream email; Apple names from the first-login user JSON).
+//!   An account created with an unverified email gets a verification email in the same storage
+//!   transaction, like local registration.
+//!
+//! Under the tenant's `require_verified_email`, a `Login` that resolved to an account whose email
+//! is not verified (existing link, or an account just created from an untrusted or unverified
+//! upstream email) creates no session: it is audited `upstream_login_failed` with reason
+//! `email_not_verified` and restarts the sign-in with `registration.check_email` (just created)
+//! or `login.email_not_verified`. The `Link` purpose (account page) is not affected.
+//!
+//! Generic OIDC: when the ID token carries no `email`, or the connection has `fetch_userinfo`
+//! on, the UserInfo endpoint is called through the [`UpstreamClient`] port (the guarded outbound
+//! client) with the access token (OIDC Core §5.4 lets a provider return `email` only there). Its
+//! `sub` must equal the ID token's (§5.3.2), otherwise the sign-in fails with
+//! `userinfo_subject`. Without `fetch_userinfo` only `email` and `email_verified` are taken from
+//! it, and a failed call leaves the identity without an email (an existing link still signs in).
+//!
+//! [`UpstreamService::callback`] reports `binding_proved` once the `state` and the binding
+//! cookie matched the pending sign-in: only then may the caller clear the binding cookie, so a
+//! forged callback cannot cancel a pending sign-in.
 //!
 //! An upstream sign-in is single factor (`amr` `[fed]`, pwd `acr`); the flow's effective MFA
 //! policy then applies (`FlowService::upstream_primary`). The `Link` purpose links the identity to
@@ -56,10 +75,12 @@ use super::audit::AuditService;
 use super::connection::ConnectionService;
 use super::flow::{
     BindingError, FlowContext, FlowService, StartedFlow, UpstreamPrimary, check_binding,
+    self_service_email,
 };
 use super::session::NewSessionCookie;
 use crate::error::CoreError;
 use crate::flow::engine::{FlowState, LoginState, LoginStep};
+use crate::flow::form::{FormMessage, MessageLevel};
 use crate::flow::login::link_confirmation;
 use crate::flow::settings::{SettingsState, is_recent_auth};
 use crate::flow::upstream::{
@@ -70,8 +91,8 @@ use crate::flow::upstream::{
 use crate::model::{
     ActorKind, AuditAction, AuditActor, AuditDetails, AuditOutcome, AuthRequestId, BrowserSession,
     Connection, ConnectionConfig, ConnectionKind, Flow, FlowId, FlowKind, IdentityLinkId,
-    NewIdentityLink, NewUser, RegistrationMode, StandardClaims, TenantId, User, UserId, UserStatus,
-    normalize_email,
+    NewIdentityLink, NewUser, RegistrationMode, SelfServiceKind, StandardClaims, TenantId, User,
+    UserId, UserStatus, normalize_email,
 };
 use crate::ports::{
     ApiProfile, Clock, CodeExchange, ProviderMetadata, Storage, StorageError, UpstreamClient,
@@ -130,6 +151,16 @@ pub enum UpstreamOutcome {
     Linked,
     /// Linking from the account page failed: show the message `key`.
     LinkFailed { key: &'static str },
+}
+
+/// Result of [`UpstreamService::callback`].
+#[derive(Debug)]
+pub struct CallbackResult {
+    pub outcome: UpstreamOutcome,
+    /// The callback's `state` and the browser's binding cookie matched the pending sign-in
+    /// ([`check_callback`] passed). Only then is the binding cookie cleared: a forged or
+    /// mismatched callback must not cancel the pending sign-in of the browser it lands in.
+    pub binding_proved: bool,
 }
 
 /// Query parameters of the callback (`GET`).
@@ -375,14 +406,13 @@ impl UpstreamService<'_> {
         }
     }
 
-    /// Records `upstream_login_failed` (reason code only) and builds the generic answer.
-    async fn fail(
+    /// Records `upstream_login_failed` with a reason code only.
+    async fn audit_failure(
         &self,
         cx: &FlowContext<'_>,
         conn: Option<&Connection>,
-        to: FailTo<'_>,
         reason: &'static str,
-    ) -> Result<UpstreamOutcome, CoreError> {
+    ) -> Result<(), CoreError> {
         let details = match conn {
             Some(c) => AuditDetails::connection(&c.slug, c.kind().as_str()),
             None => AuditDetails::empty(),
@@ -397,7 +427,18 @@ impl UpstreamService<'_> {
                 cx.ctx,
                 details.with(AuditDetails::reason(reason)),
             )
-            .await?;
+            .await
+    }
+
+    /// Records `upstream_login_failed` (reason code only) and builds the generic answer.
+    async fn fail(
+        &self,
+        cx: &FlowContext<'_>,
+        conn: Option<&Connection>,
+        to: FailTo<'_>,
+        reason: &'static str,
+    ) -> Result<UpstreamOutcome, CoreError> {
+        self.audit_failure(cx, conn, reason).await?;
         Ok(match to {
             FailTo::Login(old) => UpstreamOutcome::Continue {
                 started: self.flows.restart_login_with(cx, old, FAILED_KEY).await?,
@@ -683,6 +724,33 @@ impl UpstreamService<'_> {
         params: CallbackParams,
         binding_cookie: Option<&str>,
         current: Option<&BrowserSession>,
+    ) -> Result<CallbackResult, CoreError> {
+        let mut binding_proved = false;
+        let outcome = self
+            .run_callback(
+                cx,
+                slug,
+                params,
+                binding_cookie,
+                current,
+                &mut binding_proved,
+            )
+            .await?;
+        Ok(CallbackResult {
+            outcome,
+            binding_proved,
+        })
+    }
+
+    /// [`Self::callback`]; sets `binding_proved` once [`check_callback`] passed.
+    async fn run_callback(
+        &self,
+        cx: &FlowContext<'_>,
+        slug: &str,
+        params: CallbackParams,
+        binding_cookie: Option<&str>,
+        current: Option<&BrowserSession>,
+        binding_proved: &mut bool,
     ) -> Result<UpstreamOutcome, CoreError> {
         let tenant = cx.tenant.id;
         let now = self.clock().now();
@@ -718,6 +786,7 @@ impl UpstreamService<'_> {
         {
             return self.fail(cx, c, unproved, reject.reason()).await;
         }
+        *binding_proved = true;
         // Single use: take the pending authorization out before anything else.
         if !self
             .storage()
@@ -862,28 +931,49 @@ impl UpstreamService<'_> {
                     return normalise_apple(&claims, user_json, trust)
                         .map_err(|e| token_reason(&e));
                 }
-                if let ConnectionConfig::Oidc(o) = &conn.config
-                    && o.fetch_userinfo
+                // Generic OIDC: UserInfo when configured, or as a fallback when the ID token has
+                // no email (OIDC Core §5.4 allows `email` in UserInfo only).
+                let fetch = match &conn.config {
+                    ConnectionConfig::Oidc(o) if o.fetch_userinfo => Some(true),
+                    ConnectionConfig::Oidc(_) if !claims.contains_key("email") => Some(false),
+                    _ => None,
+                };
+                if let Some(configured) = fetch
                     && let Some(url) = resolved.userinfo_endpoint.as_deref()
                 {
-                    let info = self
+                    let info = match self
                         .client
                         .get_json(url, &tokens.access_token, ApiProfile::Standard)
                         .await
-                        .map_err(profile_failed)?;
-                    // OIDC Core §5.3.2: the UserInfo `sub` must equal the ID token's.
-                    if info.get("sub") != claims.get("sub") {
-                        return Err("userinfo_subject");
-                    }
-                    for key in [
-                        "email",
-                        "email_verified",
-                        "name",
-                        "given_name",
-                        "family_name",
-                    ] {
-                        if let Some(v) = info.get(key) {
-                            claims.insert(key.to_owned(), v.clone());
+                    {
+                        Ok(info) => Some(info),
+                        Err(e) if configured => return Err(profile_failed(e)),
+                        // The fallback is best effort: without an email the link decision
+                        // still signs in through an existing link.
+                        Err(_) => None,
+                    };
+                    if let Some(info) = info {
+                        // OIDC Core §5.3.2: the UserInfo `sub` must equal the ID token's.
+                        if info.get("sub") != claims.get("sub") {
+                            return Err("userinfo_subject");
+                        }
+                        let keys: &[&str] = if configured {
+                            &[
+                                "email",
+                                "email_verified",
+                                "name",
+                                "given_name",
+                                "family_name",
+                            ]
+                        } else {
+                            // The address and its verification come from UserInfo together.
+                            claims.remove("email_verified");
+                            &["email", "email_verified"]
+                        };
+                        for key in keys {
+                            if let Some(v) = info.get(*key) {
+                                claims.insert((*key).to_owned(), v.clone());
+                            }
                         }
                     }
                 }
@@ -1028,6 +1118,7 @@ impl UpstreamService<'_> {
                 .upstream_registration
                 .unwrap_or(settings.registration == RegistrationMode::Open),
         });
+        let mut just_created = false;
         let user: User = match decision {
             LinkDecision::SignIn(_) => {
                 let (Some(l), Some(u)) = (link, link_user) else {
@@ -1091,14 +1182,28 @@ impl UpstreamService<'_> {
                     status: UserStatus::Active,
                     created_at: now,
                 };
+                // An unverified address gets its verification email in the same transaction,
+                // like local registration.
+                let verification = if email_verified {
+                    None
+                } else {
+                    Some(self_service_email(
+                        self.kek(),
+                        cx,
+                        SelfServiceKind::Verification,
+                        new_user.id,
+                        &new_user.email,
+                        now,
+                    )?)
+                };
                 let created = storage
                     .connections()
                     .create_user_with_link(
                         tenant,
                         &new_user,
                         &new_link(new_user.id, conn, &identity, now),
-                        None,
-                        None,
+                        verification.as_ref().map(|(t, _)| t),
+                        verification.as_ref().map(|(_, e)| e),
                     )
                     .await;
                 let u = match created {
@@ -1119,6 +1224,7 @@ impl UpstreamService<'_> {
                         AuditDetails::connection(&conn.slug, conn.kind().as_str()),
                     )
                     .await?;
+                just_created = true;
                 u
             }
             LinkDecision::Refuse(RefuseReason::Inactive) => {
@@ -1128,6 +1234,23 @@ impl UpstreamService<'_> {
                 return self.fail(cx, Some(conn), to, "no_account").await;
             }
         };
+        if cx.tenant.settings.require_verified_email && !user.email_verified {
+            // Like a password or passkey sign-in: no session until the address is verified.
+            self.audit_failure(cx, Some(conn), "email_not_verified")
+                .await?;
+            let message = if just_created {
+                FormMessage::new(MessageLevel::Info, "registration.check_email")
+            } else {
+                FormMessage::error("login.email_not_verified")
+            };
+            return Ok(UpstreamOutcome::Continue {
+                started: self
+                    .flows
+                    .restart_login_with_message(cx, Some(flow), message)
+                    .await?,
+                request: flow.auth_request_id,
+            });
+        }
         Ok(
             match self
                 .flows

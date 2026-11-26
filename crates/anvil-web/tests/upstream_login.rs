@@ -158,6 +158,74 @@ async fn untrusted_connection_registers_with_an_unverified_email() {
 }
 
 #[tokio::test]
+async fn trusted_verified_jit_signs_in_at_once() {
+    let u = setup(true).await;
+    tenant_settings(&u.app, |s| s.require_verified_email = true).await;
+    let resp = sign_in(&u, json!({})).await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert!(
+        message_keys(&resp.html()).contains(&"login.signed_in".to_owned()),
+        "{}",
+        resp.text()
+    );
+    let alice = user(&u.app, MOCK_EMAIL).await.expect("user registered");
+    assert!(alice.email_verified);
+    assert_eq!(session(&u.app).await.expect("session").user_id, alice.id);
+    assert!(
+        take_emails(&u.app).await.is_empty(),
+        "no verification email"
+    );
+}
+
+#[tokio::test]
+async fn untrusted_jit_without_requirement_signs_in_and_gets_verification_email() {
+    let u = setup(false).await;
+    let resp = sign_in(&u, json!({})).await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let alice = user(&u.app, MOCK_EMAIL).await.expect("user registered");
+    assert!(!alice.email_verified);
+    assert_eq!(session(&u.app).await.expect("session").user_id, alice.id);
+    let emails = take_emails(&u.app).await;
+    assert_eq!(emails.len(), 1, "{emails:?}");
+    assert_eq!(emails[0].to, MOCK_EMAIL);
+    let link = link_of(&u.app, &emails, "verification");
+    assert!(link.starts_with("/ui/verification?token="), "{link}");
+}
+
+#[tokio::test]
+async fn email_only_in_userinfo_is_used_when_the_id_token_has_none() {
+    // OIDC Core 5.4: a provider may return `email` only from UserInfo. `fetch_userinfo` is off.
+    let u = setup(true).await;
+    u.mock.set_userinfo(json!({
+        "sub": MOCK_SUBJECT,
+        "email": "info@example.com",
+        "email_verified": true,
+        "name": "Not Taken",
+    }));
+    let started = start(&u.app, SLUG).await;
+    reply_for(
+        &u,
+        &started,
+        json!({ "email": null, "email_verified": null }),
+    );
+    let resp = callback(&u, &started).await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let created = user(&u.app, "info@example.com")
+        .await
+        .expect("user from UserInfo email");
+    assert!(created.email_verified);
+    // Without fetch_userinfo only the email is taken from UserInfo; names stay the ID token's.
+    assert_eq!(created.claims.name.as_deref(), Some("Alice Example"));
+    assert_eq!(session(&u.app).await.expect("session").user_id, created.id);
+    assert_eq!(u.mock.request_count("/userinfo").await, 1);
+
+    // An ID token with an email does not call UserInfo.
+    u.app.clear_cookies();
+    sign_in(&u, json!({})).await;
+    assert_eq!(u.mock.request_count("/userinfo").await, 1);
+}
+
+#[tokio::test]
 async fn later_sign_ins_use_the_link_even_after_the_upstream_email_changed() {
     let u = setup(true).await;
     sign_in(&u, json!({})).await;
@@ -439,14 +507,23 @@ async fn account_page_link_connects_the_signed_in_user() {
     // The upstream email is not Bob's: linking from the account page does not depend on it.
     reply_for(&u, &started, json!({}));
     let resp = callback(&u, &started).await;
-    assert_eq!(resp.status, 200, "{}", resp.text());
-    assert!(
-        message_keys(&resp.html()).contains(&"upstream.linked".to_owned()),
-        "{}",
-        resp.text()
+    // Back to the linked accounts page, which lists the new identity.
+    assert_eq!(resp.status, 303, "{}", resp.text());
+    assert_eq!(
+        support::location(&resp),
+        format!("{}/ui/account/linked", u.app.issuer(None))
     );
+    assert_eq!(resp.header("cache-control"), Some("no-store"));
+    let page = u.app.follow(&resp).await;
+    assert_eq!(page.status, 200, "{}", page.text());
     let l = links(&u.app, &bob).await;
     assert_eq!(l.len(), 1);
+    let html = page.html();
+    assert!(
+        html.contains(&format!("id=\"linked-{}\"", l[0].id)),
+        "{html}"
+    );
+    assert!(!html.contains("id=\"linked-none\""), "{html}");
     assert_eq!(l[0].subject, MOCK_SUBJECT);
     let linked = audit(&u.app, AuditAction::IdentityLinked).await;
     assert_eq!(linked[0].details.as_map()["mode"], "account");
