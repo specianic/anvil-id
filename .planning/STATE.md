@@ -6,15 +6,15 @@ current_phase: 05
 current_phase_name: release 0 4 operate it
 current_plan: 33
 status: executing
-stopped_at: Completed 06-29-PLAN.md
-last_updated: "2026-11-26T13:26:31.611Z"
+stopped_at: Completed 06-28-PLAN.md
+last_updated: "2026-11-26T13:37:23.494Z"
 last_activity: 2026-11-26
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 166
-  completed_plans: 160
-  percent: 96
+  completed_plans: 161
+  percent: 97
 ---
 
 # Project State
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 **Status:** Ready to execute
 **Last Activity:** 2026-11-26
 **Last Activity Description:** 05-28 phase gate complete (632-pair security map, 0.4 plaintext scan, anvilid 0.4.0, 0.4 migrations pinned, every workflow incl. load and deploy green on f80dcb4)
-**Progress:** [██████████] 96%
+**Progress:** [██████████] 97%
 
 Phase 5 has 33 plans (05-01 through 05-33). Every plan except 05-29 (release v0.4.0 after owner sign-off) has a
 SUMMARY. Current Plan counts plans in execution order: 05-29 is the 33rd and last. Phase 4 still has one open plan, 04-33 (manual real-provider checklist, then tag v0.3.0); it must be
@@ -217,6 +217,7 @@ done before 05-29 tags v0.4.0.
 | Phase 06 P25 | 70min | 2 tasks | 9 files |
 | Phase 06 P30 | 10min | 2 tasks | 10 files |
 | Phase 06 P29 | 50min | 2 tasks | 17 files |
+| Phase 06 P28 | 80min | 2 tasks | 17 files |
 
 ## Accumulated Context
 
@@ -505,6 +506,8 @@ Recent decisions affecting current work:
 - [Phase 06]: 06-25: docs name the org-admin resource {public_url}/api/admin/v1; D4 stays open (experimental, corpus green, review and interop in Phase 7); org JIT under closed registration documented as current behaviour + open decision
 - [Phase 06]: 06-30: check-deps.sh enforces one aws-lc-rs/aws-lc-sys version from Cargo.lock (runs first in check())
 - [Phase 06]: 06-29: listUserOrganizations accepts users or organizations read scope; org admin tokens get 401 on tenant routes (system-token extractor)
+- [Phase 06]: 06-28: email-first uses routing_connections + idp_routable (flag-aware); lock/CAPTCHA pages take FlowService::initial_login_form
+- [Phase 06]: 06-28: org connections JIT regardless of tenant registration only for emails trusted for the org (verified domain); others follow upstream_registration
 
 ### Pending Todos
 
@@ -517,6 +520,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-26T13:26:31.607Z
-Stopped at: Completed 06-29-PLAN.md
+Last session: 2026-11-26T13:37:23.488Z
+Stopped at: Completed 06-28-PLAN.md
 Resume file: None
