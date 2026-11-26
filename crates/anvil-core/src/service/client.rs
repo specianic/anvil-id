@@ -455,6 +455,43 @@ impl ClientService {
         actor: AuditActor,
         ctx: &RequestContext,
     ) -> Result<CreatedClient, CoreError> {
+        self.insert(tenant, input, options, None, Some(actor), ctx)
+            .await
+    }
+
+    /// Registers a dynamic client (RFC 7591) with the same rules as [`Self::create`]: the row has
+    /// `registration_source = Dynamic` and the registration access token hash. Audited as
+    /// `client_registered`, with the new client as the actor.
+    pub async fn create_dynamic(
+        &self,
+        tenant: &Tenant,
+        input: ClientInput,
+        options: ClientOptions,
+        registration_access_token_hash: SecretHash,
+        ctx: &RequestContext,
+    ) -> Result<CreatedClient, CoreError> {
+        self.insert(
+            tenant,
+            input,
+            options,
+            Some(registration_access_token_hash),
+            None,
+            ctx,
+        )
+        .await
+    }
+
+    /// The one client insertion path. `dynamic = Some(hash)` stores a dynamic client with its
+    /// registration access token hash; `actor = None` audits the new client as the actor.
+    async fn insert(
+        &self,
+        tenant: &Tenant,
+        input: ClientInput,
+        options: ClientOptions,
+        dynamic: Option<SecretHash>,
+        actor: Option<AuditActor>,
+        ctx: &RequestContext,
+    ) -> Result<CreatedClient, CoreError> {
         validate_client(&input, self.redirect_validator)?;
         validate_client_options(&input, &options, &tenant.settings)?;
         validate_client_phase4(&input, &options, self.redirect_validator)?;
@@ -490,8 +527,17 @@ impl ClientService {
             allowed_resources,
             mfa_policy: options.mfa_policy,
             metadata_expires_at: None,
-            registration_access_token_hash: None,
-            registration_source: crate::model::ClientSource::Static,
+            registration_source: if dynamic.is_some() {
+                crate::model::ClientSource::Dynamic
+            } else {
+                crate::model::ClientSource::Static
+            },
+            registration_access_token_hash: dynamic,
+        };
+        let action = if new.registration_access_token_hash.is_some() {
+            AuditAction::ClientRegistered
+        } else {
+            AuditAction::ClientCreated
         };
         // A client_id collision is astronomically unlikely; retry once with a fresh id.
         let client = match self.storage.clients().create(tenant.id, &new).await {
@@ -511,10 +557,11 @@ impl ClientService {
             }
             other => other?,
         };
+        let actor = actor.unwrap_or_else(|| AuditActor::client(&client.client_id));
         self.record(
             tenant.id,
             actor,
-            AuditAction::ClientCreated,
+            action,
             &client.client_id,
             ctx,
             AuditDetails::empty(),
@@ -555,6 +602,55 @@ impl ClientService {
         client_id: &str,
         patch: ClientPatch,
         options: ClientOptionsPatch,
+        actor: AuditActor,
+        ctx: &RequestContext,
+    ) -> Result<Client, CoreError> {
+        self.apply_update(
+            tenant,
+            client_id,
+            patch,
+            options,
+            AuditAction::ClientUpdated,
+            actor,
+            ctx,
+        )
+        .await
+    }
+
+    /// RFC 7592 update of a dynamic client: [`Self::update`]'s rules, audited as
+    /// `client_registration_updated` with the client as the actor. The caller has authenticated
+    /// the registration access token.
+    pub async fn update_dynamic(
+        &self,
+        tenant: &Tenant,
+        client_id: &str,
+        patch: ClientPatch,
+        options: ClientOptionsPatch,
+        ctx: &RequestContext,
+    ) -> Result<Client, CoreError> {
+        self.apply_update(
+            tenant,
+            client_id,
+            patch,
+            options,
+            AuditAction::ClientRegistrationUpdated,
+            AuditActor::client(client_id),
+            ctx,
+        )
+        .await
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the shared body of update and update_dynamic"
+    )]
+    async fn apply_update(
+        &self,
+        tenant: &Tenant,
+        client_id: &str,
+        patch: ClientPatch,
+        options: ClientOptionsPatch,
+        action: AuditAction,
         actor: AuditActor,
         ctx: &RequestContext,
     ) -> Result<Client, CoreError> {
@@ -650,7 +746,7 @@ impl ClientService {
         self.record(
             tenant.id,
             actor,
-            AuditAction::ClientUpdated,
+            action,
             client_id,
             ctx,
             AuditDetails::fields(&fields),
@@ -705,18 +801,41 @@ impl ClientService {
         actor: AuditActor,
         ctx: &RequestContext,
     ) -> Result<(), CoreError> {
+        self.remove(tenant, client_id, AuditAction::ClientDeleted, actor, ctx)
+            .await
+    }
+
+    /// RFC 7592 deletion of a dynamic client: [`Self::delete`] (token families revoked by the
+    /// repository), audited as `client_registration_deleted` with the client as the actor.
+    pub async fn delete_dynamic(
+        &self,
+        tenant: TenantId,
+        client_id: &str,
+        ctx: &RequestContext,
+    ) -> Result<(), CoreError> {
+        self.remove(
+            tenant,
+            client_id,
+            AuditAction::ClientRegistrationDeleted,
+            AuditActor::client(client_id),
+            ctx,
+        )
+        .await
+    }
+
+    async fn remove(
+        &self,
+        tenant: TenantId,
+        client_id: &str,
+        action: AuditAction,
+        actor: AuditActor,
+        ctx: &RequestContext,
+    ) -> Result<(), CoreError> {
         if !self.storage.clients().delete(tenant, client_id).await? {
             return Err(CoreError::NotFound);
         }
-        self.record(
-            tenant,
-            actor,
-            AuditAction::ClientDeleted,
-            client_id,
-            ctx,
-            AuditDetails::empty(),
-        )
-        .await
+        self.record(tenant, actor, action, client_id, ctx, AuditDetails::empty())
+            .await
     }
 }
 
