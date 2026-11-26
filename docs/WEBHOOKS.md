@@ -1,8 +1,8 @@
 # Webhooks
 
-Added in 0.4. AnvilID can notify your services when users and sessions change: each tenant
-registers HTTPS endpoints, picks the event types it wants, and receives signed `POST` requests
-in the [Standard Webhooks](https://www.standardwebhooks.com/) format.
+Added in 0.4. AnvilID can notify your services when users, sessions and (since 1.0)
+organizations change: each tenant registers HTTPS endpoints, picks the event types it wants, and
+receives signed `POST` requests in the [Standard Webhooks](https://www.standardwebhooks.com/) format.
 
 Webhooks are a notification channel, not a data feed. A payload names **what** happened and the
 ids involved. It never carries an email address, a name, an IP address or any other profile data:
@@ -47,7 +47,19 @@ supplied by reference.
 | `session.created` | A user signs in | `user_id` |
 | `session.revoked` | An administrator or the user revokes a session (`session_id`), or all sessions of a user (`user_id`) | `session_id` or `user_id` |
 | `session.logged_out` | A user signs out (RP-initiated logout names the relying party) | `session_id`, `user_id` when the user signed out, `client_id` for RP-initiated logout |
+| `organization.created` (1.0) | An organization is created | `org_id` |
+| `organization.deleted` (1.0) | An organization is deleted (its memberships go with it; no `member_removed` per member) | `org_id` |
+| `organization.member_added` (1.0) | A user joins an organization: an administrator adds them, they accept an invitation, or their first sign-in through an organization connection makes them a member | `user_id`, `org_id` |
+| `organization.member_removed` (1.0) | An administrator or organization admin removes a member | `user_id`, `org_id` |
+| `organization.domain_verified` (1.0) | An organization verifies a domain by DNS TXT record | `domain_id`, `org_id` |
+| `organization.domain_unverified` (1.0) | The daily re-check has failed for 7 days and the domain returns to pending ([OPERATIONS.md](OPERATIONS.md#domain-verification-and-the-daily-re-check)) | `domain_id`, `org_id` |
 | `test` | The test action of the console or the API | none |
+
+Organization events carry ids only, like every other event: never the organization's slug or
+name, nor the domain name (fetch them with
+`GET /api/admin/v1/tenants/{slug}/organizations/{org_id}` and `…/domains/{domain_id}`). Other
+organization changes (updates, role assignments, invitations, routing settings) are in the audit
+log but emit no webhook.
 
 Only successful actions emit events: a failed sign-in never produces `session.created`. Events
 are enqueued in the same database transaction as the audit event that records the action, so an
@@ -74,6 +86,8 @@ deliveries queued.
   the slug.
 - `data.actor`: who did it. `kind` is `user`, `client`, `admin` or `system`; `id` is present when
   there is one (a user id, a client id, or the admin token's subject).
+- `data.org_id` and `data.domain_id` (1.0): the organization and domain-claim ids of the
+  `organization.*` events.
 - Only the ids listed for the event type appear. Ids are copied only when they look like
   identifiers (no `@`, no whitespace, at most 512 bytes; CIMD client ids are URLs).
 

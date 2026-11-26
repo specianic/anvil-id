@@ -19,9 +19,9 @@ SAML is behind the operator key **`saml_experimental`** (`ANVILID_SAML_EXPERIMEN
 - **On:** the server logs a warning at start and `anvilid config validate` prints it. The console
   marks every SAML connection **Experimental**.
 
-**Why it stays off by default through 1.0** (decision Q3): signature wrapping and XML parser
-differences have broken SAML service providers in many products over the years, and the risk sits
-in exactly the code this feature adds: the XML parser, canonicalisation, the signature verifier
+**Why it stays off by default through 1.0** (decision Q3): XML signature wrapping and parser
+differentials are well-known attack classes against SAML service providers, and the risk sits in
+exactly the code this feature adds: the XML parser, canonicalisation, the signature verifier
 and the logic that decides which element was signed. AnvilID uses a pure-Rust stack for this
 (below), and its own SAML layer is new. The attack corpus described below passes in CI, but a
 passing corpus shows that the known attacks fail, not that no unknown one succeeds. SAML stays

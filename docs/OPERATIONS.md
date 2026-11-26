@@ -3,7 +3,9 @@
 This guide covers running AnvilID: the operator commands of the `anvilid` binary (backups and
 restores, key rotation, recovering administrator access, health checks), and, added in 0.4,
 running several nodes on Postgres, shared rate limiting with Redis, metrics, traces and logs, the
-outbound request policy, and the tenant registration policies. Every command reads the same
+outbound request policy, and the tenant registration policies; and, added in 1.0, the SAML
+experimental flag, the DNS lookup for domain verification and the daily domain re-check. Every
+command reads the same
 configuration as `anvilid serve` (config file, `ANVILID_*` environment variables, flags), so run
 it with the environment of the server it operates on. `anvilid config show` prints the effective
 value and source of every key.
@@ -20,7 +22,10 @@ Contents: [What to back up](#what-to-back-up) ·
 [Outbound requests](#outbound-requests) · [Tenant hosts](#tenant-hosts) ·
 [Client registration policies](#client-registration-policies) ·
 [Deploying with Helm or Compose](#deploying-with-helm-or-compose) ·
-[Declarative tenant configuration](#declarative-tenant-configuration)
+[Declarative tenant configuration](#declarative-tenant-configuration) ·
+[Configuration keys added in 1.0](#configuration-keys-added-in-10) ·
+[SAML (experimental)](#saml-experimental) ·
+[Domain verification and the daily re-check](#domain-verification-and-the-daily-re-check)
 
 ## What to back up
 
@@ -243,8 +248,8 @@ directory lock (`serve.lock`) refuses a second server.
 - **Pool size.** Each node opens up to `database_max_connections` connections (default 10). Keep
   nodes × pool size, plus anything else using the database, below the server's
   `max_connections`.
-- **Background work.** Expired-row cleanup, key rotation and audit retention run on one node at
-  a time (database leases). Back-channel logout and webhook delivery run on every node and claim
+- **Background work.** Expired-row cleanup, key rotation, audit retention and (1.0) the daily
+  domain re-check run on one node at a time (database leases). Back-channel logout and webhook delivery run on every node and claim
   rows with `FOR UPDATE SKIP LOCKED`, so each delivery attempt is made by one node. A node that
   stops mid-delivery leaves the row to be claimed again after its lease (webhooks: 45 s), so
   deliveries are at least once.
@@ -446,9 +451,83 @@ with `invalid_client_metadata`, and a metadata document with `jwks_uri` is treat
 `anvilid tenant export|plan|apply` and the matching admin API routes keep a tenant's
 configuration (settings, static clients, connections, branding, roles, attributes, email
 templates, SMTP, webhooks) in a versioned YAML document: [CONFIG-YAML.md](CONFIG-YAML.md).
+Organizations and everything they own are not part of it (1.0).
+
+## Configuration keys added in 1.0
+
+| Key | Environment | Flag | Default | Meaning |
+|---|---|---|---|---|
+| `saml_experimental` | `ANVILID_SAML_EXPERIMENTAL` | `--saml-experimental` | `false` | Turns on SAML 2.0 organization connections. Experimental: see [SAML (experimental)](#saml-experimental) |
+| `domain_verification_resolvers` | `ANVILID_DOMAIN_VERIFICATION_RESOLVERS` | `--domain-verification-resolvers` | empty | DNS servers for domain verification TXT lookups: a list of `ip`, `ip:port` or `[ipv6]:port` (port 53 by default). Empty = the system resolver configuration |
+
+`config show` prints `saml_experimental` as `true`/`false` and the resolvers as a list, or
+`<system>` when none are set. A resolver entry that is not an IP address or IP:port (host names,
+CIDRs, URLs, port 0) stops startup with `domain_verification_resolvers: entry N is not an IP
+address or IP:port`; the value is never echoed. Organizations, domains and routing are tenant
+data, managed through the admin API and the console, not through configuration keys.
+
+## SAML (experimental)
+
+SAML 2.0 connections are off unless `saml_experimental = true`. With the flag on, `anvilid serve`
+logs a warning that SAML 2.0 is experimental and `anvilid config validate` prints it. With the flag
+off, every SAML route answers 404, SAML connections cannot be created, imported, enabled or
+changed (they can still be disabled and deleted), and domains routed to a SAML connection are not
+routed. Turning the flag off is therefore a safe way to stop all SAML sign-ins at once.
+
+SAML adds no background job and no new outbound destinations at sign-in: the browser carries the
+request to the IdP and the response back. The only server-side fetch is an IdP metadata import
+from a URL, which goes through the guarded outbound client ([Outbound requests](#outbound-requests)),
+at most 1 MiB. The assertion replay guard lives in the database, so it holds across nodes.
+The supported profile and its limits are in [SAML.md](SAML.md).
+
+## Domain verification and the daily re-check
+
+Organizations verify email domains with a DNS TXT record at `_anvilid-challenge.{domain}`
+([ORGANIZATIONS.md](ORGANIZATIONS.md#domain-verification)). The lookup:
+
+- goes to `domain_verification_resolvers` (UDP and TCP on the configured port) or, when that is
+  empty, to the system resolver configuration (`/etc/resolv.conf`);
+- queries the absolute name only (no search domains, `ndots` 0, no hosts file);
+- has no cache: positive and negative answers are never reused, so a newly published record is seen
+  on the next check (your resolvers may still cache it for its TTL);
+- is bounded: 2 s per attempt, 2 attempts, 5 s overall;
+- treats every failure (no record, wrong value, timeout, SERVFAIL, refused) as "not verified", and
+  the admin API gives one identical answer for all of them. Queried names are logged at debug level
+  only.
+
+DNS servers are operator infrastructure, like Redis or SMTP: they are not subject to the outbound
+HTTP policy and may be on private addresses. If the host has no readable resolver configuration
+and no resolvers are configured, the server still starts, logs a warning, and every verification
+fails until you set `domain_verification_resolvers`. Explicitly configured resolvers that cannot be
+set up stop startup.
+
+**Re-check job.** Every node schedules the `domain_recheck` job every 24 hours; a database lease
+(`job_lease`) lets one node run it at a time, and its runs are counted in
+`anvil_jobs_runs_total{job}`. Each run re-checks, in batches across all tenants, the verified
+domains not checked in the last 23 hours:
+
+- a passing check clears any failure streak;
+- a failing check starts a streak (`failing_since`); routing and email trust keep working;
+- once the streak is **7 days** old, the domain returns to `pending`, audited as
+  `org_domain_unverified` with the system actor, and the `organization.domain_unverified` webhook
+  is sent. Routing for that domain stops until the organization verifies it again.
+
+A storage error on one domain is reported and the run continues with the next one. If your DNS is
+unreachable for more than a week, every verified domain eventually becomes pending, so monitor the
+job: each run that checked something logs one `domain re-check ran` line with the counts
+(`checked`, `passed`, `failed`, `unverified`), and every unverification is an
+`org_domain_unverified` audit event.
 
 ## Limitations in 0.4
 
 - **KEK rotation is not supported** (see [Key rotation](#key-rotation)).
 - `jwks_uri` is not accepted for dynamic or CIMD clients (inline `jwks` only).
 - Without Redis, rate limits are per node.
+
+## Limitations in 1.0
+
+- The 0.4 limitations above still apply.
+- SAML 2.0 is experimental and off by default ([SAML.md](SAML.md)).
+- The domain re-check interval (24 hours) and grace period (7 days) are fixed.
+- Tenant-restricted system administrators (system roles limited to some tenants) are deferred to
+  Phase 7.

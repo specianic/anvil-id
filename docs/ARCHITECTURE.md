@@ -97,7 +97,9 @@ decision before M1 starts.
 2. One crypto backend (aws-lc-rs) builds statically for musl on amd64 and arm64.
 3. Two sqlx storage implementations stay manageable (the M0 spike measures this).
 4. SAML ships as an experimental feature until a pure-Rust XML-DSig stack passes an
-   attack corpus (§20, D4).
+   attack corpus (§20, D4). Status in 1.0: the corpus passes in CI; SAML still ships behind the
+   runtime flag `saml_experimental` (off by default) until the Phase 7 external review and
+   real-IdP interop checklist (`docs/SAML.md`).
 
 ## 3. Deployment topologies
 
@@ -218,25 +220,28 @@ from handler code.
 | `rp_session` | tenant_id, session_id, client_id, issuer, created_at | Which clients a browser session signed in to (for back-channel logout). Primary key (tenant_id, session_id, client_id); cascades with the session. Recorded in the `GrantRepo::create_code` transaction, only for a stored session of the same tenant. `issuer` is the issuer the client got its code (and ID tokens) from; a later code for the same row overwrites it (latest wins). It is null only for rows written before the 0.3 issuer migration. There is no `sid` column: the OIDC `sid` is the browser session id (§8.3) |
 | `logout_delivery` (0.3) | id, tenant_id, client_id, uri, sub, sid, issuer, attempts, next_attempt_at, give_up_at, created_at, delivered_at, last_error | Back-channel logout queue. No foreign key to session, user or client, so a delivery survives the deletion that caused it. Rows are enqueued by the revoking storage intents (§7.1); `issuer` is copied from the RP session |
 | `flow` | id, tenant_id, kind (login/registration/recovery/verification/settings/consent/logout), state (JSON), csrf_hash, expires_at, browser_session_id? | Short-lived flow state machines (§9). `logout` (0.3) is the sign-out confirmation |
-| `authorization_request` | id, tenant_id, client_id, params (JSON: redirect_uri, scope, state, nonce, code_challenge, resource, prompt, max_age, acr_values…), created_at, expires_at | Created at `/authorize`, consumed when a code is issued. Also used for PAR |
-| `authorization_code` | code_hash (PK), tenant_id, client_id, user_id, browser_session_id, redirect_uri, scope, nonce, code_challenge, resource, auth_time, acr, amr, expires_at, consumed_at, token_family_id | The token family is created in the same transaction as the code, so a code replay that races the exchange still finds and revokes it |
-| `token_family` | id, tenant_id, client_id, user_id?, scope, resource, auth_time?, acr?, amr, browser_session_id?, claims request (JSON)?, created_at, absolute_expires_at, revoked_at, revoked_reason | Groups a refresh-token chain; revoking the family revokes all of its tokens. Carries the authentication context so refreshed ID tokens repeat `auth_time` and UserInfo applies `claims.userinfo`. Access tokens carry the family id and UserInfo checks `revoked_at` |
+| `authorization_request` | id, tenant_id, client_id, params (JSON: redirect_uri, scope, state, nonce, code_challenge, resource, prompt, max_age, acr_values, organization…), created_at, expires_at | Created at `/authorize`, consumed when a code is issued. Also used for PAR. 1.0: the organization switcher writes the chosen org into `params.organization` (delete and re-create under the same id, keeping `created_at` and `expires_at`) |
+| `authorization_code` | code_hash (PK), tenant_id, client_id, user_id, browser_session_id, redirect_uri, scope, nonce, code_challenge, resource, auth_time, acr, amr, expires_at, consumed_at, token_family_id | The token family is created in the same transaction as the code, so a code replay that races the exchange still finds and revokes it. 1.0 adds `org_id` (the active organization, nullable, no foreign key) |
+| `token_family` | id, tenant_id, client_id, user_id?, scope, resource, auth_time?, acr?, amr, browser_session_id?, claims request (JSON)?, created_at, absolute_expires_at, revoked_at, revoked_reason | Groups a refresh-token chain; revoking the family revokes all of its tokens. Carries the authentication context so refreshed ID tokens repeat `auth_time` and UserInfo applies `claims.userinfo`. Access tokens carry the family id and UserInfo checks `revoked_at`. 1.0 adds `org_id`: the active organization is bound to the family (never to a cookie or the session), re-checked at every refresh (membership lost → `invalid_grant` and the family is revoked) |
 | `refresh_token` | token_hash (PK), tenant_id, family_id, parent_hash?, expires_at, consumed_at | Rotation: each use consumes the token and issues a child |
 | `access_token` | token_hash (PK), tenant_id, family_id?, client_id, user_id?, scope, created_at, expires_at, revoked_at | Only for opaque tokens; JWT access tokens are not stored. Revocation of a JWT revokes its family. Opaque client-credentials tokens have no family. `resource` arrives with RFC 8707 |
 | `consent_grant` | id, tenant_id, user_id, client_id, scopes, created_at, updated_at, revoked_at | Unique (tenant_id, user_id, client_id). Scopes are a sorted, de-duplicated set; a new grant is merged into the existing one in a single upsert so concurrent first grants lose nothing. Revoking also revokes that client's token families of the user. `resource` arrives with RFC 8707 |
-| `role`, `role_assignment` | role: id, tenant_id, org_id?, name, description, permissions (JSON; Postgres `text[]`), created_at, updated_at. assignment: tenant_id, role_id, user_id | RBAC (ORG-5), built in 0.4. `org_id` is always null in 0.4; names are unique per tenant among tenant-level roles. Assignments have composite foreign keys to `role (tenant_id, id)` and `user (tenant_id, id)`, both cascading, so an assignment cannot cross tenants |
+| `role`, `role_assignment` | role: id, tenant_id, org_id?, name, description, permissions (JSON; Postgres `text[]`), created_at, updated_at. assignment: tenant_id, role_id, user_id | RBAC (ORG-5), built in 0.4. `org_id` is always null in 0.4; names are unique per tenant among tenant-level roles. Assignments have composite foreign keys to `role (tenant_id, id)` and `user (tenant_id, id)`, both cascading, so an assignment cannot cross tenants. **1.0 (decision Q5, hybrid on one table):** a role with `org_id` is owned by that organization (name unique per org, FK to the org, cascading); `role_assignment` gains `org_id`: null = tenant-wide, set = valid only inside that org, with a composite FK to `org_membership (tenant_id, org_id, user_id)` (cascading, so leaving the org removes its assignments). A tenant role can be assigned within an org; an org role only within its own org; roles with `admin:*` permissions never inside an org. Tenant-level queries (claims, the last-administrator guard) see only tenant roles and tenant-wide assignments |
 | `attribute_definition` (0.4) | tenant_id, name, schema (JSON Schema fragment), required, user_editable, claim (rule or null), position, created_at, updated_at | Primary key (tenant_id, name). User values live in `user.attributes` (a JSON object) and are validated against the definitions on every write. Deleting a definition keeps stored values |
 | `webhook_endpoint`, `webhook_delivery` (0.4) | endpoint: id, tenant_id, name, url, events, enabled, secret_enc, previous_secret_enc, previous_secret_expires_at, disabled_reason, timestamps. delivery: id, tenant_id, endpoint_id, event_type, payload_json (ids only), status (pending/delivered/failed), attempts, next_attempt_at (also the claim lease), last_http_status, last_error (an error class, never response text), created_at, completed_at | Secrets sealed with the KEK. Deliveries are inserted by `AuditRepo::append` in the audit transaction (one per enabled, subscribed endpoint) and cascade with their endpoint; completed rows follow audit retention (docs/WEBHOOKS.md) |
 | `initial_access_token` (0.4) | id, tenant_id, description, token_hash (SHA-256, unique), expires_at, uses_remaining (null = unlimited), revoked_at, created_at | RFC 7591 initial access tokens for the `allow_listed` DCR policy; consumed by one conditional `UPDATE`. Purged 7 days after expiry or revocation |
-| `connection` (0.3) | id, tenant_id, slug, display_name, kind (google/apple/microsoft/github/oidc/oauth2), enabled, config (JSON, tagged `type`: social/oidc/oauth2), secret_enc, trust_email_verified, created_at, updated_at | Upstream IdP configuration, tenant-scoped in 0.3 (org-scoped connections and SAML arrive with ORG-2..4). Unique (tenant_id, slug). `kind` is derived from `config`. The secret (client secret, or the Apple `.p8` key) is sealed with the KEK under associated data tenant ‖ connection id and is write-only in the API |
-| `branding`, `branding_logo` (0.3) | branding: tenant_id, scope_key (tenant or client), tokens (JSON), custom_css, logo_sha256, logo_type, updated_at, plus the draft (tokens, custom_css, preview_hash, preview_expires_at). branding_logo: tenant_id, sha256, content_type, bytes | Published theme per scope and its preview draft (§10.7). Logos are content-addressed per tenant. SQLite keeps the draft in columns of `branding`; Postgres keeps it in a separate `branding_draft` table so a scope can have a draft without published branding. The port semantics are the same |
-| `organization`, `org_membership`, `org_invitation`, `org_domain` | standard fields | 1.0 (ORG-2..4) |
+| `connection` (0.3) | id, tenant_id, slug, display_name, kind (google/apple/microsoft/github/oidc/oauth2; 1.0 adds saml), enabled, config (JSON, tagged `type`: social/oidc/oauth2/saml), secret_enc, trust_email_verified, org_id (1.0), created_at, updated_at | Upstream IdP configuration, tenant-scoped in 0.3. Unique (tenant_id, slug), shared by tenant and organization connections. `kind` is derived from `config`. The secret (client secret, or the Apple `.p8` key) is sealed with the KEK under associated data tenant ‖ connection id and is write-only in the API. **1.0:** `org_id` set = an organization connection (OIDC or SAML only, FK to the org, cascading); SAML configs (IdP entity id, https SSO URL, 1-3 pinned PEM certificates, NameID format, attribute mapping, metadata URL for the record) exist only in organizations and carry no secret |
+| `branding`, `branding_logo` (0.3) | branding: tenant_id, scope_key (tenant, client, or since 1.0 `org:{uuid}`), tokens (JSON), custom_css, logo_sha256, logo_type, updated_at, plus the draft (tokens, custom_css, preview_hash, preview_expires_at). branding_logo: tenant_id, sha256, content_type, bytes | Published theme per scope and its preview draft (§10.7). Logos are content-addressed per tenant. SQLite keeps the draft in columns of `branding`; Postgres keeps it in a separate `branding_draft` table so a scope can have a draft without published branding. The port semantics are the same |
+| `organization` (1.0) | id, tenant_id, slug, display_name, mfa_policy (nullable), settings (JSON: `default_role_ids` for SSO just-in-time members), metadata (JSON), created_at, updated_at | A customer company inside a tenant (ORG-2). Unique (tenant_id, slug); slug rule as for tenants. None in the `system` tenant. Deleting one cascades to everything below plus its connections, roles and assignments, deletes its branding scope and revokes its token families, in one transaction |
+| `org_membership` (1.0) | tenant_id, org_id, user_id, created_at | Primary key (tenant_id, org_id, user_id); FKs to the org and the user, both cascading. Removing a member also revokes that user's families bound to the org, in the same transaction |
+| `org_invitation` (1.0) | id, tenant_id, org_id, email, role_ids (JSON), token_hash (SHA-256, unique), invited_by_kind, invited_by_id, created_at, expires_at (7 days), accepted_at, accepted_user_id, revoked_at | Single use: accepted by one conditional `UPDATE … WHERE accepted_at IS NULL AND revoked_at IS NULL AND expires_at > now` in the same transaction as the membership and its roles (concurrent accepts: one winner). Accepted and revoked are exclusive (CHECK) |
+| `org_domain` (1.0) | id, tenant_id, org_id, domain (normalised A-label), token, status (pending/verified), verified_at, last_checked_at, failing_since, connection_id, routing, allow_local_password (default true), created_at | Unique (tenant_id, org_id, domain); a **partial unique index on (tenant_id, domain) where verified** lets only one org per tenant hold a verified domain (the database decides a race). Routing needs a verified claim, `routing` and an enabled connection of the same org. Deleting the target connection clears `connection_id` and keeps the verified claim (SQLite: an `AFTER DELETE` trigger; Postgres: a composite FK, and `ConnectionRepo::delete` clears the target first) |
 | `audit_event` | id, tenant_id, at, actor (user/client/admin/system + id), action, target, outcome (success/failure), ip, user_agent, trace_id, details (JSON object) | Append-only; retention configurable (`audit_retention_days`). Tenant lifecycle events are recorded in the `system` tenant with the tenant id as target. Details never contain secrets, identifiers of failed sign-ins or SMTP error text |
 | `email_outbox` | id, tenant_id, to, template, payload (JSON), attempts, next_attempt_at, sent_at, last_error | |
-| `email_template` | tenant_id, kind (verification/recovery/invitation/password_changed/recovery_code_used; 0.3 adds login_code/email_change/email_changed), subject, body_html, body_text, updated_at | Per-tenant override of the theme's email template, validated on save (§13) |
+| `email_template` | tenant_id, kind (verification/recovery/invitation/password_changed/recovery_code_used; 0.3 adds login_code/email_change/email_changed; 1.0 adds org_invitation), subject, body_html, body_text, updated_at | Per-tenant override of the theme's email template, validated on save (§13) |
 | `smtp_settings` | tenant_id, host, port, username?, password (sealed)?, from_address, tls (starttls/implicit/none), updated_at | Per-tenant SMTP; the password is write-only in the API |
 | `job_lease` | name, owner, leased_until | Background job coordination (§14). Leases are 15 minutes and released after each run |
-| `replay_guard` | tenant_id, kind (jti/dpop/nonce), value_hash, expires_at | `private_key_jwt` assertion `jti`s; later DPoP |
+| `replay_guard` | tenant_id, kind (jti/dpop/nonce; 1.0 adds saml_assertion_id), value_hash, expires_at | `private_key_jwt` assertion `jti`s; since 1.0 SAML assertion ids (hash of IdP entity id ‖ assertion id, kept until the assertion's `NotOnOrAfter`, at most 1 h); later DPoP |
 | `admin_setup_token` | token_hash, expires_at, used_at | One-time bootstrap URL (ADM-3) |
 | `self_service_token` | token_hash (PK), tenant_id, kind (verification/recovery/invitation; 0.3 adds email_change), user_id, email, created_at, expires_at, consumed_at | Emailed one-time links, consumed atomically. Verification succeeds only while the user's email still equals `email` |
 
@@ -266,6 +271,21 @@ mapping), `dcr` and `cimd` (both default `disabled`, forced `disabled` for `syst
 data change is a backfill: the `system` tenant's `administrator` role (`admin:write`) is created
 and assigned to every existing system-tenant user.
 
+1.0 (SQLite `0008_release_1_0`, additive, and `0009_release_1_0_rebuild`; Postgres
+`0007_release_1_0`, in place) adds `organization`, `org_membership`, `org_invitation` and
+`org_domain`; `org_id` on `connection`, `role_assignment`, `authorization_code` and `token_family`
+(and the FK on `role.org_id`); `client.organization` (`off`/`optional`/`required`, default `off`);
+and the new kinds `saml` (connection), `saml_assertion_id` (replay guard) and `org_invitation`
+(email template). SQLite cannot change these constraints in place, so `0009` rebuilds
+`connection`, `role`, `role_assignment`, `replay_guard` and `email_template` with
+`-- no-transaction`: foreign keys off, one explicit transaction that copies every column of every
+row and recreates every index, `pragma_foreign_key_check` into a table whose CHECK refuses any
+violation before `COMMIT`, then foreign keys on (with foreign keys on, dropping `connection`
+would cascade into `identity_link`). Postgres swaps CHECK constraints and replaces the
+`role_assignment` primary key with two partial unique indexes (tenant-wide and in-org). Every 0.4
+row becomes tenant-level (`org_id` null, client policy `off`); the upgrade tests prove it row by
+row on both backends.
+
 **Tenant-scoped foreign keys.** Rows that point at a user reference `(tenant_id, user_id)` →
 `user (tenant_id, id)`, so the database itself rejects a row whose user belongs to another tenant.
 SQLite has used composite keys since 0.1. On Postgres, 0.2 adds them to `credential`,
@@ -279,10 +299,10 @@ the user's tenant before inserting, which gives a clearer error.
 | Secret | At rest |
 |---|---|
 | User passwords | Argon2id PHC string |
-| Client secrets, refresh/access tokens (opaque), authorization codes, session IDs, setup, recovery and (0.3) email-change tokens, API keys | SHA-256 of a 256-bit random value. The plaintext is shown once and never stored |
+| Client secrets, refresh/access tokens (opaque), authorization codes, session IDs, setup, recovery and (0.3) email-change tokens, (1.0) organization invitation tokens, API keys | SHA-256 of a 256-bit random value. The plaintext is shown once and never stored |
 | Email sign-in codes (0.3) | 6-digit code stored in the login flow as HMAC-SHA-256 under a KEK-derived key over flow id ‖ code, so it is useless outside its flow; the magic-link token beside it (256-bit) as SHA-256. Both are consumed together, once |
 | MFA recovery codes | ~80-bit random codes, formatted for typing (e.g. `XXXX-XXXX-XXXX-XXXX`), stored as HMAC-SHA-256 under a key derived from the KEK (a plain hash would be brute-forceable at this length). Shown once |
-| TOTP seeds, SMTP passwords, CAPTCHA secrets, upstream IdP client secrets (0.3: client secret or Apple `.p8` key, AAD tenant ‖ connection id), signing private keys, SAML SP keys | AES-256-GCM with a data key derived from the **key-encryption key (KEK)** via HKDF, using the table and row ID as associated data |
+| TOTP seeds, SMTP passwords, CAPTCHA secrets, upstream IdP client secrets (0.3: client secret or Apple `.p8` key, AAD tenant ‖ connection id), signing private keys, SAML SP keys (none in 1.0: AuthnRequests and SP metadata are unsigned) | AES-256-GCM with a data key derived from the **key-encryption key (KEK)** via HKDF, using the table and row ID as associated data |
 | Email outbox payloads (contain single-use links and, since 0.3, sign-in codes) | Sealed with the KEK envelope (AES-256-GCM, purpose `anvilid/outbox-payload/v1`, tenant ID as associated data) when the email is created; opened only by the outbox worker immediately before rendering. A payload that cannot be opened is never sent |
 
 **KEK source:** the `ANVILID_KEK` env var or a key file. In zero-config dev mode the binary generates
@@ -314,8 +334,12 @@ pub trait Storage: Send + Sync + 'static {
     fn connections(&self) -> &dyn ConnectionRepo; // 0.3: upstream connections, identity links
     fn branding(&self) -> &dyn BrandingRepo;   // 0.3: themes, logos, preview drafts
     fn logout(&self) -> &dyn LogoutRepo;       // 0.3: RP sessions, back-channel delivery queue
+    fn roles(&self) -> &dyn RoleRepo;          // 0.4: roles, assignments; 1.0: org roles and in-org assignments
+    fn attributes(&self) -> &dyn AttributeRepo; // 0.4: custom attribute definitions
+    fn webhooks(&self) -> &dyn WebhookRepo;    // 0.4: endpoints, delivery queue
+    fn registration(&self) -> &dyn RegistrationRepo; // 0.4: initial access tokens
+    fn organizations(&self) -> &dyn OrgRepo;   // 1.0: orgs, members, invitations, domains, routing
     async fn purge_expired(&self, now: OffsetDateTime) -> Result<u64, StorageError>;
-    // later: orgs(), roles(), …
 }
 ```
 
@@ -341,6 +365,24 @@ link, plus the verification token and email when the address is not verified),
 old address; a taken address returns `Conflict` and leaves the token unconsumed),
 `LogoutRepo::claim_due_deliveries` (lease a batch of due deliveries; Postgres uses
 `FOR UPDATE SKIP LOCKED`) and `LogoutRepo::complete_delivery`.
+
+**1.0 (`OrgRepo` and additions).** Atomic intents: `OrgRepo::delete` (cascade, org-bound family
+revocation, branding scope), `add_member` (membership plus in-org roles; returns
+`AddMemberOutcome::{Added, AlreadyMember, NotFound}`), `remove_member` (membership, its
+assignments and the user's org-bound families), `accept_invitation` and
+`accept_invitation_with_new_user` (outcome order Invalid, EmailMismatch, AlreadyMember or Conflict;
+one conditional update decides concurrent accepts), `mark_verified` (the partial unique index
+turns a second org into `Conflict`), `record_check` and `unverify` (re-check streak), plus the
+reads `routed_domain` (verified, routing on, enabled connection of the same org), `tenant_has_routing`,
+`verified_domains_of_org` and the installation-wide `due_for_recheck`. `RoleRepo` gains
+`list_org_roles`, `assign_in_org` (the user must be a member; the role a tenant role or this org's),
+`unassign_in_org`, `roles_for_user_in_org`, `org_assignments` and `org_holders_of_permission`; its
+0.4 methods are defined over tenant roles and tenant-wide assignments only. `ConnectionRepo` gains
+`list_for_org` and `has_links`, and `create_user_with_link` takes an optional `NewMembership`
+(just-in-time user, link, membership and default roles in one transaction). Non-storage ports:
+`DomainTxtLookup` (bounded TXT lookup) and `SamlXml` (verify a response, parse IdP metadata,
+encode the Redirect binding). The contract suite has 45 more tests, including 8-way concurrent
+invitation accepts and domain verifications.
 
 **Enqueue-on-revoke (0.3).** `SessionRepo::revoke`, `revoke_with_families`, `revoke_all_for_user`,
 `UserRepo::complete_recovery` and `UserRepo::delete` insert, in the same transaction, one
@@ -400,12 +442,12 @@ contract:
   migration changed (sha256 manifest `scripts/released-migrations.sha256`, extended at every
   release) or if an unreleased migration contains destructive SQL without the `destructive` name or
   the reviewed `-- anvil:non-destructive-rebuild` annotation (used by SQLite table rebuilds that
-  copy every row, e.g. 0004).
+  copy every row, e.g. 0004 and 0009).
 - Migrations are forward-only and **expand/contract**: a release never drops or renames a column that
   the previous minor release still reads. Destructive cleanups happen one minor release later.
 - CI test: create a database with release N-1's migrations and data fixtures, upgrade to N, run the
-  contract suite (`tests/upgrade.rs` in both storage crates; 0.1 → 0.2 and 0.2 → 0.3 keep every
-  row).
+  contract suite (`tests/upgrade.rs` in both storage crates; 0.1 → 0.2, 0.2 → 0.3 and, since
+  1.0, 0.4 → 1.0 keep every row, the last one including the SQLite `-- no-transaction` rebuild).
 
 ### 7.4 Expiry and cleanup
 
@@ -611,8 +653,11 @@ Login flow:
 
 - Policy values `off`, `optional` (the default, 0.2 behaviour) and `required`, set per tenant
   (`settings.mfa_policy`) and per client (`client.mfa_policy`, unset = no opinion). The effective
-  policy is the **strictest** of the two (`required` > `optional` > `off`); organizations join the
-  same rule in Phase 6. The decision is a pure function in core (`policy::mfa`).
+  policy is the **strictest** of the two (`required` > `optional` > `off`). Since 1.0 the active
+  organization's `mfa_policy` joins the same rule (strictest of tenant, organization and client;
+  `policy::mfa::effective_policy_for`). The decision is a pure function in core (`policy::mfa`).
+  During the first password sign-in the organization is not known yet, so its policy is applied
+  right after sign-in as a step-up, before any code is issued.
 - `off` never asks for a second factor. `optional` asks users who have one (TOTP or, since 0.4, a
   passkey; a passkey sign-in already counts as MFA). `required` asks, and a user without a second
   factor enrols one during sign-in: an authenticator app (recovery codes shown once) or, since 0.4,
@@ -729,6 +774,91 @@ failures never cached).
   It never satisfies MFA, never marks the address verified, cannot confirm an upstream link and is
   not offered in step-up flows.
 
+### 9.4 Organizations in the grant (1.0)
+
+- **Active organization.** `/authorize` takes `organization` (an org id or slug, at most 128
+  bytes, not repeated). After sign-in the pure `policy::org_claims::resolve_active_org` decides
+  from the client's `organization` policy, the parameter and the user's memberships: `off` +
+  parameter → `invalid_request`; a non-member org → `access_denied`; `required` with one membership
+  selects it, with several asks the switcher (`interaction_required` under `prompt=none`), with
+  none → `access_denied`. An id match wins over a slug; display names never match.
+- The active org is stored on the authorization code and the token family (`org_id`), never in a
+  cookie or the browser session. The token endpoint re-checks membership at code exchange and at
+  every refresh; a lost membership or a deleted org answers `invalid_grant` and revokes the family.
+  A code whose `org_id` differs from its family's is refused.
+- **Claims.** `org_id` and `org_slug` always come with an active org; `org_roles` (roles held in
+  the org, gated by scope `roles`) in the ID token, JWT access token, UserInfo and introspection;
+  `org_permissions` in the JWT access token and introspection only. They are recomputed at every
+  refresh, inserted before mapped claims, and reserved (no attribute or role mapping can emit
+  them). Client credentials tokens never carry them. Since 1.0 opaque tokens get the same role,
+  permission, attribute and org claims at introspection and UserInfo as a JWT carries (closing
+  the 0.4 gap).
+- **`org:admin`.** The scope is issued only while the user holds the permission `org:admin` in the
+  active org (re-bounded at each refresh, never beyond the grant), never without an active org,
+  never to client credentials, never registrable (DCR, CIMD) and never on `system` tenant clients.
+- **Switcher.** `GET|POST /ui/select-organization` lists only the signed-in user's memberships,
+  binds a consent-kind flow to the stored request (cookie + CSRF), accepts only a request whose
+  client is `required` and which names no org, uses the flow up before writing the choice into the
+  stored request, then continues the authorization (where the org MFA can step up). Switching
+  orgs is a new authorization request with `organization=…`.
+
+### 9.5 SAML 2.0 SP sign-in (1.0, experimental)
+
+Behind the operator flag `saml_experimental` (off: every route 404, every `SamlService` method
+`FeatureDisabled`). Profile and checks in `docs/SAML.md`.
+
+- **Start** (`POST /ui/login/saml/{slug}/start?flow=`, CSRF): an unsigned HTTP-Redirect
+  AuthnRequest (request id `_` + 32 hex, `ForceAuthn` for `prompt=login`), a 59-byte RelayState
+  (flow id + nonce, stored hashed), the shared `SameSite=Lax` binding cookie; pending state stored
+  in the login flow by compare-and-swap, valid 10 minutes.
+- **ACS** (`POST /ui/login/saml/{slug}/acs`, outside the Fetch-Metadata layer, no cookies, 256 KiB
+  body limit): RelayState → flow, pending request consumed once, then the `SamlXml` adapter
+  (size and markup caps, one uppsala parse with DTDs forbidden, document rules, a strict profile
+  pre-check before any bergshamra call, bergshamra-dsig verification on aws-lc against the pinned
+  certificates only with the verified reference resolved to the pinned Assertion node, extraction
+  from that node only), then core `saml::validate::check` (destination, `InResponseTo`, status,
+  issuers, instants with 90 s skew, bearer confirmation, conditions, audience, authn statement;
+  21 reason codes), then the database replay guard on the assertion id. Only the extracted
+  identity is sealed into the flow (AAD flow ‖ tenant).
+- **Continue** (`GET /ui/login/saml/{slug}/continue`): requires the binding cookie, then the shared
+  upstream completion `UpstreamService::complete_identity` (the same code as organization OIDC).
+  IdP-initiated responses are refused (no pending request matches). Every failure is one generic
+  page and `saml_login_failed` with a reason code.
+
+### 9.6 Enterprise connections and home-realm discovery (1.0)
+
+- **Organization connections** (OIDC or SAML, `connection.org_id`) reuse the 0.3 upstream
+  machinery and one completion path. They are hidden from the sign-in page. Email trust is
+  domain-bound (`upstream::linking::enterprise_email_trust`): the email's domain must equal one of
+  that org's verified domains and the upstream must not say `email_verified: false` (OIDC: strict
+  `true`; SAML: the verified domain alone). Org A's IdP can never auto-link or add a membership on
+  org B's domain. Just-in-time users get the link, the membership and the org's existing default
+  roles in one transaction (`create_user_with_link` with a membership); an existing linked
+  non-member becomes a member. JIT follows the tenant's `upstream_registration` (an open decision
+  for org connections; see `docs/ORGANIZATIONS.md`).
+- **Domain verification.** `policy::home_realm::normalize_domain` (lowercase, A-labels, no public
+  suffix, IP, wildcard, single label, URL parts or reserved names), a 128-bit token, the record
+  `_anvilid-challenge.{domain}.` TXT `anvilid-domain-verification={token}`, checked by the one
+  `service::domain_check::check_domain` through the `DomainTxtLookup` port (hickory, FQDN only, no
+  cache, 2 s × 2 attempts, 5 s overall); every failure is the same `pending` answer. The partial
+  unique index gives a domain to one org per tenant. The daily `domain_recheck` job (§14) keeps a
+  failure streak and unverifies after 7 days.
+- **Identifier-first sign-in.** A tenant with a routable domain (`OrgRepo::tenant_has_routing`)
+  starts the login flow at `EmailFirst` instead of the combined form. The email is routed by its
+  domain only (`OrgRepo::routed_domain`: verified, routing on, enabled connection of the same org;
+  SAML only with the flag on): `allow_local_password = false` → straight to the IdP
+  (`service::flow::start_idp`, SAML or OIDC with the page's flow binding); `true` (default) →
+  `SsoChoice` (single sign-on or password); no route → the same password step for every address,
+  without reading any account. `login_hint` is routed at `GET /ui/login`; `organization` naming an
+  org with exactly one enabled connection goes to that IdP. Passkey and upstream starts are
+  accepted in every primary step.
+- **Local-method policy.** For a routed domain with `allow_local_password = false`, password,
+  email-code and magic-link sign-in (including codes requested earlier) are refused with
+  `hrd.use_sso`; passkeys stay allowed. Admin-side guards (`service::org_domain::check_routing`,
+  pure): routing needs a verified domain and an enabled same-org target; turning passwords off
+  also needs routing and a target with at least one identity link. Disabling or deleting the
+  target stops routing. The tenant admin is always the recovery path.
+
 ## 10. HTTP surface
 
 Paths below are relative to the tenant base (§12).
@@ -774,6 +904,9 @@ objects are not supported (`request_parameter_supported: false`); a rejected req
 answered with `request_not_supported` through the response mode it asked for (exactly `form_post`,
 otherwise query) when the redirect URI is valid. `request_uri` is never fetched.
 
+**Added in 1.0:** the `organization` parameter at `/authorize` (§9.4); discovery's
+`claims_supported` lists `org_id`, `org_slug`, `org_roles` and `org_permissions`.
+
 **Added in 0.3:** `GET`/`POST /logout` (§8.3), a repeatable `resource` at `/authorize` and `/token`
 (§8.2), and the `prompt`, `max_age`, `login_hint` and `acr_values` handling of §9. Discovery adds
 `end_session_endpoint`, `backchannel_logout_supported: true`,
@@ -814,6 +947,15 @@ except the passkey ceremony itself.
 
 Email change, password change and unlink need a sign-in within the last 15 minutes, like the 0.2
 credential changes.
+
+1.0 adds, all without JavaScript:
+
+| Route | Purpose |
+|---|---|
+| `POST /ui/login/identify?flow=` | Identifier-first sign-in: the email page and the single-sign-on choice (`choice=sso\|password\|change`), §9.6 |
+| `GET /ui/select-organization?request=`, `POST /ui/select-organization?flow=&request=` | Organization switcher (§9.4) |
+| `GET /ui/invitation?token=`, `POST /ui/invitation`, `POST /ui/invitation/register` | Organization invitation: the GET only shows the offer; accept (signed in) or register for the invited address. CSRF: a `__Host-anvil_invitation` nonce cookie (SameSite=Strict, 1 h) plus an HMAC over tenant, nonce and token under a KEK-derived key; `no-store`, `no-referrer` |
+| `POST /ui/login/saml/{slug}/start?flow=`, `POST /ui/login/saml/{slug}/acs`, `GET /ui/login/saml/{slug}/continue?state=`, `GET /saml/{slug}/metadata` | SAML SP (§9.5; 404 with the flag off). The ACS is outside the Fetch-Metadata layer |
 
 ### 10.3 Management API
 
@@ -860,6 +1002,30 @@ credential changes.
   `admin:settings:{read|write}` (role assignment and user attribute values `admin:users:{read|write}`,
   initial access tokens `admin:clients:{read|write}`), plus `admin:write` for the `system` tenant.
   81 operations; `security_admin_v04.rs` and `security_rbac.rs` prove the scopes.
+- Added in 1.0: `organizations` (tag `organizations`, scopes `admin:organizations:{read|write}`):
+  organization CRUD, members, member roles within the org (`?scope=org|tenant`), org roles,
+  invitations (the token is never returned), connections (OIDC or SAML; `saml-metadata` import from
+  XML or an SSRF-guarded URL; the SP values in the view), domains (`verify`, routing settings) and
+  org branding, all under `/tenants/{slug}/organizations/{org}/…`; `keys` (`GET
+  /tenants/{slug}/keys`, `POST …/keys/rotate` through `KeyRotationService::rotate_now`, scopes
+  `admin:settings:*`, never private material); the client field `organization`; tenant settings
+  `claims.org_roles|org_permissions`; the tenant view `features.saml`; the `org_invitation`
+  email template kind. Tenant-level `connections` lists org connections read-only (`409` on
+  change). 122 operations; `security_admin_v10.rs` proves the scopes.
+- **Organization admins (1.0, decision Q1).** The `{org}` sub-routes use a second extractor,
+  `OrgAdminAuth`, with one `Principal` enum (`SystemAdmin`, `OrgAdmin { tenant, org, user }`). It
+  accepts a system-tenant token (scopes checked by the handler) or a JWT access token of tenant
+  `{slug}` itself, verified by the same `AccessTokenVerifier` against the tenant's canonical issuer,
+  whose `aud` contains `{public_url}/api/admin/v1` (RFC 8707 `resource`; the client must still allow
+  it), with scope `org:admin` and an `org_id` equal to the path org, a live family bound to that org
+  and user, and the user active, a member and still holding `org:admin` there
+  (`OrgService::org_admin_principal`, every request). Opaque tokens are refused. Every other route
+  keeps `AdminAuth` (system tokens only), and `AdminAuth::require` refuses an org admin, so an
+  org-admin token gets `401` outside its org's sub-routes and `403` for another org or for
+  tenant-admin-only actions (org update/delete, direct member add). An org admin cannot remove or
+  demote the last `org:admin` holder (`409`); tenant admins can (recovery path). **Tenant-restricted
+  system administrators** (system roles limited to a tenant list) are **deferred to Phase 7**: they
+  would need a second principal shape checked on every tenant-level and installation route.
 - **RBAC admin scopes (0.4).** In the `system` tenant a user's roles decide which admin scopes the
   console token can carry: the requested admin scopes are intersected, at code exchange and at
   every refresh, with the scopes the user's role permissions grant (`admin:write` covers every
@@ -937,10 +1103,12 @@ stops (`shutdown_drain`), `503 unavailable` when the storage check fails. `/metr
 
 ### 10.7 Theming (0.3)
 
-- Scopes: tenant and client (organizations in Phase 6). Tokens: nine colours plus an optional dark
-  set, a system font family, a corner radius (0–32 px), custom CSS and a logo (PNG, JPEG or WebP,
-  up to 256 KiB, identified by magic bytes; SVG is refused). Precedence is per field: client >
-  tenant > default.
+- Scopes: tenant and client; since 1.0 organization (`org:{uuid}`). Tokens: nine colours plus an
+  optional dark set, a system font family, a corner radius (0–32 px), custom CSS and a logo (PNG,
+  JPEG or WebP, up to 256 KiB, identified by magic bytes; SVG is refused). Precedence is per
+  field: client > organization > tenant > default; custom CSS is concatenated tenant,
+  organization, client. The organization layer is picked from the flow's authorization request
+  (`organization`, canonical id first, then slug; unknown orgs fall back silently).
 - Validation (pure, `policy::branding`): hex colours only; WCAG contrast below 3:1 for text on
   background, text on surface or text on primary is refused, below 4.5:1 is a warning. Custom CSS
   (up to 32 KiB) passes an allow-list of at-rules and functions; `url()`, `@import`, `expression`,
@@ -985,6 +1153,10 @@ stops (`shutdown_drain`), `503 unavailable` when the storage check fails. `/metr
 | Client ID Metadata Documents (0.4) | Policy and host allow-list checked before any fetch; fetched only through `OutboundClient` (https only, 5 KiB, status 200, no redirects), per-host budget across the installation, 16 concurrent fetches per node; `client_id` must equal the document URL exactly; secrets, shared-secret auth methods and `jwks_uri` refused; failures never cached; consent names the client by its host and labels the self-asserted name unverified. Negative tests: `security_cimd.rs` |
 | Webhooks (0.4) | Endpoint URLs pass the outbound policy at creation and at every send; Standard Webhooks v1 HMAC signatures, secrets sealed with the KEK and shown once; ids-only payloads (no email, name, IP); redirects never followed. Negative tests: `security_webhooks.rs` |
 | RBAC and attributes (0.4) | Cross-tenant role assignment impossible (composite keys and service checks), admin scopes bounded by roles, last-administrator guard, escalation guard (§10.3). Mapped claims never override protocol or standard claims. Attribute schemas: offline only (remote `$ref` refused), 16 KiB and depth 32 caps, linear-time regex. Negative tests: `security_rbac.rs`, `security_attributes.rs` |
+| Organizations and org admins (1.0) | Org-admin tokens accepted only on their own org's sub-routes, re-checked per request (audience, `org:admin`, `org_id`, live org-bound family, membership, permission); opaque tokens refused; `org:admin` bounded per active org and never registrable; no `admin:*` permission inside an org; last-org-admin guard; membership loss revokes org-bound families and refreshes answer `invalid_grant`; mapped claims never produce `org_*`. Negative tests: `security_admin_v10.rs`, `org_claims.rs`, `org_switch.rs`, `security_org_scopes.rs` |
+| Invitations (1.0) | Token 256-bit, SHA-256 at rest, 7 days, single use by one conditional update; GET consumes nothing; same-browser POST (nonce cookie + HMAC); accepted only for a verified matching email or a new account for the invited address; identical answers for every invalid token and for known/unknown addresses at creation. Negative tests: `org_invitations.rs`, `security_admin_v10.rs` |
+| SAML SP (1.0, experimental) | Operator flag; DTDs forbidden; size, depth and markup caps; strict profile pre-check before the signature library; pinned signature locations and references; trusted keys only; claims from the verified node only; RelayState, `InResponseTo` and binding cookie; database replay guard; transient NameID, encryption and IdP-initiated responses refused. Negative tests: `security_saml.rs` (D4 corpus, 67 cases), `saml_login.rs`, `saml_xml_adapter.rs`; fuzz targets `saml_response_parse`, `saml_metadata_parse` |
+| Domains and home-realm discovery (1.0) | Domain normalisation refuses public suffixes, IPs, wildcards and reserved names; FQDN-only, uncached, time-bounded TXT lookup; one uniform failure answer; one verified owner per tenant (database index); routing by domain only (no account lookup, identical password step for every non-routed address); domain-bound enterprise email trust; lockout guards on routing and `allow_local_password`; local methods refused for SSO-only domains, passkeys kept. Negative tests: `security_domains.rs`, `hrd_login.rs`, `security_linking.rs`, `enterprise_oidc.rs`, `security_enumeration.rs`; fuzz target `org_domain_parse` |
 | Secret hygiene | Secrets wrapped in `secrecy` types (no `Debug`/log output); `zeroize` on drop for key material |
 | Test code | No test-only branches in production code; test fakes implement the traits inside `#[cfg(test)]` or test crates only |
 
@@ -1087,6 +1259,7 @@ its schedule with a small random delay.
 | Back-channel logout delivery | 0.3: woken by every path that revokes sessions (§8.3), otherwise polls every 10 s; runs on every node and claims rows with a 2-minute row lease instead of a `job_lease` (§8.3) |
 | Webhook delivery (0.4) | As built: runs on every node; polls every 2 s (a full batch is followed at once), claims up to 8 due rows with a 45 s row lease (`FOR UPDATE SKIP LOCKED` on Postgres) instead of a `job_lease`, sends them concurrently, retries on a fixed schedule over about 3 days (docs/WEBHOOKS.md) |
 | Audit log retention | daily (0.2; not scheduled when `audit_retention_days = 0`) |
+| Domain re-check (1.0) | daily (`domain_recheck` lease): verified domains not checked for 23 h, in batches across tenants; a failure starts a streak, 7 days of failures unverify the domain (audited, webhook `organization.domain_unverified`) |
 
 ## 15. Observability
 
@@ -1128,7 +1301,7 @@ its schedule with a small random delay.
 | Conformance | OpenID conformance suite (Docker) against a freshly started binary; target profiles from OIDC-23 | `tests/conformance`, CI |
 | End-to-end | Playwright: login, registration, recovery, passkeys (virtual authenticator), MFA, consent, admin console | `tests/e2e`, CI |
 | Upgrade | Migrate N-1 → N with fixtures, then run the contract suite | CI |
-| Fuzzing | JWT/JWS parsing, authorization request parsing; later SAML and SCIM | `fuzz/`, nightly CI |
+| Fuzzing | JWT/JWS parsing, authorization request parsing; since 1.0 SAML responses, SAML metadata and domain normalisation; later SCIM | `fuzz/`, nightly CI |
 | Performance | Token endpoint and login benchmarks against the targets in PRD §6.3 | nightly CI |
 
 **Backend matrix.** The storage contract suite always runs on SQLite (memory and file) and Postgres
@@ -1232,6 +1405,19 @@ Exit criteria: OpenID certification submitted for all target profiles; external 
 completed and findings fixed; upgrade path from 0.4 tested; documentation site complete (install,
 integrations, migration guides).
 
+Status (1.0 in progress, Phase 6): built are organizations with members, invitations, org roles
+(hybrid model on one assignment table), org claims and the switcher (ORG-2); org OIDC connections
+and the SAML 2.0 SP with just-in-time membership (ORG-3, SAML experimental behind
+`saml_experimental`); DNS TXT domain verification with the daily re-check and identifier-first
+home-realm discovery (ORG-4); organization admins on the management API; the signing-keys API;
+and console pages for organizations, org SSO and keys (ADM-2). The 0.4 → 1.0 upgrade is tested on
+both backends (`tests/upgrade.rs`). User docs: `docs/ORGANIZATIONS.md`, `docs/SAML.md`,
+`docs/UPGRADING.md`. Open items: **tenant-restricted system admins deferred to Phase 7**; **SAML
+experimental until the Phase 7 external review and interop checklist** (D4); org JIT under closed
+tenant registration (follows `upstream_registration` for now); invitation return-to after
+sign-in; the remaining M5 scope (certification, external review, PAR, headless flow API, user
+import/export) belongs to Phase 7.
+
 ### Beyond 1.0
 
 Release 2.0 (directory, SAML IdP, forward-auth, extension hooks, token exchange, DPoP, API keys,
@@ -1244,10 +1430,14 @@ These are designed in from the start so later modules don't require rewrites:
 
 - **Principal types:** `sub` resolution and audit actors use an enum (`User`, `Client`, later `Agent`).
 - **Connections:** upstream IdP configuration is a tagged enum stored in one table. 0.3 has
-  `Social` (Google, Apple, Microsoft, GitHub presets), `Oidc` and `OAuth2`; `Saml` and later `Ldap`
-  join the same enum.
+  `Social` (Google, Apple, Microsoft, GitHub presets), `Oidc` and `OAuth2`; 1.0 adds `Saml`
+  (organization connections only) in the same enum and table; `Ldap` joins later.
 - **Token claims pipeline:** claims are assembled by an ordered list of claim providers (standard
-  claims, roles, organization, custom attributes); extension hooks (EXT-1) slot in later.
+  claims, roles, organization, custom attributes); extension hooks (EXT-1) slot in later. As built
+  in 1.0, organization claims are inserted by the token builders before mapped extras, and the
+  reserved names keep any mapping from producing or overriding them.
+- **Principals:** the management API's `Principal` enum (1.0: `SystemAdmin`, `OrgAdmin`) is where
+  a tenant-restricted administrator variant would go (deferred to Phase 7).
 - **Events:** core services emit typed domain events; audit and webhooks are subscribers.
   Back-channel logout is not an event subscriber: since 0.3 its deliveries are enqueued by the
   revoking storage intents in the same transaction (§7.1), so a revocation cannot commit without
@@ -1260,7 +1450,7 @@ These are designed in from the start so later modules don't require rewrites:
 | D1 | Path-based vs host-based tenants by default (PRD Q1) | **Decided 2026-11-25:** path-based default, host mapping optional (§12) | ✓ |
 | D2 | Opaque vs JWT access tokens by default | **Decided 2026-11-25:** JWT (RFC 9068) by default; opaque per client | ✓ |
 | D3 | Admin console stack | **Decided 2026-11-25:** React + Vite static SPA embedded in the binary (best component ecosystem and contributor pool; dogfoods the API). Login pages remain server-rendered. Rust/WebAssembly frameworks (Leptos, Dioxus) were considered and rejected for now: young component ecosystems and a small contributor pool | ✓ |
-| D4 | SAML stack: pure-Rust XML-DSig (saml-rs/bergshamra) vs alternatives | **Spike verdict 2026-11-26 (06-01):** `bergshamra-dsig` 0.12.0 on the aws-lc provider only + `uppsala` 0.12.1 as the single XML parser + our own narrow SAML SP layer. The spike (`crates/anvil-web/tests/saml_dsig_spike.rs`) signs a minimal SAML assertion (enveloped exc-c14n, RSA-SHA256 and ECDSA-P256-SHA256, `Reference URI="#_a1"`) under keys generated at test time and verifies it with `DsigContext::new(keys).with_trusted_keys_only(true).with_strict_verification(true).with_require_reference_digests(true).with_skip_time_checks(true)` and `verify::verify_all_document_with_source` on one `uppsala::Parser::new().with_forbid_dtd(true)` document; the reference resolves to the Assertion node, a one-character change fails, and a key embedded in `KeyInfo` is never trusted. Costs: the scoped `chrono` exception (§2, wrapper `tsp-ltv`). SAML stays behind a runtime experimental flag through 1.0 (Q3) until the Phase 7 external review and a real-IdP interop checklist; the attack-corpus gate is 06-09. Verified locally on Linux; macOS targets are verified by the release-build workflow at the 1.0 gate (06-26) | spike ✓; corpus 06-09 |
+| D4 | SAML stack: pure-Rust XML-DSig (saml-rs/bergshamra) vs alternatives | **Spike verdict 2026-11-26 (06-01):** `bergshamra-dsig` 0.12.0 on the aws-lc provider only + `uppsala` 0.12.1 as the single XML parser + our own narrow SAML SP layer. The spike (`crates/anvil-web/tests/saml_dsig_spike.rs`) signs a minimal SAML assertion (enveloped exc-c14n, RSA-SHA256 and ECDSA-P256-SHA256, `Reference URI="#_a1"`) under keys generated at test time and verifies it with `DsigContext::new(keys).with_trusted_keys_only(true).with_strict_verification(true).with_require_reference_digests(true).with_skip_time_checks(true)` and `verify::verify_all_document_with_source` on one `uppsala::Parser::new().with_forbid_dtd(true)` document; the reference resolves to the Assertion node, a one-character change fails, and a key embedded in `KeyInfo` is never trusted. Costs: the scoped `chrono` exception (§2, wrapper `tsp-ltv`). SAML stays behind a runtime experimental flag through 1.0 (Q3) until the Phase 7 external review and a real-IdP interop checklist; the attack-corpus gate is 06-09. Verified locally on Linux; macOS targets are verified by the release-build workflow at the 1.0 gate (06-26). **Status after the corpus (06-09):** the adapter (`adapters/saml_xml.rs`) parses once with DTDs forbidden, runs a strict profile pre-check before any bergshamra call, verifies against pinned certificates only and reads claims only from the verified node; the 67-case attack corpus (`tests/security_saml.rs`: XSW1-8 and variants, exclusion, key injection, comment injection, parser differentials, void canonicalisation, algorithm downgrade, file references, XML bombs) is green in CI, and three fuzz targets run nightly. SAML is built (06-18) but stays **experimental** (operator flag `saml_experimental`, off by default; IdP-initiated SSO refused, decision Q4); the external review and the real-IdP interop checklist (`docs/SAML.md`) are Phase 7. The `chrono` exception (§2) awaits the owner's review | **open:** experimental; corpus green; external review and interop checklist in Phase 7 |
 | D5 | Permissions engine: embedded tuple store vs integrating OpenFGA/SpiceDB | Decide at the 3.0 addendum | 3.0 |
 | D6 | Embedded HA without Postgres (replicated SQLite) | Not planned; revisit on user demand | post-1.0 |
 | D7 | sqlx minimum supported Rust version vs our toolchain policy | **Resolved 2026-11-25:** sqlx 0.9.1 requires Rust ≥ 1.94; pin current stable (1.100.0) in `rust-toolchain.toml` | ✓ |

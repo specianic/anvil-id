@@ -223,6 +223,15 @@ keys. An **organization** is a group of users *inside* a tenant: a customer comp
 | ORG-5 | Roles and permissions (RBAC) at tenant and organization level, emitted as token claims | 0.4 | P0 |
 | ORG-6 | Self-service SSO/SCIM setup portal: a shareable link for the customer's IT admin | 2.0 | P1 |
 
+Status of ORG-2 to ORG-4 (1.0, built; the release gate confirms them): organizations with
+members, invitations, organization-scoped roles, the `org_id` / `org_slug` / `org_roles` /
+`org_permissions` claims and a switcher (ORG-2); per-organization OIDC and SAML 2.0 SP connections
+with just-in-time provisioning (ORG-3), where **SAML ships as experimental, off by default behind
+an operator flag**, until the external security review and a real-IdP interop run; home-realm
+discovery with DNS TXT domain verification and a daily re-check (ORG-4). Organization admins
+manage their organization through the management API with their own tenant's tokens. See
+[ORGANIZATIONS.md](ORGANIZATIONS.md) and [SAML.md](SAML.md).
+
 ### 8.5 Administration, API and operations (`ADM`)
 
 | ID | Requirement | Phase | Pri |
@@ -239,6 +248,10 @@ keys. An **organization** is a group of users *inside* a tenant: a customer comp
 | ADM-9 | User export (per user and bulk), including the GDPR data-subject export | 1.0 | P0 |
 | ADM-10 | Terraform provider | 2.0 | P1 |
 | ADM-11 | Admin impersonation, audited and visible to the user | 2.0 | P2 |
+
+Status of ADM-2 (1.0, built; the release gate confirms it): the console administers tenants,
+users, clients, organizations (members, invitations, organization roles, connections, domains and
+routing, branding), connections, branding, signing keys, sessions and the audit log.
 
 ### 8.6 Machine and agent identity (`AGT`)
 

@@ -51,13 +51,13 @@ Every page receives `page`:
 
 Form pages (`login.html`, `second_factor.html`, `registration.html`, `verification.html`,
 `recovery.html`, `recovery_reset.html`, `setup.html`; since 0.3 also `mfa_enroll.html`,
-`email_code.html` and `upstream_link.html`) also receive `form`, a serialised `FormDescription` from
+`email_code.html` and `upstream_link.html`; since 1.0 also `login_identify.html`) also receive `form`, a serialised `FormDescription` from
 `anvil-core` (`flow/form.rs`):
 
 ```
 form = {
   id:         "login" | "second-factor" | "registration" | "recovery" | "recovery-reset" | "verification" | "setup"
-              | "mfa-enroll" | "email-code" | "upstream-link",
+              | "mfa-enroll" | "email-code" | "upstream-link" | "login-identify" | "login-sso-choice",
   action:     "/t/acme/ui/login?flow=...",
   method:     "post",
   csrf_token: "...",
@@ -90,7 +90,7 @@ Other pages receive extra keys:
 | `message.html` | `heading`, `body_key`, `body` |
 | `error.html` | `status`, `error_key`, `heading`, `detail` (or null) |
 | `setup_done.html` | `admin_email`, `mgmt_client_id`, `mgmt_client_secret`, `token_endpoint`, `admin_api_base` |
-| `login.html` | `passkey` (or null): `{ action, options_url }` for the passkey form; `captcha` (or null): `{ provider: "turnstile" \| "hcaptcha", site_key }`, rendered through `captcha.html`; since 0.3 `upstream` (list of `{ slug, name, action }`, one sign-in button per enabled connection) and `email_code` (`{ action, value }` or null, the "Email me a sign-in code" form; `value` is the address prefilled from `login_hint`) |
+| `login.html` | `passkey` (or null): `{ action, options_url }` for the passkey form; `captcha` (or null): `{ provider: "turnstile" \| "hcaptcha", site_key }`, rendered through `captcha.html`; since 0.3 `upstream` (list of `{ slug, name, action }`, one sign-in button per enabled connection) and `email_code` (`{ action, value }` or null, the "Email me a sign-in code" form; `value` is the address prefilled from `login_hint`); since 1.0 `change_email` (`{ action, email }` or null): set on the password step that follows the email-first page of a tenant with a routed domain. The entered address then travels in a hidden `identifier` field (hidden fields render without a label, also in the CAPTCHA variant) and is shown read-only, with a form that posts `choice=change` back to the email page. Null on the combined form, which then renders exactly as before |
 | `second_factor.html` | `factor_token` (sealed value naming the user for throttling; posted back as a hidden field), `has_error`; since 0.4 `passkey_second_factor` (or null): `{ action, options_url }` for the passkey assertion form, set when the user has a passkey (the form then carries the hidden marker field `passkey`, never rendered; a passkey-only user's form has no `code`/`recovery_code` field and the authenticator-app form is not rendered) |
 | `captcha.html` (partial) | `captcha` as above |
 | `consent.html` | `action`, `csrf_token`, `client_name`, `client_id`, `scopes` (`[{ name, description (or null) }]`), `resources` (0.3: requested RFC 8707 resources, list of strings, may be empty), `messages` |
@@ -113,6 +113,9 @@ Other pages receive extra keys:
 | `logout_confirm.html` (0.3) | `client_name` (or null), `csrf_token`, `action`, `cancel_url` |
 | `logged_out.html` (0.3) | `heading_key`, `message_key`, `message`, `error` (bool); signed-out page and sign-out error page |
 | `preview.html` (0.3) | none besides `page` (whose `theme_css` is the draft stylesheet); static sample markup, nothing can be submitted |
+| `login_identify.html` (1.0) | Identifier-first sign-in (home-realm discovery), rendered only for tenants with a verified, routed domain. `form` with id `login-identify` (the email page: one `identifier` field of kind `email`, `autocomplete="username"`) or `login-sso-choice` (the address uses single sign-on and its organization still allows passwords: no fields, the template writes two buttons posting `choice=sso` and `choice=password` to `form.action`); `change_email` (`{ action, email }` or null, as on `login.html`); `upstream` and `passkey` as on `login.html` (email page only) |
+| `select_organization.html` (1.0) | Organization switcher for clients whose organization policy is `required`: `client_name`, `organizations` (`[{ id, slug, display_name }]`, the signed-in user's own memberships only, sorted by display name), `messages` (`[{ level, key, text }]`), `csrf_token`, `action`. The form posts `organization` = the chosen org id |
+| `invitation.html` (1.0) | Organization invitation page. `view`: `offer`, `invalid`, `signed_out`, `wrong_account`, `verify_email`, `already_member`, `accepted`, `registered` or `email_taken`; `message_key` (the `invitation.*` message of the view); `org` (organization display name); `email` (the invited address, signed-out view only; shown read-only, never a form field); `action` (accept POST), `register_action` (registration POST), `csrf_token`, `token` (posted back as a hidden field); `registration_allowed`, `password_error` (`{ key, text }` or null), `name` (echoed); `login_url`, `logout_url`. The GET only shows the offer; nothing is consumed before the button is pressed |
 
 Timestamps are rendered in UTC; the `*_iso` variants go into `<time datetime>`.
 
@@ -137,7 +140,8 @@ template function `t()`:
   too the dotted key itself is shown (and logged at debug level).
 
 Catalog layout: `locales/{lang}/{feature}.ftl` (Fluent syntax), for example `locales/en/main.ftl`,
-`locales/en/logout.ftl`, `locales/en/upstream.ftl`.
+`locales/en/logout.ftl`, `locales/en/upstream.ftl`. 1.0 adds `hrd.ftl` (identifier-first sign-in),
+`select_organization.ftl`, `invitation.ftl` and `saml.ftl`, each in English and German.
 
 - **One file per feature.** Every `.ftl` file of a language directory is loaded, in file-name
   order. A new page or feature ships its own file instead of editing `main.ftl`.
@@ -287,6 +291,43 @@ Release 0.3 pages:
   before the tenant name on tenant pages (when `page.theme_css` is set). The generated theme
   stylesheet shows the logo as its background, or hides the element when there is none.
 
+Release 1.0 pages:
+
+- Identifier-first sign-in, email page (`login_identify.html`, form `login-identify`): form
+  `login-identify-form` with input `identifier` (type `email`) and button `login-identify-submit`
+  (text from `form.continue`); field errors use `email.invalid`. The upstream buttons
+  (`upstream-{slug}-form` / `upstream-{slug}`) and the passkey form (`login-passkey`, …) follow,
+  exactly as on `login.html`. Organization connections never get a button.
+- Identifier-first sign-in, single-sign-on choice (form `login-sso-choice`): `login-email-locked`
+  (message `hrd.signing_in_as` with `$email`), form `login-sso-form` with button
+  `login-sso-continue` (`choice=sso`), form `login-use-password-form` with button
+  `login-use-password` (`choice=password`), form `login-change-email-form` with button
+  `login-change-email` (`choice=change`). The explanation is the info message `hrd.sso_explain`.
+- Password step after the email page (`login.html` with `change_email`): form `login` as before,
+  with a hidden `identifier`; `login-email-locked` above it; `login-change-email-form` /
+  `login-change-email` after it. The email-code request form is prefilled with the locked address.
+- Refusal of password, email-code and magic-link sign-in for an address whose organization forces
+  single sign-on: message key `hrd.use_sso` (status 400, on the form or on the message page).
+- Organization switcher (`select_organization.html`): form `select-organization-form` (POST, no
+  JavaScript), messages `select-organization-messages` / `select-organization-msg-{n}` (with
+  `data-message-key`: `select_organization.expired`, `select_organization.not_member`), fieldset
+  `select-organization-list` with a legend holding the client name
+  `select-organization-client`, one radio per membership `organization-{slug}`
+  (`name="organization"`, `value` = org id, the first one checked) with its label
+  `organization-{slug}-label` (display name and slug), submit `select-organization-form-submit`.
+  Title key `title.select_organization`.
+- Organization invitation (`invitation.html`): the message in `invitation-message` with
+  `data-message-key="invitation.{offer|invalid|signed_out|wrong_account|verify_email|already_member|accepted|registered|email_taken}"`;
+  accept form `invitation-accept` with button `invitation-accept-submit`; registration form
+  `invitation-register-form` with inputs `invitation-email` (read-only, not submitted),
+  `password` and `name`, button `invitation-register-submit`, and the error
+  `invitation-password-error` (`data-message-key` `password.too_short`, `password.too_long`,
+  `password.breached` or `service.overloaded`); links `invitation-sign-in`, `invitation-sign-out`,
+  hint `invitation-sign-in-hint`, notice `invitation-registration-disabled`. Every invalid token
+  renders the same `invitation.invalid` view (status 400).
+- SAML sign-in failure (experimental): `error.html` with `error_key` `saml_login_failed`; the
+  sentence is `saml.login_failed`. It never shows the NameID, attributes or XML.
+
 Contract sentences of the logout pages (`locales/en/logout.ftl`). The conformance browser
 configuration (`tests/conformance/config.template.json`) waits for these exact English texts:
 
@@ -320,6 +361,7 @@ Error sentences in `error.html`, keyed by `error_key`:
 | `csrf` | This form submission could not be verified. Please try again. |
 | `not_found` | Page not found. |
 | `too_many_requests` | Too many attempts. Please wait a moment and try again. |
+| `saml_login_failed` (1.0) | Signing in with your organization's identity provider did not work. Go back to the application and start the sign-in again. |
 | `server_error` (and any unknown key) | Something went wrong. |
 
 In-page sentence on the login and second-factor forms when an attempt is locked (429 with
@@ -373,6 +415,7 @@ tables, no images, no external resources). The mail worker renders both from a p
 | `login_code` (0.3) | `tenant_name`, `code`?, `link`?, `expires_minutes` |
 | `email_change` (0.3, sent to the new address) | `tenant_name`, `link`, `new_email`, `expires_minutes` |
 | `email_changed` (0.3, sent to the old address) | `tenant_name`, `new_email` |
+| `org_invitation` (1.0) | `tenant_name`, `org_name`, `inviter`, `email`, `link`, `expires_in` |
 
 Tenants can override these per kind through the management API (`email-templates/{kind}`). An
 override is checked when it is saved: valid syntax, only the payload keys above, no `include` /
@@ -391,6 +434,11 @@ key is absent):
 The check on save renders an override with code only, link only and both, and refuses one that
 uses `code` or `link` unguarded (the error names the key and the line).
 
+In `org_invitation`, `inviter` is a display string (the inviting organization admin's address,
+or the tenant's name when a tenant administrator sent it), `email` is the invited address and
+`link` is the invitation page (`{issuer}/ui/invitation?token=…`, valid 7 days, single use). The
+default templates use every key, and overrides are checked like the other kinds.
+
 `expires_in` is human-readable text such as `1 hour`; `expires_minutes` is a number. No email
 reveals whether any other account exists. Emails are not translated in 0.3.
 
@@ -398,7 +446,9 @@ reveals whether any other account exists. Emails are not translated in 0.3.
 
 Most branding needs no theme directory: since 0.3 the console (**Branding**) and the management API
 set colours (with an optional dark set), font family, corner radius, a logo and custom CSS per tenant
-or per client, with a live preview. These are served as the generated stylesheet in
+or per client, and since 1.0 per organization, with a live preview. Precedence per field is client >
+organization > tenant; the organization layer applies to sign-in pages whose authorization request
+names the organization (`organization=`). These are served as the generated stylesheet in
 `page.theme_css` (same origin, under the same CSP), and custom CSS is checked by an allow-list
 validator (no `url()`, `@import` or external resources).
 

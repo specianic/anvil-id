@@ -14,9 +14,9 @@ already in force changes nothing.
 
 | Section | Key | Notes |
 |---|---|---|
-| `tenant` | `slug` | Display name, custom host and settings (registration, MFA, signing algorithms, sign-in by email, upstream linking, default language, DCR and CIMD policy, role and permission claim mapping). |
-| `clients` | `client_id` | Static clients only. |
-| `connections` | `slug` | Upstream identity providers (social presets, OIDC, OAuth 2.0). |
+| `tenant` | `slug` | Display name, custom host and settings (registration, MFA, signing algorithms, sign-in by email, upstream linking, default language, DCR and CIMD policy, role and permission claim mapping; since 1.0 also the organization claim mapping `claims.org_roles` / `claims.org_permissions`). |
+| `clients` | `client_id` | Static clients only. Since 1.0 with the `organization` policy (`off`, `optional`, `required`). |
+| `connections` | `slug` | Tenant-level upstream identity providers (social presets, OIDC, OAuth 2.0). Organization connections are not included (below). |
 | `branding` | `client_id` (absent = tenant-wide) | Theme tokens and custom CSS. |
 | `roles` | `name` | Name, description, permissions. |
 | `attributes` | `name` | Custom user attribute definitions (JSON Schema, claim rule). |
@@ -35,7 +35,38 @@ The document does **not** contain:
   with `public_url` at every start);
 - CAPTCHA settings (their secret cannot be exported; configure CAPTCHA through the admin API or
   the console, and leave `captcha` out of the document);
-- logos (version 1 carries theme tokens and custom CSS; upload logos through the admin API).
+- logos (version 1 carries theme tokens and custom CSS; upload logos through the admin API);
+- organizations and everything they own (1.0, see below).
+
+### Organizations are not part of the document
+
+Added in 1.0. Organizations are customer data that organization admins change at runtime, so the
+tenant document neither contains nor manages them. Export, plan, apply and `--prune` never see
+or touch:
+
+- organizations, their memberships, invitations, verified domains and routing settings;
+- organization connections (OIDC and SAML) and their identity links;
+- organization roles and the role assignments made within an organization;
+- organization branding.
+
+In particular, `--prune` never deletes an organization connection or an organization role, even
+one whose name equals a tenant role being pruned (roles are matched by name among tenant roles
+only). A document connection whose `slug` is already used by an organization connection is
+refused before anything is written (`connections[i].slug`: the slug is used by an organization
+connection), because organization and tenant connections share one slug namespace.
+
+The client `organization` field is part of the document and round-trips like every other client
+option:
+
+```yaml
+clients:
+  - client_id: billing-web
+    # ...
+    organization: optional   # off (default) | optional | required
+```
+
+In the system tenant `organization` must be `off`, and no client may list the `org:admin` scope;
+`dcr.allowed_scopes` can never contain `org:admin` in any tenant.
 
 ## Example
 
@@ -232,4 +263,5 @@ plans against the new state and completes the remaining changes.
   scopes and resources; no `admin` / `admin:*` scope; `dcr.max_clients` at most 1000000; CIMD
   cache bounds between 60 and 604800 seconds with `min_cache_secs <= max_cache_secs`; CIMD
   `allow_listed` needs a host. The published schema encodes the per-field bounds.
-- Clients outside the `system` tenant cannot list `admin` or `admin:*` scopes.
+- Clients outside the `system` tenant cannot list `admin` or `admin:*` scopes; `system` tenant
+  clients cannot list `org:admin` and must keep `organization: off` (1.0).
