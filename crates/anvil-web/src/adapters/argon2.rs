@@ -6,6 +6,13 @@
 //!   acquire timeout the call fails with [`CoreError::Overloaded`]; there is never a bypass.
 //! - `verify(None, _)` (unknown user, no password) verifies against a dummy hash generated at
 //!   startup with the same parameters, so response time does not reveal whether an account exists.
+//! - The Argon2 parameters of a stored PHC string are checked against the import caps
+//!   (`anvil_core::policy::password_import::check_stored_caps`) before any hashing; an over-cap
+//!   hash fails closed without allocating its memory.
+//!
+//! Production wires [`crate::adapters::password::PasswordDispatcher`], which wraps this pool and runs
+//! every scheme (Argon2 and the imported legacy schemes) through [`Argon2Pool::run_verification`].
+//! The pool's own `PasswordHasher` impl verifies Argon2 only (anything else takes the dummy path).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -15,6 +22,7 @@ use ::argon2::password_hash::phc::PasswordHash;
 use ::argon2::{Algorithm, Argon2, Params, PasswordHasher as _, PasswordVerifier as _, Version};
 use anvil_core::error::CoreError;
 use anvil_core::model::HashProfileMaterial;
+use anvil_core::policy::password_import::{StoredHash, check_stored_caps, parse_stored};
 use anvil_core::ports::{PasswordCheck, PasswordHasher};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use zeroize::Zeroizing;
@@ -27,6 +35,7 @@ pub const DEFAULT_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Bounded Argon2id hasher implementing [`PasswordHasher`].
 pub struct Argon2Pool {
     sem: Arc<Semaphore>,
+    permits: usize,
     params: Params,
     dummy_phc: String,
     acquire_timeout: Duration,
@@ -84,6 +93,7 @@ impl Argon2Pool {
             .map_err(|e| WebError::Config(format!("argon2 parameters rejected: {e}")))?;
         Ok(Self {
             sem: Arc::new(Semaphore::new(permits)),
+            permits,
             params,
             dummy_phc,
             acquire_timeout,
@@ -91,10 +101,21 @@ impl Argon2Pool {
         })
     }
 
-    /// Number of Argon2 verifications computed so far (including dummy verifications). Exposed
-    /// as an operational metric.
+    /// Number of password verifications computed so far through this pool: Argon2, dummy and
+    /// (behind the dispatcher) legacy-scheme verifications. Exposed as an operational metric.
     pub fn verifications(&self) -> u64 {
         self.verifications.load(Ordering::Relaxed)
+    }
+
+    /// Total number of concurrent hashing slots.
+    pub fn permits(&self) -> usize {
+        self.permits
+    }
+
+    /// Slots free right now (tests observe the shared pool through it).
+    #[cfg(test)]
+    pub(crate) fn available_permits(&self) -> usize {
+        self.sem.available_permits()
     }
 
     async fn permit(&self) -> Result<OwnedSemaphorePermit, CoreError> {
@@ -104,84 +125,164 @@ impl Argon2Pool {
             .map_err(|_| CoreError::Overloaded)
     }
 
-    /// `true` if `phc` was produced with other parameters than the current ones (or is not an
-    /// Argon2id v1.3 hash at all).
-    fn needs_rehash(&self, phc: &PasswordHash) -> bool {
-        if phc.algorithm.as_str() != "argon2id" || phc.version != Some(Version::V0x13.into()) {
-            return true;
-        }
-        match Params::try_from(phc) {
-            Ok(p) => {
-                p.m_cost() != self.params.m_cost()
-                    || p.t_cost() != self.params.t_cost()
-                    || p.p_cost() != self.params.p_cost()
-                    || phc.hash.as_ref().map(|h| h.len())
-                        != Some(
-                            self.params
-                                .output_len()
-                                .unwrap_or(Params::DEFAULT_OUTPUT_LEN),
-                        )
-            }
-            Err(_) => true,
-        }
+    /// Runs `f` on the blocking pool while holding the permit.
+    async fn spawn_with<F, R>(permit: OwnedSemaphorePermit, f: F) -> Result<R, CoreError>
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            f()
+        })
+        .await
+        .map_err(|e| CoreError::Internal(format!("password hashing task failed: {e}")))
+    }
+
+    /// Runs `f` in `spawn_blocking` while holding one of the pool's permits. `Overloaded` if no
+    /// permit frees up within the acquire timeout; there is no bypass.
+    pub(crate) async fn run_bounded<F, R>(&self, f: F) -> Result<R, CoreError>
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        let permit = self.permit().await?;
+        Self::spawn_with(permit, f).await
+    }
+
+    /// [`Self::run_bounded`] for a password verification: counted in [`Self::verifications`] once
+    /// the permit is held.
+    pub(crate) async fn run_verification<F, R>(&self, f: F) -> Result<R, CoreError>
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        let permit = self.permit().await?;
+        self.verifications.fetch_add(1, Ordering::Relaxed);
+        Self::spawn_with(permit, f).await
+    }
+
+    /// Verifies `password` against the startup dummy hash (same parameters as real hashes) and
+    /// returns "invalid". Used for unknown users and unrecognised stored values so their timing
+    /// matches a real verification.
+    pub(crate) async fn verify_dummy(&self, password: &str) -> Result<PasswordCheck, CoreError> {
+        let target = self.dummy_phc.clone();
+        let password = Zeroizing::new(password.to_owned());
+        // The result is discarded: the dummy's own password is random and never valid.
+        let _ = self
+            .run_verification(move || {
+                PasswordHash::new(&target).is_ok_and(|hash| {
+                    argon2(Params::default())
+                        .verify_password(password.as_bytes(), &hash)
+                        .is_ok()
+                })
+            })
+            .await?;
+        Ok(PasswordCheck {
+            valid: false,
+            needs_rehash: false,
+        })
+    }
+
+    /// Verifies `password` against an Argon2 PHC string whose parameters already passed
+    /// `check_stored_caps`. `needs_rehash` follows the current parameters.
+    pub(crate) async fn verify_argon2(
+        &self,
+        phc: &str,
+        password: &str,
+    ) -> Result<PasswordCheck, CoreError> {
+        let target = phc.to_owned();
+        let password = Zeroizing::new(password.to_owned());
+        let (ok, rehash) = self
+            .run_verification({
+                let params = self.params.clone();
+                move || match PasswordHash::new(&target) {
+                    Ok(hash) => {
+                        let ok = argon2(Params::default())
+                            .verify_password(password.as_bytes(), &hash)
+                            .is_ok();
+                        (Some(ok), ok && needs_rehash(&params, &hash))
+                    }
+                    Err(_) => (None, false),
+                }
+            })
+            .await?;
+        let Some(valid) = ok else {
+            tracing::error!(
+                scheme = "argon2",
+                "stored password hash is not a valid PHC string"
+            );
+            return Ok(PasswordCheck {
+                valid: false,
+                needs_rehash: false,
+            });
+        };
+        Ok(PasswordCheck {
+            valid,
+            needs_rehash: valid && rehash,
+        })
     }
 }
 
+/// `true` if `phc` was produced with other parameters than `current` (or is not an Argon2id v1.3
+/// hash at all).
+fn needs_rehash(current: &Params, phc: &PasswordHash) -> bool {
+    if phc.algorithm.as_str() != "argon2id" || phc.version != Some(Version::V0x13.into()) {
+        return true;
+    }
+    match Params::try_from(phc) {
+        Ok(p) => {
+            p.m_cost() != current.m_cost()
+                || p.t_cost() != current.t_cost()
+                || p.p_cost() != current.p_cost()
+                || phc.hash.as_ref().map(|h| h.len())
+                    != Some(current.output_len().unwrap_or(Params::DEFAULT_OUTPUT_LEN))
+        }
+        Err(_) => true,
+    }
+}
+
+/// Argon2-only verification (tests and tools that use the pool directly). Production goes through
+/// [`crate::adapters::password::PasswordDispatcher`]. A hash profile is meaningless for Argon2 and
+/// is ignored; any non-Argon2 or unparseable stored value takes the dummy path.
 #[async_trait::async_trait]
 impl PasswordHasher for Argon2Pool {
     async fn hash(&self, password: &str) -> Result<String, CoreError> {
-        let permit = self.permit().await?;
         let params = self.params.clone();
         let password = Zeroizing::new(password.to_owned());
-        tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            hash_with(&params, password.as_bytes())
-        })
-        .await
-        .map_err(|e| CoreError::Internal(format!("argon2 task failed: {e}")))?
+        self.run_bounded(move || hash_with(&params, password.as_bytes()))
+            .await?
     }
 
     async fn verify(
         &self,
         phc: Option<&str>,
         password: &str,
-        profile: Option<&HashProfileMaterial>,
+        _profile: Option<&HashProfileMaterial>,
     ) -> Result<PasswordCheck, CoreError> {
-        if profile.is_some() {
-            // Argon2 PHC strings carry their own parameters; a legacy hash profile is never
-            // valid here. 07-09 puts a dispatcher in front of this pool.
-            return Err(CoreError::Internal(
-                "password hash profile not supported by Argon2Pool (TRANSITIONAL(07-09))".into(),
-            ));
-        }
-        let permit = self.permit().await?;
-        let known = phc.is_some();
-        let target = phc.unwrap_or(&self.dummy_phc).to_owned();
-        let password = Zeroizing::new(password.to_owned());
-        self.verifications.fetch_add(1, Ordering::Relaxed);
-        let (ok, parsed) = tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            match PasswordHash::new(&target) {
-                Ok(hash) => {
-                    let ok = argon2(Params::default())
-                        .verify_password(password.as_bytes(), &hash)
-                        .is_ok();
-                    (ok, Some(hash))
+        let Some(stored) = phc else {
+            return self.verify_dummy(password).await;
+        };
+        match parse_stored(stored) {
+            Ok(h @ StoredHash::Argon2 { phc, .. }) => {
+                if let Err(e) = check_stored_caps(&h) {
+                    tracing::warn!(
+                        scheme = "argon2",
+                        reason = e.reason(),
+                        "stored password hash refused; verification failed closed"
+                    );
+                    return Ok(PasswordCheck {
+                        valid: false,
+                        needs_rehash: false,
+                    });
                 }
-                Err(_) => (false, None),
+                self.verify_argon2(phc, password).await
             }
-        })
-        .await
-        .map_err(|e| CoreError::Internal(format!("argon2 task failed: {e}")))?;
-        if known && parsed.is_none() {
-            tracing::error!("stored password hash is not a valid PHC string");
+            _ => {
+                tracing::error!("stored password hash is not an Argon2 PHC string");
+                self.verify_dummy(password).await
+            }
         }
-        let valid = known && ok;
-        let needs_rehash = valid && parsed.as_ref().is_some_and(|h| self.needs_rehash(h));
-        Ok(PasswordCheck {
-            valid,
-            needs_rehash,
-        })
     }
 }
 
@@ -210,7 +311,10 @@ mod tests {
             .expect("verify");
         assert!(ok.valid);
         assert!(!ok.needs_rehash);
-        let bad = pool.verify(Some(&phc), "wrong", None).await.expect("verify");
+        let bad = pool
+            .verify(Some(&phc), "wrong", None)
+            .await
+            .expect("verify");
         assert!(!bad.valid);
         assert!(!bad.needs_rehash);
     }
@@ -263,7 +367,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn argon2_pool_refuses_profile_material() {
+    async fn argon2_pool_ignores_profile_material() {
+        // A hash profile only means something for Firebase scrypt (the dispatcher's job); the
+        // Argon2 path neither uses it nor lets it change the outcome.
         let pool = Argon2Pool::new(low(), 1).expect("pool");
         let phc = pool.hash("pw").await.expect("hash");
         let material = HashProfileMaterial {
@@ -272,21 +378,73 @@ mod tests {
             rounds: 8,
             mem_cost: 14,
         };
-        // Even the right password against a real hash: never valid with a profile.
-        for phc in [Some(phc.as_str()), None] {
-            match pool.verify(phc, "pw", Some(&material)).await {
-                Err(CoreError::Internal(msg)) => {
-                    assert!(msg.contains("TRANSITIONAL(07-09)"), "{msg}")
-                }
-                other => panic!("a profile must be refused, got {other:?}"),
-            }
+        let ok = pool
+            .verify(Some(&phc), "pw", Some(&material))
+            .await
+            .expect("verify");
+        assert!(ok.valid);
+        let bad = pool
+            .verify(Some(&phc), "x", Some(&material))
+            .await
+            .expect("verify");
+        assert!(!bad.valid);
+        assert!(
+            !pool
+                .verify(None, "pw", Some(&material))
+                .await
+                .expect("verify")
+                .valid
+        );
+    }
+
+    #[tokio::test]
+    async fn argon2_pool_over_cap_phc_fails_closed_without_hashing() {
+        let pool = Argon2Pool::new(low(), 1).expect("pool");
+        let before = pool.verifications();
+        let t = std::time::Instant::now();
+        for phc in [
+            "$argon2id$v=19$m=4194304,t=1,p=1$c29tZXNhbHQ$RdescudvJCsgt3ub+b+dWRWJTmaaJObG",
+            "$argon2id$v=19$m=256,t=11,p=1$c29tZXNhbHQ$RdescudvJCsgt3ub+b+dWRWJTmaaJObG",
+            "$argon2id$v=19$m=256,t=1,p=9$c29tZXNhbHQ$RdescudvJCsgt3ub+b+dWRWJTmaaJObG",
+        ] {
+            let check = pool.verify(Some(phc), "pw", None).await.expect("verify");
+            assert!(!check.valid && !check.needs_rehash, "{phc}");
         }
+        assert_eq!(
+            pool.verifications(),
+            before,
+            "no hashing ran for over-cap hashes"
+        );
+        assert!(t.elapsed() < Duration::from_millis(200));
+    }
+
+    #[tokio::test]
+    async fn non_argon2_stored_value_takes_the_dummy_path() {
+        let pool = Argon2Pool::new(low(), 1).expect("pool");
+        let before = pool.verifications();
+        let check = pool
+            .verify(
+                Some("$2a$05$CCCCCCCCCCCCCCCCCCCCC.E5YPO9kmyuRGyh0XouQYb4YMJKvyOeW"),
+                "U*U",
+                None,
+            )
+            .await
+            .expect("verify");
+        assert!(!check.valid);
+        assert_eq!(
+            pool.verifications(),
+            before + 1,
+            "the dummy verification ran"
+        );
     }
 
     #[tokio::test]
     async fn garbage_phc_is_invalid() {
         let pool = Argon2Pool::new(low(), 1).expect("pool");
-        let check = pool.verify(Some("not-a-phc"), "pw", None).await.expect("verify");
+        let check = pool
+            .verify(Some("not-a-phc"), "pw", None)
+            .await
+            .expect("verify");
         assert!(!check.valid);
     }
 
@@ -296,12 +454,20 @@ mod tests {
             Argon2Pool::with_acquire_timeout(low(), 1, Duration::from_millis(50)).expect("pool");
         let phc = pool.hash("pw").await.expect("hash");
         let held = Arc::clone(&pool.sem).acquire_owned().await.expect("permit");
-        let err = pool.verify(Some(&phc), "pw", None).await.expect_err("saturated");
+        let err = pool
+            .verify(Some(&phc), "pw", None)
+            .await
+            .expect_err("saturated");
         assert!(matches!(err, CoreError::Overloaded));
         let err = pool.hash("pw").await.expect_err("saturated");
         assert!(matches!(err, CoreError::Overloaded));
         drop(held);
-        assert!(pool.verify(Some(&phc), "pw", None).await.expect("verify").valid);
+        assert!(
+            pool.verify(Some(&phc), "pw", None)
+                .await
+                .expect("verify")
+                .valid
+        );
     }
 
     #[test]
