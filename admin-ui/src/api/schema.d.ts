@@ -366,6 +366,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/tenants/{slug}/roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the roles of a tenant. */
+        get: operations["listRoles"];
+        put?: never;
+        /** Create a role. In the system tenant this needs `admin:write`. */
+        post: operations["createRole"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/roles/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a role. */
+        get: operations["getRole"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a role and its assignments. In the system tenant this needs `admin:write`, and
+         *     deleting an `admin:write` role must leave another active administrator (409 otherwise).
+         */
+        delete: operations["deleteRole"];
+        options?: never;
+        head?: never;
+        /**
+         * Update a role. In the system tenant this needs `admin:write`, and removing `admin:write` from
+         *     the role must leave another active administrator (409 otherwise).
+         */
+        patch: operations["updateRole"];
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/roles/{name}/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the users holding a role. */
+        get: operations["listRoleUsers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/tenants/{slug}/sessions": {
         parameters: {
             query?: never;
@@ -516,6 +576,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/tenants/{slug}/users/{user_id}/roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the roles of a user. */
+        get: operations["listUserRoles"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/users/{user_id}/roles/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Assign a role to a user (idempotent). In the system tenant the caller's token must hold
+         *     every admin scope the role carries.
+         */
+        put: operations["assignRole"];
+        post?: never;
+        /**
+         * Remove a role from a user. In the system tenant the caller's token must hold every admin
+         *     scope the role carries, and removing the last active administrator is refused (409).
+         */
+        delete: operations["unassignRole"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/tenants/{slug}/users/{user_id}/sessions": {
         parameters: {
             query?: never;
@@ -571,6 +672,12 @@ export interface components {
          * @enum {string}
          */
         ApplicationType: "web" | "native";
+        /** @description A role assignment. */
+        AssignmentDto: {
+            role: components["schemas"]["RoleDto"];
+            /** Format: uuid */
+            user_id: string;
+        };
         /**
          * @description An audited action.
          * @enum {string}
@@ -951,6 +1058,15 @@ export interface components {
          * @enum {string}
          */
         MfaPolicy: "off" | "optional" | "required";
+        /** @description Body of `POST /tenants/{slug}/roles`. */
+        NewRoleDto: {
+            /** @description At most 500 characters. */
+            description?: string;
+            /** @description 1-64 characters of a-z, 0-9, '_', '.' or '-', starting with a letter or digit. */
+            name: string;
+            /** @description At most 100 permissions of 1-128 characters (A-Z, a-z, 0-9, ':', '.', '_', '/', '-'). */
+            permissions?: string[];
+        };
         /**
          * @description Settings of a new tenant. Absent fields take their defaults; CAPTCHA is configured with
          *     `PATCH` once the tenant exists.
@@ -961,6 +1077,28 @@ export interface components {
              * @default true
              */
             auto_link: boolean;
+            /**
+             * @description Default: `roles` gated by scope `roles`, `permissions` in the access token.
+             * @default {
+             *       "permissions": {
+             *         "claim": "permissions",
+             *         "scope": null,
+             *         "tokens": [
+             *           "access_token"
+             *         ]
+             *       },
+             *       "roles": {
+             *         "claim": "roles",
+             *         "scope": "roles",
+             *         "tokens": [
+             *           "access_token",
+             *           "id_token",
+             *           "userinfo"
+             *         ]
+             *       }
+             *     }
+             */
+            claims: components["schemas"]["TokenClaimMapping"];
             /**
              * @description Default `en`; a language tag such as `de` or `pt-BR`.
              * @default en
@@ -1097,6 +1235,36 @@ export interface components {
              * @description Number of sessions revoked.
              */
             revoked: number;
+        };
+        /** @description A role. */
+        RoleDto: {
+            /** Format: date-time */
+            created_at: string;
+            description: string;
+            /** Format: uuid */
+            id: string;
+            /** @description Unique in the tenant: 1-64 characters of a-z, 0-9, '_', '.' or '-'. */
+            name: string;
+            /**
+             * @description Sorted, de-duplicated permission strings. In the system tenant, admin scopes here
+             *     (`admin:write`, `admin:users:read`, ...) are what the role's holders may obtain.
+             */
+            permissions: string[];
+            /** Format: date-time */
+            updated_at: string;
+        };
+        /** @description Roles, in name order. */
+        RoleList: {
+            items: components["schemas"]["RoleDto"][];
+        };
+        /**
+         * @description Body of `PATCH /tenants/{slug}/roles/{name}`. Absent fields stay unchanged; `permissions`
+         *     replaces the whole set.
+         */
+        RolePatchDto: {
+            description?: string | null;
+            name?: string | null;
+            permissions?: string[] | null;
         };
         /** @description A list of sessions (tenant lists are paged; a user's sessions come in one page). */
         SessionList: {
@@ -1237,6 +1405,8 @@ export interface components {
              */
             auto_link: boolean;
             captcha?: components["schemas"]["CaptchaView"] | null;
+            /** @description Mapping of roles and permissions into tokens. */
+            claims: components["schemas"]["TokenClaimMapping"];
             /** @description Page language when neither `ui_locales` nor `Accept-Language` matches. */
             default_locale: string;
             /** @description Sign-in with a one-time code sent by email. */
@@ -1260,6 +1430,7 @@ export interface components {
         TenantSettingsPatch: {
             auto_link?: boolean | null;
             captcha?: components["schemas"]["CaptchaInput"] | null;
+            claims?: components["schemas"]["TokenClaimMappingPatch"] | null;
             default_locale?: string | null;
             /** @description Turning it on needs SMTP (tenant SMTP settings or the installation SMTP). */
             email_otp?: boolean | null;
@@ -1363,10 +1534,38 @@ export interface components {
             scheme: string;
         };
         /**
+         * @description How a user's roles and permissions are mapped into tokens. `null` disables a mapping.
+         *     Default: `roles` in every token gated by scope `roles`; `permissions` in the access token
+         *     only, not gated.
+         */
+        TokenClaimMapping: {
+            permissions?: components["schemas"]["TokenClaimRule"] | null;
+            roles?: components["schemas"]["TokenClaimRule"] | null;
+        };
+        /** @description Partial claim mapping update: an absent field keeps the current rule, `null` disables it. */
+        TokenClaimMappingPatch: {
+            permissions?: components["schemas"]["TokenClaimRule"] | null;
+            roles?: components["schemas"]["TokenClaimRule"] | null;
+        };
+        /** @description One claim mapping rule. */
+        TokenClaimRule: {
+            /** @description The claim name; protocol and standard claims (`sub`, `email`, ...) are refused. */
+            claim: string;
+            /** @description A single scope that must be granted for the claim to appear; `null` = always. */
+            scope?: string | null;
+            /** @description The tokens the claim goes into. */
+            tokens: components["schemas"]["TokenTarget"][];
+        };
+        /**
          * @description Format of the access tokens issued to a client.
          * @enum {string}
          */
         TokenFormat: "jwt" | "opaque";
+        /**
+         * @description Where a mapped claim is emitted.
+         * @enum {string}
+         */
+        TokenTarget: "access_token" | "id_token" | "userinfo";
         /**
          * @description Body of `PATCH …/clients/{client_id}`. Client type, application type and auth method are
          *     fixed at creation. `jwks: null` clears the JWK Set.
@@ -3565,6 +3764,381 @@ export interface operations {
             };
         };
     };
+    listRoles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every role of the tenant, in name order */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoleList"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    createRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewRoleDto"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    /** @description URL of the new role */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoleDto"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or the role carries admin scopes the caller lacks */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A role with this name already exists */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Role name */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The role */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoleDto"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or role */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    deleteRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Role name */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or role */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The deletion would remove the last administrator */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    updateRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Role name */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RolePatchDto"];
+            };
+        };
+        responses: {
+            /** @description The updated role */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoleDto"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or the role carries admin scopes the caller lacks */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or role */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Name already in use, or the change would remove the last administrator */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listRoleUsers: {
+        parameters: {
+            query?: {
+                /** @description Return items after this id (the previous page's `next_cursor`). */
+                after?: string;
+                /** @description Page size, 1 to 200 (default 50). */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Role name */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of users holding the role */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserList"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or role */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid query */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     listSessions: {
         parameters: {
             query?: {
@@ -4150,6 +4724,15 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            /** @description The user is the system tenant's last administrator */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
         };
     };
     updateUser: {
@@ -4206,7 +4789,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Email or username already in use */
+            /** @description Email or username already in use, or blocking the system tenant's last administrator */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -4321,6 +4904,173 @@ export interface operations {
             };
             /** @description Unknown tenant, user or credential (or a password) */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listUserRoles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description User id */
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The user's roles, in name order */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoleList"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or user */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    assignRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description User id */
+                user_id: string;
+                /** @description Role name */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The user holds the role */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssignmentDto"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or the role carries admin scopes the caller lacks */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant, user or role */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    unassignRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description User id */
+                user_id: string;
+                /** @description Role name */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or the role carries admin scopes the caller lacks */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or role, or the user does not hold it */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The change would remove the last administrator */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

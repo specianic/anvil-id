@@ -155,7 +155,7 @@ pub(crate) async fn get_user(
         (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
         (status = 403, description = "Insufficient scope", body = Problem, content_type = "application/problem+json"),
         (status = 404, description = "Unknown tenant or user", body = Problem, content_type = "application/problem+json"),
-        (status = 409, description = "Email or username already in use", body = Problem, content_type = "application/problem+json"),
+        (status = 409, description = "Email or username already in use, or blocking the system tenant's last administrator", body = Problem, content_type = "application/problem+json"),
         (status = 422, description = "Validation failed", body = Problem, content_type = "application/problem+json"),
     ),
     security(
@@ -193,6 +193,7 @@ pub(crate) async fn update_user(
         (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
         (status = 403, description = "Insufficient scope", body = Problem, content_type = "application/problem+json"),
         (status = 404, description = "Unknown tenant or user", body = Problem, content_type = "application/problem+json"),
+        (status = 409, description = "The user is the system tenant's last administrator", body = Problem, content_type = "application/problem+json"),
     ),
     security(
         ("oauth2" = ["admin:users:write"]),

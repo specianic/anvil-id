@@ -33,6 +33,8 @@ use time::format_description::well_known::Rfc3339;
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
+use super::tenants::{TokenClaimMapping, TokenClaimMappingPatch};
+
 /// Mirrors a fieldless domain enum as a wire enum with the same snake_case names.
 macro_rules! wire_enum {
     ($(#[$meta:meta])* $dto:ident => $core:ident { $($variant:ident),+ $(,)? }) => {
@@ -232,13 +234,13 @@ wire_enum!(
 );
 
 /// RFC 3339 timestamp. The domain only holds times inside years 0..=9999, which always format.
-fn ts(t: OffsetDateTime) -> String {
+pub(super) fn ts(t: OffsetDateTime) -> String {
     t.format(&Rfc3339).unwrap_or_default()
 }
 
 /// Deserialises a present field (including `null`) as `Some(..)`, so PATCH bodies can tell
 /// "absent" (leave unchanged) from `null` (clear).
-fn double_option<'de, D, T>(d: D) -> Result<Option<Option<T>>, D::Error>
+pub(super) fn double_option<'de, D, T>(d: D) -> Result<Option<Option<T>>, D::Error>
 where
     D: Deserializer<'de>,
     T: Deserialize<'de>,
@@ -316,6 +318,8 @@ pub struct TenantSettings {
     pub upstream_registration: Option<bool>,
     /// Page language when neither `ui_locales` nor `Accept-Language` matches.
     pub default_locale: String,
+    /// Mapping of roles and permissions into tokens.
+    pub claims: TokenClaimMapping,
 }
 
 impl From<CoreTenantSettings> for TenantSettings {
@@ -335,6 +339,7 @@ impl From<CoreTenantSettings> for TenantSettings {
             auto_link: s.auto_link,
             upstream_registration: s.upstream_registration,
             default_locale: s.default_locale,
+            claims: s.claims.into(),
         }
     }
 }
@@ -401,6 +406,8 @@ pub struct NewTenantSettings {
     pub upstream_registration: Option<bool>,
     /// Default `en`; a language tag such as `de` or `pt-BR`.
     pub default_locale: String,
+    /// Default: `roles` gated by scope `roles`, `permissions` in the access token.
+    pub claims: TokenClaimMapping,
 }
 
 impl Default for NewTenantSettings {
@@ -416,6 +423,7 @@ impl Default for NewTenantSettings {
             auto_link: core.auto_link,
             upstream_registration: core.upstream_registration,
             default_locale: core.default_locale,
+            claims: core.claims.into(),
         }
     }
 }
@@ -434,7 +442,7 @@ impl From<NewTenantSettings> for CoreTenantSettings {
             upstream_registration: s.upstream_registration,
             default_locale: s.default_locale,
             cimd: Default::default(),
-            claims: Default::default(),
+            claims: s.claims.into(),
             dcr: Default::default(),
         }
     }
@@ -472,6 +480,10 @@ pub struct TenantSettingsPatch {
     pub upstream_registration: Option<Option<bool>>,
     #[serde(default)]
     pub default_locale: Option<String>,
+    /// Absent rules stay unchanged; `null` disables a rule. Claim names that collide with
+    /// protocol or standard claims are refused (422).
+    #[serde(default)]
+    pub claims: Option<TokenClaimMappingPatch>,
 }
 
 impl TenantSettingsPatch {
@@ -493,7 +505,8 @@ impl TenantSettingsPatch {
             || self.magic_link.is_some()
             || self.auto_link.is_some()
             || self.upstream_registration.is_some()
-            || self.default_locale.is_some();
+            || self.default_locale.is_some()
+            || self.claims.is_some();
         let settings = touched.then(|| CoreTenantSettings {
             registration: self.registration.map_or(current.registration, Into::into),
             require_verified_email: self
@@ -513,10 +526,13 @@ impl TenantSettingsPatch {
             default_locale: self
                 .default_locale
                 .unwrap_or_else(|| current.default_locale.clone()),
-            // 0.4 sections are not part of this patch: keep the stored values.
+            // DCR/CIMD are not part of this patch: keep the stored values.
             dcr: current.dcr.clone(),
             cimd: current.cimd.clone(),
-            claims: current.claims.clone(),
+            claims: match self.claims {
+                Some(patch) => patch.merge(&current.claims),
+                None => current.claims.clone(),
+            },
         });
         (settings, captcha)
     }

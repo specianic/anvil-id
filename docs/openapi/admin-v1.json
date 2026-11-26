@@ -3366,6 +3366,613 @@
         ]
       }
     },
+    "/api/admin/v1/tenants/{slug}/roles": {
+      "get": {
+        "tags": [
+          "roles"
+        ],
+        "summary": "List the roles of a tenant.",
+        "operationId": "listRoles",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every role of the tenant, in name order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:settings:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:settings:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "roles"
+        ],
+        "summary": "Create a role. In the system tenant this needs `admin:write`.",
+        "operationId": "createRole",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewRoleDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "URL of the new role"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or the role carries admin scopes the caller lacks",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A role with this name already exists",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:settings:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/roles/{name}": {
+      "get": {
+        "tags": [
+          "roles"
+        ],
+        "summary": "Get a role.",
+        "operationId": "getRole",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Role name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or role",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:settings:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:settings:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "roles"
+        ],
+        "summary": "Delete a role and its assignments. In the system tenant this needs `admin:write`, and\ndeleting an `admin:write` role must leave another active administrator (409 otherwise).",
+        "operationId": "deleteRole",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Role name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or role",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The deletion would remove the last administrator",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:settings:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "roles"
+        ],
+        "summary": "Update a role. In the system tenant this needs `admin:write`, and removing `admin:write` from\nthe role must leave another active administrator (409 otherwise).",
+        "operationId": "updateRole",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Role name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RolePatchDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or the role carries admin scopes the caller lacks",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or role",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Name already in use, or the change would remove the last administrator",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:settings:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/roles/{name}/users": {
+      "get": {
+        "tags": [
+          "roles"
+        ],
+        "summary": "List the users holding a role.",
+        "operationId": "listRoleUsers",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Role name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Return items after this id (the previous page's `next_cursor`).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size, 1 to 200 (default 50).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 200,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of users holding the role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or role",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid query",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:users:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:users:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
     "/api/admin/v1/tenants/{slug}/sessions": {
       "get": {
         "tags": [
@@ -4283,6 +4890,16 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "The user is the system tenant's last administrator",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -4377,7 +4994,7 @@
             }
           },
           "409": {
-            "description": "Email or username already in use",
+            "description": "Email or username already in use, or blocking the system tenant's last administrator",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -4569,6 +5186,287 @@
           },
           "404": {
             "description": "Unknown tenant, user or credential (or a password)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:users:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/users/{user_id}/roles": {
+      "get": {
+        "tags": [
+          "roles"
+        ],
+        "summary": "List the roles of a user.",
+        "operationId": "listUserRoles",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "User id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The user's roles, in name order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or user",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:users:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:users:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/users/{user_id}/roles/{name}": {
+      "put": {
+        "tags": [
+          "roles"
+        ],
+        "summary": "Assign a role to a user (idempotent). In the system tenant the caller's token must hold\nevery admin scope the role carries.",
+        "operationId": "assignRole",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "User id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Role name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The user holds the role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssignmentDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or the role carries admin scopes the caller lacks",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant, user or role",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:users:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "roles"
+        ],
+        "summary": "Remove a role from a user. In the system tenant the caller's token must hold every admin\nscope the role carries, and removing the last active administrator is refused (409).",
+        "operationId": "unassignRole",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "User id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Role name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or the role carries admin scopes the caller lacks",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or role, or the user does not hold it",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The change would remove the last administrator",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -4854,6 +5752,23 @@
           "web",
           "native"
         ]
+      },
+      "AssignmentDto": {
+        "type": "object",
+        "description": "A role assignment.",
+        "required": [
+          "user_id",
+          "role"
+        ],
+        "properties": {
+          "role": {
+            "$ref": "#/components/schemas/RoleDto"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
       },
       "AuditAction": {
         "type": "string",
@@ -6045,6 +6960,31 @@
           "required"
         ]
       },
+      "NewRoleDto": {
+        "type": "object",
+        "description": "Body of `POST /tenants/{slug}/roles`.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "At most 500 characters."
+          },
+          "name": {
+            "type": "string",
+            "description": "1-64 characters of a-z, 0-9, '_', '.' or '-', starting with a letter or digit."
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "At most 100 permissions of 1-128 characters (A-Z, a-z, 0-9, ':', '.', '_', '/', '-')."
+          }
+        },
+        "additionalProperties": false
+      },
       "NewTenantSettings": {
         "type": "object",
         "description": "Settings of a new tenant. Absent fields take their defaults; CAPTCHA is configured with\n`PATCH` once the tenant exists.",
@@ -6053,6 +6993,28 @@
             "type": "boolean",
             "description": "Default `true`.",
             "default": true
+          },
+          "claims": {
+            "$ref": "#/components/schemas/TokenClaimMapping",
+            "description": "Default: `roles` gated by scope `roles`, `permissions` in the access token.",
+            "default": {
+              "permissions": {
+                "claim": "permissions",
+                "scope": null,
+                "tokens": [
+                  "access_token"
+                ]
+              },
+              "roles": {
+                "claim": "roles",
+                "scope": "roles",
+                "tokens": [
+                  "access_token",
+                  "id_token",
+                  "userinfo"
+                ]
+              }
+            }
           },
           "default_locale": {
             "type": "string",
@@ -6359,6 +7321,89 @@
             "minimum": 0
           }
         }
+      },
+      "RoleDto": {
+        "type": "object",
+        "description": "A role.",
+        "required": [
+          "id",
+          "name",
+          "description",
+          "permissions",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "description": "Unique in the tenant: 1-64 characters of a-z, 0-9, '_', '.' or '-'."
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Sorted, de-duplicated permission strings. In the system tenant, admin scopes here\n(`admin:write`, `admin:users:read`, ...) are what the role's holders may obtain."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RoleList": {
+        "type": "object",
+        "description": "Roles, in name order.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RoleDto"
+            }
+          }
+        }
+      },
+      "RolePatchDto": {
+        "type": "object",
+        "description": "Body of `PATCH /tenants/{slug}/roles/{name}`. Absent fields stay unchanged; `permissions`\nreplaces the whole set.",
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "permissions": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
       },
       "SessionList": {
         "type": "object",
@@ -6760,7 +7805,8 @@
           "email_otp",
           "magic_link",
           "auto_link",
-          "default_locale"
+          "default_locale",
+          "claims"
         ],
         "properties": {
           "auto_link": {
@@ -6777,6 +7823,10 @@
                 "type": "null"
               }
             ]
+          },
+          "claims": {
+            "$ref": "#/components/schemas/TokenClaimMapping",
+            "description": "Mapping of roles and permissions into tokens."
           },
           "default_locale": {
             "type": "string",
@@ -6831,6 +7881,17 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/CaptchaInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "claims": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TokenClaimMappingPatch",
+                "description": "Absent rules stay unchanged; `null` disables a rule. Claim names that collide with\nprotocol or standard claims are refused (422)."
               },
               {
                 "type": "null"
@@ -7094,12 +8155,104 @@
           }
         }
       },
+      "TokenClaimMapping": {
+        "type": "object",
+        "description": "How a user's roles and permissions are mapped into tokens. `null` disables a mapping.\nDefault: `roles` in every token gated by scope `roles`; `permissions` in the access token\nonly, not gated.",
+        "properties": {
+          "permissions": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TokenClaimRule"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "roles": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TokenClaimRule"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "TokenClaimMappingPatch": {
+        "type": "object",
+        "description": "Partial claim mapping update: an absent field keeps the current rule, `null` disables it.",
+        "properties": {
+          "permissions": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TokenClaimRule"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "roles": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TokenClaimRule"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "TokenClaimRule": {
+        "type": "object",
+        "description": "One claim mapping rule.",
+        "required": [
+          "claim",
+          "tokens"
+        ],
+        "properties": {
+          "claim": {
+            "type": "string",
+            "description": "The claim name; protocol and standard claims (`sub`, `email`, ...) are refused."
+          },
+          "scope": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A single scope that must be granted for the claim to appear; `null` = always."
+          },
+          "tokens": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TokenTarget"
+            },
+            "description": "The tokens the claim goes into."
+          }
+        },
+        "additionalProperties": false
+      },
       "TokenFormat": {
         "type": "string",
         "description": "Format of the access tokens issued to a client.",
         "enum": [
           "jwt",
           "opaque"
+        ]
+      },
+      "TokenTarget": {
+        "type": "string",
+        "description": "Where a mapped claim is emitted.",
+        "enum": [
+          "access_token",
+          "id_token",
+          "userinfo"
         ]
       },
       "UpdateClient": {

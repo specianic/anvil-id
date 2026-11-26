@@ -1,9 +1,19 @@
 //! `/api/admin/v1/tenants`: installation-wide tenant management.
+//!
+//! Tenant settings carry `claims`, the mapping of a user's roles and permissions into tokens
+//! ([`TokenClaimMapping`]). A rule names the claim, the tokens it goes into and the scope that
+//! gates it; names that collide with protocol or standard claims are refused (422) by
+//! `TenantService`.
 
+use anvil_core::model::{
+    ClaimMappingSettings, ClaimRule as CoreClaimRule, TokenTarget as CoreTokenTarget,
+};
 use anvil_core::service::admin_scope::{Access, Resource};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::Response;
+use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 use super::auth::{
     AdminAuth, AdminJson, AdminQuery, AdminResult, created, json, no_content, page_request,
@@ -182,4 +192,132 @@ pub(crate) async fn delete_tenant(
         .delete(&slug, auth.actor(), &ctx)
         .await?;
     Ok(no_content())
+}
+
+// ---------------------------------------------------------------------------------------------
+// Claim mapping DTOs (part of the tenant settings)
+// ---------------------------------------------------------------------------------------------
+
+/// Where a mapped claim is emitted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TokenTarget {
+    AccessToken,
+    IdToken,
+    Userinfo,
+}
+
+impl From<TokenTarget> for CoreTokenTarget {
+    fn from(t: TokenTarget) -> Self {
+        match t {
+            TokenTarget::AccessToken => Self::AccessToken,
+            TokenTarget::IdToken => Self::IdToken,
+            TokenTarget::Userinfo => Self::Userinfo,
+        }
+    }
+}
+
+impl From<CoreTokenTarget> for TokenTarget {
+    fn from(t: CoreTokenTarget) -> Self {
+        match t {
+            CoreTokenTarget::AccessToken => Self::AccessToken,
+            CoreTokenTarget::IdToken => Self::IdToken,
+            CoreTokenTarget::Userinfo => Self::Userinfo,
+        }
+    }
+}
+
+/// One claim mapping rule.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TokenClaimRule {
+    /// The claim name; protocol and standard claims (`sub`, `email`, ...) are refused.
+    pub claim: String,
+    /// The tokens the claim goes into.
+    pub tokens: Vec<TokenTarget>,
+    /// A single scope that must be granted for the claim to appear; `null` = always.
+    #[serde(default)]
+    pub scope: Option<String>,
+}
+
+impl From<TokenClaimRule> for CoreClaimRule {
+    fn from(r: TokenClaimRule) -> Self {
+        Self {
+            claim: r.claim,
+            tokens: r.tokens.into_iter().map(Into::into).collect(),
+            scope: r.scope,
+        }
+    }
+}
+
+impl From<CoreClaimRule> for TokenClaimRule {
+    fn from(r: CoreClaimRule) -> Self {
+        Self {
+            claim: r.claim,
+            tokens: r.tokens.into_iter().map(Into::into).collect(),
+            scope: r.scope,
+        }
+    }
+}
+
+/// How a user's roles and permissions are mapped into tokens. `null` disables a mapping.
+/// Default: `roles` in every token gated by scope `roles`; `permissions` in the access token
+/// only, not gated.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TokenClaimMapping {
+    pub roles: Option<TokenClaimRule>,
+    pub permissions: Option<TokenClaimRule>,
+}
+
+impl Default for TokenClaimMapping {
+    fn default() -> Self {
+        ClaimMappingSettings::default().into()
+    }
+}
+
+impl From<ClaimMappingSettings> for TokenClaimMapping {
+    fn from(c: ClaimMappingSettings) -> Self {
+        Self {
+            roles: c.roles.map(Into::into),
+            permissions: c.permissions.map(Into::into),
+        }
+    }
+}
+
+impl From<TokenClaimMapping> for ClaimMappingSettings {
+    fn from(c: TokenClaimMapping) -> Self {
+        Self {
+            roles: c.roles.map(Into::into),
+            permissions: c.permissions.map(Into::into),
+        }
+    }
+}
+
+/// Partial claim mapping update: an absent field keeps the current rule, `null` disables it.
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TokenClaimMappingPatch {
+    #[serde(default, deserialize_with = "super::dto::double_option")]
+    #[schema(value_type = Option<TokenClaimRule>)]
+    pub roles: Option<Option<TokenClaimRule>>,
+    #[serde(default, deserialize_with = "super::dto::double_option")]
+    #[schema(value_type = Option<TokenClaimRule>)]
+    pub permissions: Option<Option<TokenClaimRule>>,
+}
+
+impl TokenClaimMappingPatch {
+    /// The mapping after this patch.
+    pub fn merge(self, current: &ClaimMappingSettings) -> ClaimMappingSettings {
+        ClaimMappingSettings {
+            roles: match self.roles {
+                None => current.roles.clone(),
+                Some(r) => r.map(Into::into),
+            },
+            permissions: match self.permissions {
+                None => current.permissions.clone(),
+                Some(p) => p.map(Into::into),
+            },
+        }
+    }
 }
