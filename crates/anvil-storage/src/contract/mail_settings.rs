@@ -118,8 +118,7 @@ pub async fn mail_settings_isolated_by_tenant(s: &TestStorage) {
     assert!(repo.smtp(tenant).await.expect("smtp").is_some());
 }
 
-// ---- Phase 6 (plan 06-04): the org invitation template; the backends refuse it with
-// StorageError::Unsupported until 06-07 / 06-08 ----
+// ---- Phase 6 (plan 06-04): the org invitation template ----
 
 pub async fn mail_template_org_invitation_round_trip(s: &TestStorage) {
     let tenant = seed_tenant(s).await;

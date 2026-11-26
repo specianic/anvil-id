@@ -428,8 +428,7 @@ pub async fn client_delete_removes_its_branding(s: &TestStorage) {
     );
 }
 
-// ---- Phase 6 (plan 06-04): organization branding scope; the backends refuse it with
-// StorageError::Unsupported until 06-07 / 06-08 ----
+// ---- Phase 6 (plan 06-04): organization branding scope ----
 
 pub async fn branding_org_scope_independent(s: &TestStorage) {
     let tenant = seed_tenant(s).await;

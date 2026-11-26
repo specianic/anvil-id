@@ -7,12 +7,6 @@
 
 use crate::model::{ACR_MFA, ACR_PWD, AMR_MFA, MfaPolicy};
 
-/// The policy in force for a sign-in without an active organization: see
-/// [`effective_policy_for`].
-pub fn effective_policy(tenant: MfaPolicy, client: Option<MfaPolicy>) -> MfaPolicy {
-    effective_policy_for(tenant, None, client)
-}
-
 /// The policy in force for a sign-in: the strictest of the tenant's, the active
 /// organization's and the client's (`required` > `optional` > `off`). An org or client without
 /// its own policy adds nothing, so the result is never weaker than the tenant's.
@@ -132,7 +126,7 @@ mod tests {
         ];
         for (tenant, client, expected) in table {
             assert_eq!(
-                effective_policy(tenant, client),
+                effective_policy_for(tenant, None, client),
                 expected,
                 "{tenant:?} {client:?}"
             );
@@ -143,8 +137,8 @@ mod tests {
     fn effective_policy_never_weakens_tenant() {
         for t in POLICIES {
             for c in POLICIES {
-                assert!(effective_policy(t, Some(c)) >= t);
-                assert!(effective_policy(t, Some(c)) >= c);
+                assert!(effective_policy_for(t, None, Some(c)) >= t);
+                assert!(effective_policy_for(t, None, Some(c)) >= c);
             }
         }
     }
@@ -195,7 +189,7 @@ mod tests {
     }
 
     #[test]
-    fn effective_policy_delegates_without_org() {
+    fn effective_policy_without_org_adds_nothing() {
         let optional = [
             None,
             Some(MfaPolicy::Off),
@@ -204,7 +198,8 @@ mod tests {
         ];
         for t in POLICIES {
             for c in optional {
-                assert_eq!(effective_policy(t, c), effective_policy_for(t, None, c));
+                let expected = c.map_or(t, |c| t.max(c));
+                assert_eq!(effective_policy_for(t, None, c), expected, "{t:?} {c:?}");
             }
         }
     }

@@ -1136,8 +1136,7 @@ pub async fn code_and_family_resource_round_trip(s: &TestStorage) {
     );
 }
 
-// ---- Phase 6 (plan 06-04): org-bound grants and SAML assertion replay; the backends refuse
-// them with StorageError::Unsupported until 06-07 / 06-08 ----
+// ---- Phase 6 (plan 06-04): org-bound grants and SAML assertion replay ----
 
 pub async fn code_and_family_org_round_trip(s: &TestStorage) {
     let ctx = seed_grant_ctx(s).await;

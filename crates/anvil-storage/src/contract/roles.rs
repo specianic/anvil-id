@@ -448,8 +448,7 @@ pub async fn roles_isolated_by_tenant(s: &TestStorage) {
     assert_eq!(repo.get(tenant, role.id).await.expect("get"), Some(role));
 }
 
-// ---- Phase 6 (plan 06-04): organization-level roles and assignments; the backends refuse
-// them with StorageError::Unsupported until 06-07 / 06-08 ----
+// ---- Phase 6 (plan 06-04): organization-level roles and assignments ----
 
 fn ids(roles: &[anvil_core::model::Role]) -> Vec<RoleId> {
     let mut v: Vec<RoleId> = roles.iter().map(|r| r.id).collect();

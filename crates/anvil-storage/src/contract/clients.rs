@@ -744,8 +744,7 @@ pub async fn client_registration_token_lookup_and_rotation(s: &TestStorage) {
     );
 }
 
-// ---- Phase 6 (plan 06-04): client organization policy; the backends refuse values other than
-// `off` with StorageError::Unsupported until 06-07 / 06-08 ----
+// ---- Phase 6 (plan 06-04): client organization policy ----
 
 pub async fn client_organization_policy_round_trip(s: &TestStorage) {
     use anvil_core::model::OrgClientPolicy;

@@ -741,7 +741,7 @@ pub async fn connections_isolated_by_tenant(s: &TestStorage) {
 }
 
 // ---- Phase 6 (plan 06-04): organization connections, SAML configs, has_links and JIT
-// membership; the backends refuse them with StorageError::Unsupported until 06-07 / 06-08 ----
+// membership ----
 
 pub async fn connection_org_and_saml_round_trip(s: &TestStorage) {
     let tenant = seed_tenant(s).await;

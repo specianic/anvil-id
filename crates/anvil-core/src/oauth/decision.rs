@@ -39,7 +39,8 @@ use crate::policy::mfa::{AcrRequest, MfaRequirement, acr_for, acr_request, mfa_r
 /// The MFA inputs of an authorization request for [`decide`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MfaContext {
-    /// Effective policy (strictest of tenant and client, [`crate::policy::mfa::effective_policy`]).
+    /// Effective policy (strictest of tenant, active organization and client,
+    /// [`crate::policy::mfa::effective_policy_for`]).
     pub policy: MfaPolicy,
     /// How strongly the RP asked for MFA ([`requested_acr`]).
     pub acr: AcrRequest,

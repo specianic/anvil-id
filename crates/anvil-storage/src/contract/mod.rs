@@ -230,8 +230,8 @@ macro_rules! storage_contract_tests {
             job_lease_exclusive_renew_and_release,
             job_expired_lease_taken_over,
             job_lease_concurrent_single_holder,
-            // ---- Phase 4 (plan 04-01); backends implement them in 04-04 / 04-05 and fail with
-            // StorageError::Unsupported from their TRANSITIONAL shims until then ----
+            // ---- Phase 4 (plan 04-01): client fields, step-up, email change, connections,
+            // branding and back-channel logout ----
             // clients, grants, access tokens: new fields
             client_phase4_fields_round_trip,
             // Phase 5 (plan 05-01): persisted faithfully or refused, never dropped
@@ -279,8 +279,8 @@ macro_rules! storage_contract_tests {
             delivery_claim_leases_due_rows,
             delivery_claim_concurrent_each_row_once,
             delivery_complete_semantics,
-            // ---- Phase 5 (plan 05-02); backends implement them in 05-06 / 05-07 and fail with
-            // StorageError::Unsupported from their TRANSITIONAL shims until then ----
+            // ---- Phase 5 (plan 05-02): roles, custom attributes, webhooks, dynamic client
+            // registration, consent resources and the setup administrator ----
             // roles
             role_create_get_update_delete,
             role_list_in_name_order,
@@ -323,8 +323,8 @@ macro_rules! storage_contract_tests {
             // setup: the system administrator role
             install_creates_system_administrator_role,
             complete_setup_assigns_administrator_role,
-            // ---- Phase 6 (plan 06-04); backends implement them in 06-07 / 06-08 and fail with
-            // StorageError::Unsupported from their TRANSITIONAL shims until then ----
+            // ---- Phase 6 (plan 06-04): organizations, invitations, domains, org roles, org SSO
+            // and org-bound grants ----
             // organizations and members
             org_create_get_update_delete,
             org_slug_conflict_per_tenant,
