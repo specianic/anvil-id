@@ -291,7 +291,36 @@ Plans:
   3. An admin imports users with existing password hashes (bcrypt, scrypt incl. Firebase, PBKDF2, Argon2, salted SHA-2) who can then log in with their old passwords, and can export users individually, in bulk and as a GDPR data-subject export
   4. Clients can use pushed authorization requests, SPAs and native apps can drive login through the versioned headless flow API, and the consent screen clearly identifies agent clients with incremental scope step-up
   5. The upgrade path from 0.4 to 1.0 is tested, public APIs are versioned with a documented compatibility policy, and the documentation site covers install, integrations and migration guides
-**Plans**: TBD
+**Plans**: 27 plans in 10 waves (review/SAML gap plans 07-28+ are added once private findings or owner decisions exist)
+
+Plans:
+- [ ] 07-01-PLAN.md — Legacy-hash verifiers (bcrypt, scrypt, Firebase, PBKDF2, SHA-2) with KATs, scoped RustCrypto deny exception; owner checkpoint approves the crypto exception (wave 1)
+- [ ] 07-02-PLAN.md — Import policy (core): stored `$anvil-*` encoding, caps and floors, vendor-format conversion, fuzz target (TDD) (wave 1)
+- [ ] 07-03-PLAN.md — Foundation A: client PAR/agent/native fields, tenant PAR/headless settings, PAR + hash-profile models, audit actions, admin:users:export scope, hasher port, TRANSITIONAL converter refusals (wave 1)
+- [ ] 07-04-PLAN.md — Skeletons: PAR/flows/import/export/profile modules and empty routers, CLI `users import|export`, rate-limit classes (wave 1)
+- [ ] 07-05-PLAN.md — Extract the shared ui::flow_driver (guard, CAPTCHA, submit, record, methods) with no UI behaviour change (wave 1)
+- [ ] 07-06-PLAN.md — SECURITY.md, external review scope + brief, threat model; owner checkpoint enables private vulnerability reporting (wave 1)
+- [ ] 07-07-PLAN.md — Docs site skeleton: mdBook, SUMMARY, check script (no tracking, no research, links), docs.yml with owner-dispatched publish (wave 1)
+- [ ] 07-08-PLAN.md — Foundation B: storage ports, SQLite 0010 + repos, contract suite (PAR single winner, password CAS), Postgres shims, SQLite upgrade from 0.4 and beta.1 (wave 2)
+- [ ] 07-09-PLAN.md — PasswordDispatcher: caps before hashing (incl. stored Argon2 params), legacy routing in the bounded pool, rehash flag, wiring (wave 2)
+- [ ] 07-10-PLAN.md — Headless flow API v1, browser mode: DTO over flow_driver, origin allow-list + CSRF header + JSON-only layers, flows-v1.json drift test, SPA e2e (wave 2)
+- [ ] 07-11-PLAN.md — Postgres 0008 + repos + .sqlx, upgrade from 0.4 and beta.1 (wave 3)
+- [ ] 07-12-PLAN.md — Client/tenant field exposure (admin API, YAML, DCR, CIMD) with one validation function (agents never skip consent, native eligibility) (wave 3)
+- [ ] 07-13-PLAN.md — PAR (RFC 9126): /par, request_uri consumption at /authorize, require flags, discovery, negative tests (wave 3)
+- [ ] 07-14-PLAN.md — User import service, Firebase hash profiles (sealed signer key), first-login CAS rehash, CLI import, IMPORT-EXPORT docs (wave 3)
+- [ ] 07-15-PLAN.md — User export service: single, bulk stream, GDPR bundle with redaction, no-secrets guarantee, CLI export with opt-in hash flag (wave 3)
+- [ ] 07-16-PLAN.md — Agent consent: agent badge, provenance, incremental step-up (deny keeps grant), en/de catalogs, e2e (wave 4)
+- [ ] 07-17-PLAN.md — Admin API: import, hash profiles, single/bulk/GDPR export with admin:users:export, body-limit branch, docs (wave 4)
+- [ ] 07-18-PLAN.md — Headless native mode: PAR + PKCE + flow token, code as JSON, first-party only, negative tests (wave 4)
+- [ ] 07-19-PLAN.md — Certification package: conformance green with PAR metadata, tag-run evidence retention, setup.sh --public, CERTIFICATION runbook (wave 4)
+- [ ] 07-20-PLAN.md — Console: client PAR/agent/native fields, tenant PAR/origins, users import + export, hash profiles, e2e (wave 5)
+- [ ] 07-21-PLAN.md — Compatibility policy, 1.0 OpenAPI baselines + in-repo breaking-change test, config-version tests, UPGRADING 1.0 (incl. Q8 deferral) (wave 5)
+- [ ] 07-22-PLAN.md — Docs site content: install, integration and migration guides (owner checkpoint picks vendors), SUMMARY, ARCHITECTURE (wave 6)
+- [ ] 07-23-PLAN.md — Phase gate: security map, plaintext scans, just ci, 1.0.0-rc.1 + 1.0 migration pins, ticks (OIDC-23/SEC-08 wait); owner checkpoint (push + rc tag); all workflows green (wave 7)
+- [ ] 07-24-PLAN.md — Owner: OpenID certification on the hosted suite and submission; public status (wave 8)
+- [ ] 07-25-PLAN.md — Owner: external security review commissioned and completed, findings private; triggers review gap plans (wave 8)
+- [ ] 07-26-PLAN.md — Owner: real-IdP SAML interop checklist, SAML flag and chrono decisions, AUTH-07 status (wave 9)
+- [ ] 07-27-PLAN.md — Release v1.0.0 after owner sign-off: version, pins, ticks OIDC-23/SEC-08, tag, verify, publish Pages (wave 10)
 
 ## Progress
 
@@ -306,7 +335,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 4. Release 0.3 "Real-world logins" | 36/37 | In Progress|  |
 | 5. Release 0.4 "Operate it" | 32/33 | In Progress|  |
 | 6. Release 1.0 (Organizations and SSO) | 26/31 | In Progress|  |
-| 7. Release 1.0 (Certification and release) | 0/TBD | Not started | - |
+| 7. Release 1.0 (Certification and release) | 0/27 | Planned | - |
 
 ---
 *Roadmap created: 2026-11-25*
