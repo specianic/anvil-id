@@ -796,7 +796,8 @@ pub async fn client_new_fields_non_default_refused_until_columns_exist(s: &TestS
         Err(e) => panic!("{what}: expected Unsupported, got {e:?}"),
         Ok(_) => panic!("{what}: a non-default value must not be accepted yet"),
     };
-    let variants: [(&str, fn(&mut NewClient)); 3] = [
+    type Variant = (&'static str, fn(&mut NewClient));
+    let variants: [Variant; 3] = [
         ("par", |c| c.require_pushed_authorization_requests = true),
         ("agent", |c| c.client_kind = ClientKind::Agent),
         ("headless", |c| c.headless_native = true),
