@@ -6,15 +6,15 @@ current_phase: 04
 current_phase_name: release 0 3 real world logins
 current_plan: 37
 status: executing
-stopped_at: "04-33 Task 1 checkpoint: awaiting owner real-provider checklist (approved / waive) before tagging v0.3.0 from 9c2bdd2"
-last_updated: "2026-11-26T03:30:46.617Z"
+stopped_at: "04-33 Task 1 checkpoint: awaiting owner real-provider checklist (approved / waive) before tagging v0.3.0 from 9c2bdd2 (Phase 5 wave 3 in progress; 05-10, 05-06 complete)"
+last_updated: "2026-11-26T03:31:13.800Z"
 last_activity: 2026-11-26
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 131
-  completed_plans: 110
-  percent: 84
+  completed_plans: 111
+  percent: 85
 ---
 
 # Project State
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 **Status:** Ready to execute
 **Last Activity:** 2026-11-26
 **Last Activity Description:** 04-32 phase gate complete (430-pair security map, anvilid 0.3.0, 0.3 migrations pinned, every workflow green on 9f88363)
-**Progress:** [████████░░] 84%
+**Progress:** [█████████░] 85%
 
 Phase 4 has 37 plans (04-01 through 04-37). Every plan except 04-33 (manual real-provider checklist, then tag
 v0.3.0) has a SUMMARY. Current Plan counts plans in execution order: 04-33 is the 37th and last.
@@ -166,6 +166,7 @@ v0.3.0) has a SUMMARY. Current Plan counts plans in execution order: 04-33 is th
 | Phase 05 P05 | 27min | 3 tasks | 18 files |
 | Phase 05 P09 | 45min | 2 tasks | 5 files |
 | Phase 05 P10 | 40min | 2 tasks | 6 files |
+| Phase 05 P06 | 45min | 2 tasks | 65 files |
 
 ## Accumulated Context
 
@@ -382,6 +383,7 @@ Recent decisions affecting current work:
 - [Phase 05]: 05-10: config plan treats an omitted secret as keep; {configured:false} clears; deletes are the prune-only list
 - [Phase 05]: 05-10: webhook_event(tenant_slug, &NewAuditEvent) maps by exhaustive match; UserAttributesUpdated -> user.updated
 - [Phase 05]: 05-10: claim names reserved/unique case-insensitively; mapped_claims also skips reserved names at runtime
+- [Phase 05]: 05-06: SQLite complete_setup returns Conflict (full rollback) if the admin tenant lacks the administrator role; webhook delivery log purged with the audit retention cutoff in AuditRepo::purge_before; IATs purged 7 days after expiry/revocation
 
 ### Pending Todos
 
@@ -394,6 +396,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-26T03:30:46.614Z
-Stopped at: 04-33 Task 1 checkpoint: awaiting owner real-provider checklist (approved / waive) before tagging v0.3.0 from 9c2bdd2 (Phase 5 wave 3 in progress; 05-10 complete)
+Last session: 2026-11-26T03:31:13.797Z
+Stopped at: 04-33 Task 1 checkpoint: awaiting owner real-provider checklist (approved / waive) before tagging v0.3.0 from 9c2bdd2 (Phase 5 wave 3 in progress; 05-10, 05-06 complete)
 Resume file: .planning/phases/04-release-0-3-real-world-logins/04-33-PLAN.md
