@@ -6,3 +6,4 @@
 - (from 05-09, for 05-21) `oauth::registration::validate` fails closed on an empty `DcrSettings.allowed_scopes` (it cannot know tenant defaults): 05-21 must resolve the tenant's default scopes into `allowed_scopes` before calling it. 05-21 also decides whether logo/client/policy/tos URIs are stored (no `NewClient` columns) or only echoed in the 201 response.
 - (from 05-09, for 05-15) map `CimdError` to `CoreError` at the service boundary.
 - (from 05-10, for 05-12) One-implementation: `policy::claims_mapping::RESERVED_CLAIMS` duplicates the private reserved-claim list in `service/claims.rs`. 05-12 (owner of claims.rs) must make claims.rs use the single `RESERVED_CLAIMS` list and delete its private copy.
+- (from 05-06, gate 05-28) `tests/plaintext.rs` in both backends does not seed the new 0.4 secret columns (initial access token hashes, registration access token hashes, sealed webhook secrets); extend the plaintext-at-rest scan to cover them.
