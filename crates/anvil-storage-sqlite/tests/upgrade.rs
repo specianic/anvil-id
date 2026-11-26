@@ -5,6 +5,10 @@
 //! then upgraded with `migrate_with(Default)` exactly like a 0.2 binary does on start. Everything
 //! is then checked through the storage traits. Finally the whole contract suite runs against
 //! databases built through this upgrade path.
+//!
+//! The same shape covers 0.2 → 0.3 (row-preserving CHECK rebuilds) and 0.3 → 0.4 (migration 0007:
+//! additive schema plus the system tenant's administrator role backfill), each with its own
+//! fixtures and its own contract-suite run.
 
 use std::collections::BTreeMap;
 use std::str::FromStr;
@@ -859,4 +863,325 @@ pub async fn upgraded_v0_2_sqlite() -> TestStorage {
 
 mod upgraded_v0_2_contract {
     anvil_storage::storage_contract_tests!(crate::upgraded_v0_2_sqlite);
+}
+
+// ---------------------------------------------------------------------------------------------
+// 0.3 → 0.4 (migration 0007: roles, attributes, webhooks, DCR/CIMD, consent resources, and the
+// administrator role backfill for upgraded installations).
+
+/// Last schema version shipped in 0.3.
+const LAST_V0_3_VERSION: i64 = 6;
+
+const V03_SYSTEM: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0003_0001);
+const V03_DEFAULT: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0003_0002);
+const V03_ROOT: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0003_0010);
+const V03_OPS: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0003_0011);
+const V03_END_USER: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0003_0012);
+
+struct UpgradedV03 {
+    storage: SqliteStorage,
+    url: String,
+    before: BTreeMap<String, Vec<String>>,
+    columns: BTreeMap<String, Vec<String>>,
+    _dir: tempfile::TempDir,
+}
+
+/// Builds a file database through the 0.3 → latest upgrade path.
+async fn upgraded_from_v0_3() -> UpgradedV03 {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let url = format!("sqlite://{}", dir.path().join("anvil.db").display());
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::from_str(&url)
+                .expect("url")
+                .create_if_missing(true)
+                .foreign_keys(true),
+        )
+        .await
+        .expect("open raw pool");
+    sqlx::migrate!()
+        .run_to(LAST_V0_3_VERSION, &pool)
+        .await
+        .expect("0.3 migrations apply");
+    let version: i64 = sqlx::query_scalar("SELECT max(version) FROM _sqlx_migrations")
+        .fetch_one(&pool)
+        .await
+        .expect("version");
+    assert_eq!(version, LAST_V0_3_VERSION);
+    sqlx::raw_sql(include_str!("fixtures/release_0_3.sql"))
+        .execute(&pool)
+        .await
+        .expect("0.3 fixtures load");
+    let columns = table_columns(&pool).await;
+    let before = snapshot(&pool, &columns).await;
+    for table in ["tenant", "user", "client", "consent_grant"] {
+        assert!(!before[table].is_empty(), "fixture rows in {table}");
+    }
+    pool.close().await;
+
+    // The 0.4 binary starts: connect and migrate with the defaults (destructive refused).
+    let storage = SqliteStorage::connect(&url).await.expect("connect");
+    storage
+        .migrate_with(MigrateOptions::default())
+        .await
+        .expect("0.3 → latest upgrade applies without the destructive flag");
+    UpgradedV03 {
+        storage,
+        url,
+        before,
+        columns,
+        _dir: dir,
+    }
+}
+
+#[tokio::test]
+async fn upgrade_from_0_3_keeps_every_row_and_backfills_administrators() {
+    use anvil_core::model::{ClientSource, MfaPolicy, SYSTEM_ADMIN_ROLE, UserStatus};
+
+    let up = upgraded_from_v0_3().await;
+    let s = &up.storage;
+    let system = TenantId(V03_SYSTEM);
+    let default = TenantId(V03_DEFAULT);
+
+    // Every row and every value of every 0.3 table survives.
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::from_str(&up.url)
+                .expect("url")
+                .foreign_keys(true),
+        )
+        .await
+        .expect("open raw pool");
+    let after = snapshot(&pool, &up.columns).await;
+    assert_eq!(
+        after, up.before,
+        "the upgrade must not lose or change any row"
+    );
+    let fk_violations: i64 = sqlx::query_scalar("SELECT count(*) FROM pragma_foreign_key_check")
+        .fetch_one(&pool)
+        .await
+        .expect("fk check");
+    assert_eq!(fk_violations, 0);
+
+    // Old rows stay readable through the traits; new columns take their defaults.
+    let root = s
+        .users()
+        .get(system, UserId(V03_ROOT))
+        .await
+        .expect("get user")
+        .expect("root survives");
+    assert_eq!(root.email, "root@example.test");
+    let ops = s
+        .users()
+        .get(system, UserId(V03_OPS))
+        .await
+        .expect("get user")
+        .expect("ops survives");
+    assert_eq!(ops.status, UserStatus::Blocked);
+    assert_eq!(
+        s.attributes()
+            .user_values(default, UserId(V03_END_USER))
+            .await
+            .expect("user_values"),
+        Some(serde_json::Map::new()),
+        "existing users start with no attribute values"
+    );
+    let web = s
+        .clients()
+        .get(default, "v03-web")
+        .await
+        .expect("get client")
+        .expect("client survives");
+    assert_eq!(web.token_format, TokenFormat::Jwt);
+    assert_eq!(web.mfa_policy, Some(MfaPolicy::Required));
+    assert_eq!(
+        web.post_logout_redirect_uris,
+        vec!["https://rp.example.test/bye".to_owned()]
+    );
+    assert_eq!(
+        web.allowed_resources,
+        vec!["https://api.example.test".to_owned()]
+    );
+    assert_eq!(
+        web.registration_source,
+        ClientSource::Static,
+        "0.3 clients are static registrations"
+    );
+    assert_eq!(web.metadata_expires_at, None);
+    assert_eq!(web.registration_access_token_hash, None);
+    assert_eq!(
+        s.registration()
+            .count_clients_by_source(default, ClientSource::Static)
+            .await
+            .expect("count"),
+        1
+    );
+    let consent = s
+        .grants()
+        .consent(default, UserId(V03_END_USER), "v03-web")
+        .await
+        .expect("consent")
+        .expect("consent survives");
+    assert_eq!(
+        consent.scopes,
+        vec!["openid".to_owned(), "profile".to_owned()]
+    );
+    assert!(
+        consent.resources.is_empty(),
+        "0.3 consents cover no resources"
+    );
+
+    // The backfill: the system tenant has its administrator role and both 0.3 administrators
+    // (blocked ones included) hold it; nobody outside the system tenant gets anything.
+    let admin = s
+        .roles()
+        .get_by_name(system, SYSTEM_ADMIN_ROLE)
+        .await
+        .expect("get_by_name")
+        .expect("the backfill creates the administrator role");
+    assert_eq!(admin.tenant_id, system);
+    assert_eq!(admin.org_id, None);
+    assert_eq!(admin.permissions, vec!["admin:write".to_owned()]);
+    assert_eq!(admin.id.0.get_version_num(), 7, "UUID-shaped role id");
+    assert_eq!(
+        admin.id.0.get_variant(),
+        uuid::Variant::RFC4122,
+        "UUID-shaped role id"
+    );
+    for user in [V03_ROOT, V03_OPS] {
+        assert_eq!(
+            s.roles()
+                .roles_for_user(system, UserId(user))
+                .await
+                .expect("roles"),
+            vec![admin.clone()],
+            "system user {user} keeps administrator access"
+        );
+    }
+    assert_eq!(
+        s.roles()
+            .holders_of_permission(system, "admin:write")
+            .await
+            .expect("holders"),
+        1,
+        "the blocked administrator is not an active holder"
+    );
+    assert!(
+        s.roles()
+            .roles_for_user(default, UserId(V03_END_USER))
+            .await
+            .expect("roles")
+            .is_empty()
+    );
+    assert!(s.roles().list(default).await.expect("list").is_empty());
+
+    // The upgraded schema works for 0.4 writes: consent resources merge, roles can be assigned
+    // and deleting the system tenant cascades the backfilled rows.
+    let mut more =
+        anvil_storage::contract::new_consent(UserId(V03_END_USER), "v03-web", &["openid"]);
+    more.resources = vec!["https://api.example.test".to_owned()];
+    let merged = s
+        .grants()
+        .upsert_consent(default, &more, now())
+        .await
+        .expect("upsert consent");
+    assert_eq!(merged.id, consent.id);
+    assert_eq!(
+        merged.resources,
+        vec!["https://api.example.test".to_owned()]
+    );
+    assert!(s.tenants().delete(system).await.expect("delete system"));
+    let leftovers: i64 = sqlx::query_scalar(
+        "SELECT (SELECT count(*) FROM role) + (SELECT count(*) FROM role_assignment)",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("count");
+    assert_eq!(
+        leftovers, 0,
+        "roles and assignments cascade from the tenant"
+    );
+    pool.close().await;
+}
+
+/// A 0.3 database without a system tenant (never installed) gets no role at all.
+#[tokio::test]
+async fn upgrade_from_0_3_without_system_tenant_creates_no_role() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let url = format!("sqlite://{}", dir.path().join("anvil.db").display());
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::from_str(&url)
+                .expect("url")
+                .create_if_missing(true)
+                .foreign_keys(true),
+        )
+        .await
+        .expect("open raw pool");
+    sqlx::migrate!()
+        .run_to(LAST_V0_3_VERSION, &pool)
+        .await
+        .expect("0.3 migrations apply");
+    pool.close().await;
+    let storage = SqliteStorage::connect(&url).await.expect("connect");
+    storage
+        .migrate()
+        .await
+        .expect("0007 applies on an empty 0.3 database");
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(SqliteConnectOptions::from_str(&url).expect("url"))
+        .await
+        .expect("open raw pool");
+    let roles: i64 = sqlx::query_scalar("SELECT count(*) FROM role")
+        .fetch_one(&pool)
+        .await
+        .expect("count");
+    assert_eq!(roles, 0);
+}
+
+#[tokio::test]
+async fn upgrade_from_0_3_is_idempotent_on_restart() {
+    let up = upgraded_from_v0_3().await;
+    up.storage
+        .migrate()
+        .await
+        .expect("a second start finds nothing pending");
+    assert_eq!(
+        up.storage
+            .roles()
+            .list(TenantId(V03_SYSTEM))
+            .await
+            .expect("list")
+            .len(),
+        1,
+        "the backfill runs once"
+    );
+}
+
+/// Contract-suite factory: a database built through the 0.3 upgrade path, with the fixture
+/// tenants deleted through the storage traits (the contract tests start uninstalled).
+pub async fn upgraded_v0_3_sqlite() -> TestStorage {
+    let up = upgraded_from_v0_3().await;
+    for id in [V03_DEFAULT, V03_SYSTEM] {
+        assert!(
+            up.storage
+                .tenants()
+                .delete(TenantId(id))
+                .await
+                .expect("delete fixture tenant"),
+            "fixture tenant {id} missing"
+        );
+    }
+    TestStorage {
+        storage: Arc::new(up.storage),
+        _guard: Box::new(up._dir),
+    }
+}
+
+mod upgraded_v0_3_contract {
+    anvil_storage::storage_contract_tests!(crate::upgraded_v0_3_sqlite);
 }
