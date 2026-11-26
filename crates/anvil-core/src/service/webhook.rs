@@ -371,9 +371,36 @@ impl WebhookService {
         actor: AuditActor,
         ctx: &RequestContext,
     ) -> Result<EndpointWithSecret, CoreError> {
+        self.rotate_to(tenant, id, None, actor, ctx).await
+    }
+
+    /// [`Self::rotate_secret`] to a caller-provided `whsec_` secret (declarative configuration):
+    /// same grace period for the previous secret, same audit event.
+    pub async fn set_secret(
+        &self,
+        tenant: TenantId,
+        id: WebhookEndpointId,
+        secret: SecretString,
+        actor: AuditActor,
+        ctx: &RequestContext,
+    ) -> Result<WebhookEndpoint, CoreError> {
+        Ok(self
+            .rotate_to(tenant, id, Some(secret), actor, ctx)
+            .await?
+            .endpoint)
+    }
+
+    async fn rotate_to(
+        &self,
+        tenant: TenantId,
+        id: WebhookEndpointId,
+        provided: Option<SecretString>,
+        actor: AuditActor,
+        ctx: &RequestContext,
+    ) -> Result<EndpointWithSecret, CoreError> {
         // Existence first, so an unknown endpoint is NotFound before any sealing.
         self.get(tenant, id).await?;
-        let secret = provided_or_generated(None)?;
+        let secret = provided_or_generated(provided)?;
         let sealed = seal_webhook_secret(&self.kek, tenant, id, &secret)?;
         let now = truncate_to_ms(self.clock.now());
         if !self

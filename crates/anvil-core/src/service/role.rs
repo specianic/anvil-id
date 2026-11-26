@@ -133,7 +133,7 @@ fn is_system(tenant: &Tenant) -> bool {
     tenant.slug == SYSTEM_TENANT_SLUG
 }
 
-fn validate_description(d: &str) -> Result<String, CoreError> {
+pub(crate) fn validate_description(d: &str) -> Result<String, CoreError> {
     let d = d.trim();
     if d.chars().count() > MAX_ROLE_DESCRIPTION_LEN || d.chars().any(char::is_control) {
         return Err(CoreError::Validation {
@@ -255,17 +255,17 @@ impl UserClaimSource {
 // ---------------------------------------------------------------------------------------------
 
 /// Whether at least one active user other than `except_user` holds `admin:write` through a role
-/// other than `except_role`. Walks the holders of each other `admin:write` role and stops at
+/// not in `except_roles`. Walks the holders of each other `admin:write` role and stops at
 /// the first match.
 async fn other_admin_exists(
     storage: &dyn Storage,
     tenant: TenantId,
-    except_role: Option<RoleId>,
+    except_roles: &[RoleId],
     except_user: Option<UserId>,
     unassign: Option<(RoleId, UserId)>,
 ) -> Result<bool, CoreError> {
     for role in storage.roles().list(tenant).await? {
-        if Some(role.id) == except_role || !grants_admin_write(&role) {
+        if except_roles.contains(&role.id) || !grants_admin_write(&role) {
             continue;
         }
         let mut after = None;
@@ -325,7 +325,27 @@ pub async fn guard_user_removal(
     if !active || !holds {
         return Ok(());
     }
-    if other_admin_exists(storage, tenant, None, Some(user), None).await? {
+    if other_admin_exists(storage, tenant, &[], Some(user), None).await? {
+        Ok(())
+    } else {
+        Err(CoreError::LastAdministrator)
+    }
+}
+
+/// The last-administrator guard for a batch of role changes in the system tenant (declarative
+/// configuration): `losing` are the roles that stop granting `admin:write` (deleted, or edited
+/// without it). Refuses with `LastAdministrator` unless an active user keeps `admin:write`
+/// through another role. Lets the caller refuse the whole batch before changing anything;
+/// [`RoleService::update`] and [`RoleService::delete`] still check every single change.
+pub async fn guard_roles_losing_admin(
+    storage: &dyn Storage,
+    tenant: &Tenant,
+    losing: &[RoleId],
+) -> Result<(), CoreError> {
+    if !is_system(tenant) || losing.is_empty() {
+        return Ok(());
+    }
+    if other_admin_exists(storage, tenant.id, losing, None, None).await? {
         Ok(())
     } else {
         Err(CoreError::LastAdministrator)
@@ -643,7 +663,8 @@ impl RoleService {
         except_role: Option<RoleId>,
         unassign: Option<(RoleId, UserId)>,
     ) -> Result<(), CoreError> {
-        if other_admin_exists(self.storage.as_ref(), tenant, except_role, None, unassign).await? {
+        let except: Vec<RoleId> = except_role.into_iter().collect();
+        if other_admin_exists(self.storage.as_ref(), tenant, &except, None, unassign).await? {
             Ok(())
         } else {
             Err(CoreError::LastAdministrator)

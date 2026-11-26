@@ -406,7 +406,7 @@ fn test_send_audit(result: &TestSendResult) -> (AuditOutcome, AuditDetails) {
 
 /// Validates a template override (length limits, then the checker) and builds the stored
 /// value.
-fn plan_template(
+pub(crate) fn plan_template(
     checker: &dyn EmailTemplateCheck,
     kind: EmailKind,
     input: TemplateInput,
@@ -461,7 +461,7 @@ fn issue_to_error(issue: TemplateIssue) -> TemplateError {
 
 /// Validates SMTP input and builds the stored settings, sealing a new password or keeping the
 /// current one.
-fn plan_smtp(
+pub(crate) fn plan_smtp(
     kek: &Kek,
     tenant: TenantId,
     input: SmtpInput,

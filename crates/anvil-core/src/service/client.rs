@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use anvil_jose::Jwks;
 use anvil_jose::encoding::{random_token, secret_hash};
-use secrecy::SecretString;
+use secrecy::{ExposeSecret as _, SecretString};
 
 use crate::clock::Clock;
 use crate::error::CoreError;
@@ -403,6 +403,47 @@ fn normalized_list(items: &[String]) -> Vec<String> {
     out
 }
 
+/// Longest caller-chosen `client_id` (declarative configuration).
+pub const MAX_CLIENT_ID_LEN: usize = 128;
+/// Shortest caller-provided client secret: the stored hash is a plain SHA-256, so provided
+/// secrets must be as unguessable as generated ones (43 characters).
+pub const MIN_CLIENT_SECRET_LEN: usize = 32;
+/// Longest caller-provided client secret.
+pub const MAX_CLIENT_SECRET_LEN: usize = 512;
+
+/// A caller-chosen static `client_id`: 1-128 characters of A-Z, a-z, 0-9, '.', '_', '~' and
+/// '-' (generated ids and the console client id fit; URL-shaped ids belong to CIMD clients).
+pub fn validate_client_id(client_id: &str) -> Result<(), CoreError> {
+    let ok = (1..=MAX_CLIENT_ID_LEN).contains(&client_id.len())
+        && client_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'~' | b'-'));
+    if ok {
+        Ok(())
+    } else {
+        Err(invalid(
+            "client_id",
+            "must be 1-128 characters of A-Z, a-z, 0-9, '.', '_', '~' and '-'",
+        ))
+    }
+}
+
+/// A caller-provided client secret: 32-512 characters without whitespace or control characters.
+pub fn validate_client_secret(secret: &SecretString) -> Result<(), CoreError> {
+    let s = secret.expose_secret();
+    let len = s.chars().count();
+    if (MIN_CLIENT_SECRET_LEN..=MAX_CLIENT_SECRET_LEN).contains(&len)
+        && !s.chars().any(|c| c.is_whitespace() || c.is_control())
+    {
+        Ok(())
+    } else {
+        Err(invalid(
+            "secret",
+            "must be 32-512 characters without whitespace (use a randomly generated value)",
+        ))
+    }
+}
+
 /// A freshly generated `client_id`.
 pub fn new_client_id() -> String {
     random_token()[..CLIENT_ID_LEN].to_owned()
@@ -455,8 +496,39 @@ impl ClientService {
         actor: AuditActor,
         ctx: &RequestContext,
     ) -> Result<CreatedClient, CoreError> {
-        self.insert(tenant, input, options, None, Some(actor), ctx)
+        self.insert(tenant, input, options, None, None, Some(actor), ctx)
             .await
+    }
+
+    /// Registers a static client under a caller-chosen `client_id` (declarative configuration),
+    /// with the same rules and audit event as [`Self::create`]. A secret-based client gets
+    /// `secret` when given (checked with [`validate_client_secret`]; `client_secret` of the result
+    /// is then `None`), else a generated secret returned once. A taken `client_id` is `Conflict`.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "create plus the chosen client_id and secret"
+    )]
+    pub async fn create_static(
+        &self,
+        tenant: &Tenant,
+        client_id: &str,
+        input: ClientInput,
+        options: ClientOptions,
+        secret: Option<SecretString>,
+        actor: AuditActor,
+        ctx: &RequestContext,
+    ) -> Result<CreatedClient, CoreError> {
+        validate_client_id(client_id)?;
+        self.insert(
+            tenant,
+            input,
+            options,
+            None,
+            Some((client_id, secret)),
+            Some(actor),
+            ctx,
+        )
+        .await
     }
 
     /// Registers a dynamic client (RFC 7591) with the same rules as [`Self::create`]: the row has
@@ -476,19 +548,26 @@ impl ClientService {
             options,
             Some(registration_access_token_hash),
             None,
+            None,
             ctx,
         )
         .await
     }
 
     /// The one client insertion path. `dynamic = Some(hash)` stores a dynamic client with its
-    /// registration access token hash; `actor = None` audits the new client as the actor.
+    /// registration access token hash; `chosen` is a caller-chosen `client_id` and optional
+    /// secret (declarative configuration); `actor = None` audits the new client as the actor.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the shared body of create, create_static and create_dynamic"
+    )]
     async fn insert(
         &self,
         tenant: &Tenant,
         input: ClientInput,
         options: ClientOptions,
         dynamic: Option<SecretHash>,
+        chosen: Option<(&str, Option<SecretString>)>,
         actor: Option<AuditActor>,
         ctx: &RequestContext,
     ) -> Result<CreatedClient, CoreError> {
@@ -496,16 +575,30 @@ impl ClientService {
         validate_client_options(&input, &options, &tenant.settings)?;
         validate_client_phase4(&input, &options, self.redirect_validator)?;
         let allowed_resources = parse_resources(&options.allowed_resources)?;
-        let (secret, hash) = if uses_secret(input.auth_method) {
-            let (s, h) = new_client_secret();
-            (Some(s), Some(h))
-        } else {
-            (None, None)
+        let provided = chosen.as_ref().and_then(|(_, s)| s.clone());
+        let (secret, hash) = match (uses_secret(input.auth_method), provided) {
+            (true, Some(s)) => {
+                validate_client_secret(&s)?;
+                (None, Some(SecretHash(secret_hash(s.expose_secret()))))
+            }
+            (true, None) => {
+                let (s, h) = new_client_secret();
+                (Some(s), Some(h))
+            }
+            (false, Some(_)) => {
+                return Err(invalid(
+                    "secret",
+                    "only clients using client_secret_basic or client_secret_post have a secret",
+                ));
+            }
+            (false, None) => (None, None),
         };
         let now = self.clock.now();
         let mut new = NewClient {
             id: ClientId::new_v7(),
-            client_id: new_client_id(),
+            client_id: chosen
+                .as_ref()
+                .map_or_else(new_client_id, |(id, _)| (*id).to_owned()),
             name: input.name.trim().to_owned(),
             client_type: input.client_type,
             application_type: input.application_type,
@@ -541,6 +634,9 @@ impl ClientService {
         };
         // A client_id collision is astronomically unlikely; retry once with a fresh id.
         let client = match self.storage.clients().create(tenant.id, &new).await {
+            Err(StorageError::Conflict(_)) if chosen.is_some() => {
+                return Err(CoreError::Conflict("client_id already in use".to_owned()));
+            }
             Err(StorageError::Conflict(_)) => {
                 new.id = ClientId::new_v7();
                 new.client_id = new_client_id();
@@ -772,6 +868,43 @@ impl ClientService {
             ));
         }
         let (secret, hash) = new_client_secret();
+        self.store_secret_hash(tenant, client_id, hash, actor, ctx)
+            .await?;
+        Ok(secret)
+    }
+
+    /// Replaces the secret of a secret-based client with a caller-provided one (declarative
+    /// configuration), checked with [`validate_client_secret`]. Audited like
+    /// [`Self::rotate_secret`].
+    pub async fn set_secret(
+        &self,
+        tenant: TenantId,
+        client_id: &str,
+        secret: SecretString,
+        actor: AuditActor,
+        ctx: &RequestContext,
+    ) -> Result<(), CoreError> {
+        let current = self.get(tenant, client_id).await?;
+        if !uses_secret(current.auth_method) {
+            return Err(invalid(
+                "auth_method",
+                "only clients using client_secret_basic or client_secret_post have a secret",
+            ));
+        }
+        validate_client_secret(&secret)?;
+        let hash = SecretHash(secret_hash(secret.expose_secret()));
+        self.store_secret_hash(tenant, client_id, hash, actor, ctx)
+            .await
+    }
+
+    async fn store_secret_hash(
+        &self,
+        tenant: TenantId,
+        client_id: &str,
+        hash: SecretHash,
+        actor: AuditActor,
+        ctx: &RequestContext,
+    ) -> Result<(), CoreError> {
         if !self
             .storage
             .clients()
@@ -788,8 +921,7 @@ impl ClientService {
             ctx,
             AuditDetails::empty(),
         )
-        .await?;
-        Ok(secret)
+        .await
     }
 
     /// Deletes the client; its token families are revoked by the repository. Audited as
@@ -842,7 +974,6 @@ impl ClientService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use secrecy::ExposeSecret as _;
 
     /// Test validator: accepts https URIs, and http loopback URIs for native clients.
     fn test_validator(uri: &str, app: ApplicationType) -> Result<(), CoreError> {

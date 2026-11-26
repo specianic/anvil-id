@@ -158,7 +158,7 @@ pub(crate) fn validate_display_name(name: &str) -> Result<String, CoreError> {
 }
 
 /// Custom host: a lowercase DNS name with an optional port, no scheme or path.
-fn validate_host(host: &str) -> Result<String, CoreError> {
+pub(crate) fn validate_host(host: &str) -> Result<String, CoreError> {
     let host = host.trim().to_ascii_lowercase();
     let (name, port) = match host.split_once(':') {
         Some((n, p)) => (n, Some(p)),
