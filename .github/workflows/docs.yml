@@ -1,0 +1,68 @@
+# Documentation site (plan 07-07). Builds docs/ with mdBook on every docs change, checks the output
+# (no external assets, no tracking, no research paths, no broken internal links) and uploads it as an
+# artifact. Publishing to GitHub Pages happens only when the owner dispatches this workflow with
+# `publish: true` after enabling Pages for the repository (plan 07-27).
+name: docs
+
+on:
+  pull_request:
+    paths:
+      - "docs/**"
+      - "book.toml"
+      - "scripts/check-docs-site.sh"
+      - ".github/workflows/docs.yml"
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "book.toml"
+      - "scripts/check-docs-site.sh"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish the built site to GitHub Pages"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: build + check
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      # Pinned mdBook release binary; install-action verifies its checksum.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: mdbook@0.5.4
+      - name: Build the site
+        run: mdbook build
+      - name: Check script self-test
+        run: scripts/check-docs-site.sh --self-test
+      - name: Check the built site
+        run: scripts/check-docs-site.sh book
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: book
+
+  deploy:
+    name: publish to GitHub Pages
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
