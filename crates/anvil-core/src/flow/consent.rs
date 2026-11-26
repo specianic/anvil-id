@@ -45,24 +45,47 @@ pub fn missing_scopes<'a>(granted: &[String], requested: &'a [String]) -> Vec<&'
         .collect()
 }
 
+/// The requested RFC 8707 resources not covered by `granted` (exact string comparison: the
+/// values were already validated against the client's allowed resources).
+pub fn missing_resources<'a>(granted: &[String], requested: &'a [String]) -> Vec<&'a str> {
+    missing_scopes(granted, requested)
+}
+
+/// Scopes and RFC 8707 resources: what a stored grant covers, or what a request asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConsentCoverage<'a> {
+    pub scopes: &'a [String],
+    pub resources: &'a [String],
+}
+
+impl ConsentCoverage<'_> {
+    /// Whether every scope and every resource of `requested` is covered by `self`.
+    pub fn covers(&self, requested: &ConsentCoverage<'_>) -> bool {
+        missing_scopes(self.scopes, requested.scopes).is_empty()
+            && missing_resources(self.resources, requested.resources).is_empty()
+    }
+}
+
 /// Decides whether consent is needed:
 ///
 /// - `skip_first_party` clients never ask;
 /// - `prompt=consent` always asks;
-/// - an active grant covering every requested scope skips the screen;
+/// - an active grant covering every requested scope and every requested resource skips the
+///   screen (a grant stored before 0.4 covers no resource, so the first request with a resource
+///   asks once);
 /// - otherwise the screen is required, and with `prompt=none` that is `consent_required`
 ///   (OIDC Core §3.1.2.6), delivered to the client through its response mode.
 pub fn consent_decision(
     mode: ConsentMode,
-    granted: Option<&[String]>,
-    requested: &[String],
+    granted: Option<ConsentCoverage<'_>>,
+    requested: ConsentCoverage<'_>,
     prompt: &[String],
 ) -> Result<ConsentDecision, CoreError> {
     if mode == ConsentMode::SkipFirstParty {
         return Ok(ConsentDecision::Skip);
     }
     let forced = prompt.iter().any(|p| p == "consent");
-    let covered = granted.is_some_and(|g| missing_scopes(g, requested).is_empty());
+    let covered = granted.is_some_and(|g| g.covers(&requested));
     if covered && !forced {
         return Ok(ConsentDecision::Skip);
     }
@@ -93,6 +116,10 @@ pub struct PendingConsent {
     pub client_id: String,
     /// The requested scopes, granted as a whole on Allow.
     pub scopes: Vec<String>,
+    /// The requested RFC 8707 resources (request order), granted as a whole on Allow. Absent in
+    /// the JSON of a request without resources (and of flows created before 0.4).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resources: Vec<String>,
 }
 
 /// Opaque state of a consent flow.
@@ -179,14 +206,39 @@ impl ConsentState {
 mod tests {
     use super::*;
 
-    /// `consent_decision` with the error reduced to its OAuth code (CoreError is not `PartialEq`).
+    /// `consent_decision` (scopes only, no resources) with the error reduced to its OAuth code
+    /// (CoreError is not `PartialEq`).
     fn decision(
         mode: ConsentMode,
         granted: Option<&[String]>,
         requested: &[String],
         prompt: &[String],
     ) -> Result<ConsentDecision, &'static str> {
-        consent_decision(mode, granted, requested, prompt).map_err(|e| e.oauth_error())
+        decision_with(
+            mode,
+            granted.map(|g| (g, &[][..])),
+            (requested, &[]),
+            prompt,
+        )
+    }
+
+    /// `consent_decision` with `(scopes, resources)` pairs.
+    fn decision_with(
+        mode: ConsentMode,
+        granted: Option<(&[String], &[String])>,
+        requested: (&[String], &[String]),
+        prompt: &[String],
+    ) -> Result<ConsentDecision, &'static str> {
+        consent_decision(
+            mode,
+            granted.map(|(scopes, resources)| ConsentCoverage { scopes, resources }),
+            ConsentCoverage {
+                scopes: requested.0,
+                resources: requested.1,
+            },
+            prompt,
+        )
+        .map_err(|e| e.oauth_error())
     }
 
     fn s(list: &[&str]) -> Vec<String> {
@@ -288,6 +340,136 @@ mod tests {
     }
 
     #[test]
+    fn a_grant_covering_scopes_and_resources_skips() {
+        let scopes = s(&["openid", "profile"]);
+        let mcp = s(&["https://mcp.example/"]);
+        assert_eq!(
+            decision_with(
+                ConsentMode::Required,
+                Some((&scopes, &mcp)),
+                (&scopes, &mcp),
+                &[]
+            ),
+            Ok(ConsentDecision::Skip)
+        );
+        // No resource requested: the scopes decide.
+        assert_eq!(
+            decision_with(
+                ConsentMode::Required,
+                Some((&scopes, &mcp)),
+                (&scopes, &[]),
+                &[]
+            ),
+            Ok(ConsentDecision::Skip)
+        );
+        // A subset of the granted resources.
+        let both = s(&["https://mcp.example/", "https://other.example/"]);
+        assert_eq!(
+            decision_with(
+                ConsentMode::Required,
+                Some((&scopes, &both)),
+                (&scopes, &mcp),
+                &[]
+            ),
+            Ok(ConsentDecision::Skip)
+        );
+    }
+
+    #[test]
+    fn a_new_resource_requires_consent() {
+        let scopes = s(&["openid", "profile"]);
+        let granted = s(&["https://mcp.example/"]);
+        let requested = s(&["https://mcp.example/", "https://other.example/"]);
+        assert_eq!(
+            decision_with(
+                ConsentMode::Required,
+                Some((&scopes, &granted)),
+                (&scopes, &requested),
+                &[]
+            ),
+            Ok(ConsentDecision::Required)
+        );
+        assert_eq!(
+            missing_resources(&granted, &requested),
+            ["https://other.example/"]
+        );
+        // With prompt=none that is consent_required.
+        assert_eq!(
+            decision_with(
+                ConsentMode::Required,
+                Some((&scopes, &granted)),
+                (&scopes, &requested),
+                &s(&["none"])
+            ),
+            Err("consent_required")
+        );
+        // Resources are compared exactly (no normalisation beyond validation).
+        assert_eq!(
+            decision_with(
+                ConsentMode::Required,
+                Some((&scopes, &granted)),
+                (&scopes, &s(&["https://mcp.example"])),
+                &[]
+            ),
+            Ok(ConsentDecision::Required)
+        );
+        // skip_first_party still never asks.
+        assert_eq!(
+            decision_with(
+                ConsentMode::SkipFirstParty,
+                None,
+                (&scopes, &requested),
+                &[]
+            ),
+            Ok(ConsentDecision::Skip)
+        );
+    }
+
+    #[test]
+    fn a_grant_without_resources_asks_once_for_a_resource() {
+        // A 0.3 grant: scopes only.
+        let scopes = s(&["openid"]);
+        let mcp = s(&["https://mcp.example/"]);
+        assert_eq!(
+            decision_with(
+                ConsentMode::Required,
+                Some((&scopes, &[])),
+                (&scopes, &mcp),
+                &[]
+            ),
+            Ok(ConsentDecision::Required)
+        );
+        assert_eq!(
+            decision_with(
+                ConsentMode::Required,
+                Some((&scopes, &[])),
+                (&scopes, &[]),
+                &[]
+            ),
+            Ok(ConsentDecision::Skip)
+        );
+    }
+
+    #[test]
+    fn pending_resources_are_omitted_when_empty_and_default_when_absent() {
+        let mut p = pending();
+        let state = ConsentState::for_request(UserId::new_v7(), p.clone());
+        assert!(
+            !state.to_json().contains("resources"),
+            "{}",
+            state.to_json()
+        );
+        p.resources = s(&["https://mcp.example/"]);
+        let state = ConsentState::for_request(UserId::new_v7(), p);
+        let json = state.to_json();
+        assert!(
+            json.contains("\"resources\":[\"https://mcp.example/\"]"),
+            "{json}"
+        );
+        assert_eq!(ConsentState::from_json(&json), Ok(state));
+    }
+
+    #[test]
     fn standard_scopes_have_descriptions() {
         assert_eq!(scope_description("openid"), Some("Sign you in"));
         assert_eq!(scope_description("offline_access"), Some("Stay signed in"));
@@ -302,6 +484,7 @@ mod tests {
             request_id: AuthRequestId::new_v7(),
             client_id: "rp".into(),
             scopes: s(&["openid", "email"]),
+            resources: Vec::new(),
         }
     }
 

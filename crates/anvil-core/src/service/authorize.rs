@@ -312,7 +312,14 @@ impl AuthorizeService {
         let requested = requested_scopes(&params.scope);
         match self
             .consent()
-            .decide(tenant.id, session.user_id, client, &requested, prompt)
+            .decide(
+                tenant.id,
+                session.user_id,
+                client,
+                &requested,
+                &params.resource,
+                prompt,
+            )
             .await
         {
             Ok(d) => Ok(Ok(d)),

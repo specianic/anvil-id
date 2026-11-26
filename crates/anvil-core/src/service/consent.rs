@@ -18,10 +18,19 @@
 //!
 //! # Grants
 //!
-//! Allow stores the union of the granted and the requested scopes (`GrantRepo::upsert_consent`)
-//! and records `consent_granted`. Requested RFC 8707 resources are shown on the screen but are
-//! not part of the stored grant (Phase 5 gap, see [`ConsentPage::resources`]). Revoking a grant
-//! revokes every token family of that user and client in the same transaction (`GrantRepo::revoke_consent`) and records `consent_revoked`.
+//! Allow stores the union of the granted and the requested scopes and RFC 8707 resources in one
+//! `GrantRepo::upsert_consent` (resources merged as a sorted set) and records `consent_granted`.
+//! A remembered grant skips the screen only when it covers every requested scope and every
+//! requested resource ([`consent_decision`]); a grant stored before 0.4 has no resources, so the
+//! first request with a resource asks once. Revoking a grant (scopes and resources) revokes every
+//! token family of that user and client in the same transaction (`GrantRepo::revoke_consent`) and
+//! records `consent_revoked`.
+//!
+//! # Clients from a metadata document
+//!
+//! For a CIMD client (`registration_source = cimd`) the client's name comes from a document the
+//! client itself publishes, so [`ConsentPage::cimd_host`] carries the host of its `client_id` URL
+//! for the screen to show as the client's identity.
 
 use std::sync::Arc;
 
@@ -33,12 +42,13 @@ use super::audit::AuditService;
 use super::flow::{BindingError, FLOW_LIFETIME, check_binding};
 use crate::error::CoreError;
 use crate::flow::consent::{
-    ConsentDecision, ConsentState, PendingConsent, consent_decision, requested_scopes,
+    ConsentCoverage, ConsentDecision, ConsentState, PendingConsent, consent_decision,
+    requested_scopes,
 };
 use crate::model::{
     AuditAction, AuditActor, AuditDetails, AuditOutcome, AuthRequestId, BrowserSession, Client,
-    ConsentId, Flow, FlowId, FlowKind, NewConsent, NewFlow, RequestContext, SecretHash, TenantId,
-    UserId,
+    ClientSource, ConsentId, Flow, FlowId, FlowKind, NewConsent, NewFlow, RequestContext,
+    SecretHash, TenantId, UserId, normalize_resources,
 };
 use crate::ports::{Clock, Storage};
 
@@ -67,10 +77,25 @@ pub struct ConsentPage {
     /// The requested scopes, in request order.
     pub scopes: Vec<String>,
     /// The RFC 8707 resources the tokens will be audience-bound to, in request order (already
-    /// validated against the client's allowed resources). Shown on the screen only: a stored
-    /// grant covers scopes, not resources (resource-aware grants are a Phase 5 item), so a
-    /// remembered consent does not re-prompt for a different resource of the same client.
+    /// validated against the client's allowed resources). Allow adds them to the stored grant;
+    /// a later request for a resource outside the grant shows the screen again.
     pub resources: Vec<String>,
+    /// For a CIMD client (`registration_source = cimd`): the host (with a non-default port) of
+    /// its `client_id` URL, the only verified part of its identity. `client_name` then comes
+    /// from the client's own metadata document and is unverified. `None` for other clients.
+    pub cimd_host: Option<String>,
+}
+
+/// The host of a CIMD client's `client_id` URL, with the port when it is not the scheme's
+/// default. `None` when `client_id` is not a URL with a host (never the case for a stored CIMD
+/// client).
+pub fn cimd_host(client_id: &str) -> Option<String> {
+    let url = url::Url::parse(client_id).ok()?;
+    let host = url.host_str()?;
+    Some(match url.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host.to_owned(),
+    })
 }
 
 /// Result of opening the consent screen.
@@ -130,14 +155,16 @@ impl ConsentService {
         }
     }
 
-    /// Whether `user` must see the consent screen for `client` and the `requested` scopes
-    /// ([`consent_decision`]). `Err(ConsentRequired)` when it is needed and `prompt=none`.
+    /// Whether `user` must see the consent screen for `client`, the `requested` scopes and the
+    /// requested RFC 8707 `resources` ([`consent_decision`]). `Err(ConsentRequired)` when it is
+    /// needed and `prompt=none`.
     pub async fn decide(
         &self,
         tenant: TenantId,
         user: UserId,
         client: &Client,
         requested: &[String],
+        resources: &[String],
         prompt: &[String],
     ) -> Result<ConsentDecision, CoreError> {
         let grant = match client.consent_mode {
@@ -151,8 +178,14 @@ impl ConsentService {
         };
         consent_decision(
             client.consent_mode,
-            grant.as_ref().map(|g| g.scopes.as_slice()),
-            requested,
+            grant.as_ref().map(|g| ConsentCoverage {
+                scopes: &g.scopes,
+                resources: &g.resources,
+            }),
+            ConsentCoverage {
+                scopes: requested,
+                resources,
+            },
             prompt,
         )
     }
@@ -219,9 +252,14 @@ impl ConsentService {
                 request_id,
                 client_id: client.client_id.clone(),
                 scopes: scopes.clone(),
+                resources: request.params.resource.clone(),
             },
         );
         let flow = self.create_flow(tenant, &state, Some(request_id)).await?;
+        let cimd_host = match client.registration_source {
+            ClientSource::Cimd => cimd_host(&client.client_id),
+            ClientSource::Static | ClientSource::Dynamic => None,
+        };
         Ok(ConsentStart::Started {
             flow,
             page: ConsentPage {
@@ -230,6 +268,7 @@ impl ConsentService {
                 client_name: client.name,
                 scopes,
                 resources: request.params.resource.clone(),
+                cimd_host,
             },
         })
     }
@@ -319,7 +358,7 @@ impl ConsentService {
         Ok(Some(pending))
     }
 
-    /// Allow: stores the grant (union of scopes), records `consent_granted` and returns the
+    /// Allow: stores the grant (union of scopes and of resources), records `consent_granted` and returns the
     /// request to continue.
     pub async fn approve(
         &self,
@@ -343,7 +382,7 @@ impl ConsentService {
                     client_id: pending.client_id.clone(),
                     scopes: pending.scopes.clone(),
                     created_at: now,
-                    resources: Vec::new(),
+                    resources: normalize_resources(&pending.resources),
                 },
                 now,
             )
@@ -453,5 +492,31 @@ impl ConsentService {
                 .await?;
         }
         Ok(revoked)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cimd_host;
+
+    #[test]
+    fn cimd_host_is_the_client_id_host_with_a_non_default_port() {
+        assert_eq!(
+            cimd_host("https://app.example.com/oauth/client.json").as_deref(),
+            Some("app.example.com")
+        );
+        assert_eq!(
+            cimd_host("https://app.example.com:443/c").as_deref(),
+            Some("app.example.com")
+        );
+        assert_eq!(
+            cimd_host("https://app.example.com:8443/c").as_deref(),
+            Some("app.example.com:8443")
+        );
+        assert_eq!(
+            cimd_host("http://127.0.0.1:9000/c").as_deref(),
+            Some("127.0.0.1:9000")
+        );
+        assert_eq!(cimd_host("my-static-client"), None);
     }
 }
