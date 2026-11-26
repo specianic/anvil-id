@@ -19,6 +19,8 @@ async-trait.workspace = true
 aws-lc-rs.workspace = true
 axum.workspace = true
 axum-extra.workspace = true
+# Legacy password-hash verification only (07-01, ADM-08; deny.toml wrappers).
+bcrypt.workspace = true
 # SAML SP (06-09): XML-DSig on aws-lc, uppsala as the single parser, DEFLATE for HTTP-Redirect.
 bergshamra-dsig.workspace = true
 bergshamra-keys.workspace = true
@@ -36,9 +38,11 @@ moka.workspace = true
 qrcodegen.workspace = true
 reqwest.workspace = true
 rust-embed.workspace = true
+scrypt.workspace = true
 secrecy.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+subtle.workspace = true
 thiserror.workspace = true
 time.workspace = true
 tokio.workspace = true

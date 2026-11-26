@@ -152,6 +152,14 @@ idna = "1.1.0"
 # DEFLATE for the SAML HTTP-Redirect binding: pure Rust (miniz_oxide).
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
+# Phase 7 (release 1.0). Every crate Phase 7 needs is declared here once.
+# Legacy password-hash verification only (ADM-08): imported bcrypt/scrypt/Firebase scrypt hashes are verified
+# once, then re-hashed with Argon2id. aws-lc-rs has no scrypt or bcrypt and FFI needs unsafe. blowfish and
+# salsa20 are scoped to these wrappers in deny.toml (ARCHITECTURE.md §2; owner review pending, 07-01).
+# PBKDF2, SHA-2 and AES-CTR stay on aws-lc-rs. No `phc`/`mcf`/`rayon` on scrypt; bcrypt `verify` needs `alloc`.
+scrypt = { version = "0.12.0", default-features = false }
+bcrypt = { version = "0.19.3", default-features = false, features = ["alloc"] }
+
 # Dev-only (tests).
 proptest = "1.12.0"
 insta = { version = "1.49.0", features = ["json"] }
