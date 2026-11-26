@@ -6,14 +6,14 @@ current_phase: 05
 current_phase_name: release 0 4 operate it
 current_plan: 33
 status: executing
-stopped_at: Completed 06-21-PLAN.md
-last_updated: "2026-11-26T11:54:19.470Z"
+stopped_at: Completed 06-19-PLAN.md
+last_updated: "2026-11-26T11:58:47.434Z"
 last_activity: 2026-11-26
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 162
-  completed_plans: 150
+  completed_plans: 151
   percent: 93
 ---
 
@@ -207,6 +207,7 @@ done before 05-29 tags v0.4.0.
 | Phase 06 P14 | about 1h | 2 tasks | 7 files |
 | Phase 06 P12 | 75min | 3 tasks | 11 files |
 | Phase 06 P21 | 45min | 2 tasks | 16 files |
+| Phase 06 P19 | 50min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -481,6 +482,8 @@ Recent decisions affecting current work:
 - [Phase 06]: 06-14: org connection email trust = enterprise_email_trust over the org's verified domains, AND-ed with the connection trust (OIDC); complete_identity is the one Login completion path (SAML reuses it); org JIT follows the tenant upstream_registration
 - [Phase 06]: 06-12: org-admin principal = OrgAdminAuth (same verification path as AdminAuth); 401 for tokens not for the admin API, 403 for valid tokens that are not org admins of the path org; tenant-restricted system admins deferred to Phase 7
 - [Phase 06]: 06-21: console org layout uses route-link section nav (ORG_SECTIONS) so 06-23 adds sibling files; user memberships and add-member-by-email are console-side workarounds for missing API filters (deferred-items)
+- [Phase 06]: 06-19: org switcher choice is written to the stored request by delete + re-create under the same id (CAS without a new GrantRepo method); switcher only for required-policy requests naming no org
+- [Phase 06]: 06-19: effective MFA = strictest(tenant, active org, client) once the session user selects an org; during first password login the org is unknown, so a stricter org adds a step-up before the code
 
 ### Pending Todos
 
@@ -493,6 +496,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-26T11:54:19.467Z
-Stopped at: Completed 06-21-PLAN.md
+Last session: 2026-11-26T11:58:30.808Z
+Stopped at: Completed 06-19-PLAN.md
 Resume file: None
