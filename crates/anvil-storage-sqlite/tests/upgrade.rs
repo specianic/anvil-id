@@ -6,9 +6,11 @@
 //! is then checked through the storage traits. Finally the whole contract suite runs against
 //! databases built through this upgrade path.
 //!
-//! The same shape covers 0.2 → 0.3 (row-preserving CHECK rebuilds) and 0.3 → 0.4 (migration 0007:
-//! additive schema plus the system tenant's administrator role backfill), each with its own
-//! fixtures and its own contract-suite run.
+//! The same shape covers 0.2 → 0.3 (row-preserving CHECK rebuilds), 0.3 → 0.4 (migration 0007:
+//! additive schema plus the system tenant's administrator role backfill) and 0.4 → 1.0
+//! (migration 0008, additive, and 0009, the no-transaction rebuild of connection, role,
+//! role_assignment, replay_guard and email_template), each with its own fixtures and its own
+//! contract-suite run.
 
 use std::collections::BTreeMap;
 use std::str::FromStr;
@@ -1184,4 +1186,418 @@ pub async fn upgraded_v0_3_sqlite() -> TestStorage {
 
 mod upgraded_v0_3_contract {
     anvil_storage::storage_contract_tests!(crate::upgraded_v0_3_sqlite);
+}
+
+// ---------------------------------------------------------------------------------------------
+// 0.4 → 1.0 (migration 0008: organizations, memberships, invitations, domains, org_id on codes and
+// families, client organization policy; migration 0009: no-transaction rebuild of connection,
+// role, role_assignment, replay_guard and email_template). identity_link references connection
+// and role_assignment references role ON DELETE CASCADE, so a rebuild with foreign keys on would
+// delete them: these tests count them before and after.
+
+/// Last schema version shipped in 0.4.
+const LAST_V0_4_VERSION: i64 = 7;
+
+const V04_SYSTEM: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0004_0001);
+const V04_DEFAULT: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0004_0002);
+const V04_ROOT: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0004_0010);
+const V04_OPS: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0004_0011);
+const V04_ALICE: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0004_0012);
+const V04_BOB: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0004_0013);
+const V04_ADMIN_ROLE: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0004_0020);
+const V04_EDITOR_ROLE: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0004_0021);
+const V04_VIEWER_ROLE: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0004_0022);
+const V04_GOOGLE: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0004_0030);
+const V04_GITHUB: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0004_0031);
+const V04_OIDC: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0004_0032);
+const V04_OAUTH2: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0004_0033);
+const V04_FAMILY: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0004_0060);
+const V04_CODE_HASH: [u8; 32] = [0x44; 32];
+
+/// Tables 0009 rebuilds plus the tables that reference them, with the fixture's row counts.
+const V04_COUNTED: [(&str, i64); 6] = [
+    ("connection", 4),
+    ("identity_link", 4),
+    ("role", 3),
+    ("role_assignment", 5),
+    ("replay_guard", 3),
+    ("email_template", 3),
+];
+
+/// Seeded identity links: (tenant, link subject, connection, user).
+const V04_LINKS: [(Uuid, &str, Uuid, Uuid); 4] = [
+    (V04_DEFAULT, "google-alice", V04_GOOGLE, V04_ALICE),
+    (V04_DEFAULT, "github-alice", V04_GITHUB, V04_ALICE),
+    (V04_DEFAULT, "corp-bob", V04_OIDC, V04_BOB),
+    (V04_SYSTEM, "legacy-ops", V04_OAUTH2, V04_OPS),
+];
+
+/// Seeded role assignments: (tenant, role, user).
+const V04_ASSIGNMENTS: [(Uuid, Uuid, Uuid); 5] = [
+    (V04_SYSTEM, V04_ADMIN_ROLE, V04_ROOT),
+    (V04_SYSTEM, V04_ADMIN_ROLE, V04_OPS),
+    (V04_DEFAULT, V04_EDITOR_ROLE, V04_ALICE),
+    (V04_DEFAULT, V04_VIEWER_ROLE, V04_ALICE),
+    (V04_DEFAULT, V04_VIEWER_ROLE, V04_BOB),
+];
+
+struct UpgradedV04 {
+    storage: SqliteStorage,
+    url: String,
+    before: BTreeMap<String, Vec<String>>,
+    columns: BTreeMap<String, Vec<String>>,
+    counts_before: BTreeMap<&'static str, i64>,
+    _dir: tempfile::TempDir,
+}
+
+/// `count(*)` of each table in [`V04_COUNTED`].
+async fn v04_counts(pool: &sqlx::SqlitePool) -> BTreeMap<&'static str, i64> {
+    let mut out = BTreeMap::new();
+    for (table, _) in V04_COUNTED {
+        // Table names are compile-time constants of this test.
+        let sql = sqlx::AssertSqlSafe(format!("SELECT count(*) FROM \"{table}\""));
+        let n: i64 = sqlx::query_scalar(sql)
+            .fetch_one(pool)
+            .await
+            .unwrap_or_else(|e| panic!("count {table}: {e}"));
+        out.insert(table, n);
+    }
+    out
+}
+
+async fn raw_pool(url: &str) -> sqlx::SqlitePool {
+    SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::from_str(url)
+                .expect("url")
+                .create_if_missing(true)
+                .foreign_keys(true),
+        )
+        .await
+        .expect("open raw pool")
+}
+
+/// Builds a file database through the 0.4 → latest upgrade path.
+async fn upgraded_from_v0_4() -> UpgradedV04 {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let url = format!("sqlite://{}", dir.path().join("anvil.db").display());
+    let pool = raw_pool(&url).await;
+    sqlx::migrate!()
+        .run_to(LAST_V0_4_VERSION, &pool)
+        .await
+        .expect("0.4 migrations apply");
+    let version: i64 = sqlx::query_scalar("SELECT max(version) FROM _sqlx_migrations")
+        .fetch_one(&pool)
+        .await
+        .expect("version");
+    assert_eq!(version, LAST_V0_4_VERSION);
+    sqlx::raw_sql(include_str!("fixtures/release_0_4.sql"))
+        .execute(&pool)
+        .await
+        .expect("0.4 fixtures load");
+    let columns = table_columns(&pool).await;
+    let before = snapshot(&pool, &columns).await;
+    let counts_before = v04_counts(&pool).await;
+    for (table, want) in V04_COUNTED {
+        assert_eq!(counts_before[table], want, "fixture rows in {table}");
+    }
+    pool.close().await;
+
+    // The 1.0 binary starts: connect and migrate with the defaults (destructive refused).
+    let storage = SqliteStorage::connect(&url).await.expect("connect");
+    storage
+        .migrate_with(MigrateOptions::default())
+        .await
+        .expect("0.4 → latest upgrade applies without the destructive flag");
+    UpgradedV04 {
+        storage,
+        url,
+        before,
+        columns,
+        counts_before,
+        _dir: dir,
+    }
+}
+
+#[tokio::test]
+async fn upgrade_from_0_4_keeps_every_row() {
+    use anvil_core::model::{
+        ConnectionId, ConnectionKind, EmailKind, IdentityLinkId, NewIdentityLink, OrgClientPolicy,
+        ReplayKind, SYSTEM_ADMIN_ROLE,
+    };
+    use anvil_core::ports::{JtiOutcome, StorageError};
+
+    let up = upgraded_from_v0_4().await;
+    let s = &up.storage;
+    let system = TenantId(V04_SYSTEM);
+    let default = TenantId(V04_DEFAULT);
+    let pool = raw_pool(&up.url).await;
+
+    // Row counts of the rebuilt tables and of the tables referencing them are unchanged.
+    let counts_after = v04_counts(&pool).await;
+    assert_eq!(
+        counts_after, up.counts_before,
+        "0009 must not lose a connection, identity link, role, role assignment, replay guard or \
+         email template"
+    );
+    for (table, want) in V04_COUNTED {
+        assert_eq!(
+            counts_after[table], want,
+            "rows in {table} after the upgrade"
+        );
+    }
+    // Every row and every value of every 0.4 table survives (pre-upgrade columns).
+    let after = snapshot(&pool, &up.columns).await;
+    assert_eq!(
+        after, up.before,
+        "the upgrade must not lose or change any row"
+    );
+    let fk_violations: i64 = sqlx::query_scalar("SELECT count(*) FROM pragma_foreign_key_check")
+        .fetch_one(&pool)
+        .await
+        .expect("fk check");
+    assert_eq!(fk_violations, 0, "the rebuild passes the foreign key check");
+    let version: i64 = sqlx::query_scalar("SELECT max(version) FROM _sqlx_migrations")
+        .fetch_one(&pool)
+        .await
+        .expect("version");
+    assert_eq!(version, 9);
+
+    // The new columns take their defaults on old rows.
+    let conn = s
+        .connections()
+        .get(default, ConnectionId(V04_GOOGLE))
+        .await
+        .expect("get connection")
+        .expect("google survives");
+    assert_eq!(conn.org_id, None);
+    assert_eq!(conn.kind(), ConnectionKind::Google);
+    assert_eq!(conn.secret_enc, Some(vec![1, 2, 3, 4, 5]));
+    let kinds: Vec<ConnectionKind> = s
+        .connections()
+        .list(default)
+        .await
+        .expect("list")
+        .iter()
+        .map(|c| c.kind())
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![
+            ConnectionKind::Oidc,
+            ConnectionKind::Github,
+            ConnectionKind::Google
+        ],
+        "slug order: corp-oidc, github, google"
+    );
+    let web = s
+        .clients()
+        .get(default, "v04-web")
+        .await
+        .expect("get client")
+        .expect("client survives");
+    assert_eq!(web.organization, OrgClientPolicy::Off);
+    let family = s
+        .grants()
+        .get_family(default, TokenFamilyId(V04_FAMILY))
+        .await
+        .expect("family")
+        .expect("family survives");
+    assert_eq!(family.org_id, None);
+    match s
+        .grants()
+        .consume_code(default, &SecretHash(V04_CODE_HASH), now())
+        .await
+        .expect("consume")
+    {
+        ConsumeOutcome::Consumed(code) => {
+            assert_eq!(code.org_id, None);
+            assert_eq!(code.token_family_id, TokenFamilyId(V04_FAMILY));
+        }
+        other => panic!("the 0.4 code must survive: {other:?}"),
+    }
+    let admin = s
+        .roles()
+        .get_by_name(system, SYSTEM_ADMIN_ROLE)
+        .await
+        .expect("get_by_name")
+        .expect("administrator role survives");
+    assert_eq!(admin.org_id, None);
+    assert_eq!(
+        s.roles()
+            .holders_of_permission(system, "admin:write")
+            .await
+            .expect("holders"),
+        2,
+        "both administrators keep admin access"
+    );
+    assert_eq!(
+        s.mail_settings()
+            .list_templates(default)
+            .await
+            .expect("templates")
+            .iter()
+            .map(|t| t.kind)
+            .collect::<Vec<_>>(),
+        vec![EmailKind::LoginCode, EmailKind::Verification]
+    );
+    // The unexpired replay guard still blocks its replay.
+    assert_eq!(
+        s.grants()
+            .record_jti(
+                default,
+                ReplayKind::ClientAssertionJti,
+                &SecretHash([0x41; 32]),
+                now() + time::Duration::hours(1),
+                now(),
+            )
+            .await
+            .expect("record_jti"),
+        JtiOutcome::Replayed
+    );
+
+    // Foreign keys are enforced again, against the rebuilt tables: a link to an unknown
+    // connection is refused, and deleting a connection cascades to its links only.
+    let dangling = NewIdentityLink {
+        id: IdentityLinkId::new_v7(),
+        user_id: UserId(V04_ALICE),
+        connection_id: ConnectionId::new_v7(),
+        subject: "dangling".to_owned(),
+        email_at_link: None,
+        metadata: serde_json::Map::new(),
+        created_at: anvil_core::model::truncate_to_ms(now()),
+    };
+    assert!(matches!(
+        s.connections().create_link(default, &dangling).await,
+        Err(StorageError::Conflict(_))
+    ));
+    assert!(
+        s.connections()
+            .delete(default, ConnectionId(V04_GITHUB))
+            .await
+            .expect("delete connection")
+    );
+    let links: i64 = sqlx::query_scalar("SELECT count(*) FROM identity_link")
+        .fetch_one(&pool)
+        .await
+        .expect("count");
+    assert_eq!(links, 3, "only the deleted connection's link goes");
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn upgrade_from_0_4_keeps_identity_links_after_connection_rebuild() {
+    use anvil_core::model::{ConnectionId, RoleId};
+
+    let up = upgraded_from_v0_4().await;
+    let s = &up.storage;
+    for (tenant, subject, connection, user) in V04_LINKS {
+        let link = s
+            .connections()
+            .find_link(TenantId(tenant), ConnectionId(connection), subject)
+            .await
+            .expect("find_link")
+            .unwrap_or_else(|| panic!("link {subject} must survive the connection rebuild"));
+        assert_eq!(link.user_id, UserId(user), "link {subject} keeps its user");
+        assert_eq!(link.connection_id, ConnectionId(connection));
+        assert!(
+            s.connections()
+                .get(TenantId(tenant), ConnectionId(connection))
+                .await
+                .expect("get connection")
+                .is_some(),
+            "the connection of link {subject} exists"
+        );
+        assert!(
+            s.connections()
+                .has_links(TenantId(tenant), ConnectionId(connection))
+                .await
+                .expect("has_links")
+        );
+    }
+    assert_eq!(
+        s.connections()
+            .links_for_user(TenantId(V04_DEFAULT), UserId(V04_ALICE))
+            .await
+            .expect("links")
+            .len(),
+        2
+    );
+    for (tenant, role, user) in V04_ASSIGNMENTS {
+        let held: Vec<RoleId> = s
+            .roles()
+            .roles_for_user(TenantId(tenant), UserId(user))
+            .await
+            .expect("roles_for_user")
+            .into_iter()
+            .map(|r| r.id)
+            .collect();
+        assert!(
+            held.contains(&RoleId(role)),
+            "user {user} keeps role {role} after the role rebuild"
+        );
+        assert!(
+            s.users()
+                .get(TenantId(tenant), UserId(user))
+                .await
+                .expect("get user")
+                .is_some()
+        );
+    }
+    // Tenant-wide assignments stay tenant-wide (no org).
+    let pool = raw_pool(&up.url).await;
+    let with_org: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM role_assignment WHERE org_id IS NOT NULL")
+            .fetch_one(&pool)
+            .await
+            .expect("count");
+    assert_eq!(with_org, 0);
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn upgrade_from_0_4_is_idempotent_on_restart() {
+    let up = upgraded_from_v0_4().await;
+    up.storage
+        .migrate()
+        .await
+        .expect("a second start finds nothing pending");
+    // A fresh process on the same file finds nothing pending either.
+    let again = SqliteStorage::connect(&up.url).await.expect("reconnect");
+    again.migrate().await.expect("third start");
+    let pool = raw_pool(&up.url).await;
+    assert_eq!(v04_counts(&pool).await, up.counts_before);
+    let after = snapshot(&pool, &up.columns).await;
+    assert_eq!(after, up.before);
+    let applied: i64 = sqlx::query_scalar("SELECT count(*) FROM _sqlx_migrations")
+        .fetch_one(&pool)
+        .await
+        .expect("count");
+    assert_eq!(applied, 9, "every migration recorded once");
+    pool.close().await;
+}
+
+/// Contract-suite factory: a database built through the 0.4 upgrade path, with the fixture
+/// tenants deleted through the storage traits (the contract tests start uninstalled).
+pub async fn upgraded_v0_4_sqlite() -> TestStorage {
+    let up = upgraded_from_v0_4().await;
+    for id in [V04_DEFAULT, V04_SYSTEM] {
+        assert!(
+            up.storage
+                .tenants()
+                .delete(TenantId(id))
+                .await
+                .expect("delete fixture tenant"),
+            "fixture tenant {id} missing"
+        );
+    }
+    TestStorage {
+        storage: Arc::new(up.storage),
+        _guard: Box::new(up._dir),
+    }
+}
+
+mod upgraded_v0_4_contract {
+    anvil_storage::storage_contract_tests!(crate::upgraded_v0_4_sqlite);
 }
