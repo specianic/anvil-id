@@ -7,14 +7,14 @@ current_phase_name: release 0 3 real world logins
 current_plan: 37
 status: executing
 stopped_at: "04-33 Task 1 checkpoint: awaiting owner real-provider checklist (approved / waive) before tagging v0.3.0 from 9c2bdd2"
-last_updated: "2026-11-26T02:57:20.082Z"
+last_updated: "2026-11-26T03:00:52.490Z"
 last_activity: 2026-11-26
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 131
-  completed_plans: 106
-  percent: 81
+  completed_plans: 107
+  percent: 82
 ---
 
 # Project State
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 **Status:** Ready to execute
 **Last Activity:** 2026-11-26
 **Last Activity Description:** 04-32 phase gate complete (430-pair security map, anvilid 0.3.0, 0.3 migrations pinned, every workflow green on 9f88363)
-**Progress:** [████████░░] 81%
+**Progress:** [████████░░] 82%
 
 Phase 4 has 37 plans (04-01 through 04-37). Every plan except 04-33 (manual real-provider checklist, then tag
 v0.3.0) has a SUMMARY. Current Plan counts plans in execution order: 04-33 is the 37th and last.
@@ -162,6 +162,7 @@ v0.3.0) has a SUMMARY. Current Plan counts plans in execution order: 04-33 is th
 | Phase 05 P01 | 45min | 2 tasks | 46 files |
 | Phase 05 P08 | 50min | 2 tasks | 10 files |
 | Phase 05 P11 | 90min | 2 tasks | 10 files |
+| Phase 05 P02 | 75min | 2 tasks | 56 files |
 
 ## Accumulated Context
 
@@ -370,6 +371,8 @@ Recent decisions affecting current work:
 - [Phase 05]: 05-08: Redis down -> Auth check and brute_force_gate Deny{rest of 5 s breaker cool-down} (Closed) or local (Local); other classes and backoff bookkeeping use the embedded InProcessLimiter
 - [Phase 05]: 05-08: Redis-backed tests have redis in the name and are #[ignore]d; just test-redis runs them with --include-ignored (CI postgres job)
 - [Phase 05]: 05-11: in-flow passkey enrolment is a second choice on the one enrolment page (authenticator app first); LoginState.enroll_passkey is single-use via compare-and-swap; the stored passkey signs in as SessionAuth::Passkey
+- [Phase 05]: WebhookRepo::claim_due returns delivery+endpoint; complete() counts attempts and only changes Pending rows
+- [Phase 05]: AppState::attribute_check()/cimd_fetcher() live in adapters/attribute_schema.rs and adapters/cimd.rs returning None until 05-10/05-15
 
 ### Pending Todos
 
@@ -382,6 +385,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-26T02:57:20.076Z
-Stopped at: 04-33 Task 1 checkpoint: awaiting owner real-provider checklist (approved / waive) before tagging v0.3.0 from 9c2bdd2 (Phase 5 wave 2 in progress; 05-01, 05-03, 05-04, 05-08 and 05-11 complete)
+Last session: 2026-11-26T03:00:52.488Z
+Stopped at: 04-33 Task 1 checkpoint: awaiting owner real-provider checklist (approved / waive) before tagging v0.3.0 from 9c2bdd2 (Phase 5 wave 2 in progress; 05-01, 05-02, 05-03, 05-04, 05-08 and 05-11 complete)
 Resume file: .planning/phases/04-release-0-3-real-world-logins/04-33-PLAN.md
