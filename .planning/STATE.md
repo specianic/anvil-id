@@ -6,15 +6,15 @@ current_phase: 04
 current_phase_name: release 0 3 real world logins
 current_plan: 37
 status: executing
-stopped_at: Completed 05-21-PLAN.md
-last_updated: "2026-11-26T05:00:10.211Z"
+stopped_at: Completed 05-23-PLAN.md
+last_updated: "2026-11-26T05:26:04.364Z"
 last_activity: 2026-11-26
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 131
-  completed_plans: 123
-  percent: 94
+  completed_plans: 124
+  percent: 95
 ---
 
 # Project State
@@ -179,6 +179,7 @@ v0.3.0) has a SUMMARY. Current Plan counts plans in execution order: 04-33 is th
 | Phase 05 P22 | 25min | 2 tasks | 27 files |
 | Phase 05 P21 | 55min | 2 tasks | 10 files |
 | Phase 05 P20 | 60min | 2 tasks | 22 files |
+| Phase 05 P23 | 35min | 2 tasks | 16 files |
 
 ## Accumulated Context
 
@@ -415,6 +416,8 @@ Recent decisions affecting current work:
 - [Phase 05]: 05-21: DCR empty allowed_scopes -> DEFAULT_DCR_SCOPES (= discovery scopes_supported); logo/client/policy/tos URIs validated but neither stored nor echoed; IAT verified before validation, consumed atomically after
 - [Phase 05]: 05-20: config plan/apply need admin:write; the last-administrator guard runs for the whole role batch before any write (role::guard_roles_losing_admin), RoleService still guards each change
 - [Phase 05]: 05-20: CAPTCHA and logos are not part of TenantConfig v1; secret references {env}/{file} are CLI-only, the API refuses them
+- [Phase 05]: 05-23: DCR/CIMD settings validated by one function (service::tenant::registration_settings_issues) shared by TenantService and validate_document; system tenant always disabled
+- [Phase 05]: 05-23: admin API validation stays 422; webhook rotation POST /webhooks/{id}/secret; redelivery POST /webhooks/deliveries/{delivery_id}/redeliver; TenantView exposes issuer and discovery_url
 
 ### Pending Todos
 
@@ -427,6 +430,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-26T04:44:13.179Z
-Stopped at: Completed 05-21-PLAN.md
+Last session: 2026-11-26T05:26:04.360Z
+Stopped at: Completed 05-23-PLAN.md
 Resume file: None

@@ -267,7 +267,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 2. Release 0.1 "First login" | 23/23 | Complete    | 2026-11-25 |
 | 3. Release 0.2 "Secure by default" | 34/34 | Complete    | 2026-11-25 |
 | 4. Release 0.3 "Real-world logins" | 36/37 | In Progress|  |
-| 5. Release 0.4 "Operate it" | 17/29 | In Progress|  |
+| 5. Release 0.4 "Operate it" | 23/29 | In Progress|  |
 | 6. Release 1.0 (Organizations and SSO) | 0/TBD | Not started | - |
 | 7. Release 1.0 (Certification and release) | 0/TBD | Not started | - |
 
