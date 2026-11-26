@@ -1,6 +1,6 @@
 //! Browser-mode handlers of the headless flow API (single-page apps, UI-05).
 //!
-//! Every handler goes through [`crate::ui::flow_driver`], exactly like the HTML handlers in
+//! Every handler goes through `ui::flow_driver`, exactly like the HTML handlers in
 //! `ui::login`, `ui::mfa`, `ui::email_code`, `ui::registration`, `ui::recovery` and
 //! `ui::verification`: the same flow binding (flow cookie + CSRF token), brute-force gate and
 //! limiter keys, CAPTCHA check, attempt recording, lock decision and session switch. Only the

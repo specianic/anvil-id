@@ -11,7 +11,7 @@
 //!   hash fails closed without allocating its memory.
 //!
 //! Production wires [`crate::adapters::password::PasswordDispatcher`], which wraps this pool and runs
-//! every scheme (Argon2 and the imported legacy schemes) through [`Argon2Pool::run_verification`].
+//! every scheme (Argon2 and the imported legacy schemes) through `Argon2Pool::run_verification`.
 //! The pool's own `PasswordHasher` impl verifies Argon2 only (anything else takes the dummy path).
 
 use std::sync::Arc;

@@ -91,6 +91,7 @@ fuzz_target!(|data: &[u8]| {
         attribute_check: &ObjectSchemas,
         url_check: &HttpsOnly,
         template_check: &AnyTemplate,
+        dev_mode: false,
     };
     if validate_document(&doc, &v).is_ok() {
         let normalized = normalize_document(&doc);

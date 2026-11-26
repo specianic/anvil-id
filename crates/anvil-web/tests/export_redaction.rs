@@ -24,7 +24,7 @@ use anvil_core::model::{
 };
 use anvil_core::ports::{AddMemberOutcome, Clock, Storage};
 use anvil_core::service::user_export::{ExportOptions, UserExportService};
-use anvil_jose::encoding::b64url;
+use anvil_jose::encoding::{b64std, b64url};
 use serde_json::{Value, json};
 use support::{TestApp, start_time};
 use time::Duration;
@@ -41,28 +41,6 @@ const FIREBASE_PHC: &str =
 const PASSKEY_MARKER: &str = "PASSKEY-PRIVATE-MATERIAL-MARKER";
 const TOTP_SEED_SEALED: &[u8] = b"sealed-totp-seed-bytes-0123456789abcdef";
 const CONNECTION_SECRET_SEALED: &[u8] = b"sealed-connection-secret-0123456789abcd";
-
-/// Standard base64 with padding (test code only; anvil-jose exposes the URL-safe alphabet).
-fn b64std(data: &[u8]) -> String {
-    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::new();
-    for chunk in data.chunks(3) {
-        let b = [
-            chunk[0],
-            *chunk.get(1).unwrap_or(&0),
-            *chunk.get(2).unwrap_or(&0),
-        ];
-        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
-        for i in 0..4 {
-            if i <= chunk.len() {
-                out.push(A[((n >> (18 - 6 * i)) & 63) as usize] as char);
-            } else {
-                out.push('=');
-            }
-        }
-    }
-    out
-}
 
 fn hex(data: &[u8]) -> String {
     data.iter().map(|b| format!("{b:02x}")).collect()

@@ -2,7 +2,7 @@
 //! verification flows for single-page apps (browser mode, plan 07-10; native apps follow in
 //! 07-18). See docs/HEADLESS.md.
 //!
-//! A second renderer over the shared [`crate::ui::flow_driver`]: every handler in [`browser`]
+//! A second renderer over the shared `ui::flow_driver`: every handler in [`browser`]
 //! calls the driver, so throttling, CAPTCHA, the flow binding and session handling exist once.
 //! The handlers only map the driver's typed outcomes to the versioned DTO ([`dto`]).
 //!
@@ -16,7 +16,7 @@
 //! | `POST /api/flows/v1/login/{flow_id}/enroll/passkey/{start,finish}` | passkey enrolment step |
 //! | `POST /api/flows/v1/login/{flow_id}/second-factor/passkey/{start,finish}` | passkey second factor |
 //!
-//! [`routes`] is merged into the tenant router next to `ui::routes()`, outside the UI
+//! [`routes()`] is merged into the tenant router next to `ui::routes()`, outside the UI
 //! Fetch-Metadata layer and outside `public_cors()`. It brings its own router-local layers:
 //! [`headless_origin_layer`] (the tenant's own origin or an exact entry of
 //! `headless.allowed_origins`; JSON bodies only) inside [`headless_cors`] (credentialed CORS for

@@ -121,7 +121,7 @@ where
 /// [`fetch_metadata_layer`] unchanged. Rules, for every method except `OPTIONS` (the CORS layer
 /// answers preflights before this layer runs):
 ///
-/// 1. `Origin` present: it must equal the tenant's own origin ([`AllowedOrigins`]) or one entry of
+/// 1. `Origin` present: it must equal the tenant's own origin (`AllowedOrigins`) or one entry of
 ///    the tenant's `headless.allowed_origins` (exact, byte-for-byte); otherwise 403.
 /// 2. Else `Sec-Fetch-Site` present: only `same-origin` or `none` pass (a same-site or cross-site
 ///    browser request without `Origin` is never admitted); otherwise 403.
