@@ -44,6 +44,7 @@ async fn app_with_state(f: impl FnOnce(&mut AppConfig)) -> (AppState, Router) {
         ),
         breach: breach_checker(BreachCheckMode::Off),
         kek: Arc::new(Kek::generate()),
+        domain_txt: Arc::new(support::FakeTxt::default()),
     };
     let state = AppState::new(config, deps).expect("app builds");
     let router = anvil_web::router(state.clone());

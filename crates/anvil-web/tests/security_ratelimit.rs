@@ -326,6 +326,7 @@ fn deps_for(app: &TestApp, clock: Arc<TestClock>) -> AppDeps {
         ),
         breach: breach_checker(BreachCheckMode::Off),
         kek: app.kek_arc(),
+        domain_txt: Arc::new(support::FakeTxt::default()),
     }
 }
 

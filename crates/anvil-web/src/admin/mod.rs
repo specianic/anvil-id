@@ -25,6 +25,10 @@ mod registration;
 mod roles;
 mod webhooks;
 
+// Phase 6 (pre-declared by plan 06-04; the owning plans add their routes)
+mod keys;
+mod organizations;
+
 use anvil_core::error::CoreError;
 use anvil_core::service::admin_scope::ALL_ADMIN_SCOPES;
 use axum::Router;
@@ -146,6 +150,12 @@ fn base_document() -> OpenApi {
                 "config",
                 "Declarative tenant configuration: export, plan and apply",
             ),
+            tag(
+                "organizations",
+                "Organizations of a tenant: members, roles, invitations, domains, enterprise \
+                 connections",
+            ),
+            tag("keys", "Signing keys of a tenant"),
         ]))
         .build()
 }
@@ -230,6 +240,8 @@ fn api_router() -> OpenApiRouter<AppState> {
         .merge(webhooks::routes())
         .merge(registration::routes())
         .merge(config::routes())
+        .merge(organizations::routes())
+        .merge(keys::routes())
 }
 
 /// Management API routes, including the served OpenAPI document.

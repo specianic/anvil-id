@@ -1,6 +1,8 @@
 //! Browser-facing self-service pages. Every route here is behind the Fetch-Metadata CSRF layer,
 //! except the upstream sign-in callback ([`upstream::callback_routes`]): a provider may return with
-//! a cross-site `form_post`; that callback is protected by state, binding cookie and nonce.
+//! a cross-site `form_post`; that callback is protected by state, binding cookie and nonce. The
+//! SAML assertion consumer service ([`saml::callback_routes`]) is exempt for the same reason (the
+//! HTTP-POST binding is a cross-site form post).
 
 mod account_apps;
 // Phase 5 (pre-declared by plan 05-02; the owning plan adds its routes)
@@ -22,6 +24,10 @@ mod select_account;
 mod setup;
 mod upstream;
 mod verification;
+// Phase 6 (pre-declared by plan 06-04; the owning plans add their routes)
+mod invitation;
+mod saml;
+mod select_organization;
 
 use axum::Router;
 
@@ -32,7 +38,7 @@ use crate::state::AppState;
 pub(crate) use login::rejection_is_too_large;
 
 /// All UI routes (tenant-relative paths), behind the Fetch-Metadata CSRF layer; the upstream
-/// callback is merged after the layer and is not covered by it.
+/// callback and the SAML ACS are merged after the layer and are not covered by it.
 pub fn routes() -> Router<AppState> {
     Router::new()
         .merge(login::routes())
@@ -53,9 +59,14 @@ pub fn routes() -> Router<AppState> {
         .merge(logout::routes())
         .merge(preview::routes())
         .merge(upstream::routes())
+        .merge(select_organization::routes())
+        .merge(invitation::routes())
+        .merge(saml::routes())
         .layer(fetch_metadata_layer())
         // After the layer: exempt from the Fetch-Metadata check (cross-site `form_post`).
         .merge(upstream::callback_routes())
+        // After the layer: the SAML HTTP-POST binding to the ACS is cross-site.
+        .merge(saml::callback_routes())
 }
 
 #[cfg(test)]

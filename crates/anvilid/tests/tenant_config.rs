@@ -242,6 +242,8 @@ async fn configure(a: &Instance) -> String {
         storage: storage.clone(),
         clock: a.clock(),
         kek: a.kek.clone(),
+        saml_enabled: false,
+        saml_xml: None,
     }
     .create(
         tenant.id,
@@ -402,6 +404,8 @@ async fn round_trip_into_fresh_instance() {
         storage: b.storage.clone(),
         clock: b.clock(),
         kek: b.kek.clone(),
+        saml_enabled: false,
+        saml_xml: None,
     }
     .open_secret(conn)
     .unwrap()

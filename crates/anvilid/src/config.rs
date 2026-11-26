@@ -22,6 +22,11 @@
 //! traces; incoming `traceparent` headers are honoured only from `trusted_proxies`),
 //! `shutdown_drain` (readiness turns 503 on SIGTERM, then the node waits this long before it stops
 //! accepting) and `database_max_connections` (Postgres pool size; SQLite ignores it).
+//!
+//! Phase 6 keys (1.0): `saml_experimental` (SAML 2.0 connections, off by default and experimental
+//! through 1.0; a warning is logged when on) and `domain_verification_resolvers` (DNS resolvers
+//! for organization domain verification, `ip` or `ip:port` entries, port 53 by default; empty =
+//! the system resolver configuration).
 
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
@@ -109,6 +114,8 @@ pub const KEYS: &[&str] = &[
     "otel_service_name",
     "shutdown_drain",
     "database_max_connections",
+    "saml_experimental",
+    "domain_verification_resolvers",
 ];
 
 /// Keys whose value is a secret as a whole.
@@ -304,6 +311,17 @@ pub struct CliOverrides {
     #[arg(long, value_name = "N")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub database_max_connections: Option<u32>,
+
+    /// Enable SAML 2.0 enterprise connections (experimental through 1.0) [default: off].
+    #[arg(long)]
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub saml_experimental: bool,
+
+    /// Comma-separated DNS resolvers (`ip` or `ip:port`, port 53 by default) for organization
+    /// domain verification [default: the system resolver configuration].
+    #[arg(long, value_name = "ADDRS")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub domain_verification_resolvers: Option<String>,
 }
 
 /// A duration given as a string (`10s`, `500ms`, `1m`, `2h`, `10`) or as a number of seconds
@@ -437,6 +455,9 @@ pub struct RawConfig {
     pub otel_service_name: String,
     pub shutdown_drain: DurationValue,
     pub database_max_connections: u32,
+    pub saml_experimental: bool,
+    /// `None` or empty = the system resolver configuration.
+    pub domain_verification_resolvers: Option<ListValue>,
 }
 
 impl fmt::Debug for RawConfig {
@@ -487,6 +508,8 @@ impl Default for RawConfig {
             otel_service_name: DEFAULT_OTEL_SERVICE_NAME.to_owned(),
             shutdown_drain: DurationValue::Secs(0),
             database_max_connections: DEFAULT_DATABASE_MAX_CONNECTIONS,
+            saml_experimental: false,
+            domain_verification_resolvers: None,
         }
     }
 }
@@ -507,6 +530,37 @@ pub fn parse_trusted_proxies(list: &ListValue) -> anyhow::Result<Vec<IpNet>> {
 /// Parses the outbound allow-list (same entry syntax as `trusted_proxies`).
 pub fn parse_outbound_allow_cidrs(list: &ListValue) -> anyhow::Result<Vec<IpNet>> {
     parse_cidr_list("outbound_allow_cidrs", list)
+}
+
+/// Default DNS port of a `domain_verification_resolvers` entry without a port.
+pub const DEFAULT_DNS_PORT: u16 = 53;
+
+/// Parses the domain verification resolvers: each entry is an IP address (port 53) or a socket
+/// address (`192.0.2.1:5353`, `[2001:db8::1]:53`). Errors name the key and the entry position,
+/// never the value.
+pub fn parse_domain_verification_resolvers(list: &ListValue) -> anyhow::Result<Vec<SocketAddr>> {
+    list.entries()
+        .iter()
+        .enumerate()
+        .map(|(i, entry)| {
+            entry
+                .parse::<SocketAddr>()
+                .ok()
+                .or_else(|| {
+                    entry
+                        .parse::<IpAddr>()
+                        .ok()
+                        .map(|ip| SocketAddr::new(ip, DEFAULT_DNS_PORT))
+                })
+                .filter(|addr| addr.port() != 0)
+                .ok_or_else(|| {
+                    field_error(
+                        "domain_verification_resolvers",
+                        format!("entry {} is not an IP address or IP:port", i + 1),
+                    )
+                })
+        })
+        .collect()
 }
 
 /// Reads and validates the extra outbound CA bundle. Errors name the key, never the content.
@@ -810,6 +864,10 @@ pub struct Config {
     pub shutdown_drain: Duration,
     /// Postgres pool size (SQLite ignores it).
     pub database_max_connections: u32,
+    /// SAML 2.0 connections enabled (experimental; decision Q3).
+    pub saml_experimental: bool,
+    /// Explicit DNS resolvers for domain verification; empty = system configuration.
+    pub domain_verification_resolvers: Vec<SocketAddr>,
     /// Non-fatal findings, logged as warnings on start.
     pub warnings: Vec<String>,
 }
@@ -989,6 +1047,12 @@ impl Config {
             .as_deref()
             .map(read_outbound_ca)
             .transpose()?;
+        let domain_verification_resolvers = raw
+            .domain_verification_resolvers
+            .as_ref()
+            .map(parse_domain_verification_resolvers)
+            .transpose()?
+            .unwrap_or_default();
 
         let redis_url = raw
             .redis_url
@@ -1041,6 +1105,13 @@ impl Config {
                 "metrics_listen",
                 "must differ from listen (use metrics_on_main_port to serve /metrics there)",
             ));
+        }
+        if raw.saml_experimental {
+            warnings.push(
+                "SAML 2.0 is experimental (saml_experimental is set): SAML connections can be \
+                 configured and used; it has not had an external security review yet"
+                    .to_owned(),
+            );
         }
         if raw.metrics_on_main_port {
             warnings.push(
@@ -1122,6 +1193,8 @@ impl Config {
             otel_service_name,
             shutdown_drain,
             database_max_connections: raw.database_max_connections,
+            saml_experimental: raw.saml_experimental,
+            domain_verification_resolvers,
             warnings,
         })
     }
@@ -1296,6 +1369,19 @@ pub fn show(layers: &Layers, raw: &RawConfig) -> String {
             "otel_service_name" => raw.otel_service_name.clone(),
             "shutdown_drain" => raw.shutdown_drain.display(),
             "database_max_connections" => raw.database_max_connections.to_string(),
+            "saml_experimental" => raw.saml_experimental.to_string(),
+            "domain_verification_resolvers" => {
+                let entries = raw
+                    .domain_verification_resolvers
+                    .as_ref()
+                    .map(ListValue::entries)
+                    .unwrap_or_default();
+                if entries.is_empty() {
+                    "<system>".to_owned()
+                } else {
+                    entries.join(", ")
+                }
+            }
             _ => continue,
         };
         out.push_str(&format!("{key} = {value} ({})\n", layers.source(key)));

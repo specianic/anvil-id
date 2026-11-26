@@ -18,6 +18,10 @@ pub mod attribute_schema;
 pub mod cimd;
 pub mod webhook;
 
+// Phase 6 (pre-declared by plan 06-04; the owning plans fill them in)
+pub mod dns_txt;
+pub mod saml_xml;
+
 pub use self::argon2::Argon2Pool;
 pub use self::captcha::{CaptchaEndpoints, CaptchaError, CaptchaVerifier, captcha_csp};
 pub use self::hibp::{BreachCheckMode, HibpChecker, breach_checker, breach_checker_with};

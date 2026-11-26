@@ -1,5 +1,6 @@
 //! Configuration of the HTTP application built by [`crate::app`].
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -52,6 +53,12 @@ pub struct AppConfig {
     /// Continues incoming W3C trace context from trusted proxies (set by the binary when OTLP
     /// export is configured). `None`: every request starts a new trace.
     pub trace_context: Option<TraceContextHook>,
+    /// Operator flag `saml_experimental` (decision Q3): SAML 2.0 connections can be configured
+    /// and used only when it is on. Default `false`; stays experimental through 1.0.
+    pub saml_experimental: bool,
+    /// Operator key `domain_verification_resolvers`: the DNS resolvers domain verification
+    /// queries. Empty (default): the system resolver configuration.
+    pub domain_verification_resolvers: Vec<SocketAddr>,
 }
 
 /// Default lifetime of a negative "unknown host" cache entry.
@@ -78,6 +85,8 @@ impl AppConfig {
             unknown_host_ttl: DEFAULT_UNKNOWN_HOST_TTL,
             metrics: None,
             trace_context: None,
+            saml_experimental: false,
+            domain_verification_resolvers: Vec::new(),
         }
     }
 

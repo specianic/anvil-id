@@ -111,6 +111,9 @@ async fn service(cfg: &Config) -> anyhow::Result<ConfigService> {
             storage: Arc::clone(&storage),
             clock: Arc::clone(&clock),
             kek: Arc::clone(&kek),
+            // SAML connections are never part of tenant YAML.
+            saml_enabled: false,
+            saml_xml: None,
         },
         branding: BrandingService {
             storage: Arc::clone(&storage),

@@ -3,6 +3,7 @@
 //! - Backend from `ANVILID_TEST_DB`: `sqlite` (default, `sqlite::memory:`) or `postgres` (one shared
 //!   Postgres 18 testcontainer per test binary, a fresh database per test).
 //! - [`TestClock`]: settable clock.
+//! - [`FakeTxt`]: settable DNS TXT lookup (domain verification), wired into every app.
 //! - [`TestApp`]: the full `anvil_web::app` on that backend, installed with the `system` and
 //!   `default` tenants and one active RS256 key each, plus a cookie jar and HTTP helpers.
 //!   Requests carry the peer address [`DEFAULT_PEER`] (`ConnectInfo`) unless they set their own
@@ -13,7 +14,7 @@
 
 #![allow(dead_code)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -23,7 +24,7 @@ use anvil_core::model::{
     SIGNING_KEY_PURPOSE, SYSTEM_TENANT_SLUG, SecretHash, SigningKeyId, Tenant, TenantBase,
     TenantId, TenantSettings, issuer, signing_key_aad, truncate_to_ms,
 };
-use anvil_core::ports::{Clock, InstallOutcome, Storage};
+use anvil_core::ports::{Clock, DomainTxtLookup, InstallOutcome, Storage, TxtLookupError};
 use anvil_jose::kek::Kek;
 use anvil_web::adapters::argon2::Argon2Pool;
 use anvil_web::adapters::hibp::{BreachCheckMode, breach_checker};
@@ -229,6 +230,45 @@ pub struct InstalledTenant {
     pub kid: String,
 }
 
+/// Settable DNS TXT lookup for domain verification (test code only). Records are keyed by the
+/// FQDN, case-insensitive, with or without the trailing dot; an unknown name answers
+/// [`TxtLookupError::NotFound`]. Clones share the records.
+#[derive(Debug, Clone, Default)]
+pub struct FakeTxt {
+    records: Arc<Mutex<HashMap<String, Vec<String>>>>,
+}
+
+impl FakeTxt {
+    fn key(fqdn: &str) -> String {
+        fqdn.trim_end_matches('.').to_ascii_lowercase()
+    }
+
+    /// Replaces the TXT records of `fqdn` (one entry per record).
+    pub fn set(&self, fqdn: &str, values: &[&str]) {
+        self.records.lock().expect("txt records").insert(
+            Self::key(fqdn),
+            values.iter().map(|v| (*v).to_owned()).collect(),
+        );
+    }
+
+    /// Removes every record.
+    pub fn clear(&self) {
+        self.records.lock().expect("txt records").clear();
+    }
+}
+
+#[async_trait::async_trait]
+impl DomainTxtLookup for FakeTxt {
+    async fn txt(&self, fqdn: &str) -> Result<Vec<Vec<u8>>, TxtLookupError> {
+        self.records
+            .lock()
+            .expect("txt records")
+            .get(&Self::key(fqdn))
+            .map(|values| values.iter().map(|v| v.as_bytes().to_vec()).collect())
+            .ok_or(TxtLookupError::NotFound)
+    }
+}
+
 /// The full application on the selected backend.
 pub struct TestApp {
     pub backend: Backend,
@@ -238,6 +278,7 @@ pub struct TestApp {
     storage: Arc<dyn Storage>,
     clock: Arc<TestClock>,
     kek: Arc<Kek>,
+    txt: FakeTxt,
     jar: Mutex<BTreeMap<String, String>>,
     pub system: Option<InstalledTenant>,
     pub default: Option<InstalledTenant>,
@@ -295,12 +336,14 @@ impl TestApp {
             4,
         )
         .expect("argon2 pool");
+        let txt = FakeTxt::default();
         let deps = AppDeps {
             storage: Arc::clone(&storage),
             clock: Arc::clone(&clock) as Arc<dyn Clock>,
             hasher: Arc::new(hasher),
             breach: breach_checker(BreachCheckMode::Off),
             kek: Arc::clone(&kek),
+            domain_txt: Arc::new(txt.clone()),
         };
         let state = AppState::new(config.clone(), deps).expect("app builds");
         let logout_wake = state.logout_wake();
@@ -313,6 +356,7 @@ impl TestApp {
             storage,
             clock,
             kek,
+            txt,
             jar: Mutex::new(BTreeMap::new()),
             system,
             default,
@@ -326,6 +370,11 @@ impl TestApp {
     /// The storage handle as an `Arc`, for services under test that keep it.
     pub fn storage_arc(&self) -> Arc<dyn Storage> {
         Arc::clone(&self.storage)
+    }
+
+    /// The DNS TXT records the app's domain verification sees ([`FakeTxt`]).
+    pub fn txt(&self) -> &FakeTxt {
+        &self.txt
     }
 
     /// The app's back-channel logout wake (`AppState::logout_wake`): hand it to a worker, or

@@ -392,6 +392,7 @@ impl OwnApp {
             hasher: Arc::clone(&hasher) as Arc<dyn anvil_core::ports::PasswordHasher>,
             breach: breach_checker(BreachCheckMode::Off),
             kek: Arc::clone(&kek),
+            domain_txt: Arc::new(crate::support::FakeTxt::default()),
         };
         let router = anvil_web::app(config.clone(), deps).expect("app builds");
         Self {

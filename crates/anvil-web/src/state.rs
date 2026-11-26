@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anvil_cache::limiter::{InProcessLimiter, RateLimiter};
-use anvil_core::ports::{BreachChecker, Clock, PasswordHasher, Storage};
+use anvil_core::ports::{BreachChecker, Clock, DomainTxtLookup, PasswordHasher, Storage};
 use anvil_jose::kek::Kek;
 use tokio::sync::{Notify, Semaphore};
 
@@ -23,6 +23,9 @@ pub struct AppDeps {
     pub hasher: Arc<dyn PasswordHasher>,
     pub breach: Arc<dyn BreachChecker>,
     pub kek: Arc<Kek>,
+    /// DNS TXT lookups for organization domain verification. The binary wires
+    /// [`crate::adapters::dns_txt::HickoryTxtLookup`]; tests wire a fake (test code only).
+    pub domain_txt: Arc<dyn DomainTxtLookup>,
 }
 
 struct Inner {
@@ -32,6 +35,7 @@ struct Inner {
     hasher: Arc<dyn PasswordHasher>,
     breach: Arc<dyn BreachChecker>,
     kek: Arc<Kek>,
+    domain_txt: Arc<dyn DomainTxtLookup>,
     renderer: Renderer,
     cookies: CookiePolicy,
     limiter: Arc<dyn RateLimiter>,
@@ -110,6 +114,7 @@ impl AppState {
             hasher: deps.hasher,
             breach: deps.breach,
             kek: deps.kek,
+            domain_txt: deps.domain_txt,
             renderer,
             cookies,
             limiter,
@@ -165,6 +170,15 @@ impl AppState {
 
     pub fn kek_arc(&self) -> Arc<Kek> {
         Arc::clone(&self.0.kek)
+    }
+
+    /// DNS TXT lookups for organization domain verification.
+    pub fn domain_txt(&self) -> &dyn DomainTxtLookup {
+        self.0.domain_txt.as_ref()
+    }
+
+    pub fn domain_txt_arc(&self) -> Arc<dyn DomainTxtLookup> {
+        Arc::clone(&self.0.domain_txt)
     }
 
     pub fn renderer(&self) -> &Renderer {

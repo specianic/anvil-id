@@ -55,6 +55,8 @@ impl AppState {
                 storage: self.storage_arc(),
                 clock: self.clock_arc(),
                 kek: self.kek_arc(),
+                saml_enabled: self.config().saml_experimental,
+                saml_xml: Some(self.saml_xml()),
             },
             branding: self.branding(),
             roles: RoleService {

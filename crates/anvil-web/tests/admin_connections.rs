@@ -189,6 +189,10 @@ async fn crud_round_trip_with_write_only_secret() {
         storage: app.storage_arc(),
         clock: std::sync::Arc::new(Frozen(app.clock().now())),
         kek: app.kek_arc(),
+        saml_enabled: app.config.saml_experimental,
+        saml_xml: Some(std::sync::Arc::new(
+            anvil_web::adapters::saml_xml::SamlXmlAdapter,
+        )),
     };
     assert_eq!(
         service

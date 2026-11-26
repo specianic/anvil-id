@@ -11557,6 +11557,14 @@
     {
       "name": "config",
       "description": "Declarative tenant configuration: export, plan and apply"
+    },
+    {
+      "name": "organizations",
+      "description": "Organizations of a tenant: members, roles, invitations, domains, enterprise connections"
+    },
+    {
+      "name": "keys",
+      "description": "Signing keys of a tenant"
     }
   ]
 }

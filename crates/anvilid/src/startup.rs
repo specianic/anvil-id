@@ -12,6 +12,7 @@ use anvil_core::service::bootstrap::{BootstrapService, InstallResult};
 use anvil_core::service::key_rotation::KeyRotationService;
 use anvil_jose::Kek;
 use anvil_web::adapters::backchannel::LogoutDeliveryWorker;
+use anvil_web::adapters::dns_txt::HickoryTxtLookup;
 use anvil_web::adapters::webhook::WebhookDeliveryWorker;
 use anvil_web::adapters::{Argon2Pool, OutboundClient, breach_checker_with};
 use anvil_web::observability::{MetricsEndpoint, TraceContextHook};
@@ -218,13 +219,18 @@ pub async fn start(cfg: &Config, observability: Observability) -> anyhow::Result
     app_config.rate_limits = cfg.rate_limits.clone();
     app_config.metrics = observability.metrics.filter(|_| cfg.metrics_on_main_port);
     app_config.trace_context = observability.trace_context;
+    app_config.saml_experimental = cfg.saml_experimental;
+    app_config.domain_verification_resolvers = cfg.domain_verification_resolvers.clone();
     let outbound = outbound_client(cfg, &mut app_config)?;
+    let domain_txt = HickoryTxtLookup::new(&cfg.domain_verification_resolvers)
+        .context("invalid configuration: domain_verification_resolvers")?;
     let deps = AppDeps {
         storage: Arc::clone(&storage),
         clock: Arc::clone(&clock),
         hasher,
         breach: breach_checker_with(cfg.breach_check.clone(), outbound),
         kek: Arc::clone(&kek),
+        domain_txt: Arc::new(domain_txt),
     };
     let public_url = app_config.public_url.clone();
     let state = AppState::new_with_limiter(app_config, deps, limiter)
