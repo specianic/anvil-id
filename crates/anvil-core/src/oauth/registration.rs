@@ -27,7 +27,8 @@
 //!   `private_key_jwt`}, default `client_secret_basic` (RFC 7591 §2); `none` makes a public client;
 //! - `jwks_uri` is rejected: no remote key fetching for dynamic clients in 0.4, so
 //!   `private_key_jwt` needs an inline `jwks`;
-//! - `scope` ⊆ [`DcrSettings::allowed_scopes`], never an `admin:` scope; default: the allowed scopes;
+//! - `scope` ⊆ [`DcrSettings::allowed_scopes`], never an `admin:` scope or `org:admin`; default:
+//!   the allowed scopes;
 //! - `allowed_resources` (RFC 8707) ⊆ [`DcrSettings::allowed_resources`]; default: all of them;
 //! - in [`DcrMode::AllowListed`], when [`DcrSettings::allowed_redirect_hosts`] is not empty, every
 //!   redirect and post-logout redirect URI host must be listed (a URI without host is refused);
@@ -48,10 +49,18 @@ use crate::model::{
 };
 use crate::oauth::redirect::{MAX_REDIRECT_URI_LEN, validate_redirect_uri};
 use crate::oauth::resource::parse_resources;
-use crate::service::admin_scope::is_reserved_admin_token;
+use crate::service::admin_scope::{ORG_ADMIN_SCOPE, is_reserved_admin_token};
 use crate::service::client::{
     ClientInput, ClientOptions, MAX_REDIRECT_URIS, validate_client, validate_client_phase4,
 };
+
+/// Whether a scope token can never be obtained by self-registration (DCR, CIMD, and the tenant's
+/// `dcr.allowed_scopes`): the reserved admin API tokens ([`is_reserved_admin_token`]) and the
+/// organization admin scope [`ORG_ADMIN_SCOPE`] (decision Q1: only static clients of application
+/// tenants may hold it).
+pub fn is_registration_forbidden_scope(token: &str) -> bool {
+    is_reserved_admin_token(token) || token == ORG_ADMIN_SCOPE
+}
 
 /// Name given to a registered client that sent no `client_name`.
 pub const DEFAULT_CLIENT_NAME: &str = "Dynamically registered client";
@@ -395,7 +404,7 @@ pub fn validate(
         Some(raw) => {
             Scope::parse(raw).map_err(|_| meta("scope is not a valid scope string"))?;
             let tokens = dedup(raw.split(' ').map(str::to_owned).collect());
-            if tokens.iter().any(|t| is_reserved_admin_token(t)) {
+            if tokens.iter().any(|t| is_registration_forbidden_scope(t)) {
                 return Err(meta("admin scopes cannot be registered"));
             }
             if tokens.iter().any(|t| !settings.allowed_scopes.contains(t)) {
@@ -410,7 +419,9 @@ pub fn validate(
                 .allowed_scopes
                 .iter()
                 .filter(|t| {
-                    !is_reserved_admin_token(t) && Scope::parse(t).is_ok() && !t.contains(' ')
+                    !is_registration_forbidden_scope(t)
+                        && Scope::parse(t).is_ok()
+                        && !t.contains(' ')
                 })
                 .cloned()
                 .collect(),
@@ -1183,6 +1194,16 @@ mod tests {
             };
             let mode = if allow_listed { DcrMode::AllowListed } else { DcrMode::Open };
             let _ = validate(&v, &s, mode);
+        }
+    }
+
+    #[test]
+    fn registration_forbidden_scopes() {
+        for t in ["admin", "admin:read", "admin:clients:write", "org:admin"] {
+            assert!(is_registration_forbidden_scope(t), "{t}");
+        }
+        for t in ["openid", "org", "org:admin:x", "organization", "Org:Admin"] {
+            assert!(!is_registration_forbidden_scope(t), "{t}");
         }
     }
 }

@@ -301,10 +301,13 @@ pub fn registration_settings_issues(
         for s in &dcr.allowed_scopes {
             if s.is_empty() || s.contains(' ') || crate::model::Scope::parse(s).is_err() {
                 out.push(("dcr.allowed_scopes", format!("invalid scope token {s:?}")));
-            } else if crate::service::admin_scope::is_reserved_admin_token(s) {
+            } else if crate::oauth::registration::is_registration_forbidden_scope(s) {
                 out.push((
                     "dcr.allowed_scopes",
-                    format!("{s:?}: admin API scopes can never be registered dynamically"),
+                    format!(
+                        "{s:?}: admin API and organization admin scopes can never be registered \
+                         dynamically"
+                    ),
                 ));
             }
         }
@@ -1383,6 +1386,13 @@ mod tests {
             (
                 DcrSettings {
                     allowed_scopes: vec!["admin".into()],
+                    ..DcrSettings::default()
+                },
+                "dcr.allowed_scopes",
+            ),
+            (
+                DcrSettings {
+                    allowed_scopes: vec!["openid".into(), "org:admin".into()],
                     ..DcrSettings::default()
                 },
                 "dcr.allowed_scopes",

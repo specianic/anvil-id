@@ -38,7 +38,7 @@ use crate::model::{
     NewClient, Scope, TokenFormat,
 };
 use crate::oauth::redirect::validate_redirect_uri;
-use crate::service::admin_scope::is_reserved_admin_token;
+use crate::oauth::registration::is_registration_forbidden_scope;
 use crate::service::client::{ClientInput, MAX_REDIRECT_URIS, uses_secret, validate_client};
 
 /// Largest accepted metadata document (draft-03 §4: 5 kilobytes).
@@ -331,7 +331,7 @@ pub fn validate(
         Some(raw) => {
             Scope::parse(raw).map_err(|_| invalid("scope is not a valid scope string"))?;
             let tokens = dedup(raw.split(' ').map(str::to_owned).collect());
-            if tokens.iter().any(|t| is_reserved_admin_token(t)) {
+            if tokens.iter().any(|t| is_registration_forbidden_scope(t)) {
                 return Err(invalid("admin scopes are not allowed"));
             }
             tokens

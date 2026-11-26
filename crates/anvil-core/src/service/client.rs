@@ -31,7 +31,7 @@ use crate::model::{
 };
 use crate::oauth::resource::parse_resources;
 use crate::ports::{Storage, StorageError};
-use crate::service::admin_scope::is_reserved_admin_token;
+use crate::service::admin_scope::{ORG_ADMIN_SCOPE, is_reserved_admin_token};
 use crate::service::audit::AuditService;
 use crate::service::tenant::{MAX_DISPLAY_NAME_LEN, admin_page};
 
@@ -138,14 +138,37 @@ fn invalid(field: &'static str, message: impl Into<String>) -> CoreError {
 /// The admin API accepts only system-tenant tokens, so such a scope would never grant admin
 /// access; it is refused at the source, as DCR and CIMD already do. `system_tenant`: whether the
 /// client belongs to the system tenant.
+///
+/// The organization admin scope ([`ORG_ADMIN_SCOPE`], decision Q1) is the mirror image: it is
+/// refused on system-tenant clients (organizations do not exist there) and allowed on static
+/// clients of application tenants. Self-registration never obtains either
+/// ([`crate::oauth::registration::is_registration_forbidden_scope`]).
 pub fn check_admin_scopes(system_tenant: bool, scopes: &[String]) -> Result<(), CoreError> {
     if system_tenant {
+        if scopes.iter().any(|s| s.trim() == ORG_ADMIN_SCOPE) {
+            return Err(invalid(
+                "scopes",
+                "the organization admin scope is not available in the system tenant",
+            ));
+        }
         return Ok(());
     }
     if scopes.iter().any(|s| is_reserved_admin_token(s.trim())) {
         return Err(invalid(
             "scopes",
             "admin API scopes are reserved for clients of the system tenant",
+        ));
+    }
+    Ok(())
+}
+
+/// Refuses an organization policy other than `off` on system-tenant clients (organizations do
+/// not exist in the system tenant). Clients of application tenants may use any policy.
+pub fn check_org_policy(system_tenant: bool, policy: OrgClientPolicy) -> Result<(), CoreError> {
+    if system_tenant && policy != OrgClientPolicy::Off {
+        return Err(invalid(
+            "organization",
+            "organizations do not exist in the system tenant: the policy must be off",
         ));
     }
     Ok(())
@@ -598,6 +621,7 @@ impl ClientService {
     ) -> Result<CreatedClient, CoreError> {
         validate_client(&input, self.redirect_validator)?;
         check_admin_scopes(tenant.slug == SYSTEM_TENANT_SLUG, &input.scopes)?;
+        check_org_policy(tenant.slug == SYSTEM_TENANT_SLUG, options.organization)?;
         validate_client_options(&input, &options, &tenant.settings)?;
         validate_client_phase4(&input, &options, self.redirect_validator)?;
         let allowed_resources = parse_resources(&options.allowed_resources)?;
@@ -839,6 +863,10 @@ impl ClientService {
         if let Some(o) = options.organization {
             merged_options.organization = o;
         }
+        check_org_policy(
+            tenant.slug == SYSTEM_TENANT_SLUG,
+            merged_options.organization,
+        )?;
         validate_client_options(&merged, &merged_options, &tenant.settings)?;
         validate_client_phase4(&merged, &merged_options, self.redirect_validator)?;
         let fields = changed_fields(&patch, &options);
@@ -1506,5 +1534,37 @@ mod tests {
         assert!(d.post_logout_redirect_uris.is_empty() && d.allowed_resources.is_empty());
         assert_eq!(d.backchannel_logout_uri, None);
         assert_eq!(d.mfa_policy, None);
+    }
+
+    #[test]
+    fn org_admin_scope_is_refused_in_the_system_tenant_only() {
+        let org = vec!["openid".to_owned(), ORG_ADMIN_SCOPE.to_owned()];
+        assert!(matches!(
+            check_admin_scopes(true, &org),
+            Err(CoreError::Validation {
+                field: "scopes",
+                ..
+            })
+        ));
+        assert!(check_admin_scopes(false, &org).is_ok());
+        // The reserved admin tokens keep their rule.
+        let admin = vec!["admin:read".to_owned()];
+        assert!(check_admin_scopes(true, &admin).is_ok());
+        assert!(check_admin_scopes(false, &admin).is_err());
+    }
+
+    #[test]
+    fn org_policy_must_be_off_in_the_system_tenant() {
+        for p in [OrgClientPolicy::Optional, OrgClientPolicy::Required] {
+            assert!(matches!(
+                check_org_policy(true, p),
+                Err(CoreError::Validation {
+                    field: "organization",
+                    ..
+                })
+            ));
+            assert!(check_org_policy(false, p).is_ok());
+        }
+        assert!(check_org_policy(true, OrgClientPolicy::Off).is_ok());
     }
 }
