@@ -58,7 +58,7 @@ use crate::oauth::decision::{MfaContext, SessionDecision, decide, requested_acr,
 use crate::oauth::redirect::redirect_matches;
 use crate::oauth::response_mode::AuthorizationResponse;
 use crate::policy::mfa::effective_policy;
-use crate::ports::{Clock, Storage};
+use crate::ports::{ClientMetadataFetcher, Clock, Storage};
 
 /// Lifetime of an authorization code.
 pub const CODE_TTL: Duration = Duration::seconds(60);
@@ -263,6 +263,9 @@ impl Stage {
 pub struct AuthorizeService {
     pub storage: Arc<dyn Storage>,
     pub clock: Arc<dyn Clock>,
+    /// Client ID Metadata Document fetcher (used from plan 05-15; `None` = URL client ids are
+    /// not resolved).
+    pub metadata_fetcher: Option<Arc<dyn ClientMetadataFetcher>>,
 }
 
 impl AuthorizeService {

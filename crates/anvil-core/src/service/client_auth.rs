@@ -20,7 +20,7 @@ use time::{Duration, OffsetDateTime};
 
 use crate::error::CoreError;
 use crate::model::{Client, ClientAuthMethod, ClientType, ReplayKind, SecretHash, Tenant};
-use crate::ports::{Clock, JtiOutcome, Storage};
+use crate::ports::{ClientMetadataFetcher, Clock, JtiOutcome, Storage};
 
 /// RFC 7523 `client_assertion_type` for JWT bearer client assertions.
 pub const JWT_BEARER_ASSERTION_TYPE: &str =
@@ -312,6 +312,9 @@ pub fn verify_assertion(
 pub struct ClientAuthenticator {
     pub storage: Arc<dyn Storage>,
     pub clock: Arc<dyn Clock>,
+    /// Client ID Metadata Document fetcher (used from plan 05-15; `None` = URL client ids are
+    /// not resolved).
+    pub metadata_fetcher: Option<Arc<dyn ClientMetadataFetcher>>,
 }
 
 impl ClientAuthenticator {

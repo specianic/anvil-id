@@ -18,6 +18,13 @@ mod sessions;
 mod tenants;
 mod users;
 
+// Phase 5 (pre-declared by plan 05-02; the owning plans add their routes)
+mod attributes;
+mod config;
+mod registration;
+mod roles;
+mod webhooks;
+
 use anvil_core::error::CoreError;
 use anvil_core::service::admin_scope::ALL_ADMIN_SCOPES;
 use axum::Router;
@@ -121,6 +128,24 @@ fn base_document() -> OpenApi {
                 "branding",
                 "Theme tokens, custom CSS, logo and live preview of a tenant or client",
             ),
+            tag("roles", "Roles, permissions and role assignments of a tenant"),
+            tag(
+                "attributes",
+                "Custom user attribute definitions and claim mapping of a tenant",
+            ),
+            tag(
+                "webhooks",
+                "Webhook endpoints and the delivery log of a tenant",
+            ),
+            tag(
+                "registration",
+                "Dynamic client registration, Client ID Metadata Document policy and initial \
+                 access tokens of a tenant",
+            ),
+            tag(
+                "config",
+                "Declarative tenant configuration: export, plan and apply",
+            ),
         ]))
         .build()
 }
@@ -200,6 +225,11 @@ fn api_router() -> OpenApiRouter<AppState> {
         ))
         .routes(routes!(branding::preview_client_branding))
         .routes(routes!(branding::publish_client_branding))
+        .merge(roles::routes())
+        .merge(attributes::routes())
+        .merge(webhooks::routes())
+        .merge(registration::routes())
+        .merge(config::routes())
 }
 
 /// Management API routes, including the served OpenAPI document.

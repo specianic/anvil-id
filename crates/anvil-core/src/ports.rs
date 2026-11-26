@@ -22,7 +22,9 @@
 //! - Timestamps are passed in by callers (millisecond precision, see
 //!   [`crate::model::truncate_to_ms`]); "expired" means `expires_at <= now`.
 //! - Secrets are only ever stored and looked up by [`SecretHash`] (or stored KEK-sealed, like
-//!   connection secrets).
+//!   connection secrets and webhook signing secrets).
+//! - The webhook delivery worker methods ([`WebhookRepo::claim_due`], [`WebhookRepo::complete`])
+//!   are installation-wide, like the outbox and logout worker methods.
 //!
 //! # Back-channel logout enqueueing
 //!
@@ -36,6 +38,16 @@
 //! ([`crate::model::LOGOUT_DELIVERY_TTL`]), `attempts = 0`. A call that revokes nothing enqueues
 //! nothing. `rp_session` rows are written by [`GrantRepo::create_code`]. Methods without a `now`
 //! parameter (`UserRepo::delete`) use the storage clock.
+//!
+//! # Webhook enqueueing
+//!
+//! Webhooks have no event bus of their own: [`AuditRepo::append`] is the single event path. When
+//! the appended event carries a webhook payload (`NewAuditEvent::webhook` is `Some`), the same
+//! transaction inserts one `Pending` [`crate::model::WebhookDelivery`] per **enabled** endpoint
+//! of the event's tenant whose subscription list contains the event type. Nothing is enqueued
+//! without a webhook payload, for disabled or unsubscribed endpoints, or for other tenants. The
+//! deliveries are then leased and completed by the worker ([`WebhookRepo::claim_due`],
+//! [`WebhookRepo::complete`]), the same claim/lease shape as the logout deliveries.
 
 use std::time::Duration;
 
@@ -46,19 +58,22 @@ use time::OffsetDateTime;
 pub use crate::clock::{Clock, SystemClock};
 use crate::error::CoreError;
 use crate::model::{
-    AccessTokenRecord, AuditEvent, AuditQuery, AuthRequestId, AuthorizationCode,
-    AuthorizationRequest, Branding, BrandingDraft, BrandingUpdate, BrowserSession, Client,
-    ClientUpdate, CodeHash, Connection, ConnectionId, ConnectionUpdate, ConsentGrant,
-    CounterOutcome, CredentialId, CredentialSummary, DeliveryResult, EmailKind, EmailTemplate,
-    Flow, FlowId, IdentityLink, IdentityLinkId, InstallPlan, Logo, LogoutDelivery,
+    AccessTokenRecord, AttributeDefinition, AuditEvent, AuditQuery, AuthRequestId,
+    AuthorizationCode, AuthorizationRequest, Branding, BrandingDraft, BrandingUpdate,
+    BrowserSession, Client, ClientSource, ClientUpdate, CodeHash, Connection, ConnectionId,
+    ConnectionUpdate, ConsentGrant, CounterOutcome, CredentialId, CredentialSummary,
+    DeliveryResult, EmailKind, EmailTemplate, FetchedMetadata, Flow, FlowId, IdentityLink,
+    IdentityLinkId, InitialAccessToken, InitialAccessTokenId, InstallPlan, Logo, LogoutDelivery,
     LogoutDeliveryId, NewAccessToken, NewAuditEvent, NewAuthorizationCode, NewAuthorizationRequest,
     NewBrowserSession, NewClient, NewConnection, NewConsent, NewEmail, NewFlow, NewIdentityLink,
-    NewPasskey, NewPasswordCredential, NewRefreshToken, NewSelfServiceToken, NewSetupToken,
-    NewSigningKey, NewTenant, NewTokenFamily, NewTotp, NewUser, OutboxEmail, OutboxId, Page,
-    PageRequest, PasskeyCredential, PasswordCredential, RecoveryCodeHash, RecoveryNotice,
-    RefreshToken, ReplayKind, RevokeReason, RpSession, SecretHash, SessionId, SigningKey,
-    SigningKeyId, SmtpSettings, SmtpTls, Tenant, TenantId, TenantUpdate, TokenFamily,
-    TokenFamilyId, TotpCredential, User, UserId, UserUpdate,
+    NewInitialAccessToken, NewPasskey, NewPasswordCredential, NewRefreshToken, NewRole,
+    NewSelfServiceToken, NewSetupToken, NewSigningKey, NewTenant, NewTokenFamily, NewTotp, NewUser,
+    NewWebhookEndpoint, OutboxEmail, OutboxId, Page, PageRequest, PasskeyCredential,
+    PasswordCredential, RecoveryCodeHash, RecoveryNotice, RefreshToken, ReplayKind, RevokeReason,
+    Role, RoleId, RoleUpdate, RpSession, SecretHash, SessionId, SigningKey, SigningKeyId,
+    SmtpSettings, SmtpTls, Tenant, TenantId, TenantUpdate, TokenFamily, TokenFamilyId,
+    TotpCredential, User, UserId, UserUpdate, WebhookDelivery, WebhookDeliveryId, WebhookEndpoint,
+    WebhookEndpointId, WebhookEndpointUpdate, WebhookEvent, WebhookResult,
 };
 
 /// Entry point to all repositories of one storage backend.
@@ -79,6 +94,10 @@ pub trait Storage: Send + Sync + 'static {
     fn connections(&self) -> &dyn ConnectionRepo;
     fn branding(&self) -> &dyn BrandingRepo;
     fn logout(&self) -> &dyn LogoutRepo;
+    fn roles(&self) -> &dyn RoleRepo;
+    fn attributes(&self) -> &dyn AttributeRepo;
+    fn webhooks(&self) -> &dyn WebhookRepo;
+    fn registration(&self) -> &dyn RegistrationRepo;
 
     /// Batch-deletes expired rows across all tenants: authorization codes, authorization
     /// requests, flows, browser sessions, refresh tokens, opaque access tokens, replay guards,
@@ -394,6 +413,42 @@ pub trait ClientRepo: Send + Sync {
     /// [`crate::model::BrandingScope::scope_key`] `client:{client_id}`) and its preview draft.
     /// `false` if it did not exist.
     async fn delete(&self, tenant: TenantId, client_id: &str) -> Result<bool, StorageError>;
+
+    /// Materializes a Client ID Metadata Document client (OIDC-17) in one statement or
+    /// transaction. The stored row always has `registration_source = Cimd` and
+    /// `metadata_expires_at = metadata_expires_at`, whatever `client` says. If no client with
+    /// `client.client_id` exists it is inserted (`created_at = updated_at = now`). If a `Cimd`
+    /// client with that `client_id` exists, its metadata fields (everything except the row id,
+    /// `client_id` and `created_at`) are replaced and `updated_at = now`; its token families are
+    /// kept. `Conflict` (nothing changed) if a `Static` or `Dynamic` client holds that
+    /// `client_id`: a metadata document never overwrites a registered client.
+    async fn upsert_cimd(
+        &self,
+        tenant: TenantId,
+        client: &NewClient,
+        metadata_expires_at: OffsetDateTime,
+        now: OffsetDateTime,
+    ) -> Result<Client, StorageError>;
+
+    /// RFC 7592 client configuration endpoint lookup: the `Dynamic` client `client_id` iff its
+    /// stored registration access token hash equals `token_hash` (exact comparison). `None` for
+    /// an unknown client, a wrong or cleared token, or a non-dynamic client.
+    async fn get_by_registration_token(
+        &self,
+        tenant: TenantId,
+        client_id: &str,
+        token_hash: &SecretHash,
+    ) -> Result<Option<Client>, StorageError>;
+
+    /// Replaces (`Some`) or clears (`None`) the registration access token hash and sets
+    /// `updated_at = now`. `false` if the client does not exist.
+    async fn set_registration_token(
+        &self,
+        tenant: TenantId,
+        client_id: &str,
+        token_hash: Option<&SecretHash>,
+        now: OffsetDateTime,
+    ) -> Result<bool, StorageError>;
 }
 
 /// Signing key persistence.
@@ -734,10 +789,11 @@ pub trait GrantRepo: Send + Sync {
         user: UserId,
     ) -> Result<Vec<ConsentGrant>, StorageError>;
 
-    /// Grants `consent.scopes` to (user, client) in one statement or transaction: creates the
-    /// grant (with `consent.id`), or merges the scopes into the existing one (union, sorted) and
-    /// sets `updated_at = now`. A revoked grant is re-activated with exactly the new scopes.
-    /// Returns the stored grant.
+    /// Grants `consent.scopes` and `consent.resources` to (user, client) in one statement or
+    /// transaction: creates the grant (with `consent.id`), or merges the scopes and the resources
+    /// into the existing one (each a union, sorted and de-duplicated) and sets `updated_at = now`.
+    /// A revoked grant is re-activated with exactly the new scopes and resources. Returns the
+    /// stored grant.
     async fn upsert_consent(
         &self,
         tenant: TenantId,
@@ -764,8 +820,9 @@ pub trait SetupRepo: Send + Sync {
     async fn is_installed(&self) -> Result<bool, StorageError>;
 
     /// Writes the tenants, keys and setup token of the plan in **one transaction**, unless the
-    /// installation already exists (then nothing is written). Concurrent installers: exactly one
-    /// gets `Installed`.
+    /// installation already exists (then nothing is written). The same transaction creates the
+    /// system tenant's role [`crate::model::SYSTEM_ADMIN_ROLE`] (`administrator`) with the
+    /// permission set `[admin:write]`. Concurrent installers: exactly one gets `Installed`.
     async fn install(&self, plan: &InstallPlan) -> Result<InstallOutcome, StorageError>;
 
     /// Stores an additional setup token (e.g. a regenerated one). `Conflict` on duplicate hash.
@@ -778,11 +835,15 @@ pub trait SetupRepo: Send + Sync {
         now: OffsetDateTime,
     ) -> Result<bool, StorageError>;
 
-    /// In **one transaction**: atomically consumes the setup token, creates the first
-    /// administrator (with password) in `admin_tenant` and the admin client in `client_tenant`.
-    /// `InvalidToken` (nothing written) if the token is unknown, consumed or expired. Exactly one
-    /// concurrent caller can get `Completed`. A user/client conflict rolls back everything,
-    /// including the token consumption, and returns `Conflict`.
+    /// In **one transaction**: atomically consumes the setup token, creates the administrator
+    /// (with password) in `admin_tenant`, assigns it the `admin_tenant`'s
+    /// [`crate::model::SYSTEM_ADMIN_ROLE`] role (created by [`SetupRepo::install`]), and creates
+    /// the admin client in `client_tenant`. This is the intent behind both the first-admin setup
+    /// URL and every later `anvilid admin setup-url` token, so every administrator created
+    /// through setup holds the role. `InvalidToken` (nothing written) if the token is unknown,
+    /// consumed or expired. Exactly one concurrent caller can get `Completed`. A user/client
+    /// conflict rolls back everything, including the token consumption, and returns
+    /// `Conflict`.
     #[expect(
         clippy::too_many_arguments,
         reason = "one atomic intent method; see module docs"
@@ -831,7 +892,12 @@ pub trait OutboxRepo: Send + Sync {
 /// Append-only audit log.
 #[async_trait::async_trait]
 pub trait AuditRepo: Send + Sync {
-    /// Appends an event. `Conflict` on a duplicate id. Events are never updated.
+    /// Appends an event. `Conflict` on a duplicate id (nothing written). Events are never
+    /// updated. With `event.webhook = Some(w)`, the **same transaction** inserts one `Pending`
+    /// webhook delivery per enabled endpoint of `tenant` whose subscriptions contain
+    /// `w.event_type` (module docs, "Webhook enqueueing"): a fresh delivery id per row,
+    /// `event_type` and `payload_json` from `w`, `attempts = 0`,
+    /// `created_at = next_attempt_at = event.at`. With `webhook = None` nothing is enqueued.
     async fn append(&self, tenant: TenantId, event: &NewAuditEvent) -> Result<(), StorageError>;
 
     /// Events of one tenant matching every set filter of `query`, newest first (id descending),
@@ -1100,6 +1166,304 @@ pub trait LogoutRepo: Send + Sync {
         tenant: TenantId,
         client_id: &str,
     ) -> Result<Vec<LogoutDelivery>, StorageError>;
+}
+
+/// Tenant-scoped roles and their assignments (ADM-05). 0.4 roles are plain permission sets;
+/// `org_id` is always `None` (Phase 6 adds org-scoped roles).
+#[async_trait::async_trait]
+pub trait RoleRepo: Send + Sync {
+    /// Persists a role (`updated_at = created_at`). `Conflict` (nothing stored) on a duplicate
+    /// id, or on a duplicate name among the tenant's roles with `org_id = None` (partial unique
+    /// index). The same name in another tenant is not a conflict.
+    async fn create(&self, tenant: TenantId, role: &NewRole) -> Result<Role, StorageError>;
+
+    async fn get(&self, tenant: TenantId, id: RoleId) -> Result<Option<Role>, StorageError>;
+
+    /// Lookup of a tenant-level role (`org_id = None`) by exact name.
+    async fn get_by_name(&self, tenant: TenantId, name: &str)
+    -> Result<Option<Role>, StorageError>;
+
+    /// Every role of the tenant, in name order.
+    async fn list(&self, tenant: TenantId) -> Result<Vec<Role>, StorageError>;
+
+    /// Applies a partial update and sets `updated_at = now`. `None` if the role does not exist;
+    /// `Conflict` (nothing changed) on a duplicate name.
+    async fn update(
+        &self,
+        tenant: TenantId,
+        id: RoleId,
+        update: &RoleUpdate,
+        now: OffsetDateTime,
+    ) -> Result<Option<Role>, StorageError>;
+
+    /// Deletes the role and, in the same transaction (cascade), every assignment of it. `false`
+    /// if it did not exist.
+    async fn delete(&self, tenant: TenantId, id: RoleId) -> Result<bool, StorageError>;
+
+    /// Assigns `role` to `user` (idempotent: an existing assignment is kept as is). `true` if the
+    /// user holds the role afterwards; `false` (nothing stored) if the role or the user does not
+    /// exist in `tenant`, so a role or user of another tenant can never be assigned.
+    async fn assign(
+        &self,
+        tenant: TenantId,
+        role: RoleId,
+        user: UserId,
+        now: OffsetDateTime,
+    ) -> Result<bool, StorageError>;
+
+    /// Removes the assignment. `true` if one was removed, `false` if there was none.
+    async fn unassign(
+        &self,
+        tenant: TenantId,
+        role: RoleId,
+        user: UserId,
+    ) -> Result<bool, StorageError>;
+
+    /// The roles assigned to `user`, in name order (empty for an unknown user).
+    async fn roles_for_user(
+        &self,
+        tenant: TenantId,
+        user: UserId,
+    ) -> Result<Vec<Role>, StorageError>;
+
+    /// Users holding `role`, in user id order (keyset pagination on the user id).
+    async fn users_with_role(
+        &self,
+        tenant: TenantId,
+        role: RoleId,
+        page: PageRequest,
+    ) -> Result<Page<User>, StorageError>;
+
+    /// Number of distinct **active** users (`UserStatus::Active`) of the tenant holding at least
+    /// one role whose permissions contain `permission` (exact match). Blocked and deleted users
+    /// are not counted. Used by the last-administrator guard.
+    async fn holders_of_permission(
+        &self,
+        tenant: TenantId,
+        permission: &str,
+    ) -> Result<u64, StorageError>;
+}
+
+/// Custom user attribute definitions and per-user values (ADM-06).
+#[async_trait::async_trait]
+pub trait AttributeRepo: Send + Sync {
+    /// Every definition of the tenant, by `position` then name.
+    async fn list(&self, tenant: TenantId) -> Result<Vec<AttributeDefinition>, StorageError>;
+
+    async fn get(
+        &self,
+        tenant: TenantId,
+        name: &str,
+    ) -> Result<Option<AttributeDefinition>, StorageError>;
+
+    /// Inserts the definition or replaces the one with the same name (the natural key), in one
+    /// statement. Returns the stored definition.
+    async fn upsert(
+        &self,
+        tenant: TenantId,
+        definition: &AttributeDefinition,
+        now: OffsetDateTime,
+    ) -> Result<AttributeDefinition, StorageError>;
+
+    /// Deletes the definition. Stored user values are left untouched (a re-created definition
+    /// sees them again). `false` if it did not exist.
+    async fn delete(&self, tenant: TenantId, name: &str) -> Result<bool, StorageError>;
+
+    /// The user's attribute values (a JSON object, empty if never set). `None` if the user does
+    /// not exist in `tenant`.
+    async fn user_values(
+        &self,
+        tenant: TenantId,
+        user: UserId,
+    ) -> Result<Option<serde_json::Map<String, serde_json::Value>>, StorageError>;
+
+    /// Replaces the user's whole attribute object with `values` and sets the user's
+    /// `updated_at = now`, in one statement. Callers validate against the definitions first.
+    /// `false` if the user does not exist in `tenant`.
+    async fn set_user_values(
+        &self,
+        tenant: TenantId,
+        user: UserId,
+        values: &serde_json::Map<String, serde_json::Value>,
+        now: OffsetDateTime,
+    ) -> Result<bool, StorageError>;
+}
+
+/// Webhook endpoints and the delivery queue (module docs, "Webhook enqueueing"). Deliveries are
+/// enqueued by [`AuditRepo::append`]; this trait manages endpoints and drives the worker.
+#[async_trait::async_trait]
+pub trait WebhookRepo: Send + Sync {
+    /// Persists an endpoint (`updated_at = created_at`, no previous secret, no disabled
+    /// reason). `Conflict` (nothing stored) on a duplicate id or a duplicate name in the tenant.
+    async fn create_endpoint(
+        &self,
+        tenant: TenantId,
+        endpoint: &NewWebhookEndpoint,
+    ) -> Result<WebhookEndpoint, StorageError>;
+
+    async fn get_endpoint(
+        &self,
+        tenant: TenantId,
+        id: WebhookEndpointId,
+    ) -> Result<Option<WebhookEndpoint>, StorageError>;
+
+    /// Every endpoint of the tenant, in name order.
+    async fn list_endpoints(&self, tenant: TenantId) -> Result<Vec<WebhookEndpoint>, StorageError>;
+
+    /// Applies a partial update and sets `updated_at = now`. Setting `enabled = Some(true)`
+    /// clears `disabled_reason`. `None` if the endpoint does not exist; `Conflict` (nothing
+    /// changed) on a duplicate name.
+    async fn update_endpoint(
+        &self,
+        tenant: TenantId,
+        id: WebhookEndpointId,
+        update: &WebhookEndpointUpdate,
+        now: OffsetDateTime,
+    ) -> Result<Option<WebhookEndpoint>, StorageError>;
+
+    /// Secret rotation in one statement: the current `secret_enc` becomes
+    /// `previous_secret_enc` with `previous_secret_expires_at = previous_expires_at` (replacing
+    /// any older previous secret), `secret_enc = new_secret_enc`, `updated_at = now`. Both
+    /// secrets sign until the previous one expires. `false` if the endpoint does not exist.
+    async fn rotate_secret(
+        &self,
+        tenant: TenantId,
+        id: WebhookEndpointId,
+        new_secret_enc: &[u8],
+        previous_expires_at: OffsetDateTime,
+        now: OffsetDateTime,
+    ) -> Result<bool, StorageError>;
+
+    /// Sets `enabled = false`, `disabled_reason = reason` (a fixed, code-defined string) and
+    /// `updated_at = now`. Pending deliveries stay queued but are not claimed while the endpoint
+    /// is disabled. `false` if the endpoint does not exist.
+    async fn disable_endpoint(
+        &self,
+        tenant: TenantId,
+        id: WebhookEndpointId,
+        reason: &str,
+        now: OffsetDateTime,
+    ) -> Result<bool, StorageError>;
+
+    /// Deletes the endpoint and, in the same transaction (cascade), all its deliveries. `false`
+    /// if it did not exist.
+    async fn delete_endpoint(
+        &self,
+        tenant: TenantId,
+        id: WebhookEndpointId,
+    ) -> Result<bool, StorageError>;
+
+    /// Installation-wide, like [`LogoutRepo::claim_due_deliveries`]: claims up to `limit`
+    /// `Pending` deliveries with `next_attempt_at <= now` whose endpoint is enabled, oldest
+    /// first, and leases them by setting `next_attempt_at = owner_lease_until`. `attempts` is not
+    /// changed (see [`WebhookRepo::complete`]). Returns each delivery with its endpoint as of the
+    /// claim. Concurrent claimers never get the same row (Postgres: `FOR UPDATE SKIP LOCKED`;
+    /// SQLite: the single writer).
+    async fn claim_due(
+        &self,
+        owner_lease_until: OffsetDateTime,
+        now: OffsetDateTime,
+        limit: u32,
+    ) -> Result<Vec<ClaimedWebhookDelivery>, StorageError>;
+
+    /// Records one attempt on a `Pending` delivery; every variant increments `attempts`:
+    /// - `Delivered`: `status = Delivered`, `last_http_status`, `last_error = None`,
+    ///   `completed_at = now`;
+    /// - `Retry`: stays `Pending`, `next_attempt_at`, `last_http_status`, `last_error`;
+    /// - `GiveUp`: `status = Failed`, `last_http_status`, `last_error`, `completed_at = now`;
+    /// - `DisableEndpoint`: as `GiveUp` (with `last_error = "gone"`), and in the **same
+    ///   transaction** disables the endpoint with `disabled_reason = "gone"`.
+    ///
+    /// `false` (nothing changed) if the delivery is unknown or no longer `Pending`, so a
+    /// completed delivery is never changed or claimed again.
+    async fn complete(
+        &self,
+        id: WebhookDeliveryId,
+        result: &WebhookResult,
+        now: OffsetDateTime,
+    ) -> Result<bool, StorageError>;
+
+    /// Deliveries of one endpoint in any state, newest first (id descending). `page.after` is
+    /// the cursor: only deliveries with a smaller id. `next_cursor` is the id of the last item
+    /// iff more follow. Empty for an unknown endpoint.
+    async fn deliveries(
+        &self,
+        tenant: TenantId,
+        endpoint: WebhookEndpointId,
+        page: PageRequest,
+    ) -> Result<Page<WebhookDelivery>, StorageError>;
+
+    /// Queues a new `Pending` delivery (fresh id, `attempts = 0`,
+    /// `created_at = next_attempt_at = now`) to the same endpoint with the event type and payload
+    /// of delivery `id` (in any state). The original row is unchanged. `None` if the delivery
+    /// does not exist in `tenant`.
+    async fn redeliver(
+        &self,
+        tenant: TenantId,
+        id: WebhookDeliveryId,
+        now: OffsetDateTime,
+    ) -> Result<Option<WebhookDelivery>, StorageError>;
+
+    /// Queues `event` for one endpoint regardless of its subscriptions (the console's "send test
+    /// event"), as a `Pending` delivery with `created_at = next_attempt_at = now`. `None` if the
+    /// endpoint does not exist in `tenant`.
+    async fn enqueue_test(
+        &self,
+        tenant: TenantId,
+        endpoint: WebhookEndpointId,
+        event: &WebhookEvent,
+        now: OffsetDateTime,
+    ) -> Result<Option<WebhookDelivery>, StorageError>;
+}
+
+/// Dynamic client registration: initial access tokens (RFC 7591 §3) and registration counts.
+#[async_trait::async_trait]
+pub trait RegistrationRepo: Send + Sync {
+    /// Stores an initial access token (by hash only). `Conflict` on a duplicate id or hash.
+    async fn create_iat(
+        &self,
+        tenant: TenantId,
+        token: &NewInitialAccessToken,
+    ) -> Result<InitialAccessToken, StorageError>;
+
+    /// Every initial access token of the tenant (any state), in id order.
+    async fn list_iats(&self, tenant: TenantId) -> Result<Vec<InitialAccessToken>, StorageError>;
+
+    /// Sets `revoked_at = now`. `false` if unknown or already revoked.
+    async fn revoke_iat(
+        &self,
+        tenant: TenantId,
+        id: InitialAccessTokenId,
+        now: OffsetDateTime,
+    ) -> Result<bool, StorageError>;
+
+    /// Consumes one use with a **single conditional UPDATE**: matches the token by hash if it is
+    /// unrevoked, unexpired (`expires_at` null or `> now`) and `uses_remaining` is null or `> 0`,
+    /// and decrements a non-null `uses_remaining`. Returns the token after the update; `None`
+    /// (nothing changed) otherwise. Of concurrent callers on a single-use token, exactly one
+    /// gets `Some`.
+    async fn consume_iat(
+        &self,
+        tenant: TenantId,
+        token_hash: &SecretHash,
+        now: OffsetDateTime,
+    ) -> Result<Option<InitialAccessToken>, StorageError>;
+
+    /// Number of clients of the tenant with `registration_source = source` (the DCR
+    /// `max_clients` cap).
+    async fn count_clients_by_source(
+        &self,
+        tenant: TenantId,
+        source: ClientSource,
+    ) -> Result<u64, StorageError>;
+}
+
+/// One delivery leased by [`WebhookRepo::claim_due`], with its endpoint (URL and sealed
+/// secrets) as of the claim.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaimedWebhookDelivery {
+    pub delivery: WebhookDelivery,
+    pub endpoint: WebhookEndpoint,
 }
 
 /// Result of [`GrantRepo::consume_code`].
@@ -1450,6 +1814,64 @@ pub trait UpstreamClient: Send + Sync {
     ) -> Result<serde_json::Value, UpstreamError>;
 }
 
+/// Why an attribute JSON Schema was rejected, reported to the administrator. Never contains
+/// user attribute values.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchemaIssue {
+    pub message: String,
+}
+
+/// Offline JSON Schema handling for custom user attributes (implemented with `jsonschema` in
+/// the web layer; no remote `$ref`, size and depth capped). Synchronous: no I/O.
+pub trait AttributeSchemaCheck: Send + Sync {
+    /// Accepts an attribute definition's schema only if it is a valid, compilable schema within
+    /// the limits (checked before the definition is stored).
+    fn check_definition(&self, schema: &serde_json::Value) -> Result<(), SchemaIssue>;
+
+    /// Validates a value against a (previously checked) schema. `Err` lists the JSON pointers of
+    /// the failing locations in the instance (never the values themselves).
+    fn validate(
+        &self,
+        schema: &serde_json::Value,
+        instance: &serde_json::Value,
+    ) -> Result<(), Vec<String>>;
+}
+
+/// Why a Client ID Metadata Document fetch failed. `Display` never echoes URLs, IP addresses or
+/// response bodies.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum MetadataFetchError {
+    /// The destination is not allowed (SSRF guard: private address, scheme, port).
+    #[error("metadata document destination blocked")]
+    Blocked,
+    #[error("metadata document network error")]
+    Network,
+    #[error("metadata document fetch timed out")]
+    Timeout,
+    /// Unexpected HTTP status.
+    #[error("metadata document fetch returned status {0}")]
+    Status(u16),
+    /// The response exceeded the size limit.
+    #[error("metadata document too large")]
+    TooLarge,
+    /// The response was not acceptable (fixed, code-defined reason).
+    #[error("invalid metadata document response: {0}")]
+    InvalidResponse(&'static str),
+}
+
+/// Fetches Client ID Metadata Documents (OIDC-17), implemented in the web layer on the
+/// SSRF-guarded outbound client with time and size limits.
+#[async_trait::async_trait]
+pub trait ClientMetadataFetcher: Send + Sync {
+    /// GET `url` (the client id) and return the size-limited body with its cache lifetime.
+    async fn fetch(&self, url: &str) -> Result<FetchedMetadata, MetadataFetchError>;
+
+    /// Whether `http://` client ids on loopback hosts are acceptable. This is the
+    /// installation's existing development-mode outbound policy (`allow_http`), exposed by the
+    /// adapter; core passes it to `oauth::cimd` URL checks so no service needs a config field.
+    fn allow_http_loopback(&self) -> bool;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1475,6 +1897,14 @@ mod tests {
         assert_send_sync::<dyn ConnectionRepo>();
         assert_send_sync::<dyn BrandingRepo>();
         assert_send_sync::<dyn LogoutRepo>();
+        assert_send_sync::<dyn RoleRepo>();
+        assert_send_sync::<dyn AttributeRepo>();
+        assert_send_sync::<dyn WebhookRepo>();
+        assert_send_sync::<dyn RegistrationRepo>();
+        assert_send_sync::<dyn AttributeSchemaCheck>();
+        assert_send_sync::<dyn ClientMetadataFetcher>();
+        assert_send_sync::<MetadataFetchError>();
+        assert_send_sync::<ClaimedWebhookDelivery>();
         assert_send_sync::<dyn UpstreamClient>();
         assert_send_sync::<UpstreamError>();
         assert_send_sync::<dyn AuditMirror>();
@@ -1498,6 +1928,35 @@ mod tests {
             (
                 UpstreamError::InvalidResponse("issuer mismatch"),
                 "invalid upstream response: issuer mismatch",
+            ),
+        ] {
+            assert_eq!(e.to_string(), want);
+        }
+    }
+
+    #[test]
+    fn metadata_fetch_error_display_is_fixed_text() {
+        for (e, want) in [
+            (
+                MetadataFetchError::Blocked,
+                "metadata document destination blocked",
+            ),
+            (
+                MetadataFetchError::Network,
+                "metadata document network error",
+            ),
+            (
+                MetadataFetchError::Timeout,
+                "metadata document fetch timed out",
+            ),
+            (
+                MetadataFetchError::Status(404),
+                "metadata document fetch returned status 404",
+            ),
+            (MetadataFetchError::TooLarge, "metadata document too large"),
+            (
+                MetadataFetchError::InvalidResponse("not json"),
+                "invalid metadata document response: not json",
             ),
         ] {
             assert_eq!(e.to_string(), want);

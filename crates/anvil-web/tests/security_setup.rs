@@ -129,6 +129,9 @@ async fn setup_creates_the_admin_and_a_working_management_client_once() {
         storage: Arc::clone(&app.storage),
         clock: Arc::clone(&app.clock) as Arc<dyn anvil_core::ports::Clock>,
         kek: Arc::clone(&app.kek),
+        // Test fixture: no AppState here, and client_credentials uses neither port.
+        attribute_check: None,
+        metadata_fetcher: None,
     };
     let basic = |secret: &str| {
         format!(

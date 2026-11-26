@@ -35,3 +35,12 @@ pub mod branding;
 pub mod connection;
 pub mod logout;
 pub mod upstream;
+
+// Phase 5 (pre-declared by plan 05-02; the owning plans fill them in)
+pub mod admin_recovery;
+pub mod attribute;
+pub mod client_resolver;
+pub mod config;
+pub mod registration;
+pub mod role;
+pub mod webhook;

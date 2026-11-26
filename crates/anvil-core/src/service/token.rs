@@ -22,7 +22,9 @@ use crate::model::{
     UserStatus,
 };
 use crate::oauth::resource;
-use crate::ports::{Clock, ConsumeOutcome, RotateOutcome, Storage};
+use crate::ports::{
+    AttributeSchemaCheck, ClientMetadataFetcher, Clock, ConsumeOutcome, RotateOutcome, Storage,
+};
 use crate::service::audit::AuditService;
 use crate::service::claims::{
     ACCESS_TOKEN_TTL, AccessTokenInput, IdTokenInput, access_token_claims, id_token_claims,
@@ -396,6 +398,12 @@ pub struct TokenService {
     pub storage: Arc<dyn Storage>,
     pub clock: Arc<dyn Clock>,
     pub kek: Arc<Kek>,
+    /// Attribute schema check for mapped attribute claims (used from plan 05-12; `None` until the
+    /// adapter is wired).
+    pub attribute_check: Option<Arc<dyn AttributeSchemaCheck>>,
+    /// Client ID Metadata Document fetcher, passed to the [`ClientAuthenticator`] this service
+    /// builds (used from plan 05-15; `None` = URL client ids are not resolved).
+    pub metadata_fetcher: Option<Arc<dyn ClientMetadataFetcher>>,
 }
 
 /// Tokens minted for one user family.
@@ -484,6 +492,7 @@ impl TokenService {
         let client = ClientAuthenticator {
             storage: self.storage.clone(),
             clock: self.clock.clone(),
+            metadata_fetcher: self.metadata_fetcher.clone(),
         }
         .authenticate(tenant, issuer, &req.auth)
         .await?;

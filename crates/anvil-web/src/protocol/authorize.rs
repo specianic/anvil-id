@@ -45,6 +45,7 @@ impl AppState {
         AuthorizeService {
             storage: self.storage_arc(),
             clock: self.clock_arc(),
+            metadata_fetcher: self.cimd_fetcher(),
         }
     }
 

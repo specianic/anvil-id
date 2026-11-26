@@ -27,6 +27,7 @@ impl AppState {
         UserInfoService {
             storage: self.storage_arc(),
             clock: self.clock_arc(),
+            attribute_check: self.attribute_check(),
         }
     }
 }

@@ -11,3 +11,7 @@ pub mod response_mode;
 // Phase 4 (pre-declared by plan 04-01; the owning plans fill them in)
 pub mod logout;
 pub mod resource;
+
+// Phase 5 (pre-declared by plan 05-02; the owning plans fill them in)
+pub mod cimd;
+pub mod registration;

@@ -18,7 +18,7 @@ use crate::model::{
     AccessTokenRecord, Scope, SecretHash, Tenant, TenantId, TokenFamily, TokenFamilyId, UserStatus,
 };
 use crate::oauth::resource::{audience, userinfo_audience_ok};
-use crate::ports::{Clock, Storage};
+use crate::ports::{AttributeSchemaCheck, Clock, Storage};
 use crate::service::claims::{requested_claims, scope_claims};
 use crate::service::key::published_jwks;
 use crate::service::token::ACCESS_TOKEN_TYP;
@@ -250,6 +250,9 @@ impl AccessTokenVerifier {
 pub struct UserInfoService {
     pub storage: Arc<dyn Storage>,
     pub clock: Arc<dyn Clock>,
+    /// Attribute schema check for mapped attribute claims (used from plan 05-12; `None` until the
+    /// adapter is wired).
+    pub attribute_check: Option<Arc<dyn AttributeSchemaCheck>>,
 }
 
 impl UserInfoService {

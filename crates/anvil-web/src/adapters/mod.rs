@@ -13,6 +13,11 @@ pub mod passkey;
 pub mod qr;
 pub mod upstream;
 
+// Phase 5 (pre-declared by plan 05-02; the owning plans fill them in)
+pub mod attribute_schema;
+pub mod cimd;
+pub mod webhook;
+
 pub use self::argon2::Argon2Pool;
 pub use self::captcha::{CaptchaEndpoints, CaptchaError, CaptchaVerifier, captcha_csp};
 pub use self::hibp::{BreachCheckMode, HibpChecker, breach_checker, breach_checker_with};

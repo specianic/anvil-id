@@ -26,6 +26,8 @@ mod logout;
 mod mail_settings;
 pub mod migrate;
 mod outbox;
+// TRANSITIONAL(05-06): Phase 5 repositories refused with `Unsupported` until implemented.
+mod pending;
 mod sessions;
 mod setup;
 mod tenants;
@@ -35,9 +37,9 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use anvil_core::ports::{
-    AuditRepo, BrandingRepo, ClientRepo, ConnectionRepo, FlowRepo, GrantRepo, JobRepo, KeyRepo,
-    LogoutRepo, MailSettingsRepo, OutboxRepo, SessionRepo, SetupRepo, Storage, StorageError,
-    TenantRepo, UserRepo,
+    AttributeRepo, AuditRepo, BrandingRepo, ClientRepo, ConnectionRepo, FlowRepo, GrantRepo,
+    JobRepo, KeyRepo, LogoutRepo, MailSettingsRepo, OutboxRepo, RegistrationRepo, RoleRepo,
+    SessionRepo, SetupRepo, Storage, StorageError, TenantRepo, UserRepo, WebhookRepo,
 };
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
@@ -54,6 +56,7 @@ use crate::keys::SqliteKeys;
 use crate::logout::SqliteLogout;
 use crate::mail_settings::SqliteMailSettings;
 use crate::outbox::SqliteOutbox;
+use crate::pending::SqlitePending;
 use crate::sessions::SqliteSessions;
 use crate::setup::SqliteSetup;
 use crate::tenants::SqliteTenants;
@@ -86,6 +89,8 @@ pub struct SqliteStorage {
     connections: SqliteConnections,
     branding: SqliteBranding,
     logout: SqliteLogout,
+    /// TRANSITIONAL(05-06): roles, attributes, webhooks and registration.
+    pending: SqlitePending,
 }
 
 fn is_memory_url(url: &str) -> bool {
@@ -192,6 +197,7 @@ impl SqliteStorage {
             outbox: SqliteOutbox {
                 writer: writer.clone(),
             },
+            pending: SqlitePending,
             writer,
         })
     }
@@ -243,6 +249,18 @@ impl Storage for SqliteStorage {
     }
     fn logout(&self) -> &dyn LogoutRepo {
         &self.logout
+    }
+    fn roles(&self) -> &dyn RoleRepo {
+        &self.pending
+    }
+    fn attributes(&self) -> &dyn AttributeRepo {
+        &self.pending
+    }
+    fn webhooks(&self) -> &dyn WebhookRepo {
+        &self.pending
+    }
+    fn registration(&self) -> &dyn RegistrationRepo {
+        &self.pending
     }
 
     async fn purge_expired(&self, now: time::OffsetDateTime) -> Result<u64, StorageError> {

@@ -419,6 +419,42 @@ impl ClientRepo for PgClients {
         tx.commit().await.map_err(map_err)?;
         Ok(true)
     }
+
+    // TRANSITIONAL(05-07): the registration columns do not exist yet; refused, never a success.
+    async fn upsert_cimd(
+        &self,
+        _tenant: TenantId,
+        _client: &NewClient,
+        _metadata_expires_at: OffsetDateTime,
+        _now: OffsetDateTime,
+    ) -> Result<Client, StorageError> {
+        Err(StorageError::Unsupported("CIMD clients (plan 05-07)"))
+    }
+
+    // TRANSITIONAL(05-07)
+    async fn get_by_registration_token(
+        &self,
+        _tenant: TenantId,
+        _client_id: &str,
+        _token_hash: &SecretHash,
+    ) -> Result<Option<Client>, StorageError> {
+        Err(StorageError::Unsupported(
+            "registration access tokens (plan 05-07)",
+        ))
+    }
+
+    // TRANSITIONAL(05-07)
+    async fn set_registration_token(
+        &self,
+        _tenant: TenantId,
+        _client_id: &str,
+        _token_hash: Option<&SecretHash>,
+        _now: OffsetDateTime,
+    ) -> Result<bool, StorageError> {
+        Err(StorageError::Unsupported(
+            "registration access tokens (plan 05-07)",
+        ))
+    }
 }
 
 /// TRANSITIONAL(05-07): the 0.4 registration columns do not exist yet on this backend. Non-default values are

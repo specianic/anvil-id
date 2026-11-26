@@ -3,6 +3,8 @@
 //! a cross-site `form_post`; that callback is protected by state, binding cookie and nonce.
 
 mod account_apps;
+// Phase 5 (pre-declared by plan 05-02; the owning plan adds its routes)
+mod account_attributes;
 mod account_linked;
 mod account_profile;
 mod account_security;
@@ -45,6 +47,7 @@ pub fn routes() -> Router<AppState> {
         .merge(account_apps::routes())
         .merge(account_profile::routes())
         .merge(account_linked::routes())
+        .merge(account_attributes::routes())
         .merge(select_account::routes())
         .merge(email_code::routes())
         .merge(logout::routes())

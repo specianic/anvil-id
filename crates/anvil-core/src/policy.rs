@@ -6,6 +6,10 @@ use crate::error::CoreError;
 pub mod branding;
 pub mod mfa;
 
+// Phase 5 (pre-declared by plan 05-02; the owning plans fill them in)
+pub mod claims_mapping;
+pub mod webhook_event;
+
 /// Length limits in characters (not bytes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PasswordPolicy {

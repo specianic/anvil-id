@@ -20,15 +20,17 @@ mod logout;
 mod mail_settings;
 pub mod migrate;
 mod outbox;
+// TRANSITIONAL(05-07): Phase 5 repositories refused with `Unsupported` until implemented.
+mod pending;
 mod sessions;
 mod setup;
 mod tenants;
 mod users;
 
 use anvil_core::ports::{
-    AuditRepo, BrandingRepo, ClientRepo, ConnectionRepo, FlowRepo, GrantRepo, JobRepo, KeyRepo,
-    LogoutRepo, MailSettingsRepo, OutboxRepo, SessionRepo, SetupRepo, Storage, StorageError,
-    TenantRepo, UserRepo,
+    AttributeRepo, AuditRepo, BrandingRepo, ClientRepo, ConnectionRepo, FlowRepo, GrantRepo,
+    JobRepo, KeyRepo, LogoutRepo, MailSettingsRepo, OutboxRepo, RegistrationRepo, RoleRepo,
+    SessionRepo, SetupRepo, Storage, StorageError, TenantRepo, UserRepo, WebhookRepo,
 };
 use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
@@ -45,6 +47,7 @@ use crate::keys::PgKeys;
 use crate::logout::PgLogout;
 use crate::mail_settings::PgMailSettings;
 use crate::outbox::PgOutbox;
+use crate::pending::PostgresPending;
 use crate::sessions::PgSessions;
 use crate::setup::PgSetup;
 use crate::tenants::PgTenants;
@@ -74,6 +77,8 @@ pub struct PostgresStorage {
     connections: PgConnections,
     branding: PgBranding,
     logout: PgLogout,
+    /// TRANSITIONAL(05-07): roles, attributes, webhooks and registration.
+    pending: PostgresPending,
 }
 
 impl PostgresStorage {
@@ -104,6 +109,7 @@ impl PostgresStorage {
             connections: PgConnections { pool: pool.clone() },
             branding: PgBranding { pool: pool.clone() },
             logout: PgLogout { pool: pool.clone() },
+            pending: PostgresPending,
             pool,
         }
     }
@@ -155,6 +161,18 @@ impl Storage for PostgresStorage {
     }
     fn logout(&self) -> &dyn LogoutRepo {
         &self.logout
+    }
+    fn roles(&self) -> &dyn RoleRepo {
+        &self.pending
+    }
+    fn attributes(&self) -> &dyn AttributeRepo {
+        &self.pending
+    }
+    fn webhooks(&self) -> &dyn WebhookRepo {
+        &self.pending
+    }
+    fn registration(&self) -> &dyn RegistrationRepo {
+        &self.pending
     }
 
     async fn purge_expired(&self, now: time::OffsetDateTime) -> Result<u64, StorageError> {

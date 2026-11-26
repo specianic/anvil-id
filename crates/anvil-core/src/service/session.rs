@@ -571,9 +571,9 @@ mod service_tests {
     use super::*;
     use crate::model::{AuditEvent, AuditQuery, NewAuditEvent};
     use crate::ports::{
-        AuditRepo, BrandingRepo, ClientRepo, ConnectionRepo, FlowRepo, GrantRepo, JobRepo, KeyRepo,
-        LogoutRepo, MailSettingsRepo, OutboxRepo, SessionRepo, SetupRepo, StorageError, TenantRepo,
-        UserRepo,
+        AttributeRepo, AuditRepo, BrandingRepo, ClientRepo, ConnectionRepo, FlowRepo, GrantRepo,
+        JobRepo, KeyRepo, LogoutRepo, MailSettingsRepo, OutboxRepo, RegistrationRepo, RoleRepo,
+        SessionRepo, SetupRepo, StorageError, TenantRepo, UserRepo, WebhookRepo,
     };
 
     /// Runs a future whose fakes never wait (std mutexes only).
@@ -802,6 +802,281 @@ mod service_tests {
         }
     }
 
+    /// The Phase 5 repositories are not used by the session service: every call is refused with
+    /// `Unsupported` (never a success), like the unbacked session and audit methods above.
+    mod phase5_fakes {
+        use serde_json::{Map, Value};
+        use time::OffsetDateTime;
+
+        use super::Fake;
+        use crate::model::{
+            AttributeDefinition, ClientSource, InitialAccessToken, InitialAccessTokenId,
+            NewInitialAccessToken, NewRole, NewWebhookEndpoint, Page, PageRequest, Role, RoleId,
+            RoleUpdate, SecretHash, TenantId, User, UserId, WebhookDelivery, WebhookDeliveryId,
+            WebhookEndpoint, WebhookEndpointId, WebhookEndpointUpdate, WebhookEvent, WebhookResult,
+        };
+        use crate::ports::{
+            AttributeRepo, ClaimedWebhookDelivery, RegistrationRepo, RoleRepo, StorageError,
+            WebhookRepo,
+        };
+
+        fn unsupported<T>(what: &'static str) -> Result<T, StorageError> {
+            Err(StorageError::Unsupported(what))
+        }
+
+        #[async_trait::async_trait]
+        impl RoleRepo for Fake {
+            async fn create(&self, _t: TenantId, _role: &NewRole) -> Result<Role, StorageError> {
+                unsupported("fake: roles")
+            }
+            async fn get(&self, _t: TenantId, _id: RoleId) -> Result<Option<Role>, StorageError> {
+                unsupported("fake: roles")
+            }
+            async fn get_by_name(
+                &self,
+                _t: TenantId,
+                _name: &str,
+            ) -> Result<Option<Role>, StorageError> {
+                unsupported("fake: roles")
+            }
+            async fn list(&self, _t: TenantId) -> Result<Vec<Role>, StorageError> {
+                unsupported("fake: roles")
+            }
+            async fn update(
+                &self,
+                _t: TenantId,
+                _id: RoleId,
+                _update: &RoleUpdate,
+                _now: OffsetDateTime,
+            ) -> Result<Option<Role>, StorageError> {
+                unsupported("fake: roles")
+            }
+            async fn delete(&self, _t: TenantId, _id: RoleId) -> Result<bool, StorageError> {
+                unsupported("fake: roles")
+            }
+            async fn assign(
+                &self,
+                _t: TenantId,
+                _role: RoleId,
+                _user: UserId,
+                _now: OffsetDateTime,
+            ) -> Result<bool, StorageError> {
+                unsupported("fake: roles")
+            }
+            async fn unassign(
+                &self,
+                _t: TenantId,
+                _role: RoleId,
+                _user: UserId,
+            ) -> Result<bool, StorageError> {
+                unsupported("fake: roles")
+            }
+            async fn roles_for_user(
+                &self,
+                _t: TenantId,
+                _user: UserId,
+            ) -> Result<Vec<Role>, StorageError> {
+                unsupported("fake: roles")
+            }
+            async fn users_with_role(
+                &self,
+                _t: TenantId,
+                _role: RoleId,
+                _page: PageRequest,
+            ) -> Result<Page<User>, StorageError> {
+                unsupported("fake: roles")
+            }
+            async fn holders_of_permission(
+                &self,
+                _t: TenantId,
+                _permission: &str,
+            ) -> Result<u64, StorageError> {
+                unsupported("fake: roles")
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl AttributeRepo for Fake {
+            async fn list(&self, _t: TenantId) -> Result<Vec<AttributeDefinition>, StorageError> {
+                unsupported("fake: attributes")
+            }
+            async fn get(
+                &self,
+                _t: TenantId,
+                _name: &str,
+            ) -> Result<Option<AttributeDefinition>, StorageError> {
+                unsupported("fake: attributes")
+            }
+            async fn upsert(
+                &self,
+                _t: TenantId,
+                _definition: &AttributeDefinition,
+                _now: OffsetDateTime,
+            ) -> Result<AttributeDefinition, StorageError> {
+                unsupported("fake: attributes")
+            }
+            async fn delete(&self, _t: TenantId, _name: &str) -> Result<bool, StorageError> {
+                unsupported("fake: attributes")
+            }
+            async fn user_values(
+                &self,
+                _t: TenantId,
+                _user: UserId,
+            ) -> Result<Option<Map<String, Value>>, StorageError> {
+                unsupported("fake: attributes")
+            }
+            async fn set_user_values(
+                &self,
+                _t: TenantId,
+                _user: UserId,
+                _values: &Map<String, Value>,
+                _now: OffsetDateTime,
+            ) -> Result<bool, StorageError> {
+                unsupported("fake: attributes")
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl WebhookRepo for Fake {
+            async fn create_endpoint(
+                &self,
+                _t: TenantId,
+                _endpoint: &NewWebhookEndpoint,
+            ) -> Result<WebhookEndpoint, StorageError> {
+                unsupported("fake: webhooks")
+            }
+            async fn get_endpoint(
+                &self,
+                _t: TenantId,
+                _id: WebhookEndpointId,
+            ) -> Result<Option<WebhookEndpoint>, StorageError> {
+                unsupported("fake: webhooks")
+            }
+            async fn list_endpoints(
+                &self,
+                _t: TenantId,
+            ) -> Result<Vec<WebhookEndpoint>, StorageError> {
+                unsupported("fake: webhooks")
+            }
+            async fn update_endpoint(
+                &self,
+                _t: TenantId,
+                _id: WebhookEndpointId,
+                _update: &WebhookEndpointUpdate,
+                _now: OffsetDateTime,
+            ) -> Result<Option<WebhookEndpoint>, StorageError> {
+                unsupported("fake: webhooks")
+            }
+            async fn rotate_secret(
+                &self,
+                _t: TenantId,
+                _id: WebhookEndpointId,
+                _new_secret_enc: &[u8],
+                _previous_expires_at: OffsetDateTime,
+                _now: OffsetDateTime,
+            ) -> Result<bool, StorageError> {
+                unsupported("fake: webhooks")
+            }
+            async fn disable_endpoint(
+                &self,
+                _t: TenantId,
+                _id: WebhookEndpointId,
+                _reason: &str,
+                _now: OffsetDateTime,
+            ) -> Result<bool, StorageError> {
+                unsupported("fake: webhooks")
+            }
+            async fn delete_endpoint(
+                &self,
+                _t: TenantId,
+                _id: WebhookEndpointId,
+            ) -> Result<bool, StorageError> {
+                unsupported("fake: webhooks")
+            }
+            async fn claim_due(
+                &self,
+                _owner_lease_until: OffsetDateTime,
+                _now: OffsetDateTime,
+                _limit: u32,
+            ) -> Result<Vec<ClaimedWebhookDelivery>, StorageError> {
+                unsupported("fake: webhooks")
+            }
+            async fn complete(
+                &self,
+                _id: WebhookDeliveryId,
+                _result: &WebhookResult,
+                _now: OffsetDateTime,
+            ) -> Result<bool, StorageError> {
+                unsupported("fake: webhooks")
+            }
+            async fn deliveries(
+                &self,
+                _t: TenantId,
+                _endpoint: WebhookEndpointId,
+                _page: PageRequest,
+            ) -> Result<Page<WebhookDelivery>, StorageError> {
+                unsupported("fake: webhooks")
+            }
+            async fn redeliver(
+                &self,
+                _t: TenantId,
+                _id: WebhookDeliveryId,
+                _now: OffsetDateTime,
+            ) -> Result<Option<WebhookDelivery>, StorageError> {
+                unsupported("fake: webhooks")
+            }
+            async fn enqueue_test(
+                &self,
+                _t: TenantId,
+                _endpoint: WebhookEndpointId,
+                _event: &WebhookEvent,
+                _now: OffsetDateTime,
+            ) -> Result<Option<WebhookDelivery>, StorageError> {
+                unsupported("fake: webhooks")
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl RegistrationRepo for Fake {
+            async fn create_iat(
+                &self,
+                _t: TenantId,
+                _token: &NewInitialAccessToken,
+            ) -> Result<InitialAccessToken, StorageError> {
+                unsupported("fake: registration")
+            }
+            async fn list_iats(
+                &self,
+                _t: TenantId,
+            ) -> Result<Vec<InitialAccessToken>, StorageError> {
+                unsupported("fake: registration")
+            }
+            async fn revoke_iat(
+                &self,
+                _t: TenantId,
+                _id: InitialAccessTokenId,
+                _now: OffsetDateTime,
+            ) -> Result<bool, StorageError> {
+                unsupported("fake: registration")
+            }
+            async fn consume_iat(
+                &self,
+                _t: TenantId,
+                _token_hash: &SecretHash,
+                _now: OffsetDateTime,
+            ) -> Result<Option<InitialAccessToken>, StorageError> {
+                unsupported("fake: registration")
+            }
+            async fn count_clients_by_source(
+                &self,
+                _t: TenantId,
+                _source: ClientSource,
+            ) -> Result<u64, StorageError> {
+                unsupported("fake: registration")
+            }
+        }
+    }
+
     /// Only sessions and audit are backed; the functions under test use nothing else.
     #[async_trait::async_trait]
     impl Storage for Fake {
@@ -849,6 +1124,18 @@ mod service_tests {
         }
         fn logout(&self) -> &dyn LogoutRepo {
             unreachable!("session service tests use only sessions and audit")
+        }
+        fn roles(&self) -> &dyn RoleRepo {
+            self
+        }
+        fn attributes(&self) -> &dyn AttributeRepo {
+            self
+        }
+        fn webhooks(&self) -> &dyn WebhookRepo {
+            self
+        }
+        fn registration(&self) -> &dyn RegistrationRepo {
+            self
         }
         async fn purge_expired(&self, _now: OffsetDateTime) -> Result<u64, StorageError> {
             Err(StorageError::Unsupported("fake: purge"))

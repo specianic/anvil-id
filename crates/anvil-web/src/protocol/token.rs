@@ -34,6 +34,8 @@ impl AppState {
             storage: self.storage_arc(),
             clock: self.clock_arc(),
             kek: self.kek_arc(),
+            attribute_check: self.attribute_check(),
+            metadata_fetcher: self.cimd_fetcher(),
         }
     }
 }

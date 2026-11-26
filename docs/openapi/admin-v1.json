@@ -7487,6 +7487,26 @@
     {
       "name": "branding",
       "description": "Theme tokens, custom CSS, logo and live preview of a tenant or client"
+    },
+    {
+      "name": "roles",
+      "description": "Roles, permissions and role assignments of a tenant"
+    },
+    {
+      "name": "attributes",
+      "description": "Custom user attribute definitions and claim mapping of a tenant"
+    },
+    {
+      "name": "webhooks",
+      "description": "Webhook endpoints and the delivery log of a tenant"
+    },
+    {
+      "name": "registration",
+      "description": "Dynamic client registration, Client ID Metadata Document policy and initial access tokens of a tenant"
+    },
+    {
+      "name": "config",
+      "description": "Declarative tenant configuration: export, plan and apply"
     }
   ]
 }
