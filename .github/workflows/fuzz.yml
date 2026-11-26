@@ -15,6 +15,7 @@ on:
       - "crates/anvil-core/src/oauth/**"
       - "crates/anvil-jose/src/**"
       - "crates/anvil-core/src/policy/home_realm.rs"
+      - "crates/anvil-core/src/policy/password_import.rs"
       - "crates/anvil-web/src/adapters/saml_xml.rs"
   pull_request:
     paths:
@@ -65,6 +66,7 @@ jobs:
             saml_response_parse,
             saml_metadata_parse,
             org_domain_parse,
+            password_hash_parse,
           ]
     steps:
       - uses: actions/checkout@v7

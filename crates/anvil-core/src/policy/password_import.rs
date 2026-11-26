@@ -29,6 +29,32 @@
 //! Q10 defaults) refuse trivially weak data at import with `weak_parameters`, and flag data that is
 //! accepted but weak; every legacy hash is rehashed to Argon2id at first login anyway.
 //!
+//! - caps: scrypt `128·N·r·p` ≤ 64 MiB; Argon2 `m` ≤ 262,144 KiB, `t` ≤ 10, `p` ≤ 8; PBKDF2
+//!   iterations × output blocks ≤ 5,000,000; bcrypt cost ≤ 16; salt ≤ 256 bytes, hash ≤ 128 bytes,
+//!   strings ≤ 1,024 characters;
+//! - floors: bcrypt cost ≥ 4 (weak below 10); PBKDF2 ≥ 1,000 iterations (weak below 100,000), salt
+//!   ≥ 8 bytes; salted SHA-2 salt ≥ 8 bytes, always weak; scrypt and Firebase scrypt need a
+//!   non-empty salt; scrypt, Firebase scrypt and PBKDF2 hashes are at least 16 bytes.
+//!
+//! # Import input shapes (the `password` object of an import record)
+//!
+//! Byte fields (`salt`, `hash` where shown as *bytes*) are `{"hex": "…"}` or `{"base64": "…"}`.
+//!
+//! | `scheme` | Fields | Stored as |
+//! |---|---|---|
+//! | `bcrypt` | `hash`: MCF string `$2a$`/`$2b$`/`$2y$` | as is; cost 4..=16, weak below 10; `$2x$` refused (`refused_variant`) |
+//! | `argon2` | `hash`: PHC string (argon2i/d/id, `v=16`/`v=19`) | as is after the m/t/p caps |
+//! | `scrypt` | `salt` *bytes*, `hash` *bytes*, `log_n` (log2 N, 1..=63), `r`, `p` | `$anvil-scrypt$` |
+//! | `firebase_scrypt` | `salt` *bytes* (the user's salt), `hash` *bytes* (`passwordHash`), `profile` (UUID of the tenant hash profile holding signer key, salt separator, rounds, mem cost) | `$anvil-firebase-scrypt$` |
+//! | `pbkdf2` | `prf` (`sha1`/`sha256`/`sha512`), `iterations`, `salt` *bytes*, `hash` *bytes* | `$anvil-pbkdf2$` |
+//! | `django_pbkdf2` | `hash`: `pbkdf2_sha256$<iterations>$<salt>$<base64 hash>` (or `pbkdf2_sha1`); the salt string's UTF-8 bytes are the salt | `$anvil-pbkdf2$` |
+//! | `passlib_pbkdf2` | `hash`: `$pbkdf2-sha256$<iterations>$<ab64 salt>$<ab64 hash>` (also `$pbkdf2$` = SHA-1, `$pbkdf2-sha512$`); ab64 is base64 with `.` for `+`, no padding | `$anvil-pbkdf2$` |
+//! | `salted_sha2` | `alg` (`sha256`/`sha512`; `md5`/`sha1` refused), `position` (`prefix` = `H(salt‖password)`, `suffix` = `H(password‖salt)`), `salt` *bytes* (required, at least 8 bytes), `hash` *bytes* (digest length) | `$anvil-sha2$`, always weak |
+//!
+//! Refusals: an unknown `scheme` (including `md5`, `sha1`, `sha256` as a scheme) is `unknown_scheme`
+//! through [`parse_import_value`]; unsalted digests and MD5/SHA-1 salted digests are
+//! `weak_parameters`; unknown Django/passlib algorithm identifiers are `unknown_scheme`.
+//!
 //! Nothing in this module (errors, `Debug`, `Display`, serde output) contains hash, salt or password
 //! bytes: `Debug` prints lengths only.
 
@@ -776,27 +802,8 @@ pub const IMPORT_SCHEMES: [&str; 8] = [
 ];
 
 /// The `password` object of an import record, tagged by `scheme`. Unknown fields are rejected.
-/// See the accepted shapes in the module docs below. `Debug` prints the scheme and field lengths
+/// The accepted shapes are listed in the module docs. `Debug` prints the scheme and field lengths
 /// only.
-///
-/// # Accepted input shapes
-///
-/// Byte fields (`salt`, `hash` where shown as *bytes*) are `{"hex": "…"}` or `{"base64": "…"}`.
-///
-/// | `scheme` | Fields | Stored as |
-/// |---|---|---|
-/// | `bcrypt` | `hash`: MCF string `$2a$`/`$2b$`/`$2y$` | as is; cost 4..=16, weak below 10; `$2x$` refused (`refused_variant`) |
-/// | `argon2` | `hash`: PHC string (argon2i/d/id, `v=16`/`v=19`) | as is after the m/t/p caps |
-/// | `scrypt` | `salt` *bytes*, `hash` *bytes*, `log_n` (log2 N, 1..=63), `r`, `p` | `$anvil-scrypt$` |
-/// | `firebase_scrypt` | `salt` *bytes* (the user's salt), `hash` *bytes* (`passwordHash`), `profile` (UUID of the tenant hash profile holding signer key, salt separator, rounds, mem cost) | `$anvil-firebase-scrypt$` |
-/// | `pbkdf2` | `prf` (`sha1`/`sha256`/`sha512`), `iterations`, `salt` *bytes*, `hash` *bytes* | `$anvil-pbkdf2$` |
-/// | `django_pbkdf2` | `hash`: `pbkdf2_sha256$<iterations>$<salt>$<base64 hash>` (or `pbkdf2_sha1`); the salt string's UTF-8 bytes are the salt | `$anvil-pbkdf2$` |
-/// | `passlib_pbkdf2` | `hash`: `$pbkdf2-sha256$<iterations>$<ab64 salt>$<ab64 hash>` (also `$pbkdf2$` = SHA-1, `$pbkdf2-sha512$`); ab64 is base64 with `.` for `+`, no padding | `$anvil-pbkdf2$` |
-/// | `salted_sha2` | `alg` (`sha256`/`sha512`; `md5`/`sha1` refused), `position` (`prefix` = `H(salt‖password)`, `suffix` = `H(password‖salt)`), `salt` *bytes* (required, at least 8 bytes), `hash` *bytes* (digest length) | `$anvil-sha2$`, always weak |
-///
-/// Refusals: an unknown `scheme` (including `md5`, `sha1`, `sha256` as a scheme) is `unknown_scheme`
-/// through [`parse_import_value`]; unsalted digests and MD5/SHA-1 salted digests are
-/// `weak_parameters`; unknown Django/passlib algorithm identifiers are `unknown_scheme`.
 #[derive(Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(tag = "scheme", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ImportPassword {
@@ -884,7 +891,14 @@ impl fmt::Debug for ImportPassword {
 /// `unknown_scheme` and any other shape error (missing or unknown fields, wrong types) to
 /// `malformed`. The serde error itself is dropped: it can quote input.
 pub fn parse_import_value(v: serde_json::Value) -> Result<ImportPassword, HashPolicyError> {
-    todo!()
+    let scheme = v
+        .get("scheme")
+        .and_then(serde_json::Value::as_str)
+        .ok_or(HashPolicyError::Malformed)?;
+    if !IMPORT_SCHEMES.contains(&scheme) {
+        return Err(HashPolicyError::UnknownScheme);
+    }
+    serde_json::from_value(v).map_err(|_| HashPolicyError::Malformed)
 }
 
 /// The result of converting an import input: the stored string and whether the floors flag it
@@ -907,7 +921,80 @@ impl fmt::Debug for Converted {
 /// Converts an import input into the stored encoding, enforcing the caps (`over_cap`) and the
 /// floors (`weak_parameters`). The one conversion path for the admin API and the CLI.
 pub fn convert_import(input: &ImportPassword) -> Result<Converted, HashPolicyError> {
-    todo!()
+    match input {
+        ImportPassword::Bcrypt { hash } => match declared(parse_stored(hash))? {
+            h @ StoredHash::Bcrypt { .. } => finish(&h),
+            _ => Err(HashPolicyError::Malformed),
+        },
+        ImportPassword::Argon2 { hash } => match declared(parse_stored(hash))? {
+            h @ StoredHash::Argon2 { .. } => finish(&h),
+            _ => Err(HashPolicyError::Malformed),
+        },
+        ImportPassword::Scrypt {
+            salt,
+            hash,
+            log_n,
+            r,
+            p,
+        } => {
+            check_scrypt_params(*log_n, *r, *p)?;
+            finish(&StoredHash::Scrypt {
+                log_n: *log_n,
+                r: *r,
+                p: *p,
+                salt: salt.decode()?,
+                hash: hash.decode()?,
+            })
+        }
+        ImportPassword::FirebaseScrypt {
+            salt,
+            hash,
+            profile,
+        } => finish(&StoredHash::FirebaseScrypt {
+            profile: *profile,
+            salt: salt.decode()?,
+            hash: hash.decode()?,
+        }),
+        ImportPassword::Pbkdf2 {
+            prf,
+            iterations,
+            salt,
+            hash,
+        } => pbkdf2(*prf, *iterations, salt.decode()?, hash.decode()?),
+        ImportPassword::DjangoPbkdf2 { hash } => convert_django(hash),
+        ImportPassword::PasslibPbkdf2 { hash } => convert_passlib(hash),
+        ImportPassword::SaltedSha2 {
+            alg,
+            position,
+            salt,
+            hash,
+        } => {
+            let alg = match alg {
+                SaltedDigest::Md5 | SaltedDigest::Sha1 => {
+                    return Err(HashPolicyError::WeakParameters);
+                }
+                SaltedDigest::Sha256 => ShaAlg::Sha256,
+                SaltedDigest::Sha512 => ShaAlg::Sha512,
+            };
+            let salt = match salt {
+                Some(s) => s.decode()?,
+                None => Vec::new(),
+            };
+            if salt.is_empty() {
+                return Err(HashPolicyError::WeakParameters);
+            }
+            let hash = hash.decode()?;
+            if hash.len() != alg.digest_len() {
+                return Err(HashPolicyError::Malformed);
+            }
+            finish(&StoredHash::Sha2 {
+                alg,
+                position: *position,
+                salt,
+                hash,
+            })
+        }
+    }
 }
 
 /// A `bcrypt`/`argon2` input that is not that scheme at all is malformed input, not an unknown
@@ -1855,11 +1942,11 @@ mod tests {
     proptest! {
         #[test]
         fn import_conversion_is_total(raw in proptest::collection::vec(any::<u8>(), 0..300)) {
-            if let Ok(p) = serde_json::from_slice::<ImportPassword>(&raw) {
-                if let Ok(c) = convert_import(&p) {
-                    let h = parse_stored(&c.stored).expect("converted output parses");
-                    prop_assert_eq!(check_stored_caps(&h), Ok(()));
-                }
+            if let Ok(p) = serde_json::from_slice::<ImportPassword>(&raw)
+                && let Ok(c) = convert_import(&p)
+            {
+                let h = parse_stored(&c.stored).expect("converted output parses");
+                prop_assert_eq!(check_stored_caps(&h), Ok(()));
             }
         }
 
