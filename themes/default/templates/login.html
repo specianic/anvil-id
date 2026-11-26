@@ -13,15 +13,21 @@
       "Email me a sign-in code" form, open and prefilled when an address is known (`login_hint`).
       Selectors: disclosure `email-code-toggle`, form `email-code-request`, input
       `email-code-email`, button `email-code-request-submit`.
+    - `change_email` ({action, email} or none): identifier-first sign-in (a tenant with a routed
+      domain): the email entered on the email page travels in a hidden `identifier` field and is
+      shown read-only (`login-email-locked`), with the form `login-change-email-form` / button
+      `login-change-email` (posts `choice=change`) back to the email page. None on the combined
+      form, which then renders exactly as before.
     The password form is written out here (instead of forms.render) so the CAPTCHA widget can sit
     inside it; its markup matches form.html. -#}
 {% block heading %}{{ t("title.login") }}{% endblock %}
-{% block content %}
+{% block content %}{% if change_email %}
+<p class="anvil-muted" id="login-email-locked">{{ t("hrd.signing_in_as", email=change_email.email) }}</p>{% endif %}
 {% if captcha %}
 <form id="{{ form.id }}" method="post" action="{{ form.action }}" novalidate>
 <input type="hidden" name="csrf_token" value="{{ form.csrf_token }}">
 {% for field in form.fields %}
-{% set invalid = "error" in field.messages|map(attribute="level")|list %}
+{% if field.kind == "hidden" %}<input type="hidden" id="{{ field.name }}" name="{{ field.name }}"{% if field.value is not none %} value="{{ field.value }}"{% endif %}>{% else %}{% set invalid = "error" in field.messages|map(attribute="level")|list %}
 <div class="anvil-field{% if invalid %} anvil-field-invalid{% endif %}">
 <label for="{{ field.name }}">{{ field.label }}{% if not field.required %} <span class="anvil-optional">{{ t("form.optional") }}</span>{% endif %}</label>
 <input id="{{ field.name }}" name="{{ field.name }}" type="{{ field.kind }}"
@@ -31,7 +37,7 @@
 {%- if field.messages %} aria-describedby="{% for m in field.messages %}{{ field.name }}-msg-{{ loop.index }}{% if not loop.last %} {% endif %}{% endfor %}"{% endif %}
 {%- if invalid %} aria-invalid="true"{% endif %}>
 {{ forms.messages(field.messages, field.name) }}
-</div>
+</div>{% endif %}
 {% endfor %}
 {% include "captcha.html" %}
 {% if form.messages %}
@@ -43,7 +49,12 @@
 </form>
 {% else %}
 {{ forms.render(form, t("login.submit")) }}
-{% endif %}{% if email_code %}
+{% endif %}{% if change_email %}
+<form id="login-change-email-form" method="post" action="{{ change_email.action }}">
+<input type="hidden" name="csrf_token" value="{{ form.csrf_token }}">
+<input type="hidden" name="choice" value="change">
+<button type="submit" id="login-change-email" class="anvil-secondary">{{ t("hrd.change_email") }}</button>
+</form>{% endif %}{% if email_code %}
 <details class="anvil-disclosure" id="email-code-toggle"{% if email_code.value %} open{% endif %}>
 <summary>{{ t("email_code.request_toggle") }}</summary>
 <form id="email-code-request" method="post" action="{{ email_code.action }}" novalidate>

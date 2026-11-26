@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% import "form.html" as forms %}
+{#- Identifier-first sign-in (home-realm discovery, ORG-04). Rendered for two forms:
+    - `login-identify` (the email page, tenants with a routed domain only): form
+      `login-identify-form` with the `identifier` input and button `login-identify-submit`, followed
+      by the upstream buttons and the passkey form exactly as on login.html.
+    - `login-sso-choice` (the email's domain uses single sign-on and its organization still allows
+      passwords): button `login-sso-continue` (posts `choice=sso`) and button `login-use-password`
+      (posts `choice=password`), both to the form action.
+    `change_email` ({action, email} or none): the entered email, shown read-only
+    (`login-email-locked`) with the form `login-change-email-form` / button `login-change-email`
+    (posts `choice=change`) back to the email page.
+    Every control is a plain form post: no JavaScript is needed. -#}
+{% block heading %}{{ t("title.login") }}{% endblock %}
+{% block content %}
+{% if form.id == "login-sso-choice" %}
+{% if change_email %}
+<p class="anvil-muted" id="login-email-locked">{{ t("hrd.signing_in_as", email=change_email.email) }}</p>
+{% endif %}
+{% if form.messages %}
+<div class="anvil-form-messages">
+{{ forms.messages(form.messages, form.id) }}
+</div>
+{% endif %}
+<form id="login-sso-form" method="post" action="{{ form.action }}">
+<input type="hidden" name="csrf_token" value="{{ form.csrf_token }}">
+<input type="hidden" name="choice" value="sso">
+<button type="submit" id="login-sso-continue">{{ t("hrd.continue_sso") }}</button>
+</form>
+<form id="login-use-password-form" method="post" action="{{ form.action }}">
+<input type="hidden" name="csrf_token" value="{{ form.csrf_token }}">
+<input type="hidden" name="choice" value="password">
+<button type="submit" id="login-use-password" class="anvil-secondary">{{ t("hrd.use_password") }}</button>
+</form>
+{% if change_email %}
+<form id="login-change-email-form" method="post" action="{{ change_email.action }}">
+<input type="hidden" name="csrf_token" value="{{ form.csrf_token }}">
+<input type="hidden" name="choice" value="change">
+<button type="submit" id="login-change-email" class="anvil-secondary">{{ t("hrd.change_email") }}</button>
+</form>
+{% endif %}
+{% else %}
+<form id="login-identify-form" method="post" action="{{ form.action }}" novalidate>
+<input type="hidden" name="csrf_token" value="{{ form.csrf_token }}">
+{% for field in form.fields %}
+{% set invalid = "error" in field.messages|map(attribute="level")|list %}
+<div class="anvil-field{% if invalid %} anvil-field-invalid{% endif %}">
+<label for="{{ field.name }}">{{ field.label }}</label>
+<input id="{{ field.name }}" name="{{ field.name }}" type="{{ field.kind }}"
+{%- if field.value is not none %} value="{{ field.value }}"{% endif %}
+{%- if field.required %} required{% endif %}
+{%- if field.autocomplete %} autocomplete="{{ field.autocomplete }}"{% endif %}
+{%- if field.messages %} aria-describedby="{% for m in field.messages %}{{ field.name }}-msg-{{ loop.index }}{% if not loop.last %} {% endif %}{% endfor %}"{% endif %}
+{%- if invalid %} aria-invalid="true"{% endif %}>
+{{ forms.messages(field.messages, field.name) }}
+</div>
+{% endfor %}
+{% if form.messages %}
+<div class="anvil-form-messages">
+{{ forms.messages(form.messages, form.id) }}
+</div>
+{% endif %}
+<button type="submit" id="login-identify-submit">{{ t("form.continue") }}</button>
+</form>
+{% if upstream %}
+<div class="anvil-upstream" role="group" aria-label="{{ t("upstream.group_label") }}">
+<p class="anvil-muted">{{ t("upstream.or") }}</p>
+{% for c in upstream %}
+<form id="upstream-{{ c.slug }}-form" method="post" action="{{ c.action }}">
+<input type="hidden" name="csrf_token" value="{{ form.csrf_token }}">
+<button type="submit" id="upstream-{{ c.slug }}" class="anvil-secondary" data-connection="{{ c.slug }}">{{ t("upstream.continue_with", provider=c.name) }}</button>
+</form>
+{% endfor %}
+</div>
+{% endif %}
+{% if passkey %}
+<form id="login-passkey" class="anvil-passkey" method="post" action="{{ passkey.action }}" data-webauthn="authenticate" data-options-url="{{ passkey.options_url }}" data-webauthn-msg-cancelled="{{ t("login.webauthn.cancelled") }}" data-webauthn-msg-failed="{{ t("login.webauthn.failed") }}">
+<input type="hidden" name="csrf_token" value="{{ form.csrf_token }}">
+<input type="hidden" name="response" value="">
+<button type="button" id="login-passkey-submit" class="anvil-secondary" data-webauthn-trigger hidden>{{ t("login.passkey_button") }}</button>
+<p id="login-passkey-status" class="anvil-muted" data-webauthn-status aria-live="polite"></p>
+</form>
+<script src="{{ page.asset_base }}/webauthn.js" defer></script>
+{% endif %}
+{% endif %}
+{% if page.links.recovery or page.links.registration %}
+<nav class="anvil-links" aria-label="{{ t("nav.account_help") }}">
+{% if page.links.recovery %}<a id="link-recovery" href="{{ page.links.recovery }}">{{ t("login.forgot_password") }}</a>{% endif %}
+{% if page.links.registration %}<a id="link-registration" href="{{ page.links.registration }}">{{ t("login.create_account") }}</a>{% endif %}
+</nav>
+{% endif %}
+{% endblock %}

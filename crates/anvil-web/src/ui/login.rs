@@ -432,10 +432,6 @@ async fn submit(
 /// `POST /ui/login/identify?flow=`: the email-first page (`identifier`) or the single-sign-on
 /// choice (`choice` = `sso`, `password` or `change`). No account is looked up, so there is no
 /// brute-force gate: the answer depends on the email's domain only.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "axum handler: one argument per extractor"
-)]
 async fn identify(
     State(state): State<AppState>,
     tenant: ResolvedTenant,
