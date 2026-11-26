@@ -10,6 +10,10 @@ pub mod mfa;
 pub mod claims_mapping;
 pub mod webhook_event;
 
+// Phase 6 (plan 06-05)
+pub mod domain_verification;
+pub mod home_realm;
+
 /// Length limits in characters (not bytes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PasswordPolicy {
