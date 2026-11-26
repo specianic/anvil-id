@@ -6,14 +6,14 @@ current_phase: 05
 current_phase_name: release 0 4 operate it
 current_plan: 33
 status: executing
-stopped_at: Completed 06-09-PLAN.md
-last_updated: "2026-11-26T10:30:19.516Z"
+stopped_at: Completed 06-11-PLAN.md
+last_updated: "2026-11-26T10:34:43.142Z"
 last_activity: 2026-11-26
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 162
-  completed_plans: 142
+  completed_plans: 143
   percent: 88
 ---
 
@@ -199,6 +199,7 @@ done before 05-29 tags v0.4.0.
 | Phase 06 P10 | 35min | 1 tasks | 4 files |
 | Phase 06 P08 | 55min | 2 tasks | 12 files |
 | Phase 06 P09 | 55min | 3 tasks | 12 files |
+| Phase 06 P11 | 55min | 1 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -464,6 +465,7 @@ Recent decisions affecting current work:
 - [Phase 06]: 06-08: Postgres org_domain routing uses a composite FK to connection (tenant_id, org_id, id); ConnectionRepo::delete clears routing targets first (SQLite uses a trigger)
 - [Phase 06]: 06-09: SAML verify-then-read on one uppsala Document; precheck before bergshamra refuses non-fragment Reference URIs, stray signatures, any second Assertion, attribute pollution (repeated attribute local name) and duplicate ids across ID/Id/id/AssertionID/xml:id
 - [Phase 06]: 06-09: UntrustedKey vs Signature is reporting only (KeyInfo names an unconfigured cert -> UntrustedKey); trust always comes from configured certs
+- [Phase 06]: Keys admin API: settings scope family, system-tenant rotation needs admin:write; KeyView is an allow-list without key material
 
 ### Pending Todos
 
@@ -476,6 +478,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-26T10:30:19.514Z
-Stopped at: Completed 06-09-PLAN.md
+Last session: 2026-11-26T10:34:43.139Z
+Stopped at: Completed 06-11-PLAN.md
 Resume file: None
