@@ -31,6 +31,8 @@ mod logout;
 mod mail_settings;
 pub mod migrate;
 mod outbox;
+// TRANSITIONAL(06-07): OrgRepo refusals until the 1.0 schema lands.
+mod pending;
 mod registration;
 mod roles;
 mod sessions;
@@ -44,8 +46,8 @@ use std::time::Duration;
 
 use anvil_core::ports::{
     AttributeRepo, AuditRepo, BrandingRepo, ClientRepo, ConnectionRepo, FlowRepo, GrantRepo,
-    JobRepo, KeyRepo, LogoutRepo, MailSettingsRepo, OutboxRepo, RegistrationRepo, RoleRepo,
-    SessionRepo, SetupRepo, Storage, StorageError, TenantRepo, UserRepo, WebhookRepo,
+    JobRepo, KeyRepo, LogoutRepo, MailSettingsRepo, OrgRepo, OutboxRepo, RegistrationRepo,
+    RoleRepo, SessionRepo, SetupRepo, Storage, StorageError, TenantRepo, UserRepo, WebhookRepo,
 };
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
@@ -63,6 +65,7 @@ use crate::keys::SqliteKeys;
 use crate::logout::SqliteLogout;
 use crate::mail_settings::SqliteMailSettings;
 use crate::outbox::SqliteOutbox;
+use crate::pending::PendingOrgs;
 use crate::registration::SqliteRegistration;
 use crate::roles::SqliteRoles;
 use crate::sessions::SqliteSessions;
@@ -102,6 +105,7 @@ pub struct SqliteStorage {
     attributes: SqliteAttributes,
     webhooks: SqliteWebhooks,
     registration: SqliteRegistration,
+    organizations: PendingOrgs,
 }
 
 fn is_memory_url(url: &str) -> bool {
@@ -217,6 +221,7 @@ impl SqliteStorage {
                 writer: writer.clone(),
                 reader: reader.clone(),
             },
+            organizations: PendingOrgs,
             setup: SqliteSetup {
                 writer: writer.clone(),
                 reader,
@@ -296,6 +301,9 @@ impl Storage for SqliteStorage {
     }
     fn registration(&self) -> &dyn RegistrationRepo {
         &self.registration
+    }
+    fn organizations(&self) -> &dyn OrgRepo {
+        &self.organizations
     }
 
     async fn purge_expired(&self, now: time::OffsetDateTime) -> Result<u64, StorageError> {

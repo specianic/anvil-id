@@ -6,8 +6,8 @@
 //! `WHERE org_id IS NULL`); duplicates surface as `Conflict`.
 
 use anvil_core::model::{
-    NewRole, OrgId, Page, PageRequest, Role, RoleId, RoleUpdate, SYSTEM_ADMIN_ROLE, TenantId, User,
-    UserId, UserStatus,
+    NewRole, OrgId, Page, PageRequest, Role, RoleAssignment, RoleId, RoleUpdate, SYSTEM_ADMIN_ROLE,
+    TenantId, User, UserId, UserStatus,
 };
 use anvil_core::ports::{RoleRepo, StorageError};
 use sqlx::PgPool;
@@ -384,5 +384,75 @@ impl RoleRepo for PgRoles {
         .map_err(map_err)?;
         u64::try_from(count)
             .map_err(|_| StorageError::Corrupt(format!("role holder count: negative {count}")))
+    }
+
+    // TRANSITIONAL(06-08): organization-level roles and assignments need the 1.0 schema
+    // (`role_assignment.org_id`, org foreign keys). Until 06-08 migrates it every org method is
+    // refused explicitly; nothing is read or written.
+
+    async fn list_org_roles(
+        &self,
+        _tenant: TenantId,
+        _org: OrgId,
+    ) -> Result<Vec<Role>, StorageError> {
+        Err(StorageError::Unsupported("organization roles (06-08)"))
+    }
+
+    async fn assign_in_org(
+        &self,
+        _tenant: TenantId,
+        _role: RoleId,
+        _user: UserId,
+        _org: OrgId,
+        _now: OffsetDateTime,
+    ) -> Result<bool, StorageError> {
+        Err(StorageError::Unsupported(
+            "organization role assignments (06-08)",
+        ))
+    }
+
+    async fn unassign_in_org(
+        &self,
+        _tenant: TenantId,
+        _role: RoleId,
+        _user: UserId,
+        _org: OrgId,
+    ) -> Result<bool, StorageError> {
+        Err(StorageError::Unsupported(
+            "organization role assignments (06-08)",
+        ))
+    }
+
+    async fn roles_for_user_in_org(
+        &self,
+        _tenant: TenantId,
+        _user: UserId,
+        _org: OrgId,
+    ) -> Result<Vec<Role>, StorageError> {
+        Err(StorageError::Unsupported(
+            "organization role assignments (06-08)",
+        ))
+    }
+
+    async fn org_assignments(
+        &self,
+        _tenant: TenantId,
+        _org: OrgId,
+        _user: UserId,
+    ) -> Result<Vec<RoleAssignment>, StorageError> {
+        Err(StorageError::Unsupported(
+            "organization role assignments (06-08)",
+        ))
+    }
+
+    async fn org_holders_of_permission(
+        &self,
+        _tenant: TenantId,
+        _org: OrgId,
+        _permission: &str,
+    ) -> Result<u64, StorageError> {
+        Err(StorageError::Unsupported(
+            "organization role assignments (06-08)",
+        ))
     }
 }

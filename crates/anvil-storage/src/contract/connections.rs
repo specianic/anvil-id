@@ -530,7 +530,7 @@ pub async fn create_user_with_link_is_atomic(s: &TestStorage) {
     let new = new_user();
     let link = new_identity_link(new.id, c.id, "fresh");
     let user = repo
-        .create_user_with_link(tenant, &new, &link, None, None)
+        .create_user_with_link(tenant, &new, &link, None, None, None)
         .await
         .expect("create_user_with_link");
     assert_eq!(user, expected_user(tenant, &new));
@@ -556,7 +556,7 @@ pub async fn create_user_with_link_is_atomic(s: &TestStorage) {
     };
     let orphan = new_identity_link(dup_email.id, c.id, "orphan");
     assert!(matches!(
-        repo.create_user_with_link(tenant, &dup_email, &orphan, None, None)
+        repo.create_user_with_link(tenant, &dup_email, &orphan, None, None, None)
             .await,
         Err(StorageError::Conflict(_))
     ));
@@ -578,7 +578,7 @@ pub async fn create_user_with_link_is_atomic(s: &TestStorage) {
     let taken = new_user();
     let dup_link = new_identity_link(taken.id, c.id, "fresh");
     assert!(matches!(
-        repo.create_user_with_link(tenant, &taken, &dup_link, None, None)
+        repo.create_user_with_link(tenant, &taken, &dup_link, None, None, None)
             .await,
         Err(StorageError::Conflict(_))
     ));
@@ -613,7 +613,7 @@ pub async fn create_user_with_link_stores_verification_atomically(s: &TestStorag
         Duration::hours(1),
     );
     let email = new_email(&new.email);
-    repo.create_user_with_link(tenant, &new, &link, Some(&token), Some(&email))
+    repo.create_user_with_link(tenant, &new, &link, Some(&token), Some(&email), None)
         .await
         .expect("create_user_with_link");
     let now = now_ms();
@@ -655,7 +655,8 @@ pub async fn create_user_with_link_stores_verification_atomically(s: &TestStorag
             &dup,
             &orphan,
             Some(&orphan_token),
-            Some(&orphan_email)
+            Some(&orphan_email),
+            None
         )
         .await,
         Err(StorageError::Conflict(_))

@@ -44,3 +44,11 @@ pub mod config;
 pub mod registration;
 pub mod role;
 pub mod webhook;
+
+// Phase 6 (pre-declared by plan 06-04; the owning plans fill them in)
+pub mod domain_check;
+pub mod domain_recheck;
+pub mod org_domain;
+pub mod org_invitation;
+pub mod organization;
+pub mod saml;

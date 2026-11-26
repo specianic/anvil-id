@@ -16,7 +16,8 @@
 //!   tenant resolution (`TenantRepo::get_by_slug` / `get_by_host` / `list`), [`SetupRepo`] and
 //!   [`JobRepo`] (installation-wide), the outbox worker methods (`claim_due`, `mark_sent`,
 //!   `mark_failed`), the logout delivery worker methods ([`LogoutRepo::claim_due_deliveries`],
-//!   [`LogoutRepo::complete_delivery`]) and audit retention ([`AuditRepo::purge_before`]).
+//!   [`LogoutRepo::complete_delivery`]), audit retention ([`AuditRepo::purge_before`]) and the
+//!   domain re-check scan ([`OrgRepo::due_for_recheck`]).
 //! - Uniqueness is enforced by unique indexes and reported as [`StorageError::Conflict`]; never
 //!   check-then-insert.
 //! - Timestamps are passed in by callers (millisecond precision, see
@@ -63,17 +64,20 @@ use crate::model::{
     BrowserSession, Client, ClientSource, ClientUpdate, CodeHash, Connection, ConnectionId,
     ConnectionUpdate, ConsentGrant, CounterOutcome, CredentialId, CredentialSummary,
     DeliveryResult, EmailKind, EmailTemplate, FetchedMetadata, Flow, FlowId, IdentityLink,
-    IdentityLinkId, InitialAccessToken, InitialAccessTokenId, InstallPlan, Logo, LogoutDelivery,
-    LogoutDeliveryId, NewAccessToken, NewAuditEvent, NewAuthorizationCode, NewAuthorizationRequest,
-    NewBrowserSession, NewClient, NewConnection, NewConsent, NewEmail, NewFlow, NewIdentityLink,
-    NewInitialAccessToken, NewPasskey, NewPasswordCredential, NewRefreshToken, NewRole,
-    NewSelfServiceToken, NewSetupToken, NewSigningKey, NewTenant, NewTokenFamily, NewTotp, NewUser,
-    NewWebhookEndpoint, OutboxEmail, OutboxId, Page, PageRequest, PasskeyCredential,
-    PasswordCredential, RecoveryCodeHash, RecoveryNotice, RefreshToken, ReplayKind, RevokeReason,
-    Role, RoleId, RoleUpdate, RpSession, SecretHash, SessionId, SigningKey, SigningKeyId,
-    SmtpSettings, SmtpTls, Tenant, TenantId, TenantUpdate, TokenFamily, TokenFamilyId,
-    TotpCredential, User, UserId, UserUpdate, WebhookDelivery, WebhookDeliveryId, WebhookEndpoint,
-    WebhookEndpointId, WebhookEndpointUpdate, WebhookEvent, WebhookResult,
+    IdentityLinkId, IdpMetadata, InitialAccessToken, InitialAccessTokenId, InstallPlan,
+    InvitationAccept, Logo, LogoutDelivery, LogoutDeliveryId, NewAccessToken, NewAuditEvent,
+    NewAuthorizationCode, NewAuthorizationRequest, NewBrowserSession, NewClient, NewConnection,
+    NewConsent, NewEmail, NewFlow, NewIdentityLink, NewInitialAccessToken, NewMembership,
+    NewOrgDomain, NewOrgInvitation, NewOrganization, NewPasskey, NewPasswordCredential,
+    NewRefreshToken, NewRole, NewSelfServiceToken, NewSetupToken, NewSigningKey, NewTenant,
+    NewTokenFamily, NewTotp, NewUser, NewWebhookEndpoint, OrgDomain, OrgDomainId, OrgDomainUpdate,
+    OrgId, OrgInvitation, OrgInvitationId, OrgMembership, Organization, OrganizationUpdate,
+    OutboxEmail, OutboxId, Page, PageRequest, PasskeyCredential, PasswordCredential,
+    RecoveryCodeHash, RecoveryNotice, RefreshToken, ReplayKind, RevokeReason, Role, RoleAssignment,
+    RoleId, RoleUpdate, RpSession, SamlAssertionData, SecretHash, SessionId, SigningKey,
+    SigningKeyId, SmtpSettings, SmtpTls, Tenant, TenantId, TenantUpdate, TokenFamily,
+    TokenFamilyId, TotpCredential, User, UserId, UserUpdate, WebhookDelivery, WebhookDeliveryId,
+    WebhookEndpoint, WebhookEndpointId, WebhookEndpointUpdate, WebhookEvent, WebhookResult,
 };
 
 /// Entry point to all repositories of one storage backend.
@@ -98,6 +102,7 @@ pub trait Storage: Send + Sync + 'static {
     fn attributes(&self) -> &dyn AttributeRepo;
     fn webhooks(&self) -> &dyn WebhookRepo;
     fn registration(&self) -> &dyn RegistrationRepo;
+    fn organizations(&self) -> &dyn OrgRepo;
 
     /// Batch-deletes expired rows across all tenants: authorization codes, authorization
     /// requests, flows, browser sessions, refresh tokens, opaque access tokens, replay guards,
@@ -993,8 +998,27 @@ pub trait ConnectionRepo: Send + Sync {
         slug: &str,
     ) -> Result<Option<Connection>, StorageError>;
 
-    /// Every connection of the tenant in slug order.
+    /// Every connection of the tenant in slug order: tenant connections (`org_id = None`) **and**
+    /// organization connections. Callers that only want one kind filter on
+    /// [`Connection::org_id`] (the sign-in page never shows org connections as buttons).
     async fn list(&self, tenant: TenantId) -> Result<Vec<Connection>, StorageError>;
+
+    /// The connections owned by `org` (`org_id = Some(org)`), in slug order. Empty for an unknown
+    /// org or an org of another tenant.
+    async fn list_for_org(
+        &self,
+        tenant: TenantId,
+        org: OrgId,
+    ) -> Result<Vec<Connection>, StorageError>;
+
+    /// Whether at least one identity link exists for `connection` in `tenant`, i.e. at least one
+    /// user signed in or linked through it. `false` for an unknown connection or one of another
+    /// tenant. Used before a domain may force SSO through the connection (lockout guard).
+    async fn has_links(
+        &self,
+        tenant: TenantId,
+        connection: ConnectionId,
+    ) -> Result<bool, StorageError>;
 
     /// Applies a partial update and sets `updated_at = now`. `None` if the connection does not
     /// exist.
@@ -1068,9 +1092,13 @@ pub trait ConnectionRepo: Send + Sync {
     ) -> Result<DeleteLinkOutcome, StorageError>;
 
     /// Creates the user (no password), the link and optionally a self-service token (e.g.
-    /// verification) and an email, in **one transaction** (sign-up through an upstream).
-    /// `Conflict` on a duplicate email/username or link; on conflict nothing at all is
-    /// persisted (same semantics as [`UserRepo::create`]).
+    /// verification), an email and an organization membership, in **one transaction** (sign-up
+    /// through an upstream; JIT provisioning through an org connection passes the membership).
+    /// The membership's `user_id` must equal `user.id`; it is inserted with an assignment of each
+    /// of its `role_ids` in that org (`RoleAssignment.org_id = Some(membership.org_id)`).
+    /// `Conflict` on a duplicate email/username or link; on conflict, an unknown org, or a role
+    /// that cannot be assigned in the org (unknown, or org-owned by another org), nothing at all
+    /// is persisted (same semantics as [`UserRepo::create`]). `None` creates no membership.
     async fn create_user_with_link(
         &self,
         tenant: TenantId,
@@ -1078,6 +1106,7 @@ pub trait ConnectionRepo: Send + Sync {
         link: &NewIdentityLink,
         token: Option<&NewSelfServiceToken>,
         email: Option<&NewEmail>,
+        membership: Option<&NewMembership>,
     ) -> Result<User, StorageError>;
 }
 
@@ -1168,13 +1197,30 @@ pub trait LogoutRepo: Send + Sync {
     ) -> Result<Vec<LogoutDelivery>, StorageError>;
 }
 
-/// Tenant-scoped roles and their assignments (ADM-05). 0.4 roles are plain permission sets;
-/// `org_id` is always `None` (Phase 6 adds org-scoped roles).
+/// Roles and their assignments (ADM-05, ORG-02).
+///
+/// # Tenant level and organization level
+///
+/// One role table and one assignment table hold both levels (decision Q5, hybrid):
+///
+/// - a **tenant role** has `org_id = None`; assigned with `RoleAssignment.org_id = None` it holds
+///   tenant-wide (0.4 semantics), assigned with `org_id = Some(X)` it holds only in org X;
+/// - an **org-owned role** has `org_id = Some(X)` and can only ever be assigned in org X.
+///
+/// The 0.4 methods keep tenant-level semantics: [`RoleRepo::list`], [`RoleRepo::get_by_name`],
+/// [`RoleRepo::assign`], [`RoleRepo::unassign`], [`RoleRepo::roles_for_user`],
+/// [`RoleRepo::users_with_role`] and [`RoleRepo::holders_of_permission`] only see tenant roles and
+/// tenant-wide assignments (`org_id` NULL on both). The `*_in_org` / `org_*` methods are the only
+/// view of org assignments. [`RoleRepo::get`], [`RoleRepo::update`] and [`RoleRepo::delete`] work
+/// on any role of the tenant by id.
 #[async_trait::async_trait]
 pub trait RoleRepo: Send + Sync {
     /// Persists a role (`updated_at = created_at`). `Conflict` (nothing stored) on a duplicate
-    /// id, or on a duplicate name among the tenant's roles with `org_id = None` (partial unique
-    /// index). The same name in another tenant is not a conflict.
+    /// id, on a duplicate name among the tenant's roles with `org_id = None` (partial unique
+    /// index), or on a duplicate name among the org-owned roles of the same org (partial unique
+    /// index on (tenant, org, name)). A tenant role and an org-owned role may share a name, and
+    /// so may roles of two orgs. The same name in another tenant is not a conflict. A role with
+    /// an `org_id` that is not an org of `tenant` is refused with `Conflict` (foreign key).
     async fn create(&self, tenant: TenantId, role: &NewRole) -> Result<Role, StorageError>;
 
     async fn get(&self, tenant: TenantId, id: RoleId) -> Result<Option<Role>, StorageError>;
@@ -1183,7 +1229,8 @@ pub trait RoleRepo: Send + Sync {
     async fn get_by_name(&self, tenant: TenantId, name: &str)
     -> Result<Option<Role>, StorageError>;
 
-    /// Every role of the tenant, in name order.
+    /// Every tenant role (`org_id = None`) of the tenant, in name order. Org-owned roles are
+    /// listed by [`RoleRepo::list_org_roles`].
     async fn list(&self, tenant: TenantId) -> Result<Vec<Role>, StorageError>;
 
     /// Applies a partial update and sets `updated_at = now`. `None` if the role does not exist;
@@ -1196,13 +1243,15 @@ pub trait RoleRepo: Send + Sync {
         now: OffsetDateTime,
     ) -> Result<Option<Role>, StorageError>;
 
-    /// Deletes the role and, in the same transaction (cascade), every assignment of it. `false`
-    /// if it did not exist.
+    /// Deletes the role and, in the same transaction (cascade), every assignment of it (tenant-wide
+    /// and in any org). `false` if it did not exist.
     async fn delete(&self, tenant: TenantId, id: RoleId) -> Result<bool, StorageError>;
 
-    /// Assigns `role` to `user` (idempotent: an existing assignment is kept as is). `true` if the
-    /// user holds the role afterwards; `false` (nothing stored) if the role or the user does not
-    /// exist in `tenant`, so a role or user of another tenant can never be assigned.
+    /// Assigns `role` to `user` tenant-wide (idempotent: an existing assignment is kept as is).
+    /// `true` if the user holds the role afterwards; `false` (nothing stored) if the role or the
+    /// user does not exist in `tenant`, or the role is org-owned (org-owned roles are only
+    /// assigned through [`RoleRepo::assign_in_org`]), so a role or user of another tenant can
+    /// never be assigned.
     async fn assign(
         &self,
         tenant: TenantId,
@@ -1211,7 +1260,8 @@ pub trait RoleRepo: Send + Sync {
         now: OffsetDateTime,
     ) -> Result<bool, StorageError>;
 
-    /// Removes the assignment. `true` if one was removed, `false` if there was none.
+    /// Removes the tenant-wide assignment (org assignments of the same role are kept). `true` if
+    /// one was removed, `false` if there was none.
     async fn unassign(
         &self,
         tenant: TenantId,
@@ -1219,14 +1269,15 @@ pub trait RoleRepo: Send + Sync {
         user: UserId,
     ) -> Result<bool, StorageError>;
 
-    /// The roles assigned to `user`, in name order (empty for an unknown user).
+    /// The tenant roles assigned to `user` tenant-wide, in name order (empty for an unknown user).
+    /// Never includes org assignments or org-owned roles.
     async fn roles_for_user(
         &self,
         tenant: TenantId,
         user: UserId,
     ) -> Result<Vec<Role>, StorageError>;
 
-    /// Users holding `role`, in user id order (keyset pagination on the user id).
+    /// Users holding `role` tenant-wide, in user id order (keyset pagination on the user id).
     async fn users_with_role(
         &self,
         tenant: TenantId,
@@ -1235,13 +1286,365 @@ pub trait RoleRepo: Send + Sync {
     ) -> Result<Page<User>, StorageError>;
 
     /// Number of distinct **active** users (`UserStatus::Active`) of the tenant holding at least
-    /// one role whose permissions contain `permission` (exact match). Blocked and deleted users
-    /// are not counted. Used by the last-administrator guard.
+    /// one role whose permissions contain `permission` (exact match) through a tenant-wide
+    /// assignment. Org assignments are ignored. Blocked and deleted users are not counted. Used
+    /// by the last-administrator guard.
     async fn holders_of_permission(
         &self,
         tenant: TenantId,
         permission: &str,
     ) -> Result<u64, StorageError>;
+
+    /// The roles owned by `org` (`role.org_id = Some(org)`), in name order. Empty for an unknown
+    /// org or an org of another tenant.
+    async fn list_org_roles(&self, tenant: TenantId, org: OrgId)
+    -> Result<Vec<Role>, StorageError>;
+
+    /// Assigns `role` to `user` within `org` (`RoleAssignment.org_id = Some(org)`; idempotent).
+    /// `true` if the user holds the role in that org afterwards. `false` (nothing stored) if the
+    /// role, the user or the org does not exist in `tenant`, if `user` is not a member of `org`
+    /// (the assignment references the membership), or if the role is owned by another org. A
+    /// tenant role may be assigned in any org; an org-owned role only in its own org.
+    async fn assign_in_org(
+        &self,
+        tenant: TenantId,
+        role: RoleId,
+        user: UserId,
+        org: OrgId,
+        now: OffsetDateTime,
+    ) -> Result<bool, StorageError>;
+
+    /// Removes the assignment of `role` to `user` in `org`. `true` if one was removed. Tenant-wide
+    /// assignments and assignments in other orgs are kept.
+    async fn unassign_in_org(
+        &self,
+        tenant: TenantId,
+        role: RoleId,
+        user: UserId,
+        org: OrgId,
+    ) -> Result<bool, StorageError>;
+
+    /// The roles `user` holds **in** `org`, in name order, deduplicated: tenant roles assigned
+    /// with `org_id = Some(org)` plus org-owned roles of `org` assigned to the user. Never
+    /// tenant-wide assignments, never assignments in other orgs. Empty for a non-member.
+    async fn roles_for_user_in_org(
+        &self,
+        tenant: TenantId,
+        user: UserId,
+        org: OrgId,
+    ) -> Result<Vec<Role>, StorageError>;
+
+    /// The raw assignments of `user` in `org` (every entry has `org_id = Some(org)`), in role id
+    /// order.
+    async fn org_assignments(
+        &self,
+        tenant: TenantId,
+        org: OrgId,
+        user: UserId,
+    ) -> Result<Vec<RoleAssignment>, StorageError>;
+
+    /// Number of distinct **active** members of `org` holding at least one role whose
+    /// permissions contain `permission` (exact match) through an assignment **in** `org` (tenant
+    /// role assigned in the org, or org-owned role of the org). Tenant-wide assignments,
+    /// assignments in other orgs and blocked or deleted users are not counted. Used by the
+    /// last-`org:admin` lockout guard.
+    async fn org_holders_of_permission(
+        &self,
+        tenant: TenantId,
+        org: OrgId,
+        permission: &str,
+    ) -> Result<u64, StorageError>;
+}
+
+/// Organizations of a tenant: the orgs themselves, memberships, invitations and domains
+/// (ORG-02, ORG-04). An organization lives inside one tenant; every method takes the tenant and
+/// treats orgs, users, roles and connections of other tenants as missing.
+///
+/// # Cascades and revocation
+///
+/// Org-bound token families (`TokenFamily.org_id = Some(org)`) carry the active org of a grant.
+/// The intents that end a membership ([`OrgRepo::remove_member`], [`OrgRepo::delete`]) revoke the
+/// affected families with reason [`RevokeReason::Admin`] in the **same transaction**, so a removed
+/// member cannot refresh into the org. They revoke no browser session, so they enqueue no
+/// back-channel logout delivery.
+#[async_trait::async_trait]
+pub trait OrgRepo: Send + Sync {
+    // ---- organizations ----
+
+    /// Persists an org (`updated_at = created_at`). `Conflict` (nothing stored) on a duplicate id
+    /// or a duplicate slug within the tenant; the same slug in another tenant is not a conflict.
+    async fn create(
+        &self,
+        tenant: TenantId,
+        org: &NewOrganization,
+    ) -> Result<Organization, StorageError>;
+
+    async fn get(&self, tenant: TenantId, id: OrgId) -> Result<Option<Organization>, StorageError>;
+
+    /// Lookup by exact slug.
+    async fn get_by_slug(
+        &self,
+        tenant: TenantId,
+        slug: &str,
+    ) -> Result<Option<Organization>, StorageError>;
+
+    /// Orgs of the tenant in id order (keyset pagination on the org id).
+    async fn list(
+        &self,
+        tenant: TenantId,
+        page: PageRequest,
+    ) -> Result<Page<Organization>, StorageError>;
+
+    /// Applies a partial update and sets `updated_at = now`. `None` if the org does not exist;
+    /// `Conflict` (nothing changed) on a duplicate slug.
+    async fn update(
+        &self,
+        tenant: TenantId,
+        id: OrgId,
+        update: &OrganizationUpdate,
+        now: OffsetDateTime,
+    ) -> Result<Option<Organization>, StorageError>;
+
+    /// Deletes the org in **one transaction**, with (cascade) its memberships, its org-owned roles
+    /// and their assignments, every assignment in the org (of tenant roles too), its connections
+    /// and their identity links, its domains and its invitations, and revokes every token family
+    /// with `org_id = Some(id)` (reason `Admin`, `revoked_at = now`). Users, tenant roles and
+    /// tenant-wide assignments are untouched. `false` (nothing changed) if it did not exist.
+    async fn delete(
+        &self,
+        tenant: TenantId,
+        id: OrgId,
+        now: OffsetDateTime,
+    ) -> Result<bool, StorageError>;
+
+    // ---- members ----
+
+    /// Adds `membership.user_id` to `membership.org_id` and, in the same transaction, assigns each
+    /// of `membership.role_ids` in that org. Idempotent: an existing membership is kept as is and
+    /// its assignments are not touched ([`AddMemberOutcome::AlreadyMember`]). Nothing is stored
+    /// ([`AddMemberOutcome::NotFound`]) if the org or the user does not exist in `tenant`, or a
+    /// role cannot be assigned in the org (unknown, of another tenant, or owned by another org).
+    async fn add_member(
+        &self,
+        tenant: TenantId,
+        membership: &NewMembership,
+    ) -> Result<AddMemberOutcome, StorageError>;
+
+    /// In **one transaction**: deletes the membership and every assignment of the user in the org,
+    /// and revokes the user's token families with `org_id = Some(org)` (reason `Admin`,
+    /// `revoked_at = now`). Families of the same user in other orgs or without an org stay
+    /// active. `false` (nothing changed) if the user was not a member.
+    async fn remove_member(
+        &self,
+        tenant: TenantId,
+        org: OrgId,
+        user: UserId,
+        now: OffsetDateTime,
+    ) -> Result<bool, StorageError>;
+
+    async fn is_member(
+        &self,
+        tenant: TenantId,
+        org: OrgId,
+        user: UserId,
+    ) -> Result<bool, StorageError>;
+
+    /// Members of `org` in user id order (keyset pagination on the user id).
+    async fn list_members(
+        &self,
+        tenant: TenantId,
+        org: OrgId,
+        page: PageRequest,
+    ) -> Result<Page<OrgMembership>, StorageError>;
+
+    /// The orgs `user` is a member of, in slug order.
+    async fn memberships_of_user(
+        &self,
+        tenant: TenantId,
+        user: UserId,
+    ) -> Result<Vec<Organization>, StorageError>;
+
+    // ---- invitations ----
+
+    /// Stores an invitation (the email is already normalised by the caller; the token only as its
+    /// hash). `Conflict` (nothing stored) on a duplicate id or token hash; an unknown org is
+    /// refused with `Conflict` (foreign key).
+    async fn create_invitation(
+        &self,
+        tenant: TenantId,
+        invitation: &NewOrgInvitation,
+    ) -> Result<OrgInvitation, StorageError>;
+
+    /// Invitations of `org`, newest first (`created_at`, then id). `include_closed = false`
+    /// returns only open ones (not accepted, not revoked; expiry is not filtered so the console
+    /// can show "expired"); `true` returns every invitation.
+    async fn list_invitations(
+        &self,
+        tenant: TenantId,
+        org: OrgId,
+        include_closed: bool,
+    ) -> Result<Vec<OrgInvitation>, StorageError>;
+
+    /// Sets `revoked_at = now` on an open (not accepted, not revoked) invitation of `org`. `false`
+    /// if there is none with that id in that org.
+    async fn revoke_invitation(
+        &self,
+        tenant: TenantId,
+        org: OrgId,
+        id: OrgInvitationId,
+        now: OffsetDateTime,
+    ) -> Result<bool, StorageError>;
+
+    /// The invitation with this token hash in any state (callers check it is open).
+    async fn invitation_by_hash(
+        &self,
+        tenant: TenantId,
+        token_hash: &SecretHash,
+    ) -> Result<Option<OrgInvitation>, StorageError>;
+
+    /// Accepts an invitation for an existing, signed-in user, in **one transaction**:
+    ///
+    /// - [`InvitationAccept::Invalid`]: no invitation with this hash in the tenant, or it is not
+    ///   open (accepted, revoked, or `expires_at <= now`). Nothing written.
+    /// - [`InvitationAccept::EmailMismatch`]: `user_verified_email` (normalised by the caller;
+    ///   the user's **verified** email) differs from the invitation's stored email (exact
+    ///   comparison inside the intent). Nothing written; the token stays open.
+    /// - [`InvitationAccept::AlreadyMember`]: the user already belongs to the org. Nothing
+    ///   written; the token stays open.
+    /// - [`InvitationAccept::Accepted`]: one conditional `UPDATE … SET accepted_at = now,
+    ///   accepted_user_id = user WHERE accepted_at IS NULL AND revoked_at IS NULL AND expires_at >
+    ///   now` consumed the token, and the membership plus an in-org assignment of each of the
+    ///   invitation's role ids that still exists were inserted. Exactly one concurrent caller can
+    ///   get `Accepted`; the others get `Invalid`.
+    ///
+    /// An unknown user (or one of another tenant) is `Invalid`.
+    async fn accept_invitation(
+        &self,
+        tenant: TenantId,
+        token_hash: &SecretHash,
+        user: UserId,
+        user_verified_email: &str,
+        now: OffsetDateTime,
+    ) -> Result<InvitationAccept, StorageError>;
+
+    /// Accepts an invitation by registering a new user, in **one transaction**: creates `user`
+    /// (the caller sets `email_verified = true`: the invitation link proves inbox control) with
+    /// the password credential, consumes the token like [`OrgRepo::accept_invitation`] and adds
+    /// the membership with the invitation's roles. `Invalid` or `EmailMismatch` (the new user's
+    /// email differs from the invitation's) write nothing. `Conflict` (nothing written, the token
+    /// stays open) if the email or username is already taken in the tenant. Exactly one
+    /// concurrent caller can get `Accepted`.
+    async fn accept_invitation_with_new_user(
+        &self,
+        tenant: TenantId,
+        token_hash: &SecretHash,
+        user: &NewUser,
+        password: &NewPasswordCredential,
+        now: OffsetDateTime,
+    ) -> Result<InvitationAccept, StorageError>;
+
+    // ---- domains ----
+
+    /// Stores a pending domain claim (`status = Pending`, no verification yet). Several orgs of a
+    /// tenant may hold pending claims for the same domain. `Conflict` (nothing stored) on a
+    /// duplicate id or if the same org already claims the domain; an unknown org, or a routing
+    /// connection that is not a connection of the same org, is refused with `Conflict`.
+    async fn create_domain(
+        &self,
+        tenant: TenantId,
+        domain: &NewOrgDomain,
+    ) -> Result<OrgDomain, StorageError>;
+
+    /// Domains of `org` in domain order.
+    async fn list_domains(
+        &self,
+        tenant: TenantId,
+        org: OrgId,
+    ) -> Result<Vec<OrgDomain>, StorageError>;
+
+    async fn get_domain(
+        &self,
+        tenant: TenantId,
+        id: OrgDomainId,
+    ) -> Result<Option<OrgDomain>, StorageError>;
+
+    /// Applies a partial update (routing connection, routing flag, local password). `None`
+    /// (nothing changed) if the domain does not exist, or the new routing connection is not a
+    /// connection of the domain's org.
+    async fn update_domain(
+        &self,
+        tenant: TenantId,
+        id: OrgDomainId,
+        update: &OrgDomainUpdate,
+        now: OffsetDateTime,
+    ) -> Result<Option<OrgDomain>, StorageError>;
+
+    /// Deletes the domain claim. `false` if it did not exist.
+    async fn delete_domain(&self, tenant: TenantId, id: OrgDomainId) -> Result<bool, StorageError>;
+
+    /// Marks the claim verified: `status = Verified`, `verified_at = last_checked_at = now`,
+    /// `failing_since = None`. A partial unique index on (tenant, domain) over verified rows
+    /// decides between orgs: `Conflict` (nothing changed) if another org of the tenant already has
+    /// the domain verified, so exactly one of several concurrent verifications of one domain by
+    /// different orgs succeeds. Already verified: unchanged, returned as is. `None` if the claim
+    /// does not exist.
+    async fn mark_verified(
+        &self,
+        tenant: TenantId,
+        id: OrgDomainId,
+        now: OffsetDateTime,
+    ) -> Result<Option<OrgDomain>, StorageError>;
+
+    /// Records a re-check of a verified domain. `ok = true`: `last_checked_at = now`,
+    /// `failing_since = None`. `ok = false`: `failing_since = now` if it was `None` (kept
+    /// otherwise, so it marks the start of the failure streak); `last_checked_at = now`. `None`
+    /// if the claim does not exist.
+    async fn record_check(
+        &self,
+        tenant: TenantId,
+        id: OrgDomainId,
+        ok: bool,
+        now: OffsetDateTime,
+    ) -> Result<Option<OrgDomain>, StorageError>;
+
+    /// Drops a verified claim back to pending: `status = Pending`, `verified_at = None`,
+    /// `failing_since = None`, `last_checked_at = now` (routing stops: [`OrgRepo::routed_domain`]
+    /// only considers verified claims). `false` if the claim does not exist or was not verified.
+    async fn unverify(
+        &self,
+        tenant: TenantId,
+        id: OrgDomainId,
+        now: OffsetDateTime,
+    ) -> Result<bool, StorageError>;
+
+    /// The routing target for an email domain (exact, already normalised): the tenant's
+    /// **verified** claim of `domain` with `routing = true` and a routing connection that exists,
+    /// belongs to the same org and is enabled, with that connection. `None` otherwise.
+    async fn routed_domain(
+        &self,
+        tenant: TenantId,
+        domain: &str,
+    ) -> Result<Option<(OrgDomain, Connection)>, StorageError>;
+
+    /// Whether at least one domain of the tenant would route ([`OrgRepo::routed_domain`]
+    /// semantics). Decides whether the sign-in page asks for the email first.
+    async fn tenant_has_routing(&self, tenant: TenantId) -> Result<bool, StorageError>;
+
+    /// The verified domains of `org`, in domain order.
+    async fn verified_domains_of_org(
+        &self,
+        tenant: TenantId,
+        org: OrgId,
+    ) -> Result<Vec<String>, StorageError>;
+
+    /// Installation-wide (the re-check job): up to `limit` **verified** claims of any tenant whose
+    /// `last_checked_at` is `None` or `< checked_before`, oldest check first (`None` first, then
+    /// id).
+    async fn due_for_recheck(
+        &self,
+        checked_before: OffsetDateTime,
+        limit: u32,
+    ) -> Result<Vec<OrgDomain>, StorageError>;
 }
 
 /// Custom user attribute definitions and per-user values (ADM-06).
@@ -1491,6 +1894,18 @@ pub enum DeleteLinkOutcome {
     NotFound,
     /// The link exists but is the user's last sign-in method; it was kept.
     LastSignInMethod,
+}
+
+/// Result of [`OrgRepo::add_member`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AddMemberOutcome {
+    /// The membership and its role assignments were stored.
+    Added,
+    /// The user already was a member; nothing changed.
+    AlreadyMember,
+    /// The org, the user or a role does not exist in the tenant (or the role belongs to another
+    /// org); nothing was stored.
+    NotFound,
 }
 
 /// Result of [`GrantRepo::rotate_refresh`].
@@ -1872,6 +2287,89 @@ pub trait ClientMetadataFetcher: Send + Sync {
     fn allow_http_loopback(&self) -> bool;
 }
 
+/// Why a DNS TXT lookup failed. `Display` is fixed text and never echoes the queried name,
+/// resolver addresses or record contents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum TxtLookupError {
+    /// The name or its TXT RRset does not exist (NXDOMAIN, NODATA).
+    #[error("txt record not found")]
+    NotFound,
+    /// Any other failure (timeout, SERVFAIL, refused, network error, resolver misconfiguration).
+    #[error("txt lookup failed")]
+    Failed,
+}
+
+/// DNS TXT lookups for domain verification (ORG-04), implemented in the web layer on a
+/// dedicated, timeout-bounded resolver (no search domains, no cache). Callers map every failure
+/// to one uniform "not verified" outcome, so the lookup can't be used to probe internal DNS.
+#[async_trait::async_trait]
+pub trait DomainTxtLookup: Send + Sync {
+    /// The TXT records of the fully qualified name `fqdn` (absolute, trailing dot optional): one
+    /// entry per resource record, the character-strings of that record joined in order.
+    async fn txt(&self, fqdn: &str) -> Result<Vec<Vec<u8>>, TxtLookupError>;
+}
+
+/// Why a SAML XML document was rejected. Reason codes only: `Display` is fixed text and never
+/// echoes XML, attribute values, ids or certificate data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum SamlXmlReject {
+    /// The document exceeds the size limit.
+    #[error("saml document too large")]
+    Size,
+    /// Not well-formed XML, not UTF-8, or not decodable.
+    #[error("saml document could not be parsed")]
+    Parse,
+    /// The document contains a DTD or an entity declaration.
+    #[error("saml document contains a dtd")]
+    Dtd,
+    /// The structure does not match the accepted profile (elements, counts, positions).
+    #[error("saml document structure not accepted")]
+    Structure,
+    /// Two elements carry the same id.
+    #[error("saml document contains duplicate ids")]
+    DuplicateId,
+    /// `EncryptedAssertion` (or another encrypted element) is not supported.
+    #[error("encrypted saml assertions are not supported")]
+    Encrypted,
+    /// The signature does not follow the accepted profile (location, reference, transforms).
+    #[error("saml signature profile not accepted")]
+    SignatureProfile,
+    /// A signature, digest or canonicalisation algorithm is not allowed.
+    #[error("saml algorithm not allowed")]
+    Algorithm,
+    /// The signature or a digest does not verify.
+    #[error("saml signature invalid")]
+    Signature,
+    /// The signing key is not one of the configured certificates.
+    #[error("saml signing key not trusted")]
+    UntrustedKey,
+    /// SAML XML processing is not available in this build or configuration.
+    #[error("saml xml processing unavailable")]
+    Unavailable,
+}
+
+/// SAML XML handling (ORG-03), implemented in the web layer: one strict parser (no DTDs, no
+/// external entities, size and depth caps), a profile pre-check, XML-DSig verification against
+/// the configured certificates only, and extraction from the verified node only. Synchronous: no
+/// I/O. Core applies the SAML protocol rules (destination, audience, time, replay) to the
+/// extracted [`SamlAssertionData`].
+pub trait SamlXml: Send + Sync {
+    /// Verifies a decoded `samlp:Response` (signed `Assertion` required; a present `Response`
+    /// signature must verify too) against `signing_certs` (PEM) and extracts the assertion data.
+    fn verify_response(
+        &self,
+        xml: &[u8],
+        signing_certs: &[String],
+    ) -> Result<SamlAssertionData, SamlXmlReject>;
+
+    /// Parses IdP metadata (`md:EntityDescriptor`) into the values an admin may import.
+    fn parse_metadata(&self, xml: &[u8]) -> Result<IdpMetadata, SamlXmlReject>;
+
+    /// HTTP-Redirect binding encoding of an AuthnRequest: raw DEFLATE, then base64 (the caller
+    /// URL-encodes it into `SAMLRequest`).
+    fn encode_redirect(&self, authn_request_xml: &str) -> Result<String, SamlXmlReject>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1901,6 +2399,11 @@ mod tests {
         assert_send_sync::<dyn AttributeRepo>();
         assert_send_sync::<dyn WebhookRepo>();
         assert_send_sync::<dyn RegistrationRepo>();
+        assert_send_sync::<dyn OrgRepo>();
+        assert_send_sync::<dyn DomainTxtLookup>();
+        assert_send_sync::<TxtLookupError>();
+        assert_send_sync::<dyn SamlXml>();
+        assert_send_sync::<SamlXmlReject>();
         assert_send_sync::<dyn AttributeSchemaCheck>();
         assert_send_sync::<dyn ClientMetadataFetcher>();
         assert_send_sync::<MetadataFetchError>();
@@ -1960,6 +2463,38 @@ mod tests {
             ),
         ] {
             assert_eq!(e.to_string(), want);
+        }
+    }
+
+    #[test]
+    fn txt_lookup_error_display_never_echoes_input() {
+        assert_eq!(TxtLookupError::NotFound.to_string(), "txt record not found");
+        assert_eq!(TxtLookupError::Failed.to_string(), "txt lookup failed");
+    }
+
+    #[test]
+    fn saml_reject_display_is_fixed_text() {
+        let all = [
+            SamlXmlReject::Size,
+            SamlXmlReject::Parse,
+            SamlXmlReject::Dtd,
+            SamlXmlReject::Structure,
+            SamlXmlReject::DuplicateId,
+            SamlXmlReject::Encrypted,
+            SamlXmlReject::SignatureProfile,
+            SamlXmlReject::Algorithm,
+            SamlXmlReject::Signature,
+            SamlXmlReject::UntrustedKey,
+            SamlXmlReject::Unavailable,
+        ];
+        let texts: std::collections::HashSet<String> = all.iter().map(|r| r.to_string()).collect();
+        assert_eq!(texts.len(), all.len(), "each reason has its own text");
+        for t in &texts {
+            assert!(
+                t.starts_with("saml") || t.starts_with("encrypted saml"),
+                "{t}"
+            );
+            assert!(!t.contains('<'), "{t}");
         }
     }
 

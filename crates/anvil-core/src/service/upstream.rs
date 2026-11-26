@@ -403,6 +403,9 @@ impl UpstreamService<'_> {
             storage: self.storage_arc(),
             clock: Arc::clone(&self.flows.clock),
             kek: Arc::clone(&self.flows.kek),
+            // Only used here to open connection secrets; never administers SAML connections.
+            saml_enabled: false,
+            saml_xml: None,
         }
     }
 
@@ -1209,6 +1212,7 @@ impl UpstreamService<'_> {
                         &new_link(new_user.id, conn, &identity, now),
                         verification.as_ref().map(|(t, _)| t),
                         verification.as_ref().map(|(_, e)| e),
+                        None,
                     )
                     .await;
                 let u = match created {

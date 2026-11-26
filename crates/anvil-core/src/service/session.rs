@@ -572,8 +572,8 @@ mod service_tests {
     use crate::model::{AuditEvent, AuditQuery, NewAuditEvent};
     use crate::ports::{
         AttributeRepo, AuditRepo, BrandingRepo, ClientRepo, ConnectionRepo, FlowRepo, GrantRepo,
-        JobRepo, KeyRepo, LogoutRepo, MailSettingsRepo, OutboxRepo, RegistrationRepo, RoleRepo,
-        SessionRepo, SetupRepo, StorageError, TenantRepo, UserRepo, WebhookRepo,
+        JobRepo, KeyRepo, LogoutRepo, MailSettingsRepo, OrgRepo, OutboxRepo, RegistrationRepo,
+        RoleRepo, SessionRepo, SetupRepo, StorageError, TenantRepo, UserRepo, WebhookRepo,
     };
 
     /// Runs a future whose fakes never wait (std mutexes only).
@@ -811,9 +811,10 @@ mod service_tests {
         use super::Fake;
         use crate::model::{
             AttributeDefinition, ClientSource, InitialAccessToken, InitialAccessTokenId,
-            NewInitialAccessToken, NewRole, NewWebhookEndpoint, Page, PageRequest, Role, RoleId,
-            RoleUpdate, SecretHash, TenantId, User, UserId, WebhookDelivery, WebhookDeliveryId,
-            WebhookEndpoint, WebhookEndpointId, WebhookEndpointUpdate, WebhookEvent, WebhookResult,
+            NewInitialAccessToken, NewRole, NewWebhookEndpoint, OrgId, Page, PageRequest, Role,
+            RoleAssignment, RoleId, RoleUpdate, SecretHash, TenantId, User, UserId,
+            WebhookDelivery, WebhookDeliveryId, WebhookEndpoint, WebhookEndpointId,
+            WebhookEndpointUpdate, WebhookEvent, WebhookResult,
         };
         use crate::ports::{
             AttributeRepo, ClaimedWebhookDelivery, RegistrationRepo, RoleRepo, StorageError,
@@ -889,6 +890,56 @@ mod service_tests {
             async fn holders_of_permission(
                 &self,
                 _t: TenantId,
+                _permission: &str,
+            ) -> Result<u64, StorageError> {
+                unsupported("fake: roles")
+            }
+            async fn list_org_roles(
+                &self,
+                _t: TenantId,
+                _org: OrgId,
+            ) -> Result<Vec<Role>, StorageError> {
+                unsupported("fake: roles")
+            }
+            async fn assign_in_org(
+                &self,
+                _t: TenantId,
+                _role: RoleId,
+                _user: UserId,
+                _org: OrgId,
+                _now: OffsetDateTime,
+            ) -> Result<bool, StorageError> {
+                unsupported("fake: roles")
+            }
+            async fn unassign_in_org(
+                &self,
+                _t: TenantId,
+                _role: RoleId,
+                _user: UserId,
+                _org: OrgId,
+            ) -> Result<bool, StorageError> {
+                unsupported("fake: roles")
+            }
+            async fn roles_for_user_in_org(
+                &self,
+                _t: TenantId,
+                _user: UserId,
+                _org: OrgId,
+            ) -> Result<Vec<Role>, StorageError> {
+                unsupported("fake: roles")
+            }
+            async fn org_assignments(
+                &self,
+                _t: TenantId,
+                _org: OrgId,
+                _user: UserId,
+            ) -> Result<Vec<RoleAssignment>, StorageError> {
+                unsupported("fake: roles")
+            }
+            async fn org_holders_of_permission(
+                &self,
+                _t: TenantId,
+                _org: OrgId,
                 _permission: &str,
             ) -> Result<u64, StorageError> {
                 unsupported("fake: roles")
@@ -1136,6 +1187,9 @@ mod service_tests {
         }
         fn registration(&self) -> &dyn RegistrationRepo {
             self
+        }
+        fn organizations(&self) -> &dyn OrgRepo {
+            unreachable!("session service tests use only sessions and audit")
         }
         async fn purge_expired(&self, _now: OffsetDateTime) -> Result<u64, StorageError> {
             Err(StorageError::Unsupported("fake: purge"))

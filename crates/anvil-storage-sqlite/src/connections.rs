@@ -6,7 +6,8 @@
 
 use anvil_core::model::{
     Connection, ConnectionConfig, ConnectionId, ConnectionUpdate, IdentityLink, IdentityLinkId,
-    NewConnection, NewEmail, NewIdentityLink, NewSelfServiceToken, NewUser, TenantId, User, UserId,
+    NewConnection, NewEmail, NewIdentityLink, NewMembership, NewSelfServiceToken, NewUser, OrgId,
+    TenantId, User, UserId,
 };
 use anvil_core::ports::{ConnectionRepo, DeleteLinkOutcome, StorageError};
 
@@ -342,6 +343,26 @@ impl ConnectionRepo for SqliteConnections {
         Ok(done.rows_affected() > 0)
     }
 
+    async fn list_for_org(
+        &self,
+        _tenant: TenantId,
+        _org: OrgId,
+    ) -> Result<Vec<Connection>, StorageError> {
+        // TRANSITIONAL(06-07): needs `connection.org_id` (1.0 schema).
+        Err(StorageError::Unsupported(
+            "organization connections (06-07)",
+        ))
+    }
+
+    async fn has_links(
+        &self,
+        _tenant: TenantId,
+        _connection: ConnectionId,
+    ) -> Result<bool, StorageError> {
+        // TRANSITIONAL(06-07): implemented with the 1.0 connection queries.
+        Err(StorageError::Unsupported("connection has_links (06-07)"))
+    }
+
     async fn find_link(
         &self,
         tenant: TenantId,
@@ -484,7 +505,15 @@ impl ConnectionRepo for SqliteConnections {
         link: &NewIdentityLink,
         token: Option<&NewSelfServiceToken>,
         email: Option<&NewEmail>,
+        membership: Option<&NewMembership>,
     ) -> Result<User, StorageError> {
+        // TRANSITIONAL(06-07): org memberships need the 1.0 schema; JIT provisioning into an org
+        // is refused (nothing written) until 06-07 migrates it. `None` keeps the 0.4 behaviour.
+        if membership.is_some() {
+            return Err(StorageError::Unsupported(
+                "organization membership on sign-up (06-07)",
+            ));
+        }
         let mut tx = self.writer.begin().await.map_err(map_err)?;
         // Any error drops `tx` uncommitted: none of the user, link, token or email is stored.
         let created = insert_user(&mut tx, tenant, user).await?;

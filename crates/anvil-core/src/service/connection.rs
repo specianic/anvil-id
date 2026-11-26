@@ -39,7 +39,7 @@ use crate::model::{
     EndpointOverrides, NewConnection, OAuth2Config, OidcConfig, RequestContext, Scope,
     SocialConfig, SocialProvider, TenantId, connection_aad, truncate_to_ms,
 };
-use crate::ports::{Storage, StorageError};
+use crate::ports::{SamlXml, Storage, StorageError};
 use crate::service::audit::AuditService;
 use crate::service::tenant::validate_display_name;
 use crate::upstream::providers;
@@ -528,6 +528,13 @@ pub struct ConnectionService {
     pub clock: Arc<dyn Clock>,
     /// Seals and opens connection secrets; must be the KEK the sign-in flow uses.
     pub kek: Arc<Kek>,
+    /// The operator flag `saml_experimental` (decision Q3, off by default). SAML connections
+    /// can only be created or updated when it is on (enforced from 06-17; until then
+    /// `validate_config` refuses SAML with `FeatureDisabled`).
+    pub saml_enabled: bool,
+    /// Parses IdP metadata for SAML connections (06-17). `None` where SAML is never configured
+    /// (CLI tenant config apply, the upstream sign-in flow opening secrets).
+    pub saml_xml: Option<Arc<dyn SamlXml>>,
 }
 
 impl ConnectionService {

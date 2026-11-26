@@ -905,7 +905,7 @@ pub(crate) mod race_fake {
     };
     use crate::ports::{
         AttributeRepo, AuditRepo, BrandingRepo, ClientRepo, ConnectionRepo, FlowRepo, GrantRepo,
-        InstallOutcome, JobRepo, KeyRepo, LogoutRepo, MailSettingsRepo, OutboxRepo,
+        InstallOutcome, JobRepo, KeyRepo, LogoutRepo, MailSettingsRepo, OrgRepo, OutboxRepo,
         RegistrationRepo, RoleRepo, SessionRepo, SetupOutcome, SetupRepo, Storage, StorageError,
         TenantRepo, UserRepo, WebhookRepo,
     };
@@ -1194,6 +1194,9 @@ pub(crate) mod race_fake {
         }
         fn registration(&self) -> &dyn RegistrationRepo {
             unreachable!("race fake: registration")
+        }
+        fn organizations(&self) -> &dyn OrgRepo {
+            unreachable!("race fake: organizations")
         }
         async fn purge_expired(&self, _now: OffsetDateTime) -> Result<u64, StorageError> {
             unsupported()

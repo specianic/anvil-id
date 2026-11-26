@@ -7,8 +7,8 @@
 
 use anvil_core::model::{
     Connection, ConnectionConfig, ConnectionId, ConnectionKind, ConnectionUpdate, IdentityLink,
-    IdentityLinkId, NewConnection, NewEmail, NewIdentityLink, NewSelfServiceToken, NewUser,
-    TenantId, User, UserId,
+    IdentityLinkId, NewConnection, NewEmail, NewIdentityLink, NewMembership, NewSelfServiceToken,
+    NewUser, OrgId, TenantId, User, UserId,
 };
 use anvil_core::ports::{ConnectionRepo, DeleteLinkOutcome, StorageError};
 
@@ -346,6 +346,26 @@ impl ConnectionRepo for PgConnections {
         Ok(done.rows_affected() > 0)
     }
 
+    async fn list_for_org(
+        &self,
+        _tenant: TenantId,
+        _org: OrgId,
+    ) -> Result<Vec<Connection>, StorageError> {
+        // TRANSITIONAL(06-08): needs `connection.org_id` (1.0 schema).
+        Err(StorageError::Unsupported(
+            "organization connections (06-08)",
+        ))
+    }
+
+    async fn has_links(
+        &self,
+        _tenant: TenantId,
+        _connection: ConnectionId,
+    ) -> Result<bool, StorageError> {
+        // TRANSITIONAL(06-08): implemented with the 1.0 connection queries.
+        Err(StorageError::Unsupported("connection has_links (06-08)"))
+    }
+
     async fn find_link(
         &self,
         tenant: TenantId,
@@ -492,7 +512,15 @@ impl ConnectionRepo for PgConnections {
         link: &NewIdentityLink,
         token: Option<&NewSelfServiceToken>,
         email: Option<&NewEmail>,
+        membership: Option<&NewMembership>,
     ) -> Result<User, StorageError> {
+        // TRANSITIONAL(06-08): org memberships need the 1.0 schema; JIT provisioning into an org
+        // is refused (nothing written) until 06-08 migrates it. `None` keeps the 0.4 behaviour.
+        if membership.is_some() {
+            return Err(StorageError::Unsupported(
+                "organization membership on sign-up (06-08)",
+            ));
+        }
         if link.user_id != user.id {
             return Err(StorageError::Conflict(
                 "identity link user_id does not match the new user".to_owned(),

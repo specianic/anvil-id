@@ -641,8 +641,8 @@ mod tests {
     use crate::oauth::redirect::validate_redirect_uri;
     use crate::ports::{
         AttributeRepo, AuditRepo, BrandingRepo, ClientRepo, ConnectionRepo, FlowRepo, GrantRepo,
-        JobRepo, KeyRepo, LogoutRepo, MailSettingsRepo, OutboxRepo, RegistrationRepo, RoleRepo,
-        SessionRepo, SetupRepo, StorageError, TenantRepo, UserRepo, WebhookRepo,
+        JobRepo, KeyRepo, LogoutRepo, MailSettingsRepo, OrgRepo, OutboxRepo, RegistrationRepo,
+        RoleRepo, SessionRepo, SetupRepo, StorageError, TenantRepo, UserRepo, WebhookRepo,
     };
 
     const T0: OffsetDateTime = datetime!(2026-11-25 12:00 UTC);
@@ -969,6 +969,9 @@ mod tests {
         }
         fn registration(&self) -> &dyn RegistrationRepo {
             self
+        }
+        fn organizations(&self) -> &dyn OrgRepo {
+            unreachable!("registration service tests do not use organizations")
         }
         async fn purge_expired(&self, _: OffsetDateTime) -> Result<u64, StorageError> {
             unsupported()

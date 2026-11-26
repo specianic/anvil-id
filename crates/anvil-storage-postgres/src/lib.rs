@@ -21,6 +21,8 @@ mod logout;
 mod mail_settings;
 pub mod migrate;
 mod outbox;
+// TRANSITIONAL(06-08): OrgRepo refusals until the 1.0 schema lands.
+mod pending;
 mod registration;
 mod roles;
 mod sessions;
@@ -31,8 +33,8 @@ mod webhooks;
 
 use anvil_core::ports::{
     AttributeRepo, AuditRepo, BrandingRepo, ClientRepo, ConnectionRepo, FlowRepo, GrantRepo,
-    JobRepo, KeyRepo, LogoutRepo, MailSettingsRepo, OutboxRepo, RegistrationRepo, RoleRepo,
-    SessionRepo, SetupRepo, Storage, StorageError, TenantRepo, UserRepo, WebhookRepo,
+    JobRepo, KeyRepo, LogoutRepo, MailSettingsRepo, OrgRepo, OutboxRepo, RegistrationRepo,
+    RoleRepo, SessionRepo, SetupRepo, Storage, StorageError, TenantRepo, UserRepo, WebhookRepo,
 };
 use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
@@ -50,6 +52,7 @@ use crate::keys::PgKeys;
 use crate::logout::PgLogout;
 use crate::mail_settings::PgMailSettings;
 use crate::outbox::PgOutbox;
+use crate::pending::PendingOrgs;
 use crate::registration::PgRegistration;
 use crate::roles::PgRoles;
 use crate::sessions::PgSessions;
@@ -86,6 +89,7 @@ pub struct PostgresStorage {
     attributes: PgAttributes,
     webhooks: PgWebhooks,
     registration: PgRegistration,
+    organizations: PendingOrgs,
 }
 
 impl PostgresStorage {
@@ -120,6 +124,7 @@ impl PostgresStorage {
             attributes: PgAttributes { pool: pool.clone() },
             webhooks: PgWebhooks { pool: pool.clone() },
             registration: PgRegistration { pool: pool.clone() },
+            organizations: PendingOrgs,
             pool,
         }
     }
@@ -183,6 +188,9 @@ impl Storage for PostgresStorage {
     }
     fn registration(&self) -> &dyn RegistrationRepo {
         &self.registration
+    }
+    fn organizations(&self) -> &dyn OrgRepo {
+        &self.organizations
     }
 
     async fn purge_expired(&self, now: time::OffsetDateTime) -> Result<u64, StorageError> {
