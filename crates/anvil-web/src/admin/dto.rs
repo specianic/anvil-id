@@ -15,11 +15,12 @@ use anvil_core::model::{
     DEFAULT_SIGNING_ALG, DcrPolicy as CoreDcrPolicy, DcrSettings as CoreDcrSettings,
     EmailKind as CoreEmailKind, EndpointOverrides as CoreEndpointOverrides,
     GrantType as CoreGrantType, KeyState as CoreKeyState, MfaPolicy as CoreMfaPolicy,
-    OAuth2Config as CoreOAuth2Config, OidcConfig as CoreOidcConfig, Page,
-    RegistrationMode as CoreRegistrationMode, SigningKey as CoreSigningKey, SmtpTls as CoreSmtpTls,
-    SocialConfig as CoreSocialConfig, SocialProvider as CoreSocialProvider,
-    StandardClaims as CoreStandardClaims, Tenant, TenantSettings as CoreTenantSettings,
-    TokenFormat as CoreTokenFormat, User, UserStatus as CoreUserStatus,
+    OAuth2Config as CoreOAuth2Config, OidcConfig as CoreOidcConfig,
+    OrgClientPolicy as CoreOrgClientPolicy, Page, RegistrationMode as CoreRegistrationMode,
+    SigningKey as CoreSigningKey, SmtpTls as CoreSmtpTls, SocialConfig as CoreSocialConfig,
+    SocialProvider as CoreSocialProvider, StandardClaims as CoreStandardClaims, Tenant,
+    TenantSettings as CoreTenantSettings, TokenFormat as CoreTokenFormat, User,
+    UserStatus as CoreUserStatus,
 };
 use anvil_core::service::client::{ClientInput, ClientOptions, ClientOptionsPatch, ClientPatch};
 use anvil_core::service::connection::{ConnectionPatch, NewConnectionInput};
@@ -87,6 +88,12 @@ wire_enum!(
         PrivateKeyJwt,
         None,
     }
+);
+wire_enum!(
+    /// Organization policy of a client: `off` (no org claims; the `organization` authorization
+    /// parameter is refused), `optional` (an org is selected when the user belongs to one) or
+    /// `required` (every authorization needs an org).
+    OrgClientPolicy => CoreOrgClientPolicy { Off, Optional, Required }
 );
 wire_enum!(
     /// OAuth grant type.
@@ -937,6 +944,8 @@ pub struct ClientView {
     pub allowed_resources: Vec<String>,
     /// Client MFA policy; `null` = the tenant's. The strictest of both wins.
     pub mfa_policy: Option<MfaPolicy>,
+    /// Organization policy (`organization` authorization parameter and org claims).
+    pub organization: OrgClientPolicy,
     /// How the client came to exist. Dynamic and CIMD clients can be deleted like any client;
     /// a deleted CIMD client is fetched again on its next use if the CIMD policy allows it.
     pub registration_source: ClientSource,
@@ -976,6 +985,7 @@ impl From<Client> for ClientView {
             backchannel_logout_session_required: c.backchannel_logout_session_required,
             allowed_resources: c.allowed_resources,
             mfa_policy: c.mfa_policy.map(Into::into),
+            organization: c.organization.into(),
             registration_source: c.registration_source.into(),
             metadata_expires_at: c.metadata_expires_at.map(ts),
             created_at: ts(c.created_at),
@@ -1083,6 +1093,9 @@ pub struct CreateClient {
     /// Default `null` (the tenant's policy).
     #[serde(default)]
     pub mfa_policy: Option<MfaPolicy>,
+    /// Default `off`. Must be `off` in the system tenant.
+    #[serde(default)]
+    pub organization: Option<OrgClientPolicy>,
 }
 
 impl CreateClient {
@@ -1102,7 +1115,7 @@ impl CreateClient {
             backchannel_logout_session_required: self.backchannel_logout_session_required,
             allowed_resources: self.allowed_resources.clone(),
             mfa_policy: self.mfa_policy.map(Into::into),
-            organization: anvil_core::model::OrgClientPolicy::Off,
+            organization: self.organization.map_or(defaults.organization, Into::into),
         };
         (self.into(), options)
     }
@@ -1171,6 +1184,9 @@ pub struct UpdateClient {
     #[serde(default, deserialize_with = "double_option")]
     #[schema(value_type = Option<MfaPolicy>)]
     pub mfa_policy: Option<Option<MfaPolicy>>,
+    /// Must stay `off` in the system tenant.
+    #[serde(default)]
+    pub organization: Option<OrgClientPolicy>,
 }
 
 impl UpdateClient {
@@ -1186,7 +1202,7 @@ impl UpdateClient {
             backchannel_logout_session_required: self.backchannel_logout_session_required,
             allowed_resources: self.allowed_resources,
             mfa_policy: self.mfa_policy.map(|m| m.map(Into::into)),
-            organization: None,
+            organization: self.organization.map(Into::into),
         };
         let patch = ClientPatch {
             name: self.name,

@@ -547,6 +547,215 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/tenants/{slug}/organizations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the organizations of a tenant. */
+        get: operations["listOrganizations"];
+        put?: never;
+        /** Create an organization. Not available in the system tenant (422). */
+        post: operations["createOrganization"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/organizations/{org}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get an organization (by id or slug). Also allowed for the org's own admin. */
+        get: operations["getOrganization"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete an organization with its memberships, org roles, assignments, connections, domains and
+         *     invitations; its token families are revoked (tenant administrators only).
+         */
+        delete: operations["deleteOrganization"];
+        options?: never;
+        head?: never;
+        /** Update an organization (tenant administrators only). */
+        patch: operations["updateOrganization"];
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/organizations/{org}/invitations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the organization's invitations, newest first (never the token or its hash). */
+        get: operations["listOrganizationInvitations"];
+        put?: never;
+        /**
+         * Invite an address to the organization: stores only the SHA-256 of a 256-bit token, expires
+         *     after 7 days and enqueues the `org_invitation` email with the link. The answer is the same
+         *     whether or not an account exists for the address.
+         */
+        post: operations["createOrganizationInvitation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/organizations/{org}/invitations/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke an open invitation. */
+        delete: operations["revokeOrganizationInvitation"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/organizations/{org}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the members of an organization. */
+        get: operations["listOrganizationMembers"];
+        put?: never;
+        /**
+         * Add a user of the tenant to the organization directly, with roles assigned in the org
+         *     (idempotent: an existing member is kept unchanged, 200). Tenant administrators only: org
+         *     admins invite members instead.
+         */
+        post: operations["addOrganizationMember"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/organizations/{org}/members/{user_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a member: their org role assignments go with the membership and their token families
+         *     bound to this org are revoked, in one storage intent. An org admin may not remove the last
+         *     org admin (409); a tenant administrator may.
+         */
+        delete: operations["removeOrganizationMember"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/organizations/{org}/members/{user_id}/roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the roles a member holds in the organization (org-owned and tenant roles). */
+        get: operations["listOrganizationMemberRoles"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/organizations/{org}/members/{user_id}/roles/{role}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Assign a role to a member within the organization (idempotent). The role is an org-owned role
+         *     of this org or a tenant role; a role carrying an admin permission is refused (422).
+         */
+        put: operations["assignOrganizationMemberRole"];
+        post?: never;
+        /**
+         * Remove a role from a member within the organization. An org admin may not remove the last org
+         *     admin's `org:admin` (409); a tenant administrator may.
+         */
+        delete: operations["unassignOrganizationMemberRole"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/organizations/{org}/roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the roles owned by the organization. */
+        get: operations["listOrganizationRoles"];
+        put?: never;
+        /**
+         * Create an org-owned role. Admin permissions (`admin`, `admin:*`) are refused (422);
+         *     `org:admin` makes holders org admins.
+         */
+        post: operations["createOrganizationRole"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/organizations/{org}/roles/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get an org-owned role. */
+        get: operations["getOrganizationRole"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete an org-owned role and its assignments. An org admin may not delete an `org:admin` role
+         *     when that leaves the org without an org admin (409).
+         */
+        delete: operations["deleteOrganizationRole"];
+        options?: never;
+        head?: never;
+        /**
+         * Update an org-owned role. An org admin may not drop `org:admin` when that leaves the org
+         *     without an org admin (409).
+         */
+        patch: operations["updateOrganizationRole"];
+        trace?: never;
+    };
     "/api/admin/v1/tenants/{slug}/roles": {
         parameters: {
             query?: never;
@@ -957,6 +1166,16 @@ export interface components {
          * @enum {string}
          */
         ActorKind: "user" | "client" | "admin" | "system";
+        /** @description Body of `POST …/{org}/members`. */
+        AddMemberDto: {
+            /**
+             * @description Roles assigned in the org with the membership: ids of tenant roles or of roles owned by
+             *     this org, none carrying an admin permission.
+             */
+            role_ids?: string[];
+            /** Format: uuid */
+            user_id: string;
+        };
         /** @description OIDC Core §5.1.1 address claim. */
         Address: {
             /** @default null */
@@ -1226,6 +1445,8 @@ export interface components {
             metadata_expires_at?: string | null;
             mfa_policy?: components["schemas"]["MfaPolicy"] | null;
             name: string;
+            /** @description Organization policy (`organization` authorization parameter and org claims). */
+            organization: components["schemas"]["OrgClientPolicy"];
             /** @description Where RP-initiated logout may redirect after signing out. */
             post_logout_redirect_uris: string[];
             redirect_uris: string[];
@@ -1360,6 +1581,7 @@ export interface components {
             jwks_uri?: string | null;
             mfa_policy?: components["schemas"]["MfaPolicy"] | null;
             name: string;
+            organization?: components["schemas"]["OrgClientPolicy"] | null;
             /** @description Redirect URI rules of the application type. */
             post_logout_redirect_uris?: string[];
             redirect_uris?: string[];
@@ -1587,6 +1809,35 @@ export interface components {
         InitialAccessTokenList: {
             items: components["schemas"]["InitialAccessTokenDto"][];
         };
+        /** @description Invitations, newest first. */
+        InvitationList: {
+            items: components["schemas"]["InvitationView"][];
+        };
+        /**
+         * @description State of an invitation.
+         * @enum {string}
+         */
+        InvitationStatus: "open" | "accepted" | "revoked" | "expired";
+        /** @description An invitation (never its token or token hash). */
+        InvitationView: {
+            /** Format: date-time */
+            accepted_at?: string | null;
+            /** Format: uuid */
+            accepted_user_id?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** @description The invited address (normalised to lowercase). */
+            email: string;
+            /** Format: date-time */
+            expires_at: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            revoked_at?: string | null;
+            /** @description Roles assigned in the org on acceptance. */
+            role_ids: string[];
+            status: components["schemas"]["InvitationStatus"];
+        };
         /** @description An issued token with its value: returned once, by `POST`. */
         IssuedInitialAccessToken: {
             token: components["schemas"]["InitialAccessTokenDto"];
@@ -1632,6 +1883,31 @@ export interface components {
             retired_at?: string | null;
             state: components["schemas"]["KeyState"];
         };
+        /** @description Result of `POST …/{org}/members`. */
+        MemberAdded: {
+            /** @description `false` when the user already was a member (nothing changed, roles untouched). */
+            added: boolean;
+            /** Format: uuid */
+            user_id: string;
+        };
+        /** @description One page of members (user id order). */
+        MemberList: {
+            items: components["schemas"]["MemberView"][];
+            /**
+             * Format: uuid
+             * @description Present if and only if more items follow.
+             */
+            next_cursor?: string | null;
+        };
+        /** @description A member of an organization. */
+        MemberView: {
+            /** Format: date-time */
+            created_at: string;
+            /** @description The user's email; `null` if the user no longer exists. */
+            email?: string | null;
+            /** Format: uuid */
+            user_id: string;
+        };
         /**
          * @description Whether sign-in needs a second factor: `off`, `optional` (users who enrolled one) or
          *     `required` (users without one enrol first). Across tenant and client the strictest wins.
@@ -1652,6 +1928,34 @@ export interface components {
              * @description Number of registrations it authorizes, 1 to 100000; `null` = unlimited until expiry.
              */
             uses?: number | null;
+        };
+        /** @description Body of `POST …/{org}/invitations`. */
+        NewInvitationDto: {
+            email: string;
+            /**
+             * @description Roles assigned in the org on acceptance: ids of tenant roles or of roles owned by this
+             *     org, none carrying an admin permission (at most 20).
+             */
+            role_ids?: string[];
+        };
+        /** @description Body of `POST …/{org}/roles`. */
+        NewOrgRoleDto: {
+            /** @description At most 500 characters. */
+            description?: string;
+            /** @description Unique in the org: 1-64 characters of a-z, 0-9, '_', '.' or '-'. */
+            name: string;
+            /** @description At most 100 permissions; admin permissions (`admin`, `admin:*`) are refused. */
+            permissions?: string[];
+        };
+        /** @description Body of `POST /tenants/{slug}/organizations`. */
+        NewOrganizationDto: {
+            /** @description 1-200 characters. */
+            display_name: string;
+            /** @description A JSON object; default `{}`. */
+            metadata?: Record<string, never> | null;
+            mfa_policy?: components["schemas"]["MfaPolicy"] | null;
+            /** @description 2-63 characters of a-z, 0-9 and '-', starting with a letter or digit. */
+            slug: string;
         };
         /** @description Body of `POST /tenants/{slug}/roles`. */
         NewRoleDto: {
@@ -1789,6 +2093,87 @@ export interface components {
             scopes?: string[];
             /** @description Default `true`. */
             use_pkce?: boolean;
+        };
+        /** @description An in-org role assignment. */
+        OrgAssignmentView: {
+            role: components["schemas"]["OrgRoleView"];
+            /** Format: uuid */
+            user_id: string;
+        };
+        /**
+         * @description Organization policy of a client: `off` (no org claims; the `organization` authorization
+         *     parameter is refused), `optional` (an org is selected when the user belongs to one) or
+         *     `required` (every authorization needs an org).
+         * @enum {string}
+         */
+        OrgClientPolicy: "off" | "optional" | "required";
+        /** @description Roles, in name order. */
+        OrgRoleList: {
+            items: components["schemas"]["OrgRoleView"][];
+        };
+        /** @description Body of `PATCH …/{org}/roles/{name}`. `permissions` replaces the whole set. */
+        OrgRolePatchDto: {
+            description?: string | null;
+            name?: string | null;
+            permissions?: string[] | null;
+        };
+        /**
+         * @description Where a role is defined.
+         * @enum {string}
+         */
+        OrgRoleScope: "org" | "tenant";
+        /** @description A role as seen from an organization. */
+        OrgRoleView: {
+            /** Format: date-time */
+            created_at: string;
+            description: string;
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** @description Sorted, de-duplicated permission strings (`org:admin` makes the holder an org admin). */
+            permissions: string[];
+            scope: components["schemas"]["OrgRoleScope"];
+            /** Format: date-time */
+            updated_at: string;
+        };
+        /** @description One page of organizations (id order). */
+        OrganizationList: {
+            items: components["schemas"]["OrganizationView"][];
+            /**
+             * Format: uuid
+             * @description Present if and only if more items follow.
+             */
+            next_cursor?: string | null;
+        };
+        /** @description Body of `PATCH …/organizations/{org}`. Absent fields stay unchanged. */
+        OrganizationPatchDto: {
+            /**
+             * @description Replaces the default roles: ids of tenant roles or of roles owned by this org, none
+             *     carrying an admin permission (at most 20).
+             */
+            default_role_ids?: string[] | null;
+            display_name?: string | null;
+            /** @description Replaces the whole object. */
+            metadata?: Record<string, never> | null;
+            mfa_policy?: components["schemas"]["MfaPolicy"] | null;
+            slug?: string | null;
+        };
+        /** @description An organization: a business customer inside a tenant. */
+        OrganizationView: {
+            /** Format: date-time */
+            created_at: string;
+            /** @description Roles given (in this org) to members created by just-in-time provisioning. */
+            default_role_ids: string[];
+            display_name: string;
+            /** Format: uuid */
+            id: string;
+            /** @description Free-form JSON object for the integrator. */
+            metadata: Record<string, never>;
+            mfa_policy?: components["schemas"]["MfaPolicy"] | null;
+            /** @description Unique in the tenant: 2-63 characters of a-z, 0-9 and '-'. */
+            slug: string;
+            /** Format: date-time */
+            updated_at: string;
         };
         /** @description RFC 9457 problem details (`application/problem+json`). */
         Problem: {
@@ -2270,6 +2655,7 @@ export interface components {
             jwks?: Record<string, never> | null;
             mfa_policy?: components["schemas"]["MfaPolicy"] | null;
             name?: string | null;
+            organization?: components["schemas"]["OrgClientPolicy"] | null;
             post_logout_redirect_uris?: string[] | null;
             redirect_uris?: string[] | null;
             require_pkce?: boolean | null;
@@ -5228,6 +5614,1218 @@ export interface operations {
                 };
             };
             /** @description The algorithm is not enabled for the tenant */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listOrganizations: {
+        parameters: {
+            query?: {
+                /** @description Return items after this id (the previous page's `next_cursor`). */
+                after?: string;
+                /** @description Page size, 1 to 200 (default 50). */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of organizations, in id order */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationList"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid query */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    createOrganization: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewOrganizationDto"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    /** @description URL of the new organization */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description An organization with this slug already exists */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed, or the tenant is the system tenant */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getOrganization: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Organization id or slug */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The organization */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or an org admin token of another organization */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    deleteOrganization: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Organization id or slug */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or an org admin token */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    updateOrganization: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Organization id or slug */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrganizationPatchDto"];
+            };
+        };
+        responses: {
+            /** @description The updated organization */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or an org admin token */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant, organization or default role */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Slug already in use */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listOrganizationInvitations: {
+        parameters: {
+            query?: {
+                /** @description Also list accepted and revoked invitations (default `false`: open and expired ones). */
+                include_closed?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Organization id or slug */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Invitations, newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvitationList"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or an org admin token of another organization */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid query */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    createOrganizationInvitation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Organization id or slug */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewInvitationDto"];
+            };
+        };
+        responses: {
+            /** @description Invitation created and its email queued */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvitationView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or an org admin token of another organization */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant, organization or role (or a role of another organization) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed, or a role carries admin permissions */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    revokeOrganizationInvitation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Organization id or slug */
+                org: string;
+                /** @description Invitation id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revoked */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or an org admin token of another organization */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or organization, or no open invitation with this id */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listOrganizationMembers: {
+        parameters: {
+            query?: {
+                /** @description Return items after this id (the previous page's `next_cursor`). */
+                after?: string;
+                /** @description Page size, 1 to 200 (default 50). */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Organization id or slug */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of members, in user id order */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberList"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or an org admin token of another organization */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid query */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    addOrganizationMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Organization id or slug */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddMemberDto"];
+            };
+        };
+        responses: {
+            /** @description Already a member (unchanged) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberAdded"];
+                };
+            };
+            /** @description Added */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberAdded"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or an org admin token */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant, organization, user or role (or a role of another organization) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed, or a role carries admin permissions */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    removeOrganizationMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Organization id or slug */
+                org: string;
+                /** @description User id */
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or an org admin token of another organization */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or organization, or the user is not a member */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The organization would have no org admin */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listOrganizationMemberRoles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Organization id or slug */
+                org: string;
+                /** @description User id */
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The member's roles in the org, in name order */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgRoleList"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or an org admin token of another organization */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or organization, or the user is not a member */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    assignOrganizationMemberRole: {
+        parameters: {
+            query?: {
+                /** @description `org` or `tenant`; absent = the org-owned role, else the tenant role of that name. */
+                scope?: components["schemas"]["OrgRoleScope"];
+            };
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Organization id or slug */
+                org: string;
+                /** @description User id */
+                user_id: string;
+                /** @description Role name */
+                role: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The member holds the role in the org */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgAssignmentView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or an org admin token of another organization */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant, organization or role, or the user is not a member */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The role carries admin permissions, or invalid query */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    unassignOrganizationMemberRole: {
+        parameters: {
+            query?: {
+                /** @description `org` or `tenant`; absent = the org-owned role, else the tenant role of that name. */
+                scope?: components["schemas"]["OrgRoleScope"];
+            };
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Organization id or slug */
+                org: string;
+                /** @description User id */
+                user_id: string;
+                /** @description Role name */
+                role: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or an org admin token of another organization */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant, organization or role, or the member does not hold it */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The organization would have no org admin */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid query */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listOrganizationRoles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Organization id or slug */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The org-owned roles, in name order */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgRoleList"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or an org admin token of another organization */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    createOrganizationRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Organization id or slug */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewOrgRoleDto"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    /** @description URL of the new role */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgRoleView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or an org admin token of another organization */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A role with this name already exists in the organization */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed, or an admin permission */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getOrganizationRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Organization id or slug */
+                org: string;
+                /** @description Role name */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The role */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgRoleView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or an org admin token of another organization */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant, organization or role */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    deleteOrganizationRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Organization id or slug */
+                org: string;
+                /** @description Role name */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or an org admin token of another organization */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant, organization or role */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The organization would have no org admin */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    updateOrganizationRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Organization id or slug */
+                org: string;
+                /** @description Role name */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrgRolePatchDto"];
+            };
+        };
+        responses: {
+            /** @description The updated role */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgRoleView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or an org admin token of another organization */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant, organization or role */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Name already in use, or the organization would have no org admin */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed, or an admin permission */
             422: {
                 headers: {
                     [name: string]: unknown;

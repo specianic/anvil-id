@@ -3,7 +3,19 @@
 //! - [`AdminAuth`]: the bearer-token extractor. The token must be an access token issued by the
 //!   system tenant (`iss` = the system issuer, `typ` = `at+jwt`, family not revoked), checked by
 //!   the single access-token validator [`AccessTokenVerifier`]. Handlers then demand their admin
-//!   scope with [`AdminAuth::require`].
+//!   scope with [`AdminAuth::require`]. Its principal is always [`Principal::SystemAdmin`].
+//! - [`OrgAdminAuth`]: the same extractor for the organization sub-routes
+//!   (`/tenants/{slug}/organizations/{org}/…`, decision Q1). It accepts a system-tenant token
+//!   ([`Principal::SystemAdmin`], admin scopes checked by the handler) or an access token issued
+//!   by tenant `{slug}` itself ([`Principal::OrgAdmin`]): a JWT (opaque org-admin tokens are
+//!   refused; org admins need a JWT access-token client) verified against the tenant's canonical
+//!   issuer with the same verifier, whose `aud` contains the management API resource
+//!   `{public_url}/api/admin/v1` (requested with RFC 8707 `resource`; the client must still
+//!   allow it), whose client still exists, carrying scope `org:admin` and an `org_id` claim equal
+//!   to `{org}`, with a live family bound to that org and user; the user must be active, a
+//!   member, and still hold `org:admin` in the org ([`OrgService::org_admin_principal`],
+//!   re-checked on every request). Such a token is refused everywhere else: every route outside
+//!   the org sub-routes uses [`AdminAuth`], and [`AdminAuth::require`] refuses an org admin.
 //! - [`AdminError`]: every failure leaves as RFC 9457 problem JSON through
 //!   [`errors::problem_json`]; authentication failures add an RFC 6750 `WWW-Authenticate`.
 //! - [`AdminJson`] / [`AdminQuery`]: body and query extractors whose rejections are problems too.
@@ -13,15 +25,19 @@
 //! browser CSRF layer does not apply.
 
 use anvil_core::error::CoreError;
-use anvil_core::model::{AuditActor, SYSTEM_TENANT_SLUG, TenantBase, issuer};
+use anvil_core::model::{
+    AuditActor, Organization, SYSTEM_TENANT_SLUG, Tenant, TenantBase, UserId, issuer,
+};
 use anvil_core::oauth::redirect::validate_redirect_uri;
 use anvil_core::service::admin_scope::{ADMIN_WRITE, Access, Resource, scope_satisfies};
 use anvil_core::service::client::ClientService;
+use anvil_core::service::org_invitation::OrgInvitationService;
+use anvil_core::service::organization::{OrgActor, OrgService};
 use anvil_core::service::tenant::TenantService;
 use anvil_core::service::user::UserService;
-use anvil_core::service::userinfo::{AccessTokenClaims, AccessTokenVerifier};
+use anvil_core::service::userinfo::{AccessTokenClaims, AccessTokenVerifier, is_jwt_shaped};
 use axum::extract::rejection::{JsonRejection, QueryRejection};
-use axum::extract::{FromRequest, FromRequestParts, Query, Request};
+use axum::extract::{FromRequest, FromRequestParts, Query, RawPathParams, Request};
 use axum::http::request::Parts;
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -58,6 +74,27 @@ impl AppState {
             policy: self.config().password_policy,
             kek: self.kek_arc(),
         }
+    }
+
+    pub(crate) fn admin_orgs(&self) -> OrgService {
+        OrgService {
+            storage: self.storage_arc(),
+            clock: self.clock_arc(),
+        }
+    }
+
+    pub(crate) fn admin_org_invitations(&self) -> OrgInvitationService {
+        OrgInvitationService {
+            storage: self.storage_arc(),
+            clock: self.clock_arc(),
+            kek: self.kek_arc(),
+        }
+    }
+
+    /// The management API as an RFC 8707 resource: `{public_url}/api/admin/v1`. An org admin's
+    /// token must carry it in `aud`.
+    pub(crate) fn admin_api_resource(&self) -> String {
+        format!("{}{}", self.config().public_url.as_str(), super::BASE_PATH)
     }
 
     fn admin_verifier(&self) -> AccessTokenVerifier {
@@ -180,21 +217,62 @@ fn bearer(parts: &Parts) -> AdminResult<&str> {
     Ok(token)
 }
 
+/// Who an authenticated management API caller is.
+#[derive(Debug, Clone)]
+pub(crate) enum Principal {
+    /// A system-tenant access token; its admin scopes decide what it may do.
+    SystemAdmin,
+    /// An org admin of `org` in `tenant` (an access token issued by `tenant`, decision Q1). Only
+    /// the org sub-routes accept it ([`OrgAdminAuth`]); the tenant and org are the path's, already
+    /// resolved and checked by the extractor.
+    OrgAdmin {
+        tenant: Box<Tenant>,
+        org: Box<Organization>,
+        user: UserId,
+    },
+}
+
 /// An authenticated management API caller.
 #[derive(Debug, Clone)]
 pub(crate) struct AdminAuth {
     pub(crate) claims: AccessTokenClaims,
+    pub(crate) principal: Principal,
+}
+
+fn org_admin_refused() -> AdminError {
+    CoreError::InsufficientScope("this operation requires a tenant administrator".to_owned()).into()
 }
 
 impl AdminAuth {
     /// The audit actor of this caller: kind `admin`, id = the token subject (the client id for
-    /// client-credentials tokens, the administrator's user id for console tokens).
+    /// client-credentials tokens, the administrator's user id for console tokens); an org admin
+    /// is recorded as the tenant user they are.
     pub(crate) fn actor(&self) -> AuditActor {
-        AuditActor::admin(&self.claims.sub)
+        self.org_actor().audit_actor()
+    }
+
+    /// The actor of an organization administration call (the lockout guard applies to org
+    /// admins only).
+    pub(crate) fn org_actor(&self) -> OrgActor {
+        match &self.principal {
+            Principal::SystemAdmin => OrgActor::TenantAdmin(AuditActor::admin(&self.claims.sub)),
+            Principal::OrgAdmin { user, .. } => OrgActor::OrgAdmin(*user),
+        }
+    }
+
+    /// Refuses an org admin (403): org creation, update and deletion, and adding members
+    /// directly, are for tenant administrators only.
+    pub(crate) fn require_system_admin(&self) -> AdminResult<()> {
+        match self.principal {
+            Principal::SystemAdmin => Ok(()),
+            Principal::OrgAdmin { .. } => Err(org_admin_refused()),
+        }
     }
 
     /// Demands the admin scope for `access` on `resource` (403 `insufficient_scope` otherwise).
+    /// An org admin never satisfies an admin scope.
     pub(crate) fn require(&self, resource: Resource, access: Access) -> AdminResult<()> {
+        self.require_system_admin()?;
         if scope_satisfies(&self.claims.scope, resource, access) {
             Ok(())
         } else {
@@ -214,6 +292,7 @@ impl AdminAuth {
     /// can carry admin scopes, so writing them is equivalent to full administration and a
     /// narrower scope (e.g. `admin:clients:write`) must not escalate to it.
     pub(crate) fn require_full_admin(&self) -> AdminResult<()> {
+        self.require_system_admin()?;
         if self.claims.scope.contains(ADMIN_WRITE) {
             Ok(())
         } else {
@@ -231,34 +310,130 @@ impl FromRequestParts<AppState> for AdminAuth {
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> AdminResult<Self> {
         installation_level(parts)?;
         let token = bearer(parts)?;
-        let system = state
-            .admin_tenants()
-            .get(SYSTEM_TENANT_SLUG)
+        let claims = system_claims(state, token).await?;
+        Ok(Self {
+            claims,
+            principal: Principal::SystemAdmin,
+        })
+    }
+}
+
+/// Verifies a system-tenant access token whose client still exists.
+async fn system_claims(state: &AppState, token: &str) -> AdminResult<AccessTokenClaims> {
+    let system = state
+        .admin_tenants()
+        .get(SYSTEM_TENANT_SLUG)
+        .await
+        .map_err(|e| match e {
+            CoreError::NotFound => CoreError::Internal("the system tenant is missing".into()),
+            other => other,
+        })?;
+    let system_issuer = issuer(
+        &state.config().public_url,
+        &TenantBase::Path(SYSTEM_TENANT_SLUG.to_owned()),
+    );
+    let claims = state
+        .admin_verifier()
+        .verify(system.id, &system_issuer, token)
+        .await?;
+    // The token's client must still exist: deleting an admin client cuts off its tokens
+    // immediately instead of at expiry.
+    match state
+        .admin_clients()
+        .get(system.id, &claims.client_id)
+        .await
+    {
+        Ok(_) => {}
+        Err(CoreError::NotFound) => return Err(invalid_token().into()),
+        Err(e) => return Err(e.into()),
+    }
+    Ok(claims)
+}
+
+/// The caller of an organization sub-route: a system administrator or the org admin of the path's
+/// org (see the module documentation).
+#[derive(Debug, Clone)]
+pub(crate) struct OrgAdminAuth(pub(crate) AdminAuth);
+
+/// A string claim of a JWT whose signature, `typ`, `iss` and `exp` were already verified by
+/// [`AccessTokenVerifier`] (never used on an unverified token).
+fn verified_str_claim(token: &str, name: &str) -> Option<String> {
+    let payload = token.split('.').nth(1)?;
+    let bytes = anvil_jose::encoding::b64url_decode(payload).ok()?;
+    let claims: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    claims.get(name)?.as_str().map(str::to_owned)
+}
+
+impl FromRequestParts<AppState> for OrgAdminAuth {
+    type Rejection = AdminError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> AdminResult<Self> {
+        installation_level(parts)?;
+        let token = bearer(parts)?.to_owned();
+        match system_claims(state, &token).await {
+            Ok(claims) => {
+                return Ok(Self(AdminAuth {
+                    claims,
+                    principal: Principal::SystemAdmin,
+                }));
+            }
+            Err(AdminError::Core(CoreError::InvalidToken(_))) => {}
+            Err(e) => return Err(e),
+        }
+        // Not a system token: it may be an org admin's token of the path's tenant.
+        let params = RawPathParams::from_request_parts(parts, state)
             .await
-            .map_err(|e| match e {
-                CoreError::NotFound => CoreError::Internal("the system tenant is missing".into()),
-                other => other,
-            })?;
-        let system_issuer = issuer(
-            &state.config().public_url,
-            &TenantBase::Path(SYSTEM_TENANT_SLUG.to_owned()),
-        );
-        let claims = state
-            .admin_verifier()
-            .verify(system.id, &system_issuer, token)
-            .await?;
-        // The token's client must still exist: deleting an admin client cuts off its tokens
-        // immediately instead of at expiry.
-        match state
-            .admin_clients()
-            .get(system.id, &claims.client_id)
-            .await
-        {
-            Ok(_) => {}
+            .map_err(|_| CoreError::NotFound)?;
+        let param = |name: &str| {
+            params
+                .iter()
+                .find(|(k, _)| *k == name)
+                .map(|(_, v)| v.to_owned())
+        };
+        let (Some(slug), Some(org_key)) = (param("slug"), param("org")) else {
+            return Err(invalid_token().into());
+        };
+        // Opaque org-admin tokens are refused: the org binding is read from the JWT.
+        if slug == SYSTEM_TENANT_SLUG || !is_jwt_shaped(&token) {
+            return Err(invalid_token().into());
+        }
+        let tenant = match state.admin_tenants().get(&slug).await {
+            Ok(t) => t,
             Err(CoreError::NotFound) => return Err(invalid_token().into()),
             Err(e) => return Err(e.into()),
+        };
+        let claims = state
+            .admin_verifier()
+            .verify(tenant.id, &state.admin_issuer_of(&tenant), &token)
+            .await?;
+        // Audience: only tokens minted for the management API (an RP's token is not replayable).
+        let resource = state.admin_api_resource();
+        if !claims.aud.contains(&resource) {
+            return Err(invalid_token().into());
         }
-        Ok(Self { claims })
+        // The client must still exist and still be allowed the management API resource.
+        match state
+            .admin_clients()
+            .get(tenant.id, &claims.client_id)
+            .await
+        {
+            Ok(c) if c.allowed_resources.contains(&resource) => {}
+            Ok(_) | Err(CoreError::NotFound) => return Err(invalid_token().into()),
+            Err(e) => return Err(e.into()),
+        }
+        let org_claim = verified_str_claim(&token, "org_id");
+        let (org, user) = state
+            .admin_orgs()
+            .org_admin_principal(&tenant, &org_key, &claims, org_claim.as_deref())
+            .await?;
+        Ok(Self(AdminAuth {
+            claims,
+            principal: Principal::OrgAdmin {
+                tenant: Box::new(tenant),
+                org: Box::new(org),
+                user,
+            },
+        }))
     }
 }
 

@@ -4420,6 +4420,2014 @@
         ]
       }
     },
+    "/api/admin/v1/tenants/{slug}/organizations": {
+      "get": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "List the organizations of a tenant.",
+        "operationId": "listOrganizations",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Return items after this id (the previous page's `next_cursor`).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size, 1 to 200 (default 50).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 200,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of organizations, in id order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid query",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Create an organization. Not available in the system tenant (422).",
+        "operationId": "createOrganization",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewOrganizationDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "URL of the new organization"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "An organization with this slug already exists",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed, or the tenant is the system tenant",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/organizations/{org}": {
+      "get": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Get an organization (by id or slug). Also allowed for the org's own admin.",
+        "operationId": "getOrganization",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Organization id or slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The organization",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or an org admin token of another organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Delete an organization with its memberships, org roles, assignments, connections, domains and\ninvitations; its token families are revoked (tenant administrators only).",
+        "operationId": "deleteOrganization",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Organization id or slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or an org admin token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Update an organization (tenant administrators only).",
+        "operationId": "updateOrganization",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Organization id or slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrganizationPatchDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated organization",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or an org admin token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant, organization or default role",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Slug already in use",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/organizations/{org}/invitations": {
+      "get": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "List the organization's invitations, newest first (never the token or its hash).",
+        "operationId": "listOrganizationInvitations",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Organization id or slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "include_closed",
+            "in": "query",
+            "description": "Also list accepted and revoked invitations (default `false`: open and expired ones).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Invitations, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvitationList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or an org admin token of another organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid query",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Invite an address to the organization: stores only the SHA-256 of a 256-bit token, expires\nafter 7 days and enqueues the `org_invitation` email with the link. The answer is the same\nwhether or not an account exists for the address.",
+        "operationId": "createOrganizationInvitation",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Organization id or slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewInvitationDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Invitation created and its email queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvitationView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or an org admin token of another organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant, organization or role (or a role of another organization)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed, or a role carries admin permissions",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/organizations/{org}/invitations/{id}": {
+      "delete": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Revoke an open invitation.",
+        "operationId": "revokeOrganizationInvitation",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Organization id or slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Invitation id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked"
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or an org admin token of another organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or organization, or no open invitation with this id",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/organizations/{org}/members": {
+      "get": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "List the members of an organization.",
+        "operationId": "listOrganizationMembers",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Organization id or slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Return items after this id (the previous page's `next_cursor`).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size, 1 to 200 (default 50).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 200,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of members, in user id order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or an org admin token of another organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid query",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Add a user of the tenant to the organization directly, with roles assigned in the org\n(idempotent: an existing member is kept unchanged, 200). Tenant administrators only: org\nadmins invite members instead.",
+        "operationId": "addOrganizationMember",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Organization id or slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddMemberDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Already a member (unchanged)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberAdded"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberAdded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or an org admin token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant, organization, user or role (or a role of another organization)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed, or a role carries admin permissions",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/organizations/{org}/members/{user_id}": {
+      "delete": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Remove a member: their org role assignments go with the membership and their token families\nbound to this org are revoked, in one storage intent. An org admin may not remove the last\norg admin (409); a tenant administrator may.",
+        "operationId": "removeOrganizationMember",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Organization id or slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "User id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or an org admin token of another organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or organization, or the user is not a member",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The organization would have no org admin",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/organizations/{org}/members/{user_id}/roles": {
+      "get": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "List the roles a member holds in the organization (org-owned and tenant roles).",
+        "operationId": "listOrganizationMemberRoles",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Organization id or slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "User id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The member's roles in the org, in name order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgRoleList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or an org admin token of another organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or organization, or the user is not a member",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/organizations/{org}/members/{user_id}/roles/{role}": {
+      "put": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Assign a role to a member within the organization (idempotent). The role is an org-owned role\nof this org or a tenant role; a role carrying an admin permission is refused (422).",
+        "operationId": "assignOrganizationMemberRole",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Organization id or slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "User id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "role",
+            "in": "path",
+            "description": "Role name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "description": "`org` or `tenant`; absent = the org-owned role, else the tenant role of that name.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/OrgRoleScope"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The member holds the role in the org",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgAssignmentView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or an org admin token of another organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant, organization or role, or the user is not a member",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The role carries admin permissions, or invalid query",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Remove a role from a member within the organization. An org admin may not remove the last org\nadmin's `org:admin` (409); a tenant administrator may.",
+        "operationId": "unassignOrganizationMemberRole",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Organization id or slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "User id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "role",
+            "in": "path",
+            "description": "Role name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "description": "`org` or `tenant`; absent = the org-owned role, else the tenant role of that name.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/OrgRoleScope"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or an org admin token of another organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant, organization or role, or the member does not hold it",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The organization would have no org admin",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid query",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/organizations/{org}/roles": {
+      "get": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "List the roles owned by the organization.",
+        "operationId": "listOrganizationRoles",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Organization id or slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The org-owned roles, in name order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgRoleList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or an org admin token of another organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Create an org-owned role. Admin permissions (`admin`, `admin:*`) are refused (422);\n`org:admin` makes holders org admins.",
+        "operationId": "createOrganizationRole",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Organization id or slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewOrgRoleDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "URL of the new role"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgRoleView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or an org admin token of another organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A role with this name already exists in the organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed, or an admin permission",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/organizations/{org}/roles/{name}": {
+      "get": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Get an org-owned role.",
+        "operationId": "getOrganizationRole",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Organization id or slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Role name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgRoleView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or an org admin token of another organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant, organization or role",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Delete an org-owned role and its assignments. An org admin may not delete an `org:admin` role\nwhen that leaves the org without an org admin (409).",
+        "operationId": "deleteOrganizationRole",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Organization id or slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Role name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or an org admin token of another organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant, organization or role",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The organization would have no org admin",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Update an org-owned role. An org admin may not drop `org:admin` when that leaves the org\nwithout an org admin (409).",
+        "operationId": "updateOrganizationRole",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Organization id or slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Role name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrgRolePatchDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgRoleView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or an org admin token of another organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant, organization or role",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Name already in use, or the organization would have no org admin",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed, or an admin permission",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
     "/api/admin/v1/tenants/{slug}/roles": {
       "get": {
         "tags": [
@@ -7782,6 +9790,28 @@
           "system"
         ]
       },
+      "AddMemberDto": {
+        "type": "object",
+        "description": "Body of `POST …/{org}/members`.",
+        "required": [
+          "user_id"
+        ],
+        "properties": {
+          "role_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Roles assigned in the org with the membership: ids of tenant roles or of roles owned by\nthis org, none carrying an admin permission."
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false
+      },
       "Address": {
         "type": "object",
         "description": "OIDC Core §5.1.1 address claim.",
@@ -8485,6 +10515,7 @@
           "post_logout_redirect_uris",
           "backchannel_logout_session_required",
           "allowed_resources",
+          "organization",
           "registration_source",
           "created_at",
           "updated_at"
@@ -8576,6 +10607,10 @@
           },
           "name": {
             "type": "string"
+          },
+          "organization": {
+            "$ref": "#/components/schemas/OrgClientPolicy",
+            "description": "Organization policy (`organization` authorization parameter and org claims)."
           },
           "post_logout_redirect_uris": {
             "type": "array",
@@ -9001,6 +11036,17 @@
           },
           "name": {
             "type": "string"
+          },
+          "organization": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OrgClientPolicy",
+                "description": "Default `off`. Must be `off` in the system tenant."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "post_logout_redirect_uris": {
             "type": "array",
@@ -9578,6 +11624,93 @@
           }
         }
       },
+      "InvitationList": {
+        "type": "object",
+        "description": "Invitations, newest first.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InvitationView"
+            }
+          }
+        }
+      },
+      "InvitationStatus": {
+        "type": "string",
+        "description": "State of an invitation.",
+        "enum": [
+          "open",
+          "accepted",
+          "revoked",
+          "expired"
+        ]
+      },
+      "InvitationView": {
+        "type": "object",
+        "description": "An invitation (never its token or token hash).",
+        "required": [
+          "id",
+          "email",
+          "role_ids",
+          "status",
+          "created_at",
+          "expires_at"
+        ],
+        "properties": {
+          "accepted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "accepted_user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "email": {
+            "type": "string",
+            "description": "The invited address (normalised to lowercase)."
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "revoked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "role_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Roles assigned in the org on acceptance."
+          },
+          "status": {
+            "$ref": "#/components/schemas/InvitationStatus"
+          }
+        }
+      },
       "IssuedInitialAccessToken": {
         "type": "object",
         "description": "An issued token with its value: returned once, by `POST`.",
@@ -9669,6 +11802,72 @@
           }
         }
       },
+      "MemberAdded": {
+        "type": "object",
+        "description": "Result of `POST …/{org}/members`.",
+        "required": [
+          "user_id",
+          "added"
+        ],
+        "properties": {
+          "added": {
+            "type": "boolean",
+            "description": "`false` when the user already was a member (nothing changed, roles untouched)."
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "MemberList": {
+        "type": "object",
+        "description": "One page of members (user id order).",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MemberView"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Present if and only if more items follow."
+          }
+        }
+      },
+      "MemberView": {
+        "type": "object",
+        "description": "A member of an organization.",
+        "required": [
+          "user_id",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The user's email; `null` if the user no longer exists."
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "MfaPolicy": {
         "type": "string",
         "description": "Whether sign-in needs a second factor: `off`, `optional` (users who enrolled one) or\n`required` (users without one enrol first). Across tenant and client the strictest wins.",
@@ -9703,6 +11902,89 @@
             "format": "int32",
             "description": "Number of registrations it authorizes, 1 to 100000; `null` = unlimited until expiry.",
             "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "NewInvitationDto": {
+        "type": "object",
+        "description": "Body of `POST …/{org}/invitations`.",
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "role_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Roles assigned in the org on acceptance: ids of tenant roles or of roles owned by this\norg, none carrying an admin permission (at most 20)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "NewOrgRoleDto": {
+        "type": "object",
+        "description": "Body of `POST …/{org}/roles`.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "At most 500 characters."
+          },
+          "name": {
+            "type": "string",
+            "description": "Unique in the org: 1-64 characters of a-z, 0-9, '_', '.' or '-'."
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "At most 100 permissions; admin permissions (`admin`, `admin:*`) are refused."
+          }
+        },
+        "additionalProperties": false
+      },
+      "NewOrganizationDto": {
+        "type": "object",
+        "description": "Body of `POST /tenants/{slug}/organizations`.",
+        "required": [
+          "slug",
+          "display_name"
+        ],
+        "properties": {
+          "display_name": {
+            "type": "string",
+            "description": "1-200 characters."
+          },
+          "metadata": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "A JSON object; default `{}`."
+          },
+          "mfa_policy": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MfaPolicy",
+                "description": "Default `null` (no org requirement)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "slug": {
+            "type": "string",
+            "description": "2-63 characters of a-z, 0-9 and '-', starting with a letter or digit."
           }
         },
         "additionalProperties": false
@@ -9936,6 +12218,254 @@
           }
         },
         "additionalProperties": false
+      },
+      "OrgAssignmentView": {
+        "type": "object",
+        "description": "An in-org role assignment.",
+        "required": [
+          "user_id",
+          "role"
+        ],
+        "properties": {
+          "role": {
+            "$ref": "#/components/schemas/OrgRoleView"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "OrgClientPolicy": {
+        "type": "string",
+        "description": "Organization policy of a client: `off` (no org claims; the `organization` authorization\nparameter is refused), `optional` (an org is selected when the user belongs to one) or\n`required` (every authorization needs an org).",
+        "enum": [
+          "off",
+          "optional",
+          "required"
+        ]
+      },
+      "OrgRoleList": {
+        "type": "object",
+        "description": "Roles, in name order.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrgRoleView"
+            }
+          }
+        }
+      },
+      "OrgRolePatchDto": {
+        "type": "object",
+        "description": "Body of `PATCH …/{org}/roles/{name}`. `permissions` replaces the whole set.",
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "permissions": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "OrgRoleScope": {
+        "type": "string",
+        "description": "Where a role is defined.",
+        "enum": [
+          "org",
+          "tenant"
+        ]
+      },
+      "OrgRoleView": {
+        "type": "object",
+        "description": "A role as seen from an organization.",
+        "required": [
+          "id",
+          "name",
+          "description",
+          "permissions",
+          "scope",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Sorted, de-duplicated permission strings (`org:admin` makes the holder an org admin)."
+          },
+          "scope": {
+            "$ref": "#/components/schemas/OrgRoleScope"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "OrganizationList": {
+        "type": "object",
+        "description": "One page of organizations (id order).",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrganizationView"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Present if and only if more items follow."
+          }
+        }
+      },
+      "OrganizationPatchDto": {
+        "type": "object",
+        "description": "Body of `PATCH …/organizations/{org}`. Absent fields stay unchanged.",
+        "properties": {
+          "default_role_ids": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Replaces the default roles: ids of tenant roles or of roles owned by this org, none\ncarrying an admin permission (at most 20)."
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "metadata": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Replaces the whole object."
+          },
+          "mfa_policy": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MfaPolicy",
+                "description": "`null` removes the org's MFA requirement."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "slug": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "OrganizationView": {
+        "type": "object",
+        "description": "An organization: a business customer inside a tenant.",
+        "required": [
+          "id",
+          "slug",
+          "display_name",
+          "default_role_ids",
+          "metadata",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "default_role_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Roles given (in this org) to members created by just-in-time provisioning."
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "metadata": {
+            "type": "object",
+            "description": "Free-form JSON object for the integrator."
+          },
+          "mfa_policy": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MfaPolicy",
+                "description": "The org's MFA policy; `null` = no org requirement. The strictest of tenant, org and\nclient wins."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "slug": {
+            "type": "string",
+            "description": "Unique in the tenant: 2-63 characters of a-z, 0-9 and '-'."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
       },
       "Problem": {
         "type": "object",
@@ -11268,6 +13798,17 @@
             "type": [
               "string",
               "null"
+            ]
+          },
+          "organization": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OrgClientPolicy",
+                "description": "Must stay `off` in the system tenant."
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "post_logout_redirect_uris": {

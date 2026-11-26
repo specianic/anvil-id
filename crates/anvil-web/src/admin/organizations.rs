@@ -1,13 +1,1300 @@
-//! Organization administration API: organizations, members, org roles, invitations, domains and
-//! enterprise connections of a tenant (tag `organizations`). Owned by plan 06-12 (domains and
-//! connections by 06-17); pre-declared by 06-04 with an empty router (unknown paths answer 404),
-//! so no later plan edits `admin/mod.rs`.
+//! Organization administration API (tag `organizations`, ORG-02/ORG-03): organizations, members,
+//! org roles, in-org role assignments and invitations of a tenant. Owned by plan 06-12 (domains,
+//! connections and branding sub-routes: 06-17, under the same principal rules).
+//!
+//! - `GET|POST …/tenants/{slug}/organizations`: list and create (tenant administrators only;
+//!   never in the system tenant, 422);
+//! - `GET|PATCH|DELETE …/organizations/{org}` (`org` = id or slug): GET also for the org's own
+//!   admin; PATCH and DELETE for tenant administrators only;
+//! - `GET|POST …/{org}/members`, `DELETE …/{org}/members/{user_id}`: adding a member directly is
+//!   for tenant administrators only (org admins invite);
+//! - `GET|POST …/{org}/roles`, `GET|PATCH|DELETE …/{org}/roles/{name}`: org-owned roles;
+//! - `GET …/{org}/members/{user_id}/roles`, `PUT|DELETE …/{org}/members/{user_id}/roles/{role}`
+//!   (`?scope=org|tenant`; without it the org-owned role wins, the tenant role is the fallback);
+//! - `GET|POST …/{org}/invitations`, `DELETE …/{org}/invitations/{id}`.
+//!
+//! **Principals** ([`OrgAdminAuth`]): a system-tenant token needs `admin:organizations:read` for
+//! reads and `admin:organizations:write` for writes (or `admin:read` / `admin:write`). On the
+//! `{org}` sub-routes an org admin's token of tenant `{slug}` (scope `org:admin`, `org_id` =
+//! `{org}`, audience `{public_url}/api/admin/v1`, decision Q1) is accepted too, for that org
+//! only. Org admins' removals and demotions go through the lockout guard (409 when the org would
+//! lose its last org admin); a tenant administrator may still make them (recovery path).
 
+use anvil_core::error::CoreError;
+use anvil_core::model::{
+    OrgInvitation, OrgInvitationId, Organization, Role, RoleId, RoleUpdate, Tenant, UserId,
+};
+use anvil_core::service::admin_scope::{Access, Resource};
+use anvil_core::service::org_invitation::InvitationInput;
+use anvil_core::service::organization::{MemberInfo, OrgInput, OrgPatch, RoleScope};
+use anvil_core::service::role::RoleInput;
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::response::Response;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::router::OpenApiRouter;
+use utoipa_axum::routes;
+use uuid::Uuid;
 
+use super::auth::{
+    AdminAuth, AdminJson, AdminQuery, AdminResult, OrgAdminAuth, Principal, created, json,
+    no_content, page_request,
+};
+use super::dto::{ListQuery, MfaPolicy, Problem, double_option, ts};
+use crate::request_context::AuditContext;
 use crate::state::AppState;
 
-/// The organization routes (none yet).
+/// The documented routes of this module, merged into the management API by `api_router`.
 pub(crate) fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
+        .routes(routes!(list_organizations, create_organization))
+        .routes(routes!(
+            get_organization,
+            update_organization,
+            delete_organization
+        ))
+        .routes(routes!(list_members, add_member))
+        .routes(routes!(remove_member))
+        .routes(routes!(list_member_roles))
+        .routes(routes!(assign_member_role, unassign_member_role))
+        .routes(routes!(list_org_roles, create_org_role))
+        .routes(routes!(get_org_role, update_org_role, delete_org_role))
+        .routes(routes!(list_invitations, create_invitation))
+        .routes(routes!(revoke_invitation))
+}
+
+// ---------------------------------------------------------------------------------------------
+// DTOs
+// ---------------------------------------------------------------------------------------------
+
+/// An organization: a business customer inside a tenant.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct OrganizationView {
+    pub id: Uuid,
+    /// Unique in the tenant: 2-63 characters of a-z, 0-9 and '-'.
+    pub slug: String,
+    pub display_name: String,
+    /// The org's MFA policy; `null` = no org requirement. The strictest of tenant, org and
+    /// client wins.
+    pub mfa_policy: Option<MfaPolicy>,
+    /// Roles given (in this org) to members created by just-in-time provisioning.
+    pub default_role_ids: Vec<Uuid>,
+    /// Free-form JSON object for the integrator.
+    #[schema(value_type = Object)]
+    pub metadata: Value,
+    #[schema(format = DateTime)]
+    pub created_at: String,
+    #[schema(format = DateTime)]
+    pub updated_at: String,
+}
+
+impl From<Organization> for OrganizationView {
+    fn from(o: Organization) -> Self {
+        Self {
+            id: o.id.0,
+            slug: o.slug,
+            display_name: o.display_name,
+            mfa_policy: o.mfa_policy.map(Into::into),
+            default_role_ids: o.settings.default_role_ids.iter().map(|r| r.0).collect(),
+            metadata: o.metadata,
+            created_at: ts(o.created_at),
+            updated_at: ts(o.updated_at),
+        }
+    }
+}
+
+/// One page of organizations (id order).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct OrganizationList {
+    pub items: Vec<OrganizationView>,
+    /// Present if and only if more items follow.
+    pub next_cursor: Option<Uuid>,
+}
+
+/// Body of `POST /tenants/{slug}/organizations`.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct NewOrganizationDto {
+    /// 2-63 characters of a-z, 0-9 and '-', starting with a letter or digit.
+    pub slug: String,
+    /// 1-200 characters.
+    pub display_name: String,
+    /// Default `null` (no org requirement).
+    #[serde(default)]
+    pub mfa_policy: Option<MfaPolicy>,
+    /// A JSON object; default `{}`.
+    #[serde(default)]
+    #[schema(value_type = Option<Object>)]
+    pub metadata: Option<Value>,
+}
+
+/// Body of `PATCH …/organizations/{org}`. Absent fields stay unchanged.
+#[derive(Debug, Default, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OrganizationPatchDto {
+    #[serde(default)]
+    pub slug: Option<String>,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    /// `null` removes the org's MFA requirement.
+    #[serde(default, deserialize_with = "double_option")]
+    #[schema(value_type = Option<MfaPolicy>)]
+    pub mfa_policy: Option<Option<MfaPolicy>>,
+    /// Replaces the whole object.
+    #[serde(default)]
+    #[schema(value_type = Option<Object>)]
+    pub metadata: Option<Value>,
+    /// Replaces the default roles: ids of tenant roles or of roles owned by this org, none
+    /// carrying an admin permission (at most 20).
+    #[serde(default)]
+    pub default_role_ids: Option<Vec<Uuid>>,
+}
+
+/// A member of an organization.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct MemberView {
+    pub user_id: Uuid,
+    /// The user's email; `null` if the user no longer exists.
+    pub email: Option<String>,
+    #[schema(format = DateTime)]
+    pub created_at: String,
+}
+
+impl From<MemberInfo> for MemberView {
+    fn from(m: MemberInfo) -> Self {
+        Self {
+            user_id: m.membership.user_id.0,
+            email: m.email,
+            created_at: ts(m.membership.created_at),
+        }
+    }
+}
+
+/// One page of members (user id order).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct MemberList {
+    pub items: Vec<MemberView>,
+    /// Present if and only if more items follow.
+    pub next_cursor: Option<Uuid>,
+}
+
+/// Result of `POST …/{org}/members`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct MemberAdded {
+    pub user_id: Uuid,
+    /// `false` when the user already was a member (nothing changed, roles untouched).
+    pub added: bool,
+}
+
+/// Body of `POST …/{org}/members`.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AddMemberDto {
+    pub user_id: Uuid,
+    /// Roles assigned in the org with the membership: ids of tenant roles or of roles owned by
+    /// this org, none carrying an admin permission.
+    #[serde(default)]
+    pub role_ids: Vec<Uuid>,
+}
+
+/// Where a role is defined.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OrgRoleScope {
+    /// Owned by the organization.
+    Org,
+    /// A tenant role (assigned within the organization).
+    Tenant,
+}
+
+impl From<OrgRoleScope> for RoleScope {
+    fn from(s: OrgRoleScope) -> Self {
+        match s {
+            OrgRoleScope::Org => Self::Org,
+            OrgRoleScope::Tenant => Self::Tenant,
+        }
+    }
+}
+
+/// A role as seen from an organization.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct OrgRoleView {
+    pub id: Uuid,
+    pub name: String,
+    pub description: String,
+    /// Sorted, de-duplicated permission strings (`org:admin` makes the holder an org admin).
+    pub permissions: Vec<String>,
+    pub scope: OrgRoleScope,
+    #[schema(format = DateTime)]
+    pub created_at: String,
+    #[schema(format = DateTime)]
+    pub updated_at: String,
+}
+
+impl From<Role> for OrgRoleView {
+    fn from(r: Role) -> Self {
+        Self {
+            id: r.id.0,
+            scope: if r.org_id.is_some() {
+                OrgRoleScope::Org
+            } else {
+                OrgRoleScope::Tenant
+            },
+            name: r.name,
+            description: r.description,
+            permissions: r.permissions,
+            created_at: ts(r.created_at),
+            updated_at: ts(r.updated_at),
+        }
+    }
+}
+
+/// Roles, in name order.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct OrgRoleList {
+    pub items: Vec<OrgRoleView>,
+}
+
+impl From<Vec<Role>> for OrgRoleList {
+    fn from(v: Vec<Role>) -> Self {
+        Self {
+            items: v.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// Body of `POST …/{org}/roles`.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct NewOrgRoleDto {
+    /// Unique in the org: 1-64 characters of a-z, 0-9, '_', '.' or '-'.
+    pub name: String,
+    /// At most 500 characters.
+    #[serde(default)]
+    pub description: String,
+    /// At most 100 permissions; admin permissions (`admin`, `admin:*`) are refused.
+    #[serde(default)]
+    pub permissions: Vec<String>,
+}
+
+/// Body of `PATCH …/{org}/roles/{name}`. `permissions` replaces the whole set.
+#[derive(Debug, Default, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OrgRolePatchDto {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub permissions: Option<Vec<String>>,
+}
+
+/// Which role a name refers to.
+#[derive(Debug, Clone, Copy, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+#[serde(deny_unknown_fields)]
+pub struct RoleScopeQuery {
+    /// `org` or `tenant`; absent = the org-owned role, else the tenant role of that name.
+    pub scope: Option<OrgRoleScope>,
+}
+
+/// An in-org role assignment.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct OrgAssignmentView {
+    pub user_id: Uuid,
+    pub role: OrgRoleView,
+}
+
+/// State of an invitation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum InvitationStatus {
+    Open,
+    Accepted,
+    Revoked,
+    Expired,
+}
+
+/// An invitation (never its token or token hash).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct InvitationView {
+    pub id: Uuid,
+    /// The invited address (normalised to lowercase).
+    pub email: String,
+    /// Roles assigned in the org on acceptance.
+    pub role_ids: Vec<Uuid>,
+    pub status: InvitationStatus,
+    #[schema(format = DateTime)]
+    pub created_at: String,
+    #[schema(format = DateTime)]
+    pub expires_at: String,
+    #[schema(format = DateTime)]
+    pub accepted_at: Option<String>,
+    pub accepted_user_id: Option<Uuid>,
+    #[schema(format = DateTime)]
+    pub revoked_at: Option<String>,
+}
+
+impl InvitationView {
+    fn new(i: OrgInvitation, now: time::OffsetDateTime) -> Self {
+        let status = if i.accepted_at.is_some() {
+            InvitationStatus::Accepted
+        } else if i.revoked_at.is_some() {
+            InvitationStatus::Revoked
+        } else if i.expires_at <= now {
+            InvitationStatus::Expired
+        } else {
+            InvitationStatus::Open
+        };
+        Self {
+            id: i.id.0,
+            email: i.email,
+            role_ids: i.role_ids.iter().map(|r| r.0).collect(),
+            status,
+            created_at: ts(i.created_at),
+            expires_at: ts(i.expires_at),
+            accepted_at: i.accepted_at.map(ts),
+            accepted_user_id: i.accepted_user_id.map(|u| u.0),
+            revoked_at: i.revoked_at.map(ts),
+        }
+    }
+}
+
+/// Invitations, newest first.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct InvitationList {
+    pub items: Vec<InvitationView>,
+}
+
+/// Body of `POST …/{org}/invitations`.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct NewInvitationDto {
+    pub email: String,
+    /// Roles assigned in the org on acceptance: ids of tenant roles or of roles owned by this
+    /// org, none carrying an admin permission (at most 20).
+    #[serde(default)]
+    pub role_ids: Vec<Uuid>,
+}
+
+/// Invitation list filter.
+#[derive(Debug, Clone, Copy, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+#[serde(deny_unknown_fields)]
+pub struct InvitationQuery {
+    /// Also list accepted and revoked invitations (default `false`: open and expired ones).
+    pub include_closed: Option<bool>,
+}
+
+// ---------------------------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------------------------
+
+/// The tenant of a tenant-level organization route (system administrators only).
+async fn tenant_for(
+    state: &AppState,
+    auth: &AdminAuth,
+    slug: &str,
+    access: Access,
+) -> AdminResult<Tenant> {
+    auth.require(Resource::Organizations, access)?;
+    Ok(state.admin_tenants().get(slug).await?)
+}
+
+/// The tenant and org of an `{org}` sub-route. A system administrator needs the organizations
+/// scope for `access`; an org admin's tenant and org were resolved from this path and checked by
+/// [`OrgAdminAuth`].
+async fn org_for(
+    state: &AppState,
+    auth: &AdminAuth,
+    slug: &str,
+    org: &str,
+    access: Access,
+) -> AdminResult<(Tenant, Organization)> {
+    match &auth.principal {
+        Principal::SystemAdmin => {
+            let tenant = tenant_for(state, auth, slug, access).await?;
+            let org = state.admin_orgs().get(tenant.id, org).await?;
+            Ok((tenant, org))
+        }
+        Principal::OrgAdmin { tenant, org, .. } => Ok(((**tenant).clone(), (**org).clone())),
+    }
+}
+
+/// A uuid from the path; anything else names nothing (404).
+fn path_uuid(raw: &str) -> AdminResult<Uuid> {
+    Uuid::parse_str(raw).map_err(|_| CoreError::NotFound.into())
+}
+
+fn role_ids(v: Vec<Uuid>) -> Vec<RoleId> {
+    v.into_iter().map(RoleId).collect()
+}
+
+fn org_location(tenant: &Tenant, org: &Organization) -> String {
+    format!(
+        "/api/admin/v1/tenants/{}/organizations/{}",
+        tenant.slug, org.id
+    )
+}
+
+// ---------------------------------------------------------------------------------------------
+// Organizations
+// ---------------------------------------------------------------------------------------------
+
+/// List the organizations of a tenant.
+#[utoipa::path(
+    get,
+    path = "/api/admin/v1/tenants/{slug}/organizations",
+    tag = "organizations",
+    operation_id = "listOrganizations",
+    params(("slug" = String, Path, description = "Tenant slug"), ListQuery),
+    responses(
+        (status = 200, description = "One page of organizations, in id order", body = OrganizationList),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant", body = Problem, content_type = "application/problem+json"),
+        (status = 422, description = "Invalid query", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:organizations:read"]),
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:read"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn list_organizations(
+    auth: AdminAuth,
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+    AdminQuery(q): AdminQuery<ListQuery>,
+) -> AdminResult<Response> {
+    let tenant = tenant_for(&state, &auth, &slug, Access::Read).await?;
+    let page = state.admin_orgs().list(tenant.id, page_request(q)?).await?;
+    Ok(json(
+        StatusCode::OK,
+        &OrganizationList {
+            items: page.items.into_iter().map(Into::into).collect(),
+            next_cursor: page.next_cursor,
+        },
+    ))
+}
+
+/// Create an organization. Not available in the system tenant (422).
+#[utoipa::path(
+    post,
+    path = "/api/admin/v1/tenants/{slug}/organizations",
+    tag = "organizations",
+    operation_id = "createOrganization",
+    params(("slug" = String, Path, description = "Tenant slug")),
+    request_body = NewOrganizationDto,
+    responses(
+        (status = 201, description = "Created", body = OrganizationView, headers(("Location" = String, description = "URL of the new organization"))),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant", body = Problem, content_type = "application/problem+json"),
+        (status = 409, description = "An organization with this slug already exists", body = Problem, content_type = "application/problem+json"),
+        (status = 422, description = "Validation failed, or the tenant is the system tenant", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn create_organization(
+    auth: AdminAuth,
+    State(state): State<AppState>,
+    AuditContext(ctx): AuditContext,
+    Path(slug): Path<String>,
+    AdminJson(body): AdminJson<NewOrganizationDto>,
+) -> AdminResult<Response> {
+    let tenant = tenant_for(&state, &auth, &slug, Access::Write).await?;
+    let org = state
+        .admin_orgs()
+        .create(
+            &tenant,
+            OrgInput {
+                slug: body.slug,
+                display_name: body.display_name,
+                mfa_policy: body.mfa_policy.map(Into::into),
+                metadata: body.metadata,
+            },
+            &auth.org_actor(),
+            &ctx,
+        )
+        .await?;
+    Ok(created(
+        &org_location(&tenant, &org),
+        &OrganizationView::from(org),
+    ))
+}
+
+/// Get an organization (by id or slug). Also allowed for the org's own admin.
+#[utoipa::path(
+    get,
+    path = "/api/admin/v1/tenants/{slug}/organizations/{org}",
+    tag = "organizations",
+    operation_id = "getOrganization",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("org" = String, Path, description = "Organization id or slug"),
+    ),
+    responses(
+        (status = 200, description = "The organization", body = OrganizationView),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope, or an org admin token of another organization", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant or organization", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:organizations:read"]),
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:read"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn get_organization(
+    OrgAdminAuth(auth): OrgAdminAuth,
+    State(state): State<AppState>,
+    Path((slug, org)): Path<(String, String)>,
+) -> AdminResult<Response> {
+    let (_, org) = org_for(&state, &auth, &slug, &org, Access::Read).await?;
+    Ok(json(StatusCode::OK, &OrganizationView::from(org)))
+}
+
+/// Update an organization (tenant administrators only).
+#[utoipa::path(
+    patch,
+    path = "/api/admin/v1/tenants/{slug}/organizations/{org}",
+    tag = "organizations",
+    operation_id = "updateOrganization",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("org" = String, Path, description = "Organization id or slug"),
+    ),
+    request_body = OrganizationPatchDto,
+    responses(
+        (status = 200, description = "The updated organization", body = OrganizationView),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope, or an org admin token", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant, organization or default role", body = Problem, content_type = "application/problem+json"),
+        (status = 409, description = "Slug already in use", body = Problem, content_type = "application/problem+json"),
+        (status = 422, description = "Validation failed", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn update_organization(
+    OrgAdminAuth(auth): OrgAdminAuth,
+    State(state): State<AppState>,
+    AuditContext(ctx): AuditContext,
+    Path((slug, org)): Path<(String, String)>,
+    AdminJson(body): AdminJson<OrganizationPatchDto>,
+) -> AdminResult<Response> {
+    auth.require_system_admin()?;
+    let (tenant, org) = org_for(&state, &auth, &slug, &org, Access::Write).await?;
+    let org = state
+        .admin_orgs()
+        .update(
+            &tenant,
+            &org,
+            OrgPatch {
+                slug: body.slug,
+                display_name: body.display_name,
+                mfa_policy: body.mfa_policy.map(|m| m.map(Into::into)),
+                metadata: body.metadata,
+                default_role_ids: body.default_role_ids.map(role_ids),
+            },
+            &auth.org_actor(),
+            &ctx,
+        )
+        .await?;
+    Ok(json(StatusCode::OK, &OrganizationView::from(org)))
+}
+
+/// Delete an organization with its memberships, org roles, assignments, connections, domains and
+/// invitations; its token families are revoked (tenant administrators only).
+#[utoipa::path(
+    delete,
+    path = "/api/admin/v1/tenants/{slug}/organizations/{org}",
+    tag = "organizations",
+    operation_id = "deleteOrganization",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("org" = String, Path, description = "Organization id or slug"),
+    ),
+    responses(
+        (status = 204, description = "Deleted"),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope, or an org admin token", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant or organization", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn delete_organization(
+    OrgAdminAuth(auth): OrgAdminAuth,
+    State(state): State<AppState>,
+    AuditContext(ctx): AuditContext,
+    Path((slug, org)): Path<(String, String)>,
+) -> AdminResult<Response> {
+    auth.require_system_admin()?;
+    let (tenant, org) = org_for(&state, &auth, &slug, &org, Access::Write).await?;
+    state
+        .admin_orgs()
+        .delete(&tenant, &org, &auth.org_actor(), &ctx)
+        .await?;
+    Ok(no_content())
+}
+
+// ---------------------------------------------------------------------------------------------
+// Members
+// ---------------------------------------------------------------------------------------------
+
+/// List the members of an organization.
+#[utoipa::path(
+    get,
+    path = "/api/admin/v1/tenants/{slug}/organizations/{org}/members",
+    tag = "organizations",
+    operation_id = "listOrganizationMembers",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("org" = String, Path, description = "Organization id or slug"),
+        ListQuery,
+    ),
+    responses(
+        (status = 200, description = "One page of members, in user id order", body = MemberList),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope, or an org admin token of another organization", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant or organization", body = Problem, content_type = "application/problem+json"),
+        (status = 422, description = "Invalid query", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:organizations:read"]),
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:read"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn list_members(
+    OrgAdminAuth(auth): OrgAdminAuth,
+    State(state): State<AppState>,
+    Path((slug, org)): Path<(String, String)>,
+    AdminQuery(q): AdminQuery<ListQuery>,
+) -> AdminResult<Response> {
+    let (tenant, org) = org_for(&state, &auth, &slug, &org, Access::Read).await?;
+    let page = state
+        .admin_orgs()
+        .list_members(tenant.id, org.id, page_request(q)?)
+        .await?;
+    Ok(json(
+        StatusCode::OK,
+        &MemberList {
+            items: page.items.into_iter().map(Into::into).collect(),
+            next_cursor: page.next_cursor,
+        },
+    ))
+}
+
+/// Add a user of the tenant to the organization directly, with roles assigned in the org
+/// (idempotent: an existing member is kept unchanged, 200). Tenant administrators only: org
+/// admins invite members instead.
+#[utoipa::path(
+    post,
+    path = "/api/admin/v1/tenants/{slug}/organizations/{org}/members",
+    tag = "organizations",
+    operation_id = "addOrganizationMember",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("org" = String, Path, description = "Organization id or slug"),
+    ),
+    request_body = AddMemberDto,
+    responses(
+        (status = 201, description = "Added", body = MemberAdded),
+        (status = 200, description = "Already a member (unchanged)", body = MemberAdded),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope, or an org admin token", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant, organization, user or role (or a role of another organization)", body = Problem, content_type = "application/problem+json"),
+        (status = 422, description = "Validation failed, or a role carries admin permissions", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn add_member(
+    OrgAdminAuth(auth): OrgAdminAuth,
+    State(state): State<AppState>,
+    AuditContext(ctx): AuditContext,
+    Path((slug, org)): Path<(String, String)>,
+    AdminJson(body): AdminJson<AddMemberDto>,
+) -> AdminResult<Response> {
+    auth.require_system_admin()?;
+    let (tenant, org) = org_for(&state, &auth, &slug, &org, Access::Write).await?;
+    let user = UserId(body.user_id);
+    let added = state
+        .admin_orgs()
+        .add_member(
+            &tenant,
+            &org,
+            user,
+            role_ids(body.role_ids),
+            &auth.org_actor(),
+            &ctx,
+        )
+        .await?;
+    let status = if added {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    Ok(json(
+        status,
+        &MemberAdded {
+            user_id: user.0,
+            added,
+        },
+    ))
+}
+
+/// Remove a member: their org role assignments go with the membership and their token families
+/// bound to this org are revoked, in one storage intent. An org admin may not remove the last
+/// org admin (409); a tenant administrator may.
+#[utoipa::path(
+    delete,
+    path = "/api/admin/v1/tenants/{slug}/organizations/{org}/members/{user_id}",
+    tag = "organizations",
+    operation_id = "removeOrganizationMember",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("org" = String, Path, description = "Organization id or slug"),
+        ("user_id" = uuid::Uuid, Path, description = "User id"),
+    ),
+    responses(
+        (status = 204, description = "Removed"),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope, or an org admin token of another organization", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant or organization, or the user is not a member", body = Problem, content_type = "application/problem+json"),
+        (status = 409, description = "The organization would have no org admin", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn remove_member(
+    OrgAdminAuth(auth): OrgAdminAuth,
+    State(state): State<AppState>,
+    AuditContext(ctx): AuditContext,
+    Path((slug, org, user)): Path<(String, String, String)>,
+) -> AdminResult<Response> {
+    let (tenant, org) = org_for(&state, &auth, &slug, &org, Access::Write).await?;
+    let user = UserId(path_uuid(&user)?);
+    state
+        .admin_orgs()
+        .remove_member(&tenant, &org, user, &auth.org_actor(), &ctx)
+        .await?;
+    Ok(no_content())
+}
+
+// ---------------------------------------------------------------------------------------------
+// Assignments
+// ---------------------------------------------------------------------------------------------
+
+/// List the roles a member holds in the organization (org-owned and tenant roles).
+#[utoipa::path(
+    get,
+    path = "/api/admin/v1/tenants/{slug}/organizations/{org}/members/{user_id}/roles",
+    tag = "organizations",
+    operation_id = "listOrganizationMemberRoles",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("org" = String, Path, description = "Organization id or slug"),
+        ("user_id" = uuid::Uuid, Path, description = "User id"),
+    ),
+    responses(
+        (status = 200, description = "The member's roles in the org, in name order", body = OrgRoleList),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope, or an org admin token of another organization", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant or organization, or the user is not a member", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:organizations:read"]),
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:read"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn list_member_roles(
+    OrgAdminAuth(auth): OrgAdminAuth,
+    State(state): State<AppState>,
+    Path((slug, org, user)): Path<(String, String, String)>,
+) -> AdminResult<Response> {
+    let (tenant, org) = org_for(&state, &auth, &slug, &org, Access::Read).await?;
+    let user = UserId(path_uuid(&user)?);
+    let roles = state
+        .admin_orgs()
+        .member_roles(tenant.id, org.id, user)
+        .await?;
+    Ok(json(StatusCode::OK, &OrgRoleList::from(roles)))
+}
+
+/// Assign a role to a member within the organization (idempotent). The role is an org-owned role
+/// of this org or a tenant role; a role carrying an admin permission is refused (422).
+#[utoipa::path(
+    put,
+    path = "/api/admin/v1/tenants/{slug}/organizations/{org}/members/{user_id}/roles/{role}",
+    tag = "organizations",
+    operation_id = "assignOrganizationMemberRole",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("org" = String, Path, description = "Organization id or slug"),
+        ("user_id" = uuid::Uuid, Path, description = "User id"),
+        ("role" = String, Path, description = "Role name"),
+        RoleScopeQuery,
+    ),
+    responses(
+        (status = 200, description = "The member holds the role in the org", body = OrgAssignmentView),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope, or an org admin token of another organization", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant, organization or role, or the user is not a member", body = Problem, content_type = "application/problem+json"),
+        (status = 422, description = "The role carries admin permissions, or invalid query", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn assign_member_role(
+    OrgAdminAuth(auth): OrgAdminAuth,
+    State(state): State<AppState>,
+    AuditContext(ctx): AuditContext,
+    Path((slug, org, user, role)): Path<(String, String, String, String)>,
+    AdminQuery(q): AdminQuery<RoleScopeQuery>,
+) -> AdminResult<Response> {
+    let (tenant, org) = org_for(&state, &auth, &slug, &org, Access::Write).await?;
+    let user = UserId(path_uuid(&user)?);
+    let orgs = state.admin_orgs();
+    let role = orgs
+        .resolve_role(tenant.id, org.id, &role, q.scope.map(Into::into))
+        .await?;
+    orgs.assign(&tenant, &org, user, &role, &auth.org_actor(), &ctx)
+        .await?;
+    Ok(json(
+        StatusCode::OK,
+        &OrgAssignmentView {
+            user_id: user.0,
+            role: role.into(),
+        },
+    ))
+}
+
+/// Remove a role from a member within the organization. An org admin may not remove the last org
+/// admin's `org:admin` (409); a tenant administrator may.
+#[utoipa::path(
+    delete,
+    path = "/api/admin/v1/tenants/{slug}/organizations/{org}/members/{user_id}/roles/{role}",
+    tag = "organizations",
+    operation_id = "unassignOrganizationMemberRole",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("org" = String, Path, description = "Organization id or slug"),
+        ("user_id" = uuid::Uuid, Path, description = "User id"),
+        ("role" = String, Path, description = "Role name"),
+        RoleScopeQuery,
+    ),
+    responses(
+        (status = 204, description = "Removed"),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope, or an org admin token of another organization", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant, organization or role, or the member does not hold it", body = Problem, content_type = "application/problem+json"),
+        (status = 409, description = "The organization would have no org admin", body = Problem, content_type = "application/problem+json"),
+        (status = 422, description = "Invalid query", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn unassign_member_role(
+    OrgAdminAuth(auth): OrgAdminAuth,
+    State(state): State<AppState>,
+    AuditContext(ctx): AuditContext,
+    Path((slug, org, user, role)): Path<(String, String, String, String)>,
+    AdminQuery(q): AdminQuery<RoleScopeQuery>,
+) -> AdminResult<Response> {
+    let (tenant, org) = org_for(&state, &auth, &slug, &org, Access::Write).await?;
+    let user = UserId(path_uuid(&user)?);
+    let orgs = state.admin_orgs();
+    let role = orgs
+        .resolve_role(tenant.id, org.id, &role, q.scope.map(Into::into))
+        .await?;
+    orgs.unassign(&tenant, &org, user, &role, &auth.org_actor(), &ctx)
+        .await?;
+    Ok(no_content())
+}
+
+// ---------------------------------------------------------------------------------------------
+// Org roles
+// ---------------------------------------------------------------------------------------------
+
+/// List the roles owned by the organization.
+#[utoipa::path(
+    get,
+    path = "/api/admin/v1/tenants/{slug}/organizations/{org}/roles",
+    tag = "organizations",
+    operation_id = "listOrganizationRoles",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("org" = String, Path, description = "Organization id or slug"),
+    ),
+    responses(
+        (status = 200, description = "The org-owned roles, in name order", body = OrgRoleList),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope, or an org admin token of another organization", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant or organization", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:organizations:read"]),
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:read"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn list_org_roles(
+    OrgAdminAuth(auth): OrgAdminAuth,
+    State(state): State<AppState>,
+    Path((slug, org)): Path<(String, String)>,
+) -> AdminResult<Response> {
+    let (tenant, org) = org_for(&state, &auth, &slug, &org, Access::Read).await?;
+    let roles = state.admin_orgs().list_roles(tenant.id, org.id).await?;
+    Ok(json(StatusCode::OK, &OrgRoleList::from(roles)))
+}
+
+/// Create an org-owned role. Admin permissions (`admin`, `admin:*`) are refused (422);
+/// `org:admin` makes holders org admins.
+#[utoipa::path(
+    post,
+    path = "/api/admin/v1/tenants/{slug}/organizations/{org}/roles",
+    tag = "organizations",
+    operation_id = "createOrganizationRole",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("org" = String, Path, description = "Organization id or slug"),
+    ),
+    request_body = NewOrgRoleDto,
+    responses(
+        (status = 201, description = "Created", body = OrgRoleView, headers(("Location" = String, description = "URL of the new role"))),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope, or an org admin token of another organization", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant or organization", body = Problem, content_type = "application/problem+json"),
+        (status = 409, description = "A role with this name already exists in the organization", body = Problem, content_type = "application/problem+json"),
+        (status = 422, description = "Validation failed, or an admin permission", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn create_org_role(
+    OrgAdminAuth(auth): OrgAdminAuth,
+    State(state): State<AppState>,
+    AuditContext(ctx): AuditContext,
+    Path((slug, org)): Path<(String, String)>,
+    AdminJson(body): AdminJson<NewOrgRoleDto>,
+) -> AdminResult<Response> {
+    let (tenant, org) = org_for(&state, &auth, &slug, &org, Access::Write).await?;
+    let role = state
+        .admin_orgs()
+        .create_role(
+            &tenant,
+            &org,
+            RoleInput {
+                name: body.name,
+                description: body.description,
+                permissions: body.permissions,
+            },
+            &auth.org_actor(),
+            &ctx,
+        )
+        .await?;
+    let location = format!("{}/roles/{}", org_location(&tenant, &org), role.name);
+    Ok(created(&location, &OrgRoleView::from(role)))
+}
+
+/// Get an org-owned role.
+#[utoipa::path(
+    get,
+    path = "/api/admin/v1/tenants/{slug}/organizations/{org}/roles/{name}",
+    tag = "organizations",
+    operation_id = "getOrganizationRole",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("org" = String, Path, description = "Organization id or slug"),
+        ("name" = String, Path, description = "Role name"),
+    ),
+    responses(
+        (status = 200, description = "The role", body = OrgRoleView),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope, or an org admin token of another organization", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant, organization or role", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:organizations:read"]),
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:read"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn get_org_role(
+    OrgAdminAuth(auth): OrgAdminAuth,
+    State(state): State<AppState>,
+    Path((slug, org, name)): Path<(String, String, String)>,
+) -> AdminResult<Response> {
+    let (tenant, org) = org_for(&state, &auth, &slug, &org, Access::Read).await?;
+    let role = state
+        .admin_orgs()
+        .get_role(tenant.id, org.id, &name)
+        .await?;
+    Ok(json(StatusCode::OK, &OrgRoleView::from(role)))
+}
+
+/// Update an org-owned role. An org admin may not drop `org:admin` when that leaves the org
+/// without an org admin (409).
+#[utoipa::path(
+    patch,
+    path = "/api/admin/v1/tenants/{slug}/organizations/{org}/roles/{name}",
+    tag = "organizations",
+    operation_id = "updateOrganizationRole",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("org" = String, Path, description = "Organization id or slug"),
+        ("name" = String, Path, description = "Role name"),
+    ),
+    request_body = OrgRolePatchDto,
+    responses(
+        (status = 200, description = "The updated role", body = OrgRoleView),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope, or an org admin token of another organization", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant, organization or role", body = Problem, content_type = "application/problem+json"),
+        (status = 409, description = "Name already in use, or the organization would have no org admin", body = Problem, content_type = "application/problem+json"),
+        (status = 422, description = "Validation failed, or an admin permission", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn update_org_role(
+    OrgAdminAuth(auth): OrgAdminAuth,
+    State(state): State<AppState>,
+    AuditContext(ctx): AuditContext,
+    Path((slug, org, name)): Path<(String, String, String)>,
+    AdminJson(body): AdminJson<OrgRolePatchDto>,
+) -> AdminResult<Response> {
+    let (tenant, org) = org_for(&state, &auth, &slug, &org, Access::Write).await?;
+    let role = state
+        .admin_orgs()
+        .update_role(
+            &tenant,
+            &org,
+            &name,
+            RoleUpdate {
+                name: body.name,
+                description: body.description,
+                permissions: body.permissions,
+            },
+            &auth.org_actor(),
+            &ctx,
+        )
+        .await?;
+    Ok(json(StatusCode::OK, &OrgRoleView::from(role)))
+}
+
+/// Delete an org-owned role and its assignments. An org admin may not delete an `org:admin` role
+/// when that leaves the org without an org admin (409).
+#[utoipa::path(
+    delete,
+    path = "/api/admin/v1/tenants/{slug}/organizations/{org}/roles/{name}",
+    tag = "organizations",
+    operation_id = "deleteOrganizationRole",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("org" = String, Path, description = "Organization id or slug"),
+        ("name" = String, Path, description = "Role name"),
+    ),
+    responses(
+        (status = 204, description = "Deleted"),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope, or an org admin token of another organization", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant, organization or role", body = Problem, content_type = "application/problem+json"),
+        (status = 409, description = "The organization would have no org admin", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn delete_org_role(
+    OrgAdminAuth(auth): OrgAdminAuth,
+    State(state): State<AppState>,
+    AuditContext(ctx): AuditContext,
+    Path((slug, org, name)): Path<(String, String, String)>,
+) -> AdminResult<Response> {
+    let (tenant, org) = org_for(&state, &auth, &slug, &org, Access::Write).await?;
+    state
+        .admin_orgs()
+        .delete_role(&tenant, &org, &name, &auth.org_actor(), &ctx)
+        .await?;
+    Ok(no_content())
+}
+
+// ---------------------------------------------------------------------------------------------
+// Invitations
+// ---------------------------------------------------------------------------------------------
+
+/// List the organization's invitations, newest first (never the token or its hash).
+#[utoipa::path(
+    get,
+    path = "/api/admin/v1/tenants/{slug}/organizations/{org}/invitations",
+    tag = "organizations",
+    operation_id = "listOrganizationInvitations",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("org" = String, Path, description = "Organization id or slug"),
+        InvitationQuery,
+    ),
+    responses(
+        (status = 200, description = "Invitations, newest first", body = InvitationList),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope, or an org admin token of another organization", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant or organization", body = Problem, content_type = "application/problem+json"),
+        (status = 422, description = "Invalid query", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:organizations:read"]),
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:read"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn list_invitations(
+    OrgAdminAuth(auth): OrgAdminAuth,
+    State(state): State<AppState>,
+    Path((slug, org)): Path<(String, String)>,
+    AdminQuery(q): AdminQuery<InvitationQuery>,
+) -> AdminResult<Response> {
+    let (tenant, org) = org_for(&state, &auth, &slug, &org, Access::Read).await?;
+    let list = state
+        .admin_org_invitations()
+        .list(tenant.id, org.id, q.include_closed.unwrap_or(false))
+        .await?;
+    let now = state.clock().now();
+    Ok(json(
+        StatusCode::OK,
+        &InvitationList {
+            items: list
+                .into_iter()
+                .map(|i| InvitationView::new(i, now))
+                .collect(),
+        },
+    ))
+}
+
+/// Invite an address to the organization: stores only the SHA-256 of a 256-bit token, expires
+/// after 7 days and enqueues the `org_invitation` email with the link. The answer is the same
+/// whether or not an account exists for the address.
+#[utoipa::path(
+    post,
+    path = "/api/admin/v1/tenants/{slug}/organizations/{org}/invitations",
+    tag = "organizations",
+    operation_id = "createOrganizationInvitation",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("org" = String, Path, description = "Organization id or slug"),
+    ),
+    request_body = NewInvitationDto,
+    responses(
+        (status = 201, description = "Invitation created and its email queued", body = InvitationView),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope, or an org admin token of another organization", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant, organization or role (or a role of another organization)", body = Problem, content_type = "application/problem+json"),
+        (status = 422, description = "Validation failed, or a role carries admin permissions", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn create_invitation(
+    OrgAdminAuth(auth): OrgAdminAuth,
+    State(state): State<AppState>,
+    AuditContext(ctx): AuditContext,
+    Path((slug, org)): Path<(String, String)>,
+    AdminJson(body): AdminJson<NewInvitationDto>,
+) -> AdminResult<Response> {
+    let (tenant, org) = org_for(&state, &auth, &slug, &org, Access::Write).await?;
+    let issuer = state.admin_issuer_of(&tenant);
+    let invitation = state
+        .admin_org_invitations()
+        .create(
+            &tenant,
+            &org,
+            &issuer,
+            InvitationInput {
+                email: body.email,
+                role_ids: role_ids(body.role_ids),
+            },
+            &auth.org_actor(),
+            &ctx,
+        )
+        .await?;
+    let location = format!(
+        "{}/invitations/{}",
+        org_location(&tenant, &org),
+        invitation.id
+    );
+    let view = InvitationView::new(invitation, state.clock().now());
+    Ok(created(&location, &view))
+}
+
+/// Revoke an open invitation.
+#[utoipa::path(
+    delete,
+    path = "/api/admin/v1/tenants/{slug}/organizations/{org}/invitations/{id}",
+    tag = "organizations",
+    operation_id = "revokeOrganizationInvitation",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("org" = String, Path, description = "Organization id or slug"),
+        ("id" = uuid::Uuid, Path, description = "Invitation id"),
+    ),
+    responses(
+        (status = 204, description = "Revoked"),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope, or an org admin token of another organization", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant or organization, or no open invitation with this id", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn revoke_invitation(
+    OrgAdminAuth(auth): OrgAdminAuth,
+    State(state): State<AppState>,
+    AuditContext(ctx): AuditContext,
+    Path((slug, org, id)): Path<(String, String, String)>,
+) -> AdminResult<Response> {
+    let (tenant, org) = org_for(&state, &auth, &slug, &org, Access::Write).await?;
+    let id = OrgInvitationId(path_uuid(&id)?);
+    state
+        .admin_org_invitations()
+        .revoke(&tenant, &org, id, &auth.org_actor(), &ctx)
+        .await?;
+    Ok(no_content())
 }
