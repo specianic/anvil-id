@@ -7,3 +7,4 @@
 - (from 05-09, for 05-15) map `CimdError` to `CoreError` at the service boundary.
 - (from 05-10, for 05-12) One-implementation: `policy::claims_mapping::RESERVED_CLAIMS` duplicates the private reserved-claim list in `service/claims.rs`. 05-12 (owner of claims.rs) must make claims.rs use the single `RESERVED_CLAIMS` list and delete its private copy.
 - (from 05-06, gate 05-28) `tests/plaintext.rs` in both backends does not seed the new 0.4 secret columns (initial access token hashes, registration access token hashes, sealed webhook secrets); extend the plaintext-at-rest scan to cover them.
+- (from 05-16, for the owner of `crates/anvilid/src/config.rs`) Two stale notes now that the shared limiter is wired: the module doc (line ~19) still says `redis_url` is "not supported until 05-16", and `Config.redis_failure` still carries `#[allow(dead_code, reason = "read by the shared limiter (05-16)")]` although `limiter::build_limiter` reads it. Remove both.
