@@ -6,14 +6,14 @@ current_phase: 05
 current_phase_name: release 0 4 operate it
 current_plan: 33
 status: executing
-stopped_at: Completed 06-23-PLAN.md
-last_updated: "2026-11-26T12:43:46.974Z"
+stopped_at: Completed 06-22-PLAN.md
+last_updated: "2026-11-26T12:48:21.618Z"
 last_activity: 2026-11-26
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 162
-  completed_plans: 155
+  completed_plans: 156
   percent: 96
 ---
 
@@ -212,6 +212,7 @@ done before 05-29 tags v0.4.0.
 | Phase 06 P20 | 50min | 2 tasks | 17 files |
 | Phase 06 P17 | 80min | 3 tasks | 18 files |
 | Phase 06 P23 | 17min | 2 tasks | 14 files |
+| Phase 06 P22 | 45min | 2 tasks | 13 files |
 
 ## Accumulated Context
 
@@ -495,6 +496,7 @@ Recent decisions affecting current work:
 - [Phase 06]: 06-17: org connections are OIDC or SAML, changed only under the org (tenant level 409); SAML create/change/metadata import need saml_experimental (disable/delete always work)
 - [Phase 06]: 06-17: routing needs a verified domain + enabled same-org connection; allow_local_password=false also needs has_links (409); routing=false + allow_local_password=true is the recovery path
 - [Phase 06]: 06-23: org connection opens in a side panel; SAML offered only when TenantView.features.saml; routing targets only enabled org connections; routing 409s inline
+- [Phase 06]: 06-22: email-first only when tenant_has_routing; routing by email domain only; local sign-in (password, email code, magic link) refused for allow_local_password=false domains, passkeys allowed; SAML targets only while saml_experimental is on
 
 ### Pending Todos
 
@@ -507,6 +509,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-26T12:43:46.971Z
-Stopped at: Completed 06-23-PLAN.md
+Last session: 2026-11-26T12:48:21.615Z
+Stopped at: Completed 06-22-PLAN.md
 Resume file: None
