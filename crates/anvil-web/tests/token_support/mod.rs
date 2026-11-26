@@ -11,9 +11,9 @@
 use anvil_core::model::{
     ACR_PWD, AMR_PWD, ApplicationType, AuthorizationParams, BrowserSession, ClaimsRequest, Client,
     ClientAuthMethod, ClientId, ClientType, GrantType, KeyState, NewBrowserSession, NewClient,
-    NewPasswordCredential, NewSigningKey, NewTenant, NewUser, SIGNING_KEY_PURPOSE, SecretHash,
-    SessionId, SigningKeyId, StandardClaims, Tenant, TenantId, TenantSettings, User, UserId,
-    UserStatus, signing_key_aad,
+    NewPasswordCredential, NewSigningKey, NewTenant, NewUser, OrgId, SIGNING_KEY_PURPOSE,
+    SecretHash, SessionId, SigningKeyId, StandardClaims, Tenant, TenantId, TenantSettings, User,
+    UserId, UserStatus, signing_key_aad,
 };
 use anvil_core::oauth::redirect::validate_redirect_uri;
 use anvil_core::service::authorize::build_code;
@@ -128,6 +128,17 @@ pub fn cc_input(method: ClientAuthMethod) -> ClientInput {
 
 /// Registers a client the way `ClientService::create` does.
 pub async fn register(app: &TestApp, tenant: TenantId, input: ClientInput) -> Rp {
+    register_with(app, tenant, input, |_| {}).await
+}
+
+/// Registers a client like [`register`], letting `customise` set the stored fields the client
+/// input does not carry (organization policy, token format, consent mode, ...).
+pub async fn register_with(
+    app: &TestApp,
+    tenant: TenantId,
+    input: ClientInput,
+    customise: impl FnOnce(&mut NewClient),
+) -> Rp {
     validate_client(&input, validate_redirect_uri).expect("valid client registration");
     let (secret, hash) = if uses_secret(input.auth_method) {
         let (s, h) = new_client_secret();
@@ -138,40 +149,39 @@ pub async fn register(app: &TestApp, tenant: TenantId, input: ClientInput) -> Rp
     let mut grants = input.grant_types.clone();
     grants.sort();
     grants.dedup();
+    let mut new = NewClient {
+        id: ClientId::new_v7(),
+        client_id: new_client_id(),
+        name: input.name,
+        client_type: input.client_type,
+        application_type: input.application_type,
+        auth_method: input.auth_method,
+        secret_hash: hash,
+        jwks: input.jwks,
+        redirect_uris: input.redirect_uris,
+        grant_types: grants,
+        scopes: input.scopes,
+        require_pkce: input.require_pkce.unwrap_or(true),
+        created_at: app.clock_now(),
+        token_format: anvil_core::model::TokenFormat::Jwt,
+        consent_mode: anvil_core::model::ConsentMode::Required,
+        id_token_signed_response_alg: None,
+        can_introspect: false,
+        post_logout_redirect_uris: vec![],
+        backchannel_logout_uri: None,
+        backchannel_logout_session_required: false,
+        allowed_resources: vec![],
+        mfa_policy: None,
+        metadata_expires_at: None,
+        registration_access_token_hash: None,
+        registration_source: anvil_core::model::ClientSource::Static,
+        organization: anvil_core::model::OrgClientPolicy::Off,
+    };
+    customise(&mut new);
     let client = app
         .storage()
         .clients()
-        .create(
-            tenant,
-            &NewClient {
-                id: ClientId::new_v7(),
-                client_id: new_client_id(),
-                name: input.name,
-                client_type: input.client_type,
-                application_type: input.application_type,
-                auth_method: input.auth_method,
-                secret_hash: hash,
-                jwks: input.jwks,
-                redirect_uris: input.redirect_uris,
-                grant_types: grants,
-                scopes: input.scopes,
-                require_pkce: input.require_pkce.unwrap_or(true),
-                created_at: app.clock_now(),
-                token_format: anvil_core::model::TokenFormat::Jwt,
-                consent_mode: anvil_core::model::ConsentMode::Required,
-                id_token_signed_response_alg: None,
-                can_introspect: false,
-                post_logout_redirect_uris: vec![],
-                backchannel_logout_uri: None,
-                backchannel_logout_session_required: false,
-                allowed_resources: vec![],
-                mfa_policy: None,
-                metadata_expires_at: None,
-                registration_access_token_hash: None,
-                registration_source: anvil_core::model::ClientSource::Static,
-                organization: anvil_core::model::OrgClientPolicy::Off,
-            },
-        )
+        .create(tenant, &new)
         .await
         .expect("client created");
     Rp { client, secret }
@@ -305,6 +315,19 @@ pub async fn issue_code(
     session: &BrowserSession,
     p: &AuthorizationParams,
 ) -> String {
+    issue_code_in_org(app, tenant, rp, session, p, None).await
+}
+
+/// [`issue_code`] with `org` bound to the code and its family, without any membership check
+/// (the authorization endpoint's resolution is bypassed on purpose).
+pub async fn issue_code_in_org(
+    app: &TestApp,
+    tenant: TenantId,
+    rp: &Rp,
+    session: &BrowserSession,
+    p: &AuthorizationParams,
+    org: Option<OrgId>,
+) -> String {
     let t = app
         .storage()
         .tenants()
@@ -313,7 +336,10 @@ pub async fn issue_code(
         .expect("tenant lookup")
         .expect("tenant exists");
     let issuer = anvil_core::service::logout::canonical_issuer(&app.config.public_url, &t);
-    let (plain, code, family) = build_code(&rp.client, p, session, &issuer, app.clock_now());
+    let (plain, mut code, mut family) =
+        build_code(&rp.client, p, session, &issuer, app.clock_now());
+    code.org_id = org;
+    family.org_id = org;
     app.storage()
         .grants()
         .create_code(tenant, &code, &family)

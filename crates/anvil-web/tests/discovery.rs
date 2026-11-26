@@ -526,3 +526,14 @@ async fn registration_endpoint_never_published_for_the_system_tenant() {
     let doc = json(&app.get("/t/system/.well-known/openid-configuration").await);
     assert!(doc.get("registration_endpoint").is_none());
 }
+
+#[tokio::test]
+async fn claims_supported_lists_the_org_claims() {
+    let app = TestApp::new().await;
+    let doc = json(&app.get("/.well-known/openid-configuration").await);
+    let claims = strings(&doc["claims_supported"]);
+    for c in ["org_id", "org_slug", "org_roles", "org_permissions"] {
+        assert!(claims.contains(&c), "{c} missing: {claims:?}");
+    }
+    insta::assert_snapshot!("claims_supported", claims.join("\n"));
+}

@@ -74,6 +74,12 @@ const CLAIMS_SUPPORTED: &[&str] = &[
     "address",
     "phone_number",
     "phone_number_verified",
+    // The active organization of the grant (ORG-02); `org_roles` / `org_permissions` under their
+    // default names in the tenant claim mapping.
+    "org_id",
+    "org_slug",
+    "org_roles",
+    "org_permissions",
 ];
 
 /// Client authentication methods of the token and revocation endpoints.

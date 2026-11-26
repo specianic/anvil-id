@@ -12,18 +12,32 @@
 //! [`AccessTokenVerifier`](crate::service::userinfo::AccessTokenVerifier); refresh tokens by
 //! [`refresh_active`]. `token_type_hint` only changes the lookup order; an unknown hint value is
 //! ignored (RFC 7662 §2.1).
+//!
+//! An active user access token (JWT or opaque) also carries the claims a JWT access token
+//! carries: the tenant's mapped role, permission and attribute claims and the org claims of the
+//! family's org, read now through one [`UserClaimSource`] load. A token whose user is gone or
+//! blocked, or whose org the user left, is inactive. Client credentials tokens carry none.
 
 use std::sync::Arc;
 
 use anvil_jose::encoding::secret_hash;
 use serde::Serialize;
+use serde_json::{Map, Value};
 use time::OffsetDateTime;
 
 use crate::error::CoreError;
-use crate::model::{Client, ClientType, RefreshToken, SecretHash, Tenant, TokenFamily};
+use crate::model::{
+    Client, ClientType, RefreshToken, SecretHash, Tenant, TokenFamily, TokenTarget, UserStatus,
+};
 use crate::oauth::resource::{Audience, audience};
-use crate::ports::{Clock, Storage};
+use crate::ports::{AttributeSchemaCheck, Clock, Storage};
+use crate::service::claims::{merge_access_token_extras, merge_org_claims};
+use crate::service::role::UserClaimSource;
 use crate::service::userinfo::{AccessTokenClaims, AccessTokenVerifier};
+
+/// Members of the introspection response that mapped claims never set (the others are reserved
+/// claims, see [`merge_access_token_extras`]).
+const RESPONSE_MEMBERS: [&str; 3] = ["active", "token_type", "username"];
 
 /// The token types a client can name in `token_type_hint` (RFC 7009 §2.1 registry values we
 /// issue).
@@ -121,6 +135,10 @@ pub struct IntrospectionResponse {
     /// Only for JWT access tokens.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jti: Option<String>,
+    /// User access tokens: the mapped role, permission and attribute claims and the org claims
+    /// (`org_id`, `org_slug`, `org_roles`, `org_permissions`), as in a JWT access token.
+    #[serde(flatten)]
+    pub claims: Map<String, Value>,
 }
 
 impl IntrospectionResponse {
@@ -142,6 +160,7 @@ impl IntrospectionResponse {
             iat: claims.iat.map(OffsetDateTime::unix_timestamp),
             token_type: Some("Bearer"),
             jti: claims.jti,
+            claims: Map::new(),
         }
     }
 
@@ -159,6 +178,7 @@ impl IntrospectionResponse {
             iat: Some(token.created_at.unix_timestamp()),
             token_type: Some("refresh_token"),
             jti: None,
+            claims: Map::new(),
         }
     }
 }
@@ -168,6 +188,28 @@ impl IntrospectionResponse {
 pub struct IntrospectionService {
     pub storage: Arc<dyn Storage>,
     pub clock: Arc<dyn Clock>,
+    /// Attribute schema check for mapped attribute claims; `None` omits attribute claims
+    /// (values are never emitted unvalidated).
+    pub attribute_check: Option<Arc<dyn AttributeSchemaCheck>>,
+}
+
+/// The extra claims of an introspected user access token: org claims first
+/// ([`merge_org_claims`]), then the mapped claims without reserved names
+/// ([`merge_access_token_extras`]) or response members.
+pub fn introspection_claims(
+    org: Map<String, Value>,
+    mapped: Map<String, Value>,
+) -> Map<String, Value> {
+    let mut out = Map::new();
+    merge_org_claims(&mut out, org);
+    merge_access_token_extras(
+        &mut out,
+        mapped
+            .into_iter()
+            .filter(|(k, _)| !RESPONSE_MEMBERS.contains(&k.as_str()))
+            .collect(),
+    );
+    out
 }
 
 impl IntrospectionService {
@@ -210,11 +252,61 @@ impl IntrospectionService {
             storage: self.storage.clone(),
             clock: self.clock.clone(),
         };
-        match verifier.verify(tenant.id, issuer, token).await {
-            Ok(claims) => Ok(Some(IntrospectionResponse::access(claims, issuer))),
-            Err(CoreError::InvalidToken(_)) => Ok(None),
-            Err(e) => Err(e),
+        let claims = match verifier.verify(tenant.id, issuer, token).await {
+            Ok(claims) => claims,
+            Err(CoreError::InvalidToken(_)) => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        let extra = match self.user_claims(tenant, &claims).await? {
+            Some(extra) => extra,
+            None => return Ok(None),
+        };
+        let mut resp = IntrospectionResponse::access(claims, issuer);
+        resp.claims = extra;
+        Ok(Some(resp))
+    }
+
+    /// The mapped and org claims of a verified access token: empty for client credentials
+    /// tokens (no family), `None` (inactive) when the family's user is gone or blocked, is not
+    /// the token's subject, or left the family's org.
+    async fn user_claims(
+        &self,
+        tenant: &Tenant,
+        claims: &AccessTokenClaims,
+    ) -> Result<Option<Map<String, Value>>, CoreError> {
+        let Some(fid) = claims.family_id else {
+            return Ok(Some(Map::new()));
+        };
+        let Some(family) = self.storage.grants().get_family(tenant.id, fid).await? else {
+            return Ok(None);
+        };
+        let Some(user_id) = family.user_id.filter(|u| u.to_string() == claims.sub) else {
+            return Ok(None);
+        };
+        match self.storage.users().get(tenant.id, user_id).await? {
+            Some(u) if u.status == UserStatus::Active => {}
+            _ => return Ok(None),
         }
+        let source = UserClaimSource::load(
+            self.storage.as_ref(),
+            tenant.id,
+            user_id,
+            self.attribute_check.is_some(),
+            family.org_id,
+        )
+        .await?;
+        if source.lost_active_org() {
+            return Ok(None);
+        }
+        Ok(Some(introspection_claims(
+            source.org_claims(tenant, &claims.scope, TokenTarget::AccessToken),
+            source.claims(
+                tenant,
+                &claims.scope,
+                TokenTarget::AccessToken,
+                self.attribute_check.as_deref(),
+            ),
+        )))
     }
 
     async fn refresh(
@@ -436,5 +528,36 @@ mod tests {
         assert_eq!(v["sub"], f.user_id.unwrap().to_string());
         assert_eq!(v["exp"], t.expires_at.unix_timestamp());
         assert!(v.get("jti").is_none());
+    }
+
+    #[test]
+    fn introspection_claims_never_shadow_response_members() {
+        use serde_json::json;
+        let org: Map<String, Value> =
+            serde_json::from_value(json!({"org_id": "o1", "org_slug": "acme"})).unwrap();
+        let mapped: Map<String, Value> = serde_json::from_value(json!({
+            "roles": ["admin"],
+            "active": false,
+            "token_type": "x",
+            "username": "mallory",
+            "scope": "admin:write",
+            "org_id": "spoofed",
+        }))
+        .unwrap();
+        let out = introspection_claims(org, mapped);
+        assert_eq!(
+            Value::Object(out.clone()),
+            json!({"org_id": "o1", "org_slug": "acme", "roles": ["admin"]})
+        );
+        let mut resp = IntrospectionResponse::inactive();
+        resp.active = true;
+        resp.claims = out;
+        let text = serde_json::to_string(&resp).unwrap();
+        assert_eq!(text.matches("\"active\"").count(), 1, "{text}");
+        // An inactive response stays exactly {"active":false}.
+        assert_eq!(
+            serde_json::to_string(&IntrospectionResponse::inactive()).unwrap(),
+            r#"{"active":false}"#
+        );
     }
 }
