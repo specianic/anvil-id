@@ -58,7 +58,7 @@ connection), because organization and tenant connections share one slug namespac
 The client `organization` field is part of the document and round-trips like every other client
 option:
 
-```yaml
+```yaml excerpt
 clients:
   - client_id: billing-web
     # ...
