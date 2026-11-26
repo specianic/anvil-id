@@ -14,7 +14,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::CoreError;
-use crate::model::{AuthRequestId, ConsentMode, UserId};
+use crate::model::{AuthRequestId, ClientKind, ConsentMode, UserId};
 
 /// Whether the consent screen must be shown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,6 +93,99 @@ pub fn consent_decision(
         return Err(CoreError::ConsentRequired);
     }
     Ok(ConsentDecision::Required)
+}
+
+/// Who vouches for a client's identity, as the consent screen states it (AGT-03). Derived from
+/// the client's `registration_source`; carries no display text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Provenance {
+    /// Registered by an administrator (admin API, console or tenant configuration).
+    Static,
+    /// Registered itself through dynamic client registration; its details are not verified.
+    Dynamic,
+    /// Identified by its Client ID Metadata Document at `host` (the host, with a non-default
+    /// port, of its `client_id` URL: the only verified part of its identity). Its name comes
+    /// from that document and is not verified.
+    Cimd { host: String },
+}
+
+/// The requested items split against a stored grant: `new` are not covered by the grant,
+/// `granted` already are. Both keep request order.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RequestSplit {
+    pub new: Vec<String>,
+    pub granted: Vec<String>,
+}
+
+impl RequestSplit {
+    /// Splits `requested` against `granted` ([`missing_scopes`]).
+    pub fn of(granted: &[String], requested: &[String]) -> Self {
+        let new: Vec<String> = missing_scopes(granted, requested)
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        let granted = requested
+            .iter()
+            .filter(|r| !new.contains(r))
+            .cloned()
+            .collect();
+        Self { new, granted }
+    }
+}
+
+/// What the consent screen shows about a request (AGT-03): the client, whether it is an AI
+/// agent, who vouches for it, and the requested scopes and RFC 8707 resources split into new
+/// ones and ones the user already allowed (incremental step-up). Holds no display text; the web
+/// layer renders it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConsentView {
+    /// The client's name. For [`Provenance::Cimd`] and [`Provenance::Dynamic`] it is
+    /// self-asserted.
+    pub client_name: String,
+    pub client_kind: ClientKind,
+    pub provenance: Provenance,
+    /// Requested scopes the stored grant does not cover (all of them without a grant).
+    pub new_scopes: Vec<String>,
+    /// Requested scopes the stored grant already covers.
+    pub granted_scopes: Vec<String>,
+    /// Requested resources the stored grant does not cover.
+    pub new_resources: Vec<String>,
+    /// Requested resources the stored grant already covers.
+    pub granted_resources: Vec<String>,
+}
+
+impl ConsentView {
+    /// The view of a request for `requested` scopes and resources, given the user's stored
+    /// grant (`None` when there is none).
+    pub fn new(
+        client_name: String,
+        client_kind: ClientKind,
+        provenance: Provenance,
+        grant: Option<ConsentCoverage<'_>>,
+        requested: ConsentCoverage<'_>,
+    ) -> Self {
+        let (granted_scopes, granted_resources) =
+            grant.map_or((&[][..], &[][..]), |g| (g.scopes, g.resources));
+        let scopes = RequestSplit::of(granted_scopes, requested.scopes);
+        let resources = RequestSplit::of(granted_resources, requested.resources);
+        Self {
+            client_name,
+            client_kind,
+            provenance,
+            new_scopes: scopes.new,
+            granted_scopes: scopes.granted,
+            new_resources: resources.new,
+            granted_resources: resources.granted,
+        }
+    }
+
+    /// The verified host of a CIMD client, `None` for other clients.
+    pub fn cimd_host(&self) -> Option<&str> {
+        match &self.provenance {
+            Provenance::Cimd { host } => Some(host),
+            Provenance::Static | Provenance::Dynamic => None,
+        }
+    }
 }
 
 /// Plain-language description of a standard scope; `None` for custom scopes (shown by name).
@@ -527,6 +620,92 @@ mod tests {
         assert_eq!(
             ConsentState::from_json(r#"{"identifier":null}"#),
             Err(CorruptConsentState)
+        );
+    }
+
+    fn view(
+        grant: Option<(&[String], &[String])>,
+        scopes: &[String],
+        resources: &[String],
+    ) -> ConsentView {
+        ConsentView::new(
+            "Agent".into(),
+            ClientKind::Agent,
+            Provenance::Dynamic,
+            grant.map(|(scopes, resources)| ConsentCoverage { scopes, resources }),
+            ConsentCoverage { scopes, resources },
+        )
+    }
+
+    #[test]
+    fn view_without_a_grant_shows_everything_as_new() {
+        let v = view(
+            None,
+            &s(&["openid", "email"]),
+            &s(&["https://mcp.example/"]),
+        );
+        assert_eq!(v.new_scopes, s(&["openid", "email"]));
+        assert!(v.granted_scopes.is_empty());
+        assert_eq!(v.new_resources, s(&["https://mcp.example/"]));
+        assert!(v.granted_resources.is_empty());
+        assert_eq!(v.client_kind, ClientKind::Agent);
+        assert_eq!(v.provenance, Provenance::Dynamic);
+        assert_eq!(v.cimd_host(), None);
+    }
+
+    #[test]
+    fn step_up_view_splits_new_and_granted_scopes_and_resources() {
+        let granted_scopes = s(&["openid", "profile"]);
+        let granted_resources = s(&["https://mcp.example/"]);
+        let v = view(
+            Some((&granted_scopes, &granted_resources)),
+            &s(&["openid", "profile", "email"]),
+            &s(&["https://other.example/", "https://mcp.example/"]),
+        );
+        assert_eq!(v.new_scopes, s(&["email"]));
+        assert_eq!(v.granted_scopes, s(&["openid", "profile"]));
+        assert_eq!(v.new_resources, s(&["https://other.example/"]));
+        assert_eq!(v.granted_resources, s(&["https://mcp.example/"]));
+    }
+
+    #[test]
+    fn granted_lists_only_requested_items() {
+        // A grant item the request does not ask for is not listed.
+        let granted = s(&["openid", "address"]);
+        let v = view(Some((&granted, &[])), &s(&["openid"]), &[]);
+        assert!(v.new_scopes.is_empty());
+        assert_eq!(v.granted_scopes, s(&["openid"]));
+    }
+
+    #[test]
+    fn cimd_view_carries_the_host() {
+        let v = ConsentView::new(
+            "Acme".into(),
+            ClientKind::Application,
+            Provenance::Cimd {
+                host: "app.example.com".into(),
+            },
+            None,
+            ConsentCoverage {
+                scopes: &s(&["openid"]),
+                resources: &[],
+            },
+        );
+        assert_eq!(v.cimd_host(), Some("app.example.com"));
+    }
+
+    #[test]
+    fn required_with_prompt_none_and_a_new_scope_is_consent_required() {
+        // Step-up with prompt=none: the grant covers openid, email is new.
+        let granted = s(&["openid"]);
+        assert_eq!(
+            decision(
+                ConsentMode::Required,
+                Some(&granted),
+                &s(&["openid", "email"]),
+                &s(&["none"])
+            ),
+            Err("consent_required")
         );
     }
 }
