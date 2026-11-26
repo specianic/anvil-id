@@ -1,0 +1,8 @@
+# Prometheus for the compose example: scrapes AnvilID's metrics listener (ANVILID_METRICS_LISTEN).
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: anvilid
+    static_configs:
+      - targets: ["anvilid:9464"]

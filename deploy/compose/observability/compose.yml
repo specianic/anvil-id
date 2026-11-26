@@ -1,0 +1,44 @@
+# Observability overlay for deploy/compose/postgres/compose.yml: an OpenTelemetry Collector that
+# receives AnvilID's OTLP/HTTP traces and prints them (debug exporter), and Prometheus scraping
+# AnvilID's metrics listener.
+#
+#   docker compose -f deploy/compose/postgres/compose.yml \
+#                  -f deploy/compose/observability/compose.yml up -d
+#
+# Prometheus UI: http://127.0.0.1:9090 ; traces: `docker compose ... logs otel-collector`.
+# Replace the debug exporter with your tracing backend's exporter in otel-collector.yaml.
+#
+# Paths are written relative to this directory and also resolve from the base file's directory
+# (../observability/...), whichever one Compose uses as the base.
+services:
+  anvilid:
+    environment:
+      # Base URL; anvilid appends /v1/traces.
+      ANVILID_OTEL_ENDPOINT: http://otel-collector:4318
+      ANVILID_OTEL_SERVICE_NAME: anvilid
+    depends_on:
+      otel-collector:
+        condition: service_started
+
+  otel-collector:
+    image: otel/opentelemetry-collector:0.166.0@sha256:5dfb40297a8da893e4e9b6b98d3ddbdd9082f73611170d6381e355e08b235334
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ../observability/otel-collector.yaml:/etc/otelcol/config.yaml:ro
+    # OTLP is only reachable on the compose network.
+
+  prometheus:
+    image: prom/prometheus:v3.13.0@sha256:c6b27ea434f8389bfe233fbc7be381cf50587c286e871bc842008f5a1b1908a7
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+    volumes:
+      - ../observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+
+volumes:
+  prometheus-data:

@@ -1,0 +1,21 @@
+# OpenTelemetry Collector for the compose example: OTLP/HTTP in, debug exporter out (spans are
+# printed to the collector log with their resource attributes, e.g. service.name).
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch: {}
+
+exporters:
+  debug:
+    verbosity: detailed
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]

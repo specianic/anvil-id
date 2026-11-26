@@ -45,5 +45,10 @@ ENV ANVILID_LISTEN=0.0.0.0:8080
 EXPOSE 8080
 USER nonroot
 
+# Exec form (no shell in distroless): `anvilid healthcheck` GETs /health/ready on the loopback port
+# of ANVILID_LISTEN and exits 0 when ready. Kubernetes ignores this and uses the chart's probes.
+HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=3 \
+    CMD ["/usr/local/bin/anvilid", "healthcheck"]
+
 ENTRYPOINT ["/usr/local/bin/anvilid"]
 CMD ["serve"]

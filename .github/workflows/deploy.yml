@@ -1,0 +1,170 @@
+# Deployment artefacts (OPS-09) and the observability they expose (OPS-08):
+#   lint     helm lint, unsafe-values checks, kubeconform on the rendered manifests, ct lint
+#   kind     ct install of deploy/helm/anvilid on kind with ci/sqlite-values.yaml and
+#            ci/postgres-values.yaml (image built here and kind-loaded; the ghcr package is private)
+#   compose  deploy/compose/smoke.sh: Postgres example + observability overlay (health, metrics,
+#            Prometheus scrape, JSON logs, a trace span in the collector)
+# lint runs on pull requests touching the artefacts; kind and compose on pushes to main and on demand.
+name: deploy
+
+on:
+  pull_request:
+    paths:
+      - "deploy/**"
+      - "ct.yaml"
+      - "Dockerfile"
+      - "crates/anvilid/**"
+      - ".github/workflows/deploy.yml"
+  push:
+    branches: [main]
+    paths:
+      - "deploy/**"
+      - "ct.yaml"
+      - "Dockerfile"
+      - "crates/**"
+      - "themes/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "scripts/docker-image.sh"
+      - "scripts/build-musl.sh"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # chart-testing 3.15 does not state Helm 4 support: stay on Helm 3.
+  HELM_VERSION: v3.22.1
+  KUBECONFORM_VERSION: v0.8.0
+  KUBECONFORM_SHA256: 9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883
+  CHART: deploy/helm/anvilid
+
+jobs:
+  lint:
+    name: chart lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+        with:
+          version: ${{ env.HELM_VERSION }}
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - uses: helm/chart-testing-action@720270857a28afd41e2426521a7801db09e9b510 # v2.9.0
+      - name: helm lint
+        run: |
+          helm lint --strict "$CHART"
+          for f in "$CHART"/ci/*-values.yaml; do helm lint --strict "$CHART" -f "$f"; done
+      - name: Unsafe values fail at template time
+        run: |
+          must_fail() {
+            if out=$(helm template t "$CHART" "$@" 2>&1); then
+              echo "::error::helm template $* rendered but must fail"; exit 1
+            fi
+            echo "refused as expected ($*): ${out%%$'\n'*}"
+          }
+          pg=(-f "$CHART/ci/postgres-values.yaml")
+          must_fail --set replicaCount=2
+          must_fail --set hpa.enabled=true
+          must_fail --set database.type=postgres
+          must_fail "${pg[@]}" --set redis.acknowledgePerNodeLimits=false
+          must_fail "${pg[@]}" --set hpa.enabled=true --set redis.acknowledgePerNodeLimits=false
+          must_fail --set terminationGracePeriodSeconds=5
+          must_fail --set database.type=mysql
+          must_fail --set unknownKey=1
+          helm template t "$CHART" "${pg[@]}" --set redis.acknowledgePerNodeLimits=false \
+            --set redis.url=redis://redis:6379 >/dev/null
+      - name: Install kubeconform ${{ env.KUBECONFORM_VERSION }}
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/kubeconform.tgz" \
+            "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          echo "${KUBECONFORM_SHA256}  $RUNNER_TEMP/kubeconform.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/kubeconform.tgz" -C "$RUNNER_TEMP" kubeconform
+          sudo install "$RUNNER_TEMP/kubeconform" /usr/local/bin/kubeconform
+          kubeconform -v
+      - name: kubeconform (strict) on the rendered manifests
+        run: |
+          render() { helm template t "$CHART" "$@"; }
+          {
+            render
+            render -f "$CHART/ci/sqlite-values.yaml"
+            render -f "$CHART/ci/postgres-values.yaml"
+            # Every optional resource on.
+            render --set database.type=postgres --set existingSecret.name=s \
+              --set redis.existingSecretKey=redisUrl --set hpa.enabled=true \
+              --set ingress.enabled=true --set ingress.className=nginx \
+              --set "ingress.tls[0].secretName=tls" --set "ingress.tls[0].hosts[0]=id.example.com" \
+              --set metrics.serviceMonitor.enabled=true --set otel.endpoint=http://otel:4318 \
+              --set trustedProxies=10.0.0.0/8 --set image.digest=sha256:$(printf '0%.0s' {1..64})
+            render --set persistence.enabled=false
+          } | kubeconform -strict -summary -skip ServiceMonitor
+      - name: ct lint
+        run: ct lint --config ct.yaml
+
+  kind:
+    name: chart install (kind)
+    if: github.event_name != 'pull_request'
+    needs: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+        with:
+          version: ${{ env.HELM_VERSION }}
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - uses: helm/chart-testing-action@720270857a28afd41e2426521a7801db09e9b510 # v2.9.0
+      - name: Build the image (anvilid:ci)
+        run: scripts/docker-image.sh anvilid:ci
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
+        with:
+          cluster_name: chart-testing
+      - name: Load the image, start Postgres, create the CI secrets
+        run: |
+          kind load docker-image anvilid:ci --name chart-testing
+          kubectl create namespace anvilid-ci
+          kubectl -n anvilid-ci apply -f deploy/helm/ci/postgres.yaml
+          # Random KEKs per run, never written to disk. The database password is the throwaway
+          # value of the CI Postgres manifest.
+          kubectl -n anvilid-ci create secret generic anvilid-ci-sqlite \
+            --from-literal=kek="$(openssl rand -base64 32)"
+          kubectl -n anvilid-ci create secret generic anvilid-ci-postgres \
+            --from-literal=kek="$(openssl rand -base64 32)" \
+            --from-literal=databaseUrl=postgres://anvilid:anvilid-local-only@postgres:5432/anvilid
+          kubectl -n anvilid-ci rollout status deployment/postgres --timeout=180s
+      - name: ct install (SQLite and Postgres values, helm test)
+        run: ct install --config ct.yaml --namespace anvilid-ci
+      - name: Cluster state on failure
+        if: failure()
+        run: |
+          kubectl -n anvilid-ci get all,pvc,pdb -o wide || true
+          kubectl -n anvilid-ci describe pods || true
+          for p in $(kubectl -n anvilid-ci get pods -o name); do
+            echo "--- $p"; kubectl -n anvilid-ci logs "$p" --all-containers --tail=200 || true
+          done
+          kubectl -n anvilid-ci get events --sort-by=.lastTimestamp || true
+
+  compose:
+    name: compose smoke test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build the image (anvilid:ci)
+        run: scripts/docker-image.sh anvilid:ci
+      - name: Compose smoke test (health, metrics, Prometheus, JSON logs, OTLP span)
+        run: deploy/compose/smoke.sh
