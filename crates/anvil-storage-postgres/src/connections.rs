@@ -11,6 +11,24 @@ use anvil_core::model::{
     TenantId, User, UserId,
 };
 use anvil_core::ports::{ConnectionRepo, DeleteLinkOutcome, StorageError};
+
+/// TRANSITIONAL(06-08): organization connections and SAML configs need the 1.0 schema
+/// (`connection.org_id`, `saml` in the kind CHECK). Until 06-08 migrates it they are refused,
+/// never silently stored without their org or kind.
+fn refuse_unmigrated(
+    org_id: Option<anvil_core::model::OrgId>,
+    config: Option<&ConnectionConfig>,
+) -> Result<(), StorageError> {
+    if org_id.is_some() {
+        return Err(StorageError::Unsupported(
+            "organization connections (06-08)",
+        ));
+    }
+    if matches!(config, Some(ConnectionConfig::Saml(_))) {
+        return Err(StorageError::Unsupported("saml connections (06-08)"));
+    }
+    Ok(())
+}
 use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -60,6 +78,7 @@ impl ConnectionRow {
             trust_email_verified: self.trust_email_verified,
             created_at: self.created_at,
             updated_at: self.updated_at,
+            org_id: None,
         })
     }
 }
@@ -154,6 +173,7 @@ impl ConnectionRepo for PgConnections {
         tenant: TenantId,
         c: &NewConnection,
     ) -> Result<Connection, StorageError> {
+        refuse_unmigrated(c.org_id, Some(&c.config))?;
         let config = to_json("connection.config", &c.config)?;
         sqlx::query!(
             "INSERT INTO connection
@@ -185,6 +205,7 @@ impl ConnectionRepo for PgConnections {
             trust_email_verified: c.trust_email_verified,
             created_at: c.created_at,
             updated_at: c.created_at,
+            org_id: None,
         })
     }
 
@@ -255,6 +276,7 @@ impl ConnectionRepo for PgConnections {
         update: &ConnectionUpdate,
         now: OffsetDateTime,
     ) -> Result<Option<Connection>, StorageError> {
+        refuse_unmigrated(None, update.config.as_ref())?;
         let config = update
             .config
             .as_ref()
@@ -488,5 +510,32 @@ impl ConnectionRepo for PgConnections {
         }
         tx.commit().await.map_err(map_err)?;
         Ok(user_from_new(tenant, user))
+    }
+}
+
+#[cfg(test)]
+mod transitional_tests {
+    use super::*;
+
+    #[test]
+    fn org_and_saml_connections_are_refused() {
+        let org = Some(anvil_core::model::OrgId::new_v7());
+        assert!(matches!(
+            refuse_unmigrated(org, None),
+            Err(StorageError::Unsupported(_))
+        ));
+        let saml = ConnectionConfig::Saml(anvil_core::model::SamlConfig {
+            idp_entity_id: "e".into(),
+            sso_url: "https://idp.example.test/sso".into(),
+            signing_certs: vec![],
+            name_id_format: Default::default(),
+            attributes: Default::default(),
+            metadata_url: None,
+        });
+        assert!(matches!(
+            refuse_unmigrated(None, Some(&saml)),
+            Err(StorageError::Unsupported(_))
+        ));
+        assert!(refuse_unmigrated(None, None).is_ok());
     }
 }

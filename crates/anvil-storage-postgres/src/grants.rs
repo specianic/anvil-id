@@ -66,6 +66,7 @@ impl FamilyRow {
                 .map(|r| enum_from("token_family.revoked_reason", r, RevokeReason::parse))
                 .transpose()?,
             resource: from_json("token_family.resource", self.resource)?,
+            org_id: None,
         })
     }
 }
@@ -94,6 +95,16 @@ where
     .transpose()
 }
 
+/// TRANSITIONAL(06-08): org-bound codes and token families need the 1.0 columns
+/// (`authorization_code.org_id`, `token_family.org_id`); refused until 06-08 adds them, never
+/// stored without their org.
+fn refuse_org_grant(org_id: Option<anvil_core::model::OrgId>) -> Result<(), StorageError> {
+    if org_id.is_some() {
+        return Err(StorageError::Unsupported("org-bound grants (06-08)"));
+    }
+    Ok(())
+}
+
 /// Inserts a token family on any executor. `Conflict` on a duplicate id.
 async fn insert_family<'e, E>(
     exec: E,
@@ -103,6 +114,7 @@ async fn insert_family<'e, E>(
 where
     E: sqlx::PgExecutor<'e>,
 {
+    refuse_org_grant(family.org_id)?;
     let resource = to_json("token_family.resource", &family.resource)?;
     let claims = family
         .claims
@@ -238,6 +250,7 @@ impl GrantRepo for PgGrants {
         code: &NewAuthorizationCode,
         family: &NewTokenFamily,
     ) -> Result<(), StorageError> {
+        refuse_org_grant(code.org_id)?;
         let resource = to_json("authorization_code.resource", &code.resource)?;
         if code.token_family_id != family.id {
             return Err(StorageError::Conflict(
@@ -330,6 +343,7 @@ impl GrantRepo for PgGrants {
                 expires_at: r.expires_at,
                 created_at: r.created_at,
                 resource: from_json("authorization_code.resource", r.resource)?,
+                org_id: None,
             }));
         }
 
@@ -511,6 +525,12 @@ impl GrantRepo for PgGrants {
         expires_at: OffsetDateTime,
         now: OffsetDateTime,
     ) -> Result<JtiOutcome, StorageError> {
+        // TRANSITIONAL(06-08): `saml_assertion_id` is not in the replay_guard kind CHECK yet.
+        if kind == ReplayKind::SamlAssertionId {
+            return Err(StorageError::Unsupported(
+                "saml assertion replay guard (06-08)",
+            ));
+        }
         // Insert-or-fail; an expired entry is replaced in the same statement. A concurrent
         // inserter of the same key waits for the first one's commit and then hits the conflict.
         let row = sqlx::query!(
@@ -665,5 +685,19 @@ impl GrantRepo for PgGrants {
         now: OffsetDateTime,
     ) -> Result<bool, StorageError> {
         consent::revoke_consent(&self.pool, tenant, user, client_id, now).await
+    }
+}
+
+#[cfg(test)]
+mod transitional_tests {
+    use super::*;
+
+    #[test]
+    fn org_bound_grants_are_refused() {
+        assert!(matches!(
+            refuse_org_grant(Some(anvil_core::model::OrgId::new_v7())),
+            Err(StorageError::Unsupported(_))
+        ));
+        assert!(refuse_org_grant(None).is_ok());
     }
 }

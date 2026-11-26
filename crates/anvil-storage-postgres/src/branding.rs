@@ -40,6 +40,15 @@ impl BrandingRow {
     }
 }
 
+/// TRANSITIONAL(06-08): organization branding (`org:{uuid}` scope keys) arrives with the
+/// 1.0 schema and its org cascade; refused until 06-08, never stored as an orphan scope.
+fn refuse_org_scope(scope_key: &str) -> Result<(), StorageError> {
+    if scope_key.starts_with("org:") {
+        return Err(StorageError::Unsupported("organization branding (06-08)"));
+    }
+    Ok(())
+}
+
 #[async_trait::async_trait]
 impl BrandingRepo for PgBranding {
     async fn get(
@@ -69,6 +78,7 @@ impl BrandingRepo for PgBranding {
         update: &BrandingUpdate,
         now: OffsetDateTime,
     ) -> Result<Branding, StorageError> {
+        refuse_org_scope(scope_key)?;
         let tokens = to_json("branding.tokens", &update.tokens)?;
         let mut tx = self.pool.begin().await.map_err(map_err)?;
         // (set logo?, sha256, type): Keep leaves the columns alone, Clear nulls them.
@@ -163,6 +173,7 @@ impl BrandingRepo for PgBranding {
         draft: &BrandingDraft,
         now: OffsetDateTime,
     ) -> Result<(), StorageError> {
+        refuse_org_scope(scope_key)?;
         let tokens = to_json("branding_draft.tokens", &draft.tokens)?;
         // One draft per scope: a new draft replaces the previous one (and its preview token).
         sqlx::query!(
@@ -219,5 +230,22 @@ impl BrandingRepo for PgBranding {
             ))
         })
         .transpose()
+    }
+}
+
+#[cfg(test)]
+mod transitional_tests {
+    use super::*;
+    use anvil_core::model::{BrandingScope, OrgId};
+
+    #[test]
+    fn org_branding_scope_is_refused() {
+        let key = BrandingScope::Org(OrgId::new_v7()).scope_key();
+        assert!(matches!(
+            refuse_org_scope(&key),
+            Err(StorageError::Unsupported(_))
+        ));
+        assert!(refuse_org_scope("").is_ok());
+        assert!(refuse_org_scope("client:app").is_ok());
     }
 }

@@ -110,6 +110,7 @@ impl ClientRow {
                 &self.registration_source,
                 ClientSource::parse,
             )?,
+            organization: anvil_core::model::OrgClientPolicy::Off,
         })
     }
 }
@@ -144,7 +145,21 @@ pub(crate) fn client_from_new(tenant: TenantId, c: &NewClient) -> Client {
         metadata_expires_at: c.metadata_expires_at,
         registration_access_token_hash: c.registration_access_token_hash,
         registration_source: c.registration_source,
+        organization: c.organization,
     }
+}
+
+/// TRANSITIONAL(06-08): the client organization policy needs the 1.0 `client.organization`
+/// column; any value but `off` is refused until 06-08 adds it, never silently dropped.
+fn refuse_org_policy(
+    policy: Option<anvil_core::model::OrgClientPolicy>,
+) -> Result<(), StorageError> {
+    if policy.is_some_and(|p| p != anvil_core::model::OrgClientPolicy::Off) {
+        return Err(StorageError::Unsupported(
+            "client organization policy (06-08)",
+        ));
+    }
+    Ok(())
 }
 
 /// Inserts a client on any executor. `Conflict` on a duplicate (tenant, client_id).
@@ -156,6 +171,7 @@ pub(crate) async fn insert_client<'e, E>(
 where
     E: sqlx::PgExecutor<'e>,
 {
+    refuse_org_policy(Some(c.organization))?;
     let post_logout = to_json(
         "client.post_logout_redirect_uris",
         &c.post_logout_redirect_uris,
@@ -275,6 +291,7 @@ impl ClientRepo for PgClients {
         update: &ClientUpdate,
         now: OffsetDateTime,
     ) -> Result<Option<Client>, StorageError> {
+        refuse_org_policy(update.organization)?;
         let post_logout = update
             .post_logout_redirect_uris
             .as_ref()
@@ -457,6 +474,7 @@ impl ClientRepo for PgClients {
         metadata_expires_at: OffsetDateTime,
         now: OffsetDateTime,
     ) -> Result<Client, StorageError> {
+        refuse_org_policy(Some(c.organization))?;
         // One statement: insert, or replace the metadata of an existing CIMD client. The
         // conflict update only applies to CIMD rows; for a static or dynamic client holding the
         // `client_id` the WHERE fails, nothing changes and no row comes back (`Conflict`).
@@ -597,5 +615,23 @@ impl ClientRepo for PgClients {
         .await
         .map_err(map_err)?;
         Ok(done.rows_affected() > 0)
+    }
+}
+
+#[cfg(test)]
+mod transitional_tests {
+    use super::*;
+    use anvil_core::model::OrgClientPolicy;
+
+    #[test]
+    fn non_default_org_policy_is_refused() {
+        for p in [OrgClientPolicy::Optional, OrgClientPolicy::Required] {
+            assert!(matches!(
+                refuse_org_policy(Some(p)),
+                Err(StorageError::Unsupported(_))
+            ));
+        }
+        assert!(refuse_org_policy(Some(OrgClientPolicy::Off)).is_ok());
+        assert!(refuse_org_policy(None).is_ok());
     }
 }

@@ -6,7 +6,7 @@
 //! `WHERE org_id IS NULL`); duplicates surface as `Conflict`.
 
 use anvil_core::model::{
-    NewRole, Page, PageRequest, Role, RoleId, RoleUpdate, SYSTEM_ADMIN_ROLE, TenantId, User,
+    NewRole, OrgId, Page, PageRequest, Role, RoleId, RoleUpdate, SYSTEM_ADMIN_ROLE, TenantId, User,
     UserId, UserStatus,
 };
 use anvil_core::ports::{RoleRepo, StorageError};
@@ -41,7 +41,7 @@ impl RoleRow {
         Role {
             id: RoleId(self.id),
             tenant_id: TenantId(self.tenant_id),
-            org_id: self.org_id,
+            org_id: self.org_id.map(OrgId),
             name: self.name,
             description: self.description,
             permissions: self.permissions,
@@ -61,13 +61,19 @@ pub(crate) async fn insert_role<'e, E>(
 where
     E: sqlx::PgExecutor<'e>,
 {
+    // TRANSITIONAL(06-08): org-owned roles need the 1.0 schema (composite FK to organization,
+    // per-org name index); refused until 06-08 migrates it.
+    if role.org_id.is_some() {
+        return Err(StorageError::Unsupported("org-owned roles (06-08)"));
+    }
+    let org_id: Option<Uuid> = None;
     sqlx::query!(
         "INSERT INTO role
              (id, tenant_id, org_id, name, description, permissions, created_at, updated_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $7)",
         role.id.0,
         tenant.0,
-        role.org_id,
+        org_id,
         role.name,
         role.description,
         &role.permissions,
