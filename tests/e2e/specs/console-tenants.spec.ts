@@ -2,7 +2,7 @@
 // switcher by keyboard, lists the tenants (the system tenant is marked), creates a tenant from the
 // console, switches between tenants (the section is kept), creates a client in the new tenant only,
 // reads the tenant's issuer and discovery URL from the list and checks it against the published
-// discovery document, follows a pre-0.4 deep link (redirected to the default tenant) and deletes
+// discovery document, checks that a pre-0.4 deep link shows the not-found page and deletes
 // the tenant again. Every console page visited passes the axe audit and the console CSP holds.
 //
 // Env: ANVIL_URL, SETUP_URL, E2E_STATE_FILE (see tests/e2e/run.sh).
@@ -170,18 +170,16 @@ test('admin console: create, switch to and delete a tenant', async ({ page, brow
     await expectNoA11yViolations(page);
   });
 
-  await test.step('pre-0.4 deep links redirect to the default tenant', async () => {
+  await test.step('pre-0.4 deep links show the not-found page (removed in 1.0)', async () => {
     await page.goto(consoleUrl('clients'));
-    await expect(page).toHaveURL((url) => url.pathname === '/console/t/default/clients');
-    await expect(page.getByRole('heading', { level: 1, name: 'Clients' })).toBeVisible();
+    await expect(page.getByRole('heading', { level: 1, name: 'Page not found' })).toBeVisible();
+    await expect(page).toHaveURL((url) => url.pathname === '/console/clients');
 
     await page.goto(consoleUrl('audit?action=session_revoked'));
-    await expect(page).toHaveURL(
-      (url) => url.pathname === '/console/t/default/audit' && url.searchParams.get('action') === 'session_revoked',
-    );
+    await expect(page.getByRole('heading', { level: 1, name: 'Page not found' })).toBeVisible();
 
     // The default tenant cannot be deleted; its settings page says so.
-    await mainNav.getByRole('link', { name: 'Login settings' }).click();
+    await page.goto(consoleUrl('t/default/settings'));
     await expect(page.getByTestId('tenant-undeletable')).toBeVisible();
     await expect(page.getByTestId('delete-tenant')).toHaveCount(0);
   });
