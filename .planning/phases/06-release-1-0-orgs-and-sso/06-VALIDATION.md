@@ -122,7 +122,7 @@ storage are written in 06-04 and turn green in 06-07/06-08. The two checkpoints 
 | ORG-03 | org connection admin (OIDC/SAML, metadata import, flag off refusal) | `admin_org_sso` (06-17) |
 | ORG-04 | domain rules, record format, routing decision | `policy::home_realm`, `policy::domain_verification` (06-05), fuzz `org_domain_parse` (06-09) |
 | ORG-04 | hickory adapter, uniform outcome | `service::domain_check`, `dns_txt_adapter` (06-10) |
-| ORG-04 | domain admin, one verified org per domain, routing guards (proven connection before routing / forcing SSO) | `security_domains` (06-17); contract `org_domains`, `connections` (`has_links`) |
+| ORG-04 | domain admin, one verified org per domain, routing guards (enabled same-org connection for routing; a connection with a successful sign-in before passwords can be turned off) | `security_domains` (06-17); contract `org_domains`, `connections` (`has_links`) |
 | ORG-04 | re-check job | `anvilid --test jobs` (06-20) |
 | ORG-04 | identifier-first routing, enumeration | `hrd_login`, `security_enumeration` (06-22), `specs/hrd.spec.ts`, `specs/nojs-hrd.spec.ts` (06-24) |
 | ADM-02 | keys API | `admin_keys` (06-11) |
