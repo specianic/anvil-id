@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE webhook_endpoint SET enabled = 0, disabled_reason = ?3, updated_at = ?4\n                  WHERE tenant_id = ?1 AND id = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "355d4de0fe69f6e43cebb932c78dd3c6ab34756cacd0e3cff3f58ea2c6b4e4dc"
+}

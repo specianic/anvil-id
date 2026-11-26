@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT attributes AS \"attributes!\" FROM user WHERE tenant_id = ?1 AND id = ?2",
+  "describe": {
+    "columns": [
+      {
+        "name": "attributes!",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "user",
+            "name": "attributes"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "7fcc67dc7376a9cb0c5735f518fe34b76fbd80adb50716636f5b000ed4ec0527"
+}

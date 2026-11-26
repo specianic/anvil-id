@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO webhook_endpoint\n                 (id, tenant_id, name, url, events, enabled, secret_enc, previous_secret_enc,\n                  previous_secret_expires_at, disabled_reason, created_at, updated_at)\n             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, NULL, NULL, ?8, ?8)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 8
+    },
+    "nullable": []
+  },
+  "hash": "22e0c18308cf66e7ab88033273d9b6d8608157234dd001f1536d747ba6f04aad"
+}

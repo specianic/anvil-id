@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE client SET registration_access_token_hash = ?3, updated_at = ?4\n              WHERE tenant_id = ?1 AND client_id = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "78cabfbce5f4542ab8a1018f5492d545c8a47fbb61739cfac754cf0b8e99a382"
+}

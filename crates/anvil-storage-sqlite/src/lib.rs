@@ -9,8 +9,12 @@
 //! `consume_recovery_code`, `swap_state`, `try_lease`, `upgrade_auth`) are single conditional
 //! statements. Every intent that revokes browser sessions enqueues its back-channel logout
 //! deliveries in its own transaction (`logout::enqueue_deliveries`), and `create_code` records
-//! the RP session in its transaction.
+//! the RP session in its transaction. `AuditRepo::append` enqueues the event's webhook
+//! deliveries in its transaction (`webhooks::enqueue_for_event`); `SetupRepo::install` creates
+//! the system tenant's administrator role and `complete_setup` assigns it, each in its
+//! transaction.
 
+mod attributes;
 mod audit;
 mod branding;
 mod clients;
@@ -26,12 +30,13 @@ mod logout;
 mod mail_settings;
 pub mod migrate;
 mod outbox;
-// TRANSITIONAL(05-06): Phase 5 repositories refused with `Unsupported` until implemented.
-mod pending;
+mod registration;
+mod roles;
 mod sessions;
 mod setup;
 mod tenants;
 mod users;
+mod webhooks;
 
 use std::str::FromStr;
 use std::time::Duration;
@@ -44,6 +49,7 @@ use anvil_core::ports::{
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 
+use crate::attributes::SqliteAttributes;
 use crate::audit::SqliteAudit;
 use crate::branding::SqliteBranding;
 use crate::clients::SqliteClients;
@@ -56,11 +62,13 @@ use crate::keys::SqliteKeys;
 use crate::logout::SqliteLogout;
 use crate::mail_settings::SqliteMailSettings;
 use crate::outbox::SqliteOutbox;
-use crate::pending::SqlitePending;
+use crate::registration::SqliteRegistration;
+use crate::roles::SqliteRoles;
 use crate::sessions::SqliteSessions;
 use crate::setup::SqliteSetup;
 use crate::tenants::SqliteTenants;
 use crate::users::SqliteUsers;
+use crate::webhooks::SqliteWebhooks;
 
 pub use crate::migrate::{MigrateError, MigrateOptions, PendingMigration};
 
@@ -89,8 +97,10 @@ pub struct SqliteStorage {
     connections: SqliteConnections,
     branding: SqliteBranding,
     logout: SqliteLogout,
-    /// TRANSITIONAL(05-06): roles, attributes, webhooks and registration.
-    pending: SqlitePending,
+    roles: SqliteRoles,
+    attributes: SqliteAttributes,
+    webhooks: SqliteWebhooks,
+    registration: SqliteRegistration,
 }
 
 fn is_memory_url(url: &str) -> bool {
@@ -190,6 +200,22 @@ impl SqliteStorage {
                 writer: writer.clone(),
                 reader: reader.clone(),
             },
+            roles: SqliteRoles {
+                writer: writer.clone(),
+                reader: reader.clone(),
+            },
+            attributes: SqliteAttributes {
+                writer: writer.clone(),
+                reader: reader.clone(),
+            },
+            webhooks: SqliteWebhooks {
+                writer: writer.clone(),
+                reader: reader.clone(),
+            },
+            registration: SqliteRegistration {
+                writer: writer.clone(),
+                reader: reader.clone(),
+            },
             setup: SqliteSetup {
                 writer: writer.clone(),
                 reader,
@@ -197,7 +223,6 @@ impl SqliteStorage {
             outbox: SqliteOutbox {
                 writer: writer.clone(),
             },
-            pending: SqlitePending,
             writer,
         })
     }
@@ -251,16 +276,16 @@ impl Storage for SqliteStorage {
         &self.logout
     }
     fn roles(&self) -> &dyn RoleRepo {
-        &self.pending
+        &self.roles
     }
     fn attributes(&self) -> &dyn AttributeRepo {
-        &self.pending
+        &self.attributes
     }
     fn webhooks(&self) -> &dyn WebhookRepo {
-        &self.pending
+        &self.webhooks
     }
     fn registration(&self) -> &dyn RegistrationRepo {
-        &self.pending
+        &self.registration
     }
 
     async fn purge_expired(&self, now: time::OffsetDateTime) -> Result<u64, StorageError> {
@@ -338,6 +363,15 @@ impl Storage for SqliteStorage {
             "DELETE FROM branding WHERE rowid IN
                (SELECT rowid FROM branding
                  WHERE tokens IS NULL AND preview_expires_at <= ?1 LIMIT ?2)"
+        );
+        // Initial access tokens stay listed for 7 days after they expire or are revoked, so the
+        // console can show why a registration was refused. ?1 - 7 days in milliseconds.
+        total += purge!(
+            "DELETE FROM initial_access_token WHERE rowid IN
+               (SELECT rowid FROM initial_access_token
+                 WHERE (expires_at IS NOT NULL AND expires_at <= ?1 - 604800000)
+                    OR (revoked_at IS NOT NULL AND revoked_at <= ?1 - 604800000)
+                 LIMIT ?2)"
         );
         // Families past their absolute lifetime can never issue tokens again; keep any that a
         // still-valid code references. Their (unusable) refresh tokens go by cascade.

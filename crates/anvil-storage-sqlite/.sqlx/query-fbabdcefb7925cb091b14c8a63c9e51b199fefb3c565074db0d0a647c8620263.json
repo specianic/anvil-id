@@ -1,0 +1,110 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE initial_access_token\n                  SET uses_remaining = CASE WHEN uses_remaining IS NULL THEN NULL\n                                            ELSE uses_remaining - 1 END\n                WHERE tenant_id = ?1 AND token_hash = ?2 AND revoked_at IS NULL\n                  AND (expires_at IS NULL OR expires_at > ?3)\n                  AND (uses_remaining IS NULL OR uses_remaining > 0)\n            RETURNING id AS \"id!: uuid::Uuid\", tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      description AS \"description!\", token_hash AS \"token_hash!\",\n                      expires_at AS \"expires_at?\", uses_remaining AS \"uses_remaining?\",\n                      created_at AS \"created_at!\", revoked_at AS \"revoked_at?\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: uuid::Uuid",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "initial_access_token",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "tenant_id!: uuid::Uuid",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "initial_access_token",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "name": "description!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "initial_access_token",
+            "name": "description"
+          }
+        }
+      },
+      {
+        "name": "token_hash!",
+        "ordinal": 3,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "initial_access_token",
+            "name": "token_hash"
+          }
+        }
+      },
+      {
+        "name": "expires_at?",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "initial_access_token",
+            "name": "expires_at"
+          }
+        }
+      },
+      {
+        "name": "uses_remaining?",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "initial_access_token",
+            "name": "uses_remaining"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "initial_access_token",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "revoked_at?",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "initial_access_token",
+            "name": "revoked_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "fbabdcefb7925cb091b14c8a63c9e51b199fefb3c565074db0d0a647c8620263"
+}

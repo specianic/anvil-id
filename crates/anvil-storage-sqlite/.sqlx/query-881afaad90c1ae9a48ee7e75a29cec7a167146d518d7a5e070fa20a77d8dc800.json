@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id AS \"id!: uuid::Uuid\", user_id AS \"user_id!: uuid::Uuid\",\n                  client_id AS \"client_id!\", scopes AS \"scopes!\", created_at AS \"created_at!\",\n                  updated_at AS \"updated_at!\", revoked_at AS \"revoked_at?\"\n             FROM consent_grant\n            WHERE tenant_id = ?1 AND user_id = ?2 AND revoked_at IS NULL\n            ORDER BY client_id",
+  "query": "INSERT INTO consent_grant\n               (id, tenant_id, user_id, client_id, scopes, created_at, updated_at, revoked_at,\n                resources)\n           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?8)\n           ON CONFLICT (tenant_id, user_id, client_id)\n           DO UPDATE SET scopes = excluded.scopes, updated_at = excluded.updated_at,\n                         revoked_at = NULL, resources = excluded.resources\n           RETURNING id AS \"id!: uuid::Uuid\", user_id AS \"user_id!: uuid::Uuid\",\n                     client_id AS \"client_id!\", scopes AS \"scopes!\", created_at AS \"created_at!\",\n                     updated_at AS \"updated_at!\", revoked_at AS \"revoked_at?\",\n                  resources AS \"resources!\"",
   "describe": {
     "columns": [
       {
@@ -79,10 +79,21 @@
             "name": "revoked_at"
           }
         }
+      },
+      {
+        "name": "resources!",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "consent_grant",
+            "name": "resources"
+          }
+        }
       }
     ],
     "parameters": {
-      "Right": 2
+      "Right": 8
     },
     "nullable": [
       false,
@@ -91,8 +102,9 @@
       false,
       false,
       false,
-      true
+      true,
+      false
     ]
   },
-  "hash": "b004d90b8a7c6178993d8f5ac1d8a8ce80a5986def12635cb8ac95eab756f5bd"
+  "hash": "881afaad90c1ae9a48ee7e75a29cec7a167146d518d7a5e070fa20a77d8dc800"
 }

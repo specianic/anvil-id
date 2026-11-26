@@ -17,6 +17,7 @@ struct ConsentRow {
     created_at: i64,
     updated_at: i64,
     revoked_at: Option<i64>,
+    resources: String,
 }
 
 impl TryFrom<ConsentRow> for ConsentGrant {
@@ -31,8 +32,7 @@ impl TryFrom<ConsentRow> for ConsentGrant {
             created_at: ms_to_odt(r.created_at)?,
             updated_at: ms_to_odt(r.updated_at)?,
             revoked_at: opt_ms_to_odt(r.revoked_at)?,
-            // TRANSITIONAL(05-06): no resources column yet.
-            resources: Vec::new(),
+            resources: from_json(&r.resources, "consent_grant.resources")?,
         })
     }
 }
@@ -48,7 +48,8 @@ async fn grant_on(
         ConsentRow,
         r#"SELECT id AS "id!: uuid::Uuid", user_id AS "user_id!: uuid::Uuid",
                   client_id AS "client_id!", scopes AS "scopes!", created_at AS "created_at!",
-                  updated_at AS "updated_at!", revoked_at AS "revoked_at?"
+                  updated_at AS "updated_at!", revoked_at AS "revoked_at?",
+                  resources AS "resources!"
              FROM consent_grant WHERE tenant_id = ?1 AND user_id = ?2 AND client_id = ?3"#,
         tenant.0,
         user.0,
@@ -84,7 +85,8 @@ pub(crate) async fn list_active(
         ConsentRow,
         r#"SELECT id AS "id!: uuid::Uuid", user_id AS "user_id!: uuid::Uuid",
                   client_id AS "client_id!", scopes AS "scopes!", created_at AS "created_at!",
-                  updated_at AS "updated_at!", revoked_at AS "revoked_at?"
+                  updated_at AS "updated_at!", revoked_at AS "revoked_at?",
+                  resources AS "resources!"
              FROM consent_grant
             WHERE tenant_id = ?1 AND user_id = ?2 AND revoked_at IS NULL
             ORDER BY client_id"#,
@@ -108,35 +110,38 @@ pub(crate) async fn upsert(
     consent: &NewConsent,
     now: OffsetDateTime,
 ) -> Result<ConsentGrant, StorageError> {
-    // TRANSITIONAL(05-06): consent resources are not stored yet; refuse instead of dropping them.
-    if !consent.resources.is_empty() {
-        return Err(StorageError::Unsupported(
-            "consent resources are not stored by this backend yet",
-        ));
-    }
     let mut tx = writer.begin().await.map_err(map_err)?;
     let existing = grant_on(&mut tx, tenant, consent.user_id, &consent.client_id).await?;
     let mut merged: BTreeSet<String> = consent.scopes.iter().cloned().collect();
+    let mut resources: BTreeSet<String> = consent.resources.iter().cloned().collect();
     if let Some(active) = existing.as_ref().filter(|g| g.revoked_at.is_none()) {
         merged.extend(active.scopes.iter().cloned());
+        resources.extend(active.resources.iter().cloned());
     }
     let scopes = to_json(
         &merged.into_iter().collect::<Vec<_>>(),
         "consent_grant.scopes",
+    )?;
+    // A BTreeSet iterates sorted and de-duplicated: the stored form of `normalize_resources`.
+    let resources = to_json(
+        &resources.into_iter().collect::<Vec<_>>(),
+        "consent_grant.resources",
     )?;
     let created_at = odt_to_ms(consent.created_at);
     let now_ms = odt_to_ms(now);
     let row = sqlx::query_as!(
         ConsentRow,
         r#"INSERT INTO consent_grant
-               (id, tenant_id, user_id, client_id, scopes, created_at, updated_at, revoked_at)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)
+               (id, tenant_id, user_id, client_id, scopes, created_at, updated_at, revoked_at,
+                resources)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?8)
            ON CONFLICT (tenant_id, user_id, client_id)
            DO UPDATE SET scopes = excluded.scopes, updated_at = excluded.updated_at,
-                         revoked_at = NULL
+                         revoked_at = NULL, resources = excluded.resources
            RETURNING id AS "id!: uuid::Uuid", user_id AS "user_id!: uuid::Uuid",
                      client_id AS "client_id!", scopes AS "scopes!", created_at AS "created_at!",
-                     updated_at AS "updated_at!", revoked_at AS "revoked_at?""#,
+                     updated_at AS "updated_at!", revoked_at AS "revoked_at?",
+                  resources AS "resources!""#,
         consent.id.0,
         tenant.0,
         consent.user_id.0,
@@ -144,6 +149,7 @@ pub(crate) async fn upsert(
         scopes,
         created_at,
         now_ms,
+        resources,
     )
     .fetch_one(&mut *tx)
     .await

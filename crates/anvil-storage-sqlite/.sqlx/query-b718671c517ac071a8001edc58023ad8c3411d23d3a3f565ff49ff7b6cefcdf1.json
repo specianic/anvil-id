@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO role_assignment (tenant_id, role_id, user_id, created_at)\n         SELECT r.tenant_id, r.id, u.id, ?4\n           FROM role r JOIN user u ON u.tenant_id = r.tenant_id\n          WHERE r.tenant_id = ?1 AND r.name = ?2 AND r.org_id IS NULL AND u.id = ?3\n         ON CONFLICT (tenant_id, role_id, user_id) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "b718671c517ac071a8001edc58023ad8c3411d23d3a3f565ff49ff7b6cefcdf1"
+}

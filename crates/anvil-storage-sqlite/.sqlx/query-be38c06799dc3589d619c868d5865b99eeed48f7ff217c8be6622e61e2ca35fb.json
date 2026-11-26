@@ -1,0 +1,110 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT r.id AS \"id!: uuid::Uuid\", r.tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      r.org_id AS \"org_id?: uuid::Uuid\", r.name AS \"name!\",\n                      r.description AS \"description!\", r.permissions AS \"permissions!\",\n                      r.created_at AS \"created_at!\", r.updated_at AS \"updated_at!\"\n                 FROM role_assignment a\n                 JOIN role r ON r.tenant_id = a.tenant_id AND r.id = a.role_id\n                WHERE a.tenant_id = ?1 AND a.user_id = ?2\n                ORDER BY r.name, r.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: uuid::Uuid",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "role",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "tenant_id!: uuid::Uuid",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "role",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "name": "org_id?: uuid::Uuid",
+        "ordinal": 2,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "role",
+            "name": "org_id"
+          }
+        }
+      },
+      {
+        "name": "name!",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "role",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "description!",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "role",
+            "name": "description"
+          }
+        }
+      },
+      {
+        "name": "permissions!",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "role",
+            "name": "permissions"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "role",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "updated_at!",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "role",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "be38c06799dc3589d619c868d5865b99eeed48f7ff217c8be6622e61e2ca35fb"
+}

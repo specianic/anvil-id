@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE user SET attributes = ?3, updated_at = ?4 WHERE tenant_id = ?1 AND id = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "2353283f697400a75f772f52485a19717f41574c88a87b87b85fec667e4aa3b4"
+}

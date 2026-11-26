@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM initial_access_token WHERE rowid IN\n               (SELECT rowid FROM initial_access_token\n                 WHERE (expires_at IS NOT NULL AND expires_at <= ?1 - 604800000)\n                    OR (revoked_at IS NOT NULL AND revoked_at <= ?1 - 604800000)\n                 LIMIT ?2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "891dd2dd746c82334853f4e3bd88a5017aac04970f08f2ce9a3818123ddcd0a6"
+}

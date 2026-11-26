@@ -13,6 +13,7 @@ use time::OffsetDateTime;
 use crate::convert::{
     from_json, into_page, map_err, ms_to_odt, odt_to_ms, opt_odt_to_ms, parse_enum, to_json,
 };
+use crate::webhooks::enqueue_for_event;
 
 #[derive(Debug, Clone)]
 pub(crate) struct SqliteAudit {
@@ -71,18 +72,15 @@ impl TryFrom<AuditRow> for AuditEvent {
 #[async_trait::async_trait]
 impl AuditRepo for SqliteAudit {
     async fn append(&self, tenant: TenantId, event: &NewAuditEvent) -> Result<(), StorageError> {
-        // TRANSITIONAL(05-06): webhook fan-out is not stored yet; refuse instead of dropping the event.
-        if event.webhook.is_some() {
-            return Err(StorageError::Unsupported(
-                "webhook events are not stored by this backend yet",
-            ));
-        }
         let at = odt_to_ms(event.at);
         let actor_kind = event.actor.kind.as_str();
         let action = event.action.as_str();
         let outcome = event.outcome.as_str();
         let ip = event.ctx.ip.map(|ip| ip.to_string());
         let details = to_json(event.details.as_map(), "audit_event.details")?;
+        // The event and its webhook deliveries are one transaction: a rejected append (e.g. a
+        // duplicate id) enqueues nothing, and no delivery exists without its audit row.
+        let mut tx = self.writer.begin().await.map_err(map_err)?;
         sqlx::query!(
             "INSERT INTO audit_event
                  (id, tenant_id, at, actor_kind, actor_id, action, target, outcome, ip,
@@ -101,9 +99,13 @@ impl AuditRepo for SqliteAudit {
             event.ctx.trace_id,
             details,
         )
-        .execute(&self.writer)
+        .execute(&mut *tx)
         .await
         .map_err(map_err)?;
+        if let Some(webhook) = &event.webhook {
+            enqueue_for_event(&mut tx, tenant, webhook, event.at).await?;
+        }
+        tx.commit().await.map_err(map_err)?;
         Ok(())
     }
 
@@ -158,12 +160,23 @@ impl AuditRepo for SqliteAudit {
         Ok(into_page(items, query.limit, |e| e.id.0))
     }
 
+    /// Also applies the audit retention to the webhook delivery log: delivered and failed
+    /// deliveries completed before `cutoff` are deleted (pending ones never are). The returned
+    /// count is the number of audit events deleted.
     async fn purge_before(&self, cutoff: OffsetDateTime) -> Result<u64, StorageError> {
         let cutoff = odt_to_ms(cutoff);
         let done = sqlx::query!("DELETE FROM audit_event WHERE at < ?1", cutoff)
             .execute(&self.writer)
             .await
             .map_err(map_err)?;
+        sqlx::query!(
+            "DELETE FROM webhook_delivery
+              WHERE status IN ('delivered', 'failed') AND completed_at < ?1",
+            cutoff,
+        )
+        .execute(&self.writer)
+        .await
+        .map_err(map_err)?;
         Ok(done.rows_affected())
     }
 }

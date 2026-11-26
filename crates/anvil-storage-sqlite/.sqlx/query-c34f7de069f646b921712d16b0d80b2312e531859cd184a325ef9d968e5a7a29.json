@@ -1,0 +1,158 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id AS \"id!: uuid::Uuid\", tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      name AS \"name!\", url AS \"url!\", events AS \"events!\",\n                      enabled AS \"enabled!: bool\", secret_enc AS \"secret_enc!\",\n                      previous_secret_enc AS \"previous_secret_enc?\",\n                      previous_secret_expires_at AS \"previous_secret_expires_at?\",\n                      disabled_reason AS \"disabled_reason?\", created_at AS \"created_at!\",\n                      updated_at AS \"updated_at!\"\n                 FROM webhook_endpoint WHERE tenant_id = ?1\n                ORDER BY name",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: uuid::Uuid",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "webhook_endpoint",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "tenant_id!: uuid::Uuid",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "webhook_endpoint",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "name": "name!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "webhook_endpoint",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "url!",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "webhook_endpoint",
+            "name": "url"
+          }
+        }
+      },
+      {
+        "name": "events!",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "webhook_endpoint",
+            "name": "events"
+          }
+        }
+      },
+      {
+        "name": "enabled!: bool",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "webhook_endpoint",
+            "name": "enabled"
+          }
+        }
+      },
+      {
+        "name": "secret_enc!",
+        "ordinal": 6,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "webhook_endpoint",
+            "name": "secret_enc"
+          }
+        }
+      },
+      {
+        "name": "previous_secret_enc?",
+        "ordinal": 7,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "webhook_endpoint",
+            "name": "previous_secret_enc"
+          }
+        }
+      },
+      {
+        "name": "previous_secret_expires_at?",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "webhook_endpoint",
+            "name": "previous_secret_expires_at"
+          }
+        }
+      },
+      {
+        "name": "disabled_reason?",
+        "ordinal": 9,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "webhook_endpoint",
+            "name": "disabled_reason"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 10,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "webhook_endpoint",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "updated_at!",
+        "ordinal": 11,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "webhook_endpoint",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "c34f7de069f646b921712d16b0d80b2312e531859cd184a325ef9d968e5a7a29"
+}

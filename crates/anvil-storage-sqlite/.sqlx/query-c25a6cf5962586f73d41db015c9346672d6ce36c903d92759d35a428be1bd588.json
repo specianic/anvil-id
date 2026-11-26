@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE webhook_delivery\n                  SET attempts = attempts + 1, status = ?2,\n                      next_attempt_at = COALESCE(?3, next_attempt_at),\n                      last_http_status = ?4, last_error = ?5, completed_at = ?6\n                WHERE id = ?1 AND status = 'pending'\n            RETURNING tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      endpoint_id AS \"endpoint_id!: uuid::Uuid\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "tenant_id!: uuid::Uuid",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "webhook_delivery",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "name": "endpoint_id!: uuid::Uuid",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "webhook_delivery",
+            "name": "endpoint_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "c25a6cf5962586f73d41db015c9346672d6ce36c903d92759d35a428be1bd588"
+}

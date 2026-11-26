@@ -1,0 +1,158 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO webhook_delivery\n                   (id, tenant_id, endpoint_id, event_type, payload_json, attempts,\n                    next_attempt_at, status, last_http_status, last_error, created_at,\n                    completed_at)\n               SELECT ?3, tenant_id, id, ?4, ?5, 0, ?6, 'pending', NULL, NULL, ?6, NULL\n                 FROM webhook_endpoint WHERE tenant_id = ?1 AND id = ?2\n            RETURNING id AS \"id!: uuid::Uuid\", tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      endpoint_id AS \"endpoint_id!: uuid::Uuid\", event_type AS \"event_type!\",\n                      payload_json AS \"payload_json!\", attempts AS \"attempts!\",\n                      next_attempt_at AS \"next_attempt_at!\", status AS \"status!\",\n                      last_http_status AS \"last_http_status?\", last_error AS \"last_error?\",\n                      created_at AS \"created_at!\", completed_at AS \"completed_at?\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: uuid::Uuid",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "webhook_delivery",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "tenant_id!: uuid::Uuid",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "webhook_delivery",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "name": "endpoint_id!: uuid::Uuid",
+        "ordinal": 2,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "webhook_delivery",
+            "name": "endpoint_id"
+          }
+        }
+      },
+      {
+        "name": "event_type!",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "webhook_delivery",
+            "name": "event_type"
+          }
+        }
+      },
+      {
+        "name": "payload_json!",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "webhook_delivery",
+            "name": "payload_json"
+          }
+        }
+      },
+      {
+        "name": "attempts!",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "webhook_delivery",
+            "name": "attempts"
+          }
+        }
+      },
+      {
+        "name": "next_attempt_at!",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "webhook_delivery",
+            "name": "next_attempt_at"
+          }
+        }
+      },
+      {
+        "name": "status!",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "webhook_delivery",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "name": "last_http_status?",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "webhook_delivery",
+            "name": "last_http_status"
+          }
+        }
+      },
+      {
+        "name": "last_error?",
+        "ordinal": 9,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "webhook_delivery",
+            "name": "last_error"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 10,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "webhook_delivery",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "completed_at?",
+        "ordinal": 11,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "webhook_delivery",
+            "name": "completed_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "1169983eaaae52829e7b1771c508240a6f514cf13f42860e977e2b15884398c8"
+}

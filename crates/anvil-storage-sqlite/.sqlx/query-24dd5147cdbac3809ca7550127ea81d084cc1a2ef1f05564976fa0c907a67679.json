@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "UPDATE client\n                  SET name = COALESCE(?3, name),\n                      redirect_uris = COALESCE(?4, redirect_uris),\n                      grant_types = COALESCE(?5, grant_types),\n                      scopes = COALESCE(?6, scopes),\n                      require_pkce = COALESCE(?7, require_pkce),\n                      jwks = CASE WHEN ?8 THEN ?9 ELSE jwks END,\n                      updated_at = ?10,\n                      token_format = COALESCE(?11, token_format),\n                      consent_mode = COALESCE(?12, consent_mode),\n                      id_token_signed_response_alg =\n                        CASE WHEN ?13 THEN ?14 ELSE id_token_signed_response_alg END,\n                      can_introspect = COALESCE(?15, can_introspect),\n                      post_logout_redirect_uris = COALESCE(?16, post_logout_redirect_uris),\n                      backchannel_logout_uri =\n                        CASE WHEN ?17 THEN ?18 ELSE backchannel_logout_uri END,\n                      backchannel_logout_session_required =\n                        COALESCE(?19, backchannel_logout_session_required),\n                      allowed_resources = COALESCE(?20, allowed_resources),\n                      mfa_policy = CASE WHEN ?21 THEN ?22 ELSE mfa_policy END\n                WHERE tenant_id = ?1 AND client_id = ?2\n            RETURNING id AS \"id!: uuid::Uuid\", tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      client_id AS \"client_id!\", name AS \"name!\", client_type AS \"client_type!\",\n                      application_type AS \"application_type!\", auth_method AS \"auth_method!\",\n                      secret_hash AS \"secret_hash?\", jwks AS \"jwks?\",\n                      redirect_uris AS \"redirect_uris!\", grant_types AS \"grant_types!\",\n                      scopes AS \"scopes!\", require_pkce AS \"require_pkce!: bool\",\n                      token_format AS \"token_format!\", consent_mode AS \"consent_mode!\",\n                      id_token_signed_response_alg AS \"id_token_signed_response_alg?\",\n                      can_introspect AS \"can_introspect!: bool\",\n                      created_at AS \"created_at!\", updated_at AS \"updated_at!\",\n                      post_logout_redirect_uris AS \"post_logout_redirect_uris!\",\n                      backchannel_logout_uri AS \"backchannel_logout_uri?\",\n                      backchannel_logout_session_required\n                        AS \"backchannel_logout_session_required!: bool\",\n                      allowed_resources AS \"allowed_resources!\",\n                      mfa_policy AS \"mfa_policy?\"",
+  "query": "INSERT INTO client\n                   (id, tenant_id, client_id, name, client_type, application_type, auth_method,\n                    secret_hash, jwks, redirect_uris, grant_types, scopes, require_pkce,\n                    created_at, updated_at, token_format, consent_mode,\n                    id_token_signed_response_alg, can_introspect, post_logout_redirect_uris,\n                    backchannel_logout_uri, backchannel_logout_session_required,\n                    allowed_resources, mfa_policy, registration_source, metadata_expires_at,\n                    registration_access_token_hash)\n               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14, ?15,\n                       ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, 'cimd', ?24, ?25)\n               ON CONFLICT (tenant_id, client_id) DO UPDATE\n                  SET name = excluded.name,\n                      client_type = excluded.client_type,\n                      application_type = excluded.application_type,\n                      auth_method = excluded.auth_method,\n                      secret_hash = excluded.secret_hash,\n                      jwks = excluded.jwks,\n                      redirect_uris = excluded.redirect_uris,\n                      grant_types = excluded.grant_types,\n                      scopes = excluded.scopes,\n                      require_pkce = excluded.require_pkce,\n                      updated_at = excluded.updated_at,\n                      token_format = excluded.token_format,\n                      consent_mode = excluded.consent_mode,\n                      id_token_signed_response_alg = excluded.id_token_signed_response_alg,\n                      can_introspect = excluded.can_introspect,\n                      post_logout_redirect_uris = excluded.post_logout_redirect_uris,\n                      backchannel_logout_uri = excluded.backchannel_logout_uri,\n                      backchannel_logout_session_required =\n                        excluded.backchannel_logout_session_required,\n                      allowed_resources = excluded.allowed_resources,\n                      mfa_policy = excluded.mfa_policy,\n                      metadata_expires_at = excluded.metadata_expires_at,\n                      registration_access_token_hash = excluded.registration_access_token_hash\n                WHERE client.registration_source = 'cimd'\n            RETURNING id AS \"id!: uuid::Uuid\", tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      client_id AS \"client_id!\", name AS \"name!\", client_type AS \"client_type!\",\n                      application_type AS \"application_type!\", auth_method AS \"auth_method!\",\n                      secret_hash AS \"secret_hash?\", jwks AS \"jwks?\",\n                      redirect_uris AS \"redirect_uris!\", grant_types AS \"grant_types!\",\n                      scopes AS \"scopes!\", require_pkce AS \"require_pkce!: bool\",\n                      token_format AS \"token_format!\", consent_mode AS \"consent_mode!\",\n                      id_token_signed_response_alg AS \"id_token_signed_response_alg?\",\n                      can_introspect AS \"can_introspect!: bool\",\n                      created_at AS \"created_at!\", updated_at AS \"updated_at!\",\n                      post_logout_redirect_uris AS \"post_logout_redirect_uris!\",\n                      backchannel_logout_uri AS \"backchannel_logout_uri?\",\n                      backchannel_logout_session_required\n                        AS \"backchannel_logout_session_required!: bool\",\n                      allowed_resources AS \"allowed_resources!\",\n                      mfa_policy AS \"mfa_policy?\",\n                      registration_source AS \"registration_source!\",\n                      metadata_expires_at AS \"metadata_expires_at?\",\n                      registration_access_token_hash AS \"registration_access_token_hash?\"",
   "describe": {
     "columns": [
       {
@@ -266,10 +266,43 @@
             "name": "mfa_policy"
           }
         }
+      },
+      {
+        "name": "registration_source!",
+        "ordinal": 24,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "registration_source"
+          }
+        }
+      },
+      {
+        "name": "metadata_expires_at?",
+        "ordinal": 25,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "metadata_expires_at"
+          }
+        }
+      },
+      {
+        "name": "registration_access_token_hash?",
+        "ordinal": 26,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "registration_access_token_hash"
+          }
+        }
       }
     ],
     "parameters": {
-      "Right": 22
+      "Right": 25
     },
     "nullable": [
       false,
@@ -279,15 +312,10 @@
       false,
       false,
       false,
-      true,
-      true,
-      false,
-      false,
-      false,
-      false,
-      false,
       false,
       true,
+      false,
+      false,
       false,
       false,
       false,
@@ -295,8 +323,16 @@
       true,
       false,
       false,
-      true
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      false,
+      true,
+      false
     ]
   },
-  "hash": "00b7699815da537baea60d00cdff4278b31f79652a3e9d1ae7799cca8138f61b"
+  "hash": "24dd5147cdbac3809ca7550127ea81d084cc1a2ef1f05564976fa0c907a67679"
 }

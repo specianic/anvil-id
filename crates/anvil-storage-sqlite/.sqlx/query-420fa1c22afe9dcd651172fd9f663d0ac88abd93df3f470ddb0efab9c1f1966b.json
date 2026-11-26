@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE webhook_endpoint\n                SET previous_secret_enc = secret_enc, previous_secret_expires_at = ?4,\n                    secret_enc = ?3, updated_at = ?5\n              WHERE tenant_id = ?1 AND id = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "420fa1c22afe9dcd651172fd9f663d0ac88abd93df3f470ddb0efab9c1f1966b"
+}

@@ -1,0 +1,158 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE webhook_delivery SET next_attempt_at = ?1\n                WHERE id IN (SELECT d.id FROM webhook_delivery d\n                               JOIN webhook_endpoint e\n                                 ON e.tenant_id = d.tenant_id AND e.id = d.endpoint_id\n                              WHERE d.status = 'pending' AND d.next_attempt_at <= ?2\n                                AND e.enabled\n                              ORDER BY d.next_attempt_at, d.created_at, d.id\n                              LIMIT ?3)\n            RETURNING id AS \"id!: uuid::Uuid\", tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      endpoint_id AS \"endpoint_id!: uuid::Uuid\", event_type AS \"event_type!\",\n                      payload_json AS \"payload_json!\", attempts AS \"attempts!\",\n                      next_attempt_at AS \"next_attempt_at!\", status AS \"status!\",\n                      last_http_status AS \"last_http_status?\", last_error AS \"last_error?\",\n                      created_at AS \"created_at!\", completed_at AS \"completed_at?\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: uuid::Uuid",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "webhook_delivery",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "tenant_id!: uuid::Uuid",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "webhook_delivery",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "name": "endpoint_id!: uuid::Uuid",
+        "ordinal": 2,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "webhook_delivery",
+            "name": "endpoint_id"
+          }
+        }
+      },
+      {
+        "name": "event_type!",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "webhook_delivery",
+            "name": "event_type"
+          }
+        }
+      },
+      {
+        "name": "payload_json!",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "webhook_delivery",
+            "name": "payload_json"
+          }
+        }
+      },
+      {
+        "name": "attempts!",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "webhook_delivery",
+            "name": "attempts"
+          }
+        }
+      },
+      {
+        "name": "next_attempt_at!",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "webhook_delivery",
+            "name": "next_attempt_at"
+          }
+        }
+      },
+      {
+        "name": "status!",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "webhook_delivery",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "name": "last_http_status?",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "webhook_delivery",
+            "name": "last_http_status"
+          }
+        }
+      },
+      {
+        "name": "last_error?",
+        "ordinal": 9,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "webhook_delivery",
+            "name": "last_error"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 10,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "webhook_delivery",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "completed_at?",
+        "ordinal": 11,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "webhook_delivery",
+            "name": "completed_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "3c71e4e816651830c1e6beb49104700030fa4393ed99d20e5b6e71da9847767a"
+}

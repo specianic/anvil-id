@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id AS \"id!: uuid::Uuid\", tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      client_id AS \"client_id!\", name AS \"name!\", client_type AS \"client_type!\",\n                      application_type AS \"application_type!\", auth_method AS \"auth_method!\",\n                      secret_hash AS \"secret_hash?\", jwks AS \"jwks?\",\n                      redirect_uris AS \"redirect_uris!\", grant_types AS \"grant_types!\",\n                      scopes AS \"scopes!\", require_pkce AS \"require_pkce!: bool\",\n                      token_format AS \"token_format!\", consent_mode AS \"consent_mode!\",\n                      id_token_signed_response_alg AS \"id_token_signed_response_alg?\",\n                      can_introspect AS \"can_introspect!: bool\",\n                      created_at AS \"created_at!\", updated_at AS \"updated_at!\",\n                      post_logout_redirect_uris AS \"post_logout_redirect_uris!\",\n                      backchannel_logout_uri AS \"backchannel_logout_uri?\",\n                      backchannel_logout_session_required\n                        AS \"backchannel_logout_session_required!: bool\",\n                      allowed_resources AS \"allowed_resources!\",\n                      mfa_policy AS \"mfa_policy?\"\n                 FROM client\n                WHERE tenant_id = ?1 AND (?2 IS NULL OR id > ?2)\n                ORDER BY id\n                LIMIT ?3",
+  "query": "SELECT id AS \"id!: uuid::Uuid\", tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      client_id AS \"client_id!\", name AS \"name!\", client_type AS \"client_type!\",\n                      application_type AS \"application_type!\", auth_method AS \"auth_method!\",\n                      secret_hash AS \"secret_hash?\", jwks AS \"jwks?\",\n                      redirect_uris AS \"redirect_uris!\", grant_types AS \"grant_types!\",\n                      scopes AS \"scopes!\", require_pkce AS \"require_pkce!: bool\",\n                      token_format AS \"token_format!\", consent_mode AS \"consent_mode!\",\n                      id_token_signed_response_alg AS \"id_token_signed_response_alg?\",\n                      can_introspect AS \"can_introspect!: bool\",\n                      created_at AS \"created_at!\", updated_at AS \"updated_at!\",\n                      post_logout_redirect_uris AS \"post_logout_redirect_uris!\",\n                      backchannel_logout_uri AS \"backchannel_logout_uri?\",\n                      backchannel_logout_session_required\n                        AS \"backchannel_logout_session_required!: bool\",\n                      allowed_resources AS \"allowed_resources!\",\n                      mfa_policy AS \"mfa_policy?\",\n                      registration_source AS \"registration_source!\",\n                      metadata_expires_at AS \"metadata_expires_at?\",\n                      registration_access_token_hash AS \"registration_access_token_hash?\"\n                 FROM client\n                WHERE tenant_id = ?1 AND client_id = ?2 AND registration_source = 'dynamic'\n                  AND registration_access_token_hash = ?3",
   "describe": {
     "columns": [
       {
@@ -266,6 +266,39 @@
             "name": "mfa_policy"
           }
         }
+      },
+      {
+        "name": "registration_source!",
+        "ordinal": 24,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "registration_source"
+          }
+        }
+      },
+      {
+        "name": "metadata_expires_at?",
+        "ordinal": 25,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "metadata_expires_at"
+          }
+        }
+      },
+      {
+        "name": "registration_access_token_hash?",
+        "ordinal": 26,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "registration_access_token_hash"
+          }
+        }
       }
     ],
     "parameters": {
@@ -295,8 +328,11 @@
       true,
       false,
       false,
+      true,
+      false,
+      true,
       true
     ]
   },
-  "hash": "89a548ae2f38acd8a76ea102bb05f48a0f4ae8222720746a6e8af5a638680aff"
+  "hash": "4c25cee385d43406dfa06ba196eb63faa7f81e5cd8320ebf7ef3a814600a163c"
 }

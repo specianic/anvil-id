@@ -1,0 +1,86 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT name AS \"name!\", schema AS \"schema!\", required AS \"required!: bool\",\n                      user_editable AS \"user_editable!: bool\", claim AS \"claim?\",\n                      position AS \"position!\"\n                 FROM attribute_definition WHERE tenant_id = ?1\n                ORDER BY position, name",
+  "describe": {
+    "columns": [
+      {
+        "name": "name!",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "attribute_definition",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "schema!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "attribute_definition",
+            "name": "schema"
+          }
+        }
+      },
+      {
+        "name": "required!: bool",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "attribute_definition",
+            "name": "required"
+          }
+        }
+      },
+      {
+        "name": "user_editable!: bool",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "attribute_definition",
+            "name": "user_editable"
+          }
+        }
+      },
+      {
+        "name": "claim?",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "attribute_definition",
+            "name": "claim"
+          }
+        }
+      },
+      {
+        "name": "position!",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "attribute_definition",
+            "name": "position"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "cf54fe6e0f9f2c5e7dcc369979b350d46970e730ae874a37d5e33f247d757aa8"
+}

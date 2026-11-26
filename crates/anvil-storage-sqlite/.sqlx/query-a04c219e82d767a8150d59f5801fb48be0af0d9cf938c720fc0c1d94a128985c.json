@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id AS \"id!: uuid::Uuid\", user_id AS \"user_id!: uuid::Uuid\",\n                  client_id AS \"client_id!\", scopes AS \"scopes!\", created_at AS \"created_at!\",\n                  updated_at AS \"updated_at!\", revoked_at AS \"revoked_at?\"\n             FROM consent_grant WHERE tenant_id = ?1 AND user_id = ?2 AND client_id = ?3",
+  "query": "SELECT id AS \"id!: uuid::Uuid\", user_id AS \"user_id!: uuid::Uuid\",\n                  client_id AS \"client_id!\", scopes AS \"scopes!\", created_at AS \"created_at!\",\n                  updated_at AS \"updated_at!\", revoked_at AS \"revoked_at?\",\n                  resources AS \"resources!\"\n             FROM consent_grant\n            WHERE tenant_id = ?1 AND user_id = ?2 AND revoked_at IS NULL\n            ORDER BY client_id",
   "describe": {
     "columns": [
       {
@@ -79,10 +79,21 @@
             "name": "revoked_at"
           }
         }
+      },
+      {
+        "name": "resources!",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "consent_grant",
+            "name": "resources"
+          }
+        }
       }
     ],
     "parameters": {
-      "Right": 3
+      "Right": 2
     },
     "nullable": [
       false,
@@ -91,8 +102,9 @@
       false,
       false,
       false,
-      true
+      true,
+      false
     ]
   },
-  "hash": "2feec56e926a2e34e5bbfa1a94814ade645a93ff00733d38de32925ae2de0668"
+  "hash": "a04c219e82d767a8150d59f5801fb48be0af0d9cf938c720fc0c1d94a128985c"
 }

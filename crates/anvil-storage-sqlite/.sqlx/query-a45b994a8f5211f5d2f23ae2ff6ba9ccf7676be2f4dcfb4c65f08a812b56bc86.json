@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT e.id AS \"id!: uuid::Uuid\" FROM webhook_endpoint e\n            WHERE e.tenant_id = ?1 AND e.enabled\n              AND EXISTS (SELECT 1 FROM json_each(e.events) j WHERE j.value = ?2)\n            ORDER BY e.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: uuid::Uuid",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "webhook_endpoint",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a45b994a8f5211f5d2f23ae2ff6ba9ccf7676be2f4dcfb4c65f08a812b56bc86"
+}

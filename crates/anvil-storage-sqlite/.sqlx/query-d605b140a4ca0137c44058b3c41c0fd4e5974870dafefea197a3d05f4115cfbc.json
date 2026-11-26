@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM attribute_definition WHERE tenant_id = ?1 AND name = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "d605b140a4ca0137c44058b3c41c0fd4e5974870dafefea197a3d05f4115cfbc"
+}
