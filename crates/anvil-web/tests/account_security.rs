@@ -15,8 +15,8 @@ use std::time::Duration;
 use anvil_core::error::CoreError;
 use anvil_core::model::{
     ActorKind, AuditAction, AuditQuery, BrowserSession, CounterOutcome, CredentialKind, FlowId,
-    NewPasskey, RecoveryCodeHash, RequestContext, SecretHash, TOTP_SEED_PURPOSE, Tenant, UserId,
-    credential_aad,
+    MfaPolicy, NewPasskey, RecoveryCodeHash, RequestContext, SecretHash, TOTP_SEED_PURPOSE, Tenant,
+    TenantSettings, UserId, credential_aad,
 };
 use anvil_core::ports::{
     Challenge, Clock as _, PasskeyCeremonies, PasskeyError, PasskeyUser, RegisteredPasskey,
@@ -448,8 +448,25 @@ async fn a_stale_session_must_sign_in_again_and_changes_nothing() {
     );
     assert!(audit_actions(&app).await.is_empty());
 
-    // Signing in again restores access.
-    login(&app, "", EMAIL, PASSWORD).await;
+    // Signing in again restores access. The stored passkey counts as a second factor, and this
+    // fake one has no authenticator to answer it, so the tenant's MFA policy is turned off for
+    // the password-only sign-in (the second-factor passkey is tested in `flow_mfa_policy.rs`).
+    let tenant = default_tenant(&app);
+    set_settings(
+        &app,
+        tenant.id,
+        TenantSettings {
+            mfa_policy: MfaPolicy::Off,
+            ..tenant.settings.clone()
+        },
+    )
+    .await;
+    let resp = login(&app, "", EMAIL, PASSWORD).await;
+    assert_eq!(
+        message_keys(&resp.html()),
+        vec!["login.signed_in".to_owned()],
+        "signed in again"
+    );
     let html = open_page(&app).await;
     assert!(!html.contains("id=\"account-reauth\""));
     let resp = post(

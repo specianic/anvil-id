@@ -165,6 +165,13 @@ second_factor-use_recovery_code = Use a recovery code instead
 second_factor-recovery_code_hint = Enter one of the recovery codes you saved when you set up the authenticator app. Each code works only once.
 second_factor-submit = Verify
 second_factor-start_over = Start over
+second_factor-passkey_heading = Use a passkey
+second_factor-passkey_help = Confirm it's you with the passkey on this device or your security key.
+second_factor-passkey_button = Verify with a passkey
+second_factor-passkey_nojs = Using a passkey needs JavaScript and a browser that supports passkeys.
+second_factor-passkey_failed = That passkey could not be used for this account. Try again with your own passkey.
+second_factor-webauthn-cancelled = The passkey request was cancelled or timed out. Please try again.
+second_factor-webauthn-failed = Your passkey could not be used. Please try again.
 
 ## Registration, verification, recovery
 

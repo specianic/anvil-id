@@ -20,6 +20,8 @@
 //! | `GET/POST /ui/login/second-factor?flow=` | TOTP or recovery code, or the enrolment code ([`super::mfa`]) |
 //! | `POST /ui/login/enroll/passkey/start?flow=` | enrolment step: WebAuthn creation options (JSON, for webauthn.js) |
 //! | `POST /ui/login/enroll/passkey/finish?flow=` | enrolment step: the registration response (`response`) |
+//! | `POST /ui/login/second-factor/passkey/start?flow=` | second-factor step: WebAuthn request options (JSON, for webauthn.js) |
+//! | `POST /ui/login/second-factor/passkey/finish?flow=` | second-factor step: the assertion of one of the step user's passkeys (`response`) |
 //! | `/ui/login/email-code[/verify]`, `/ui/login/email-link` | email code and magic link ([`super::email_code`]) |
 //!
 //! When the tenant enables email sign-in (`email_otp` or `magic_link`) the sign-in form is followed
@@ -37,8 +39,10 @@
 //! webauthn.js runs; the registration state lives in the flow and is used once) or the
 //! authenticator-app QR code and key (works without JavaScript). After the confirming code it
 //! shows the new recovery codes once, then continues the request; a stored passkey signs in
-//! directly (`amr [hwk|swk, user, mfa]`). Both passkey routes are bound to the flow (cookie +
-//! `csrf_token`) like every flow form.
+//! directly (`amr [hwk|swk, user, mfa]`). A user with a passkey sees a passkey option on the
+//! second-factor page (`passkey_second_factor` template variable); an assertion of one of that
+//! user's own passkeys signs in the same way (or upgrades the step-up session). The passkey
+//! routes are bound to the flow (cookie + `csrf_token`) like every flow form.
 //!
 //! Brute-force protection goes through the one limiter ([`guard_attempt`] / [`record_attempt`]):
 //! a password POST is keyed by (identifier, client IP) and by identifier, a passkey assertion by
@@ -63,7 +67,8 @@ use anvil_core::flow::email_code::{EMAIL_CODE_FORM_ID, LINK_INVALID, OTHER_BROWS
 use anvil_core::flow::engine::{FlowEnv, FlowInput, FlowState};
 use anvil_core::flow::form::{FormDescription, FormMessage, MessageLevel};
 use anvil_core::flow::login::{
-    ENROLL_FORM_ID, PASSKEY_ENROLMENT_FAILED, SECOND_FACTOR_FORM_ID, UPSTREAM_LINK_FORM_ID,
+    ENROLL_FORM_ID, PASSKEY_ENROLMENT_FAILED, SECOND_FACTOR_FORM_ID, SECOND_FACTOR_PASSKEY_FAILED,
+    SECOND_FACTOR_PASSKEY_FIELD, UPSTREAM_LINK_FORM_ID,
 };
 use anvil_core::model::{
     ActorKind, AuditAction, AuditActor, AuditDetails, AuditOutcome, AuthRequestId, BrowserSession,
@@ -143,6 +148,14 @@ pub(super) fn routes() -> Router<AppState> {
         .route(
             "/ui/login/enroll/passkey/finish",
             post(passkey_enrolment_finish),
+        )
+        .route(
+            "/ui/login/second-factor/passkey/start",
+            post(passkey_second_factor_start),
+        )
+        .route(
+            "/ui/login/second-factor/passkey/finish",
+            post(passkey_second_factor_finish),
         )
 }
 
@@ -723,8 +736,27 @@ async fn passkey_submit(
 }
 
 // ---------------------------------------------------------------------------------------------
-// Passkey enrolment (MFA policy `required`, enrolment step)
+// In-flow passkeys: enrolment (MFA policy `required`) and the second-factor step
 // ---------------------------------------------------------------------------------------------
+
+/// Which in-flow passkey ceremony a route runs.
+#[derive(Clone, Copy)]
+enum FlowPasskey {
+    /// Registration at the enrolment step (MFA policy `required`, no second factor yet).
+    Enrolment,
+    /// Assertion of one of the step user's passkeys at the second-factor step.
+    SecondFactor,
+}
+
+impl FlowPasskey {
+    /// The message key of a refused ceremony (also the JSON error of a refused options request).
+    fn failed_key(self) -> &'static str {
+        match self {
+            Self::Enrolment => PASSKEY_ENROLMENT_FAILED,
+            Self::SecondFactor => SECOND_FACTOR_PASSKEY_FAILED,
+        }
+    }
+}
 
 /// `POST /ui/login/enroll/passkey/start?flow=`: creation options for webauthn.js (JSON) for the
 /// user of the flow's enrolment step. Bound to the flow (cookie + `csrf_token` field). Errors
@@ -736,6 +768,32 @@ async fn passkey_enrolment_start(
     jar: CookieJar,
     Query(q): Query<UiQuery>,
     form: Result<Form<UiForm>, FormRejection>,
+) -> Response {
+    flow_passkey_options(&state, &tenant, &jar, &q, form, FlowPasskey::Enrolment).await
+}
+
+/// `POST /ui/login/second-factor/passkey/start?flow=`: discoverable request options for
+/// webauthn.js (JSON) at the second-factor step of a user with a passkey. Bound to the flow
+/// (cookie + `csrf_token` field). Errors are JSON `{"error": key}`: 403 `csrf`, 400
+/// `second_factor.passkey_failed` (expired flow, not in a second-factor step that offers a
+/// passkey), 500.
+async fn passkey_second_factor_start(
+    State(state): State<AppState>,
+    tenant: ResolvedTenant,
+    jar: CookieJar,
+    Query(q): Query<UiQuery>,
+    form: Result<Form<UiForm>, FormRejection>,
+) -> Response {
+    flow_passkey_options(&state, &tenant, &jar, &q, form, FlowPasskey::SecondFactor).await
+}
+
+async fn flow_passkey_options(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    jar: &CookieJar,
+    q: &UiQuery,
+    form: Result<Form<UiForm>, FormRejection>,
+    which: FlowPasskey,
 ) -> Response {
     let json_error = |status: StatusCode, key: &str| {
         no_store((status, axum::Json(serde_json::json!({ "error": key }))).into_response())
@@ -750,8 +808,8 @@ async fn passkey_enrolment_start(
     let cookie = jar
         .get(&state.cookies().flow_name(&tenant.tenant))
         .map(|c| c.value().to_owned());
-    let base = ui_base(&tenant);
-    let rp = tenant_relying_party(&tenant);
+    let base = ui_base(tenant);
+    let rp = tenant_relying_party(tenant);
     // Creating a challenge records nothing, so no request context.
     let ctx = RequestContext::default();
     let cx = FlowContext {
@@ -761,11 +819,20 @@ async fn passkey_enrolment_start(
         rp: &rp,
         ctx: &ctx,
     };
-    match state
-        .ui_flow_service()
-        .passkey_enrolment_options(&cx, flow_id, cookie.as_deref(), csrf)
-        .await
-    {
+    let service = state.ui_flow_service();
+    let result = match which {
+        FlowPasskey::Enrolment => {
+            service
+                .passkey_enrolment_options(&cx, flow_id, cookie.as_deref(), csrf)
+                .await
+        }
+        FlowPasskey::SecondFactor => {
+            service
+                .passkey_second_factor_options(&cx, flow_id, cookie.as_deref(), csrf)
+                .await
+        }
+    };
+    match result {
         Ok(options) => no_store(
             (
                 StatusCode::OK,
@@ -776,10 +843,10 @@ async fn passkey_enrolment_start(
         ),
         Err(CoreError::Forbidden) => json_error(StatusCode::FORBIDDEN, "csrf"),
         Err(CoreError::InvalidRequest(_)) => {
-            json_error(StatusCode::BAD_REQUEST, PASSKEY_ENROLMENT_FAILED)
+            json_error(StatusCode::BAD_REQUEST, which.failed_key())
         }
         Err(e) => {
-            tracing::error!(error = %e, "creating passkey creation options failed");
+            tracing::error!(error = %e, "creating in-flow passkey options failed");
             json_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error")
         }
     }
@@ -799,50 +866,114 @@ async fn passkey_enrolment_finish(
     Query(q): Query<UiQuery>,
     form: Result<Form<UiForm>, FormRejection>,
 ) -> Response {
+    flow_passkey_finish(
+        &state,
+        &tenant,
+        &loc,
+        &ctx,
+        &jar,
+        &q,
+        form,
+        FlowPasskey::Enrolment,
+    )
+    .await
+}
+
+/// `POST /ui/login/second-factor/passkey/finish?flow=`: the assertion from webauthn.js
+/// (`response`) at the second-factor step. Success signs in (or upgrades the step-up session)
+/// like a passkey sign-in; every failure is the second-factor page with
+/// `second_factor.passkey_failed` (400), with no session. The posted `factor_token` is handed
+/// back to that page unchanged (the TOTP route checks it).
+async fn passkey_second_factor_finish(
+    State(state): State<AppState>,
+    tenant: ResolvedTenant,
+    RequestLocale(loc, _): RequestLocale,
+    AuditContext(ctx): AuditContext,
+    jar: CookieJar,
+    Query(q): Query<UiQuery>,
+    form: Result<Form<UiForm>, FormRejection>,
+) -> Response {
+    flow_passkey_finish(
+        &state,
+        &tenant,
+        &loc,
+        &ctx,
+        &jar,
+        &q,
+        form,
+        FlowPasskey::SecondFactor,
+    )
+    .await
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the two finish routes share one body; the extractors travel with it"
+)]
+async fn flow_passkey_finish(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    loc: &Locale,
+    ctx: &RequestContext,
+    jar: &CookieJar,
+    q: &UiQuery,
+    form: Result<Form<UiForm>, FormRejection>,
+    which: FlowPasskey,
+) -> Response {
     let form = match form {
         Ok(Form(form)) => form,
-        Err(e) => return rejected_form(&state, Some(&tenant), &loc, &e),
+        Err(e) => return rejected_form(state, Some(tenant), loc, &e),
     };
     let (Some(flow_id), Some(csrf)) = (q.flow_id(), form.csrf_token.as_deref()) else {
-        return csrf_page(&state, Some(&tenant), &loc);
+        return csrf_page(state, Some(tenant), loc);
     };
     let cookie = jar
         .get(&state.cookies().flow_name(&tenant.tenant))
         .map(|c| c.value().to_owned());
-    let session = match current_session(&state, &tenant, &jar).await {
+    let session = match current_session(state, tenant, jar).await {
         Ok(s) => s,
-        Err(e) => return core_error_page_in(&state, Some(&tenant), &loc, &e),
+        Err(e) => return core_error_page_in(state, Some(tenant), loc, &e),
     };
-    let base = ui_base(&tenant);
-    let rp = tenant_relying_party(&tenant);
+    let base = ui_base(tenant);
+    let rp = tenant_relying_party(tenant);
     let cx = FlowContext {
         tenant: &tenant.tenant,
         issuer: &tenant.issuer,
         ui_base: &base,
         rp: &rp,
-        ctx: &ctx,
+        ctx,
     };
-    let result = match state
-        .ui_flow_service()
-        .passkey_enrolment_finish(
-            &cx,
-            flow_id,
-            cookie.as_deref(),
-            csrf,
-            form.response.as_deref().unwrap_or_default(),
-            session,
-        )
-        .await
-    {
+    let response = form.response.as_deref().unwrap_or_default();
+    let service = state.ui_flow_service();
+    let result = match which {
+        FlowPasskey::Enrolment => {
+            service
+                .passkey_enrolment_finish(&cx, flow_id, cookie.as_deref(), csrf, response, session)
+                .await
+        }
+        FlowPasskey::SecondFactor => {
+            service
+                .passkey_second_factor_finish(
+                    &cx,
+                    flow_id,
+                    cookie.as_deref(),
+                    csrf,
+                    response,
+                    session,
+                )
+                .await
+        }
+    };
+    let result = match result {
         Ok(r) => r,
-        Err(CoreError::Forbidden) => return csrf_page(&state, Some(&tenant), &loc),
-        Err(e) => return core_error_page_in(&state, Some(&tenant), &loc, &e),
+        Err(CoreError::Forbidden) => return csrf_page(state, Some(tenant), loc),
+        Err(e) => return core_error_page_in(state, Some(tenant), loc, &e),
     };
     let extras = Extras {
         factor_token: form.factor_token.clone().filter(|t| !t.is_empty()),
         ..Extras::default()
     };
-    outcome_response_with(&state, &tenant, &loc, result.outcome, &extras)
+    outcome_response_with(state, tenant, loc, result.outcome, &extras)
 }
 
 fn no_store(mut resp: Response) -> Response {
@@ -1131,7 +1262,7 @@ pub(super) struct Extras<'a> {
 }
 
 /// URLs of a passkey form (webauthn.js `data-options-url` and form action): the sign-in form,
-/// or the enrolment page's registration form.
+/// the enrolment page's registration form, or the second-factor page's assertion form.
 #[derive(Serialize)]
 struct PasskeyView {
     options_url: String,
@@ -1186,6 +1317,7 @@ pub(super) fn render_tenant_form_with(
     state.renderer().localize_form(loc, &mut form);
     let mut passkey = None;
     let mut passkey_enroll = None;
+    let mut passkey_second_factor = None;
     let mut captcha = None;
     let mut factor_token = None;
     let mut qr_svg = None;
@@ -1212,6 +1344,20 @@ pub(super) fn render_tenant_form_with(
         (SECOND_FACTOR_FORM_ID, Some(flow)) => {
             form.action = format!("{base}/login/second-factor?flow={flow}");
             factor_token = extras.factor_token.clone();
+            if form
+                .fields
+                .iter()
+                .any(|f| f.name == SECOND_FACTOR_PASSKEY_FIELD)
+                && tenant_relying_party(tenant).is_ok()
+            {
+                passkey_second_factor = Some(PasskeyView {
+                    options_url: format!("{base}/login/second-factor/passkey/start?flow={flow}"),
+                    action: carry_ui_locales(
+                        &format!("{base}/login/second-factor/passkey/finish?flow={flow}"),
+                        loc,
+                    ),
+                });
+            }
         }
         (ENROLL_FORM_ID, Some(flow)) => {
             form.action = format!("{base}/login/second-factor?flow={flow}");
@@ -1254,6 +1400,7 @@ pub(super) fn render_tenant_form_with(
         form => Value::from(Serde(&form)),
         passkey => Value::from(Serde(&passkey)),
         passkey_enroll => Value::from(Serde(&passkey_enroll)),
+        passkey_second_factor => Value::from(Serde(&passkey_second_factor)),
         captcha => Value::from(Serde(captcha.map(|c| CaptchaView {
             provider: c.provider.as_str(),
             site_key: c.site_key.clone(),
@@ -1270,9 +1417,11 @@ pub(super) fn render_tenant_form_with(
     let csp = match (captcha, &passkey) {
         (Some(c), _) => HeaderValue::from_str(&captcha_csp(c.provider).header_value()).ok(),
         (None, Some(_)) => Some(HeaderValue::from_static(LOGIN_CSP)),
-        // The enrolment page (inline QR code, webauthn.js for the passkey choice) needs no more
-        // than the account pages' policy.
-        (None, None) if form.id == ENROLL_FORM_ID => Some(HeaderValue::from_static(LOGIN_CSP)),
+        // The enrolment page (inline QR code, webauthn.js for the passkey choice) and the
+        // second-factor page with a passkey option need no more than the account pages' policy.
+        (None, None) if form.id == ENROLL_FORM_ID || passkey_second_factor.is_some() => {
+            Some(HeaderValue::from_static(LOGIN_CSP))
+        }
         (None, None) => None,
     };
     if let Some(csp) = csp {

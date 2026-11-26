@@ -1,18 +1,42 @@
 {% extends "base.html" %}
 {% import "form.html" as forms %}
-{#- Second-factor page (AUTH-05), shown after a correct password when the user has an
-    authenticator app. Variables besides `page` and `form` (form id `second-factor`, fields `code`
-    and, when unused recovery codes remain, `recovery_code`): `factor_token` (hidden binding token,
-    or none). Selectors: form `second-factor`, inputs `code` and `recovery_code` (inside the
+{#- Second-factor page (AUTH-05, AUTH-08), shown after a correct primary sign-in (or for a
+    step-up) when the user has a second factor: an authenticator app, a passkey, or both.
+    Variables besides `page` and `form` (form id `second-factor`; fields `code` when the user has
+    an authenticator app, `recovery_code` when unused recovery codes remain, and the hidden marker
+    `passkey` when the user has a passkey, which is never rendered or submitted):
+    - `factor_token` (hidden binding token, or none);
+    - `passkey_second_factor` = {options_url, action}, or none (no passkey, or the issuer cannot be
+      a WebAuthn relying party): a webauthn.js assertion form; its button is hidden until the
+      script finds WebAuthn support, and a noscript note explains that it needs JavaScript. A
+      refused passkey comes back as the form message `second_factor.passkey_failed`, shown in
+      the passkey section.
+    The authenticator-app form is rendered only when it has fields (a passkey-only user has
+    none); a user without a passkey sees the page exactly as before. The authenticator-app form
+    comes first, the passkey section after it.
+    Selectors: form `second-factor`, inputs `code` and `recovery_code` (inside the
     `recovery-code-toggle` disclosure), button `second-factor-submit`, messages
-    `second-factor-msg-N`, link `link-login`. Works without JavaScript. -#}
+    `second-factor-msg-N`; section `second-factor-passkey` with form `second-factor-passkey-form`,
+    button `second-factor-passkey-submit`, status `second-factor-passkey-status`, messages
+    `second-factor-passkey-msg-N`, noscript note `second-factor-passkey-nojs`; link `link-login`.
+    The authenticator-app path works without JavaScript. -#}
 {% block heading %}{{ t("title.second_factor") }}{% endblock %}
 {% block content %}
-{% set has_error = "error" in form.messages|map(attribute="level")|list %}
+{% set field_names = form.fields|map(attribute="name")|list %}
+{% set has_totp = "code" in field_names or "recovery_code" in field_names %}
+{% set passkey_failed = "second_factor.passkey_failed" in form.messages|map(attribute="key")|list %}
+{% set totp_messages = has_totp and not (passkey_failed and passkey_second_factor) %}
+{% set has_error = totp_messages and "error" in form.messages|map(attribute="level")|list %}
+{% if form.messages and not has_totp and not passkey_second_factor %}
+<div class="anvil-form-messages">
+{{ forms.messages(form.messages, form.id) }}
+</div>
+{% endif %}
+{% if has_totp %}
 <form id="{{ form.id }}" method="post" action="{{ form.action }}" novalidate>
 <input type="hidden" name="csrf_token" value="{{ form.csrf_token }}">
 {% if factor_token %}<input type="hidden" id="factor_token" name="factor_token" value="{{ factor_token }}">{% endif %}
-{% if form.messages %}
+{% if form.messages and totp_messages %}
 <div class="anvil-form-messages">
 {{ forms.messages(form.messages, form.id) }}
 </div>
@@ -37,6 +61,27 @@
 {% endfor %}
 <button type="submit" id="{{ form.id }}-submit">{{ t("second_factor.submit") }}</button>
 </form>
+{% endif %}
+{% if passkey_second_factor %}
+<section id="second-factor-passkey" aria-labelledby="second-factor-passkey-heading">
+<h2 id="second-factor-passkey-heading">{{ t("second_factor.passkey_heading") }}</h2>
+<p id="second-factor-passkey-help">{{ t("second_factor.passkey_help") }}</p>
+<form id="second-factor-passkey-form" method="post" action="{{ passkey_second_factor.action }}" data-webauthn="authenticate" data-options-url="{{ passkey_second_factor.options_url }}" data-webauthn-msg-cancelled="{{ t("second_factor.webauthn.cancelled") }}" data-webauthn-msg-failed="{{ t("second_factor.webauthn.failed") }}" novalidate>
+<input type="hidden" name="csrf_token" value="{{ form.csrf_token }}">
+{% if factor_token %}<input type="hidden" name="factor_token" value="{{ factor_token }}">{% endif %}
+<input type="hidden" name="response" value="">
+{% if form.messages and not totp_messages %}
+<div class="anvil-form-messages">
+{{ forms.messages(form.messages, "second-factor-passkey") }}
+</div>
+{% endif %}
+<button type="button" id="second-factor-passkey-submit" data-webauthn-trigger hidden>{{ t("second_factor.passkey_button") }}</button>
+<p id="second-factor-passkey-status" class="anvil-muted" data-webauthn-status aria-live="polite"></p>
+<noscript><p class="anvil-muted" id="second-factor-passkey-nojs">{{ t("second_factor.passkey_nojs") }}</p></noscript>
+</form>
+</section>
+<script src="{{ page.asset_base }}/webauthn.js" defer></script>
+{% endif %}
 {% if page.links.login %}
 <nav class="anvil-links" aria-label="{{ t("nav.other_options") }}">
 <a id="link-login" href="{{ page.links.login }}">{{ t("second_factor.start_over") }}</a>

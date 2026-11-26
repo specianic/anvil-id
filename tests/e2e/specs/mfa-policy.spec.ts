@@ -11,7 +11,8 @@
 // - Tenant policy `required`, passkey choice: a fresh user picks "Add a passkey" on the enrolment
 //   page, the CDP virtual authenticator (fixtures/webauthn.ts) registers it, and the RP's ID token
 //   has acr mfa and mfa in amr; the next sign-in uses that passkey (usernameless, from the sign-in
-//   page), which satisfies `required` on its own.
+//   page), which satisfies `required` on its own; a password sign-in after that gets the passkey
+//   as its second factor (second-factor page, not enrolment), again acr mfa.
 //
 // The tenant policy is shared by every spec of the run (one worker, one instance), so each test
 // sets it through withTenantSettings, which restores the previous value even on failure. ID token
@@ -235,7 +236,7 @@ test('a client override to required applies only to that client', async ({ page 
   });
 });
 
-test('policy required: a passkey chosen at enrolment signs in with mfa, then signs in again', async ({
+test('policy required: a passkey chosen at enrolment signs in with mfa, then signs in again, also as the second factor', async ({
   page,
 }) => {
   test.setTimeout(90_000);
@@ -278,6 +279,24 @@ test('policy required: a passkey chosen at enrolment signs in with mfa, then sig
       expect(again.sub).toBe(user.id);
       expect(again.acr).toBe(ACR_MFA);
       expect(again.amr).toEqual(expect.arrayContaining(['mfa']));
+
+      // A password sign-in: the passkey is the second factor (not the enrolment page again).
+      await page.context().clearCookies();
+      const second = await signInForIdToken(page, codeClient, async (p) => {
+        await login(p, user.email, user.password);
+        await expect(p.locator('#second-factor-passkey')).toBeVisible();
+        await expect(p.locator('#mfa-enroll')).toHaveCount(0);
+        await expect(p.locator('#code')).toHaveCount(0);
+        await expectNoA11yViolations(p);
+        const button = p.locator('#second-factor-passkey-submit');
+        await expect(button).toBeVisible();
+        await button.click();
+      });
+      expect(second.sub).toBe(user.id);
+      expect(second.acr).toBe(ACR_MFA);
+      const secondAmr = second.amr as string[];
+      expect(secondAmr).toEqual(expect.arrayContaining(['user', 'mfa']));
+      expect(secondAmr.some((m) => m === 'hwk' || m === 'swk')).toBe(true);
     });
   } finally {
     await removeVirtualAuthenticator(authenticator);

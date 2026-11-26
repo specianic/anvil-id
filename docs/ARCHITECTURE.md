@@ -568,7 +568,8 @@ Login flow:
   second factor (TOTP or recovery code, required when the user has TOTP enrolled). Passkey sign-in
   satisfies MFA and skips the second factor. The second-factor page is rendered as the answer to the
   password POST, and a KEK-sealed `factor_token` names the user for the per-user throttle (the flow
-  state still decides).
+  state still decides). Since 0.4 a passkey is also a second factor: a user with a passkey gets a
+  passkey option at the second-factor step (§9.1).
 - **Consent is its own small state machine** (`FlowKind::Consent`, `flow/consent.rs`), not a step of
   the login engine as the diagram suggests. It reuses the flow binding (cookie + CSRF) and lifetime.
   Allow stores the grant and continues the authorization in-process; Deny answers `access_denied`
@@ -603,12 +604,19 @@ Login flow:
   (`settings.mfa_policy`) and per client (`client.mfa_policy`, unset = no opinion). The effective
   policy is the **strictest** of the two (`required` > `optional` > `off`); organizations join the
   same rule in Phase 6. The decision is a pure function in core (`policy::mfa`).
-- `off` never asks for a second factor. `optional` asks users who have one (TOTP; a passkey sign-in
-  already counts as MFA). `required` asks, and a user without a second factor enrols an
-  authenticator app during sign-in and gets recovery codes once. Known limitation of 0.3: passkey
-  registration is not offered as an in-flow enrolment choice (TOTP only; the per-tenant and
-  per-client MFA policy does not require it, and passkeys can be added from the account page). It
-  is planned for Phase 5.
+- `off` never asks for a second factor. `optional` asks users who have one (TOTP or, since 0.4, a
+  passkey; a passkey sign-in already counts as MFA). `required` asks, and a user without a second
+  factor enrols one during sign-in: an authenticator app (recovery codes shown once) or, since 0.4,
+  a passkey.
+- **Passkey as the second factor (0.4):** whether a user has a second factor is answered in one
+  place (`service::authorize::second_factor_methods`: TOTP or at least one passkey; recovery codes
+  only back up TOTP), used by the login engine, the step-up path and the authorization decision.
+  The second-factor step accepts a TOTP code, a recovery code or a passkey assertion. The passkey
+  challenge is issued at that step and stored in its own field of the flow state (a challenge of
+  the sign-in page is never accepted there), taken out with a compare-and-swap before verification
+  (single use), and the assertion must come from one of the step user's own passkeys (user handle
+  and credential id checked before the signature). Success signs in like a passkey sign-in
+  (`["hwk"|"swk","user","mfa"]`, MFA `acr`) or upgrades the step-up session in place.
 - An existing single-factor session is re-checked only when the request asks for an `acr` or the
   effective policy is `required`. `acr_values=urn:anvilid:acr:mfa` (or an essential `acr` claim)
   steps the session up in place: same session id and cookie, `amr` gains `otp` and `mfa`,

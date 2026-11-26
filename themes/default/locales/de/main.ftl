@@ -156,6 +156,13 @@ second_factor-use_recovery_code = Stattdessen einen Wiederherstellungscode verwe
 second_factor-recovery_code_hint = Geben Sie einen der Wiederherstellungscodes ein, die Sie beim Einrichten der Authenticator-App gespeichert haben. Jeder Code funktioniert nur einmal.
 second_factor-submit = Bestätigen
 second_factor-start_over = Von vorn beginnen
+second_factor-passkey_heading = Mit Passkey bestätigen
+second_factor-passkey_help = Bestätigen Sie mit dem Passkey auf diesem Gerät oder Ihrem Sicherheitsschlüssel, dass Sie es sind.
+second_factor-passkey_button = Mit Passkey bestätigen
+second_factor-passkey_nojs = Für Passkeys werden JavaScript und ein Browser mit Passkey-Unterstützung benötigt.
+second_factor-passkey_failed = Dieser Passkey kann für dieses Konto nicht verwendet werden. Bitte versuchen Sie es mit Ihrem eigenen Passkey erneut.
+second_factor-webauthn-cancelled = Die Passkey-Anfrage wurde abgebrochen oder ist abgelaufen. Bitte versuchen Sie es erneut.
+second_factor-webauthn-failed = Ihr Passkey konnte nicht verwendet werden. Bitte versuchen Sie es erneut.
 
 ## Registration, verification, recovery
 

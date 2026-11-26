@@ -91,7 +91,7 @@ Other pages receive extra keys:
 | `error.html` | `status`, `error_key`, `heading`, `detail` (or null) |
 | `setup_done.html` | `admin_email`, `mgmt_client_id`, `mgmt_client_secret`, `token_endpoint`, `admin_api_base` |
 | `login.html` | `passkey` (or null): `{ action, options_url }` for the passkey form; `captcha` (or null): `{ provider: "turnstile" \| "hcaptcha", site_key }`, rendered through `captcha.html`; since 0.3 `upstream` (list of `{ slug, name, action }`, one sign-in button per enabled connection) and `email_code` (`{ action, value }` or null, the "Email me a sign-in code" form; `value` is the address prefilled from `login_hint`) |
-| `second_factor.html` | `factor_token` (sealed value naming the user for throttling; posted back as a hidden field), `has_error` |
+| `second_factor.html` | `factor_token` (sealed value naming the user for throttling; posted back as a hidden field), `has_error`; since 0.4 `passkey_second_factor` (or null): `{ action, options_url }` for the passkey assertion form, set when the user has a passkey (the form then carries the hidden marker field `passkey`, never rendered; a passkey-only user's form has no `code`/`recovery_code` field and the authenticator-app form is not rendered) |
 | `captcha.html` (partial) | `captcha` as above |
 | `consent.html` | `action`, `csrf_token`, `client_name`, `client_id`, `scopes` (`[{ name, description (or null) }]`), `resources` (0.3: requested RFC 8707 resources, list of strings, may be empty), `messages` |
 | `form_post.html` | `action` (the redirect URI), `fields` (name/value pairs: `code` or `error`, `state`, `iss`, …) |
@@ -202,6 +202,13 @@ Release 0.2 pages:
   `login-passkey-status` (`data-webauthn-status`, `aria-live`).
 - Second factor: form `second-factor`, inputs `code` and `recovery_code` (the latter inside the
   `<details>` toggled by `recovery-code-toggle`), hidden `factor_token`, submit `second-factor-submit`.
+  Since 0.4, when the user has a passkey: section `second-factor-passkey` with form
+  `second-factor-passkey-form` (`data-webauthn="authenticate"`, posts `response` to
+  `/ui/login/second-factor/passkey/finish?flow=`), button `second-factor-passkey-submit`
+  (`data-webauthn-trigger`, hidden until `webauthn.js` runs), status `second-factor-passkey-status`,
+  messages `second-factor-passkey-msg-N` (a refusal is `second_factor.passkey_failed`), noscript
+  note `second-factor-passkey-nojs`. Keys: `second_factor.{passkey_heading, passkey_help,
+  passkey_button, passkey_nojs, passkey_failed}`, `second_factor.webauthn.{cancelled, failed}`.
 - CAPTCHA: `captcha-widget`, `captcha-noscript`.
 - Consent: `consent-form`, `consent-client`, `consent-scopes` with one `consent-scope-{n}`
   (`data-scope="{name}"`) per scope, the decision buttons `consent-allow` and `consent-deny`
