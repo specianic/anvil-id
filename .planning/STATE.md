@@ -6,14 +6,14 @@ current_phase: 05
 current_phase_name: release 0 4 operate it
 current_plan: 33
 status: executing
-stopped_at: Completed 06-15-PLAN.md
-last_updated: "2026-11-26T11:15:09.776Z"
+stopped_at: Completed 06-13-PLAN.md
+last_updated: "2026-11-26T11:19:24.218Z"
 last_activity: 2026-11-26
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 162
-  completed_plans: 147
+  completed_plans: 148
   percent: 91
 ---
 
@@ -203,6 +203,7 @@ done before 05-29 tags v0.4.0.
 | Phase 06 P07 | 35min | 2 tasks | 14 files |
 | Phase 06 P16 | 25min | 2 tasks | 5 files |
 | Phase 06 P15 | 50min | 2 tasks | 8 files |
+| Phase 06 P13 | 45min | 2 tasks | 13 files |
 
 ## Accumulated Context
 
@@ -473,6 +474,7 @@ Recent decisions affecting current work:
 - [Phase 06]: 06-07: tenant-level role queries filter role_assignment.org_id IS NULL; OrgRepo::delete also removes the org:{id} branding scope
 - [Phase 06]: 06-16: console Signing keys page offers only the tenant's enabled algs; immediate activation off by default
 - [Phase 06]: 06-15: org:admin unobtainable via DCR/CIMD (is_registration_forbidden_scope composes is_reserved_admin_token) and in the system tenant; tenant config hides org-owned connections/roles (StoredConfig::tenant_connections/tenant_roles), so prune never deletes them
+- [Phase 06]: 06-13: lost org membership at code exchange/refresh revokes the family and answers invalid_grant; introspection/UserInfo recompute role and org claims at read time for JWT and opaque tokens
 
 ### Pending Todos
 
@@ -485,6 +487,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-26T11:15:09.772Z
-Stopped at: Completed 06-15-PLAN.md
+Last session: 2026-11-26T11:19:24.208Z
+Stopped at: Completed 06-13-PLAN.md
 Resume file: None
