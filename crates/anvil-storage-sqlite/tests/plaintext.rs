@@ -24,6 +24,12 @@
 //! only as digests, and a webhook endpoint's signing secrets (current and, after a rotation,
 //! previous) only KEK-sealed under `WEBHOOK_SECRET_PURPOSE` with `webhook_aad(tenant, id)`. The
 //! column scan and the raw file scan cover the `whsec_` secrets and their decoded key bytes.
+//!
+//! Release 1.0: an organization invitation token (digest only; its email sealed), an org-owned
+//! connection's client secret (KEK-sealed) and a login flow holding a sealed SAML identity and a
+//! sealed invitation return target (`return_to_sealed`), see
+//! `release_1_0_secrets_never_stored_plaintext`. Domain challenge tokens and SAML certificates
+//! are public by design and serve as positive controls.
 
 use std::collections::BTreeMap;
 
@@ -836,4 +842,283 @@ async fn connection_secret_sealed_at_rest() {
     let columns = all_columns(&pool).await;
     assert_eq!(hits_anywhere(&pool, &columns, secret.as_bytes()).await, 0);
     assert_eq!(hits_anywhere(&pool, &columns, &sealed).await, 1);
+}
+
+/// Release 1.0 (Phase 6) secrets, seeded through the storage ports exactly as the core services
+/// store them:
+///
+/// - an organization invitation: only `SecretHash(secret_hash(token))` in `org_invitation`, and
+///   its email (whose link carries the token) sealed into the outbox with `seal_payload`;
+/// - an org-owned OIDC connection whose client secret is KEK-sealed under
+///   `CONNECTION_SECRET_PURPOSE` with `connection_aad`, like a tenant connection;
+/// - a login flow whose JSON state holds a verified SAML identity sealed under
+///   `SAML_IDENTITY_PURPOSE` and the invitation return target sealed under `RETURN_TO_PURPOSE`
+///   (06-31, `return_to_sealed`), both with `upstream_aad(tenant, flow)`.
+///
+/// Neither the invitation token (alone or as `token=` in a link or return target), the
+/// connection secret nor the SAML subject and email may appear in any column or in the raw
+/// database file and WAL (before and after a checkpoint). The invitation hash is stored exactly
+/// once, in `org_invitation.token_hash`.
+///
+/// Public by design and therefore positive controls of the scan, not secrets: the DNS TXT
+/// challenge token of an org domain (it is published in DNS) and the IdP signing certificates of
+/// a SAML connection (published in the IdP metadata).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn release_1_0_secrets_never_stored_plaintext() {
+    use anvil_core::flow::engine::FlowState;
+    use anvil_core::flow::login::{LoginState, SamlPending};
+    use anvil_core::flow::upstream::{SealedIdentity, upstream_aad};
+    use anvil_core::model::{CONNECTION_SECRET_PURPOSE, EmailKind, connection_aad};
+    use anvil_core::policy::return_to::parse_return_target;
+    use anvil_core::service::flow::RETURN_TO_PURPOSE;
+    use anvil_core::service::saml::SAML_IDENTITY_PURPOSE;
+    use anvil_jose::encoding::random_token;
+    use anvil_storage::contract::{
+        new_invitation, new_org, new_org_connection, new_org_domain, new_saml_connection,
+        unique_domain,
+    };
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("anvil.db");
+    let storage = SqliteStorage::connect(&format!("sqlite://{}", path.display()))
+        .await
+        .expect("connect");
+    storage.migrate().await.expect("migrate");
+    let kek = Kek::generate();
+    let t = storage
+        .tenants()
+        .create(&new_tenant())
+        .await
+        .expect("tenant")
+        .id;
+    let org = storage
+        .organizations()
+        .create(t, &new_org())
+        .await
+        .expect("organization");
+
+    // Invitation: the token is stored only as its digest; the email with the link is sealed.
+    let token = random_token();
+    let token_hash = hash_of(&token);
+    let invitation = anvil_core::model::NewOrgInvitation {
+        token_hash,
+        ..new_invitation(org.id, "invitee@example.test", &[], Duration::days(7))
+    };
+    storage
+        .organizations()
+        .create_invitation(t, &invitation)
+        .await
+        .expect("create_invitation");
+    let vars = BTreeMap::from([
+        ("tenant_name".to_owned(), "Acme".to_owned()),
+        ("org_name".to_owned(), org.display_name.clone()),
+        ("email".to_owned(), invitation.email.clone()),
+        ("inviter".to_owned(), "Acme".to_owned()),
+        (
+            "link".to_owned(),
+            format!("https://id.example.test/ui/invitation?token={token}"),
+        ),
+        ("expires_in".to_owned(), "7 days".to_owned()),
+    ]);
+    storage
+        .outbox()
+        .enqueue(
+            t,
+            &NewEmail {
+                id: OutboxId::new_v7(),
+                to: invitation.email.clone(),
+                template: EmailKind::OrgInvitation.as_str().to_owned(),
+                payload: seal_payload(&kek, t, &vars).expect("seal payload"),
+                created_at: now_ms(),
+                expires_at: now_ms() + Duration::days(7),
+            },
+        )
+        .await
+        .expect("enqueue invitation email");
+
+    // Org-owned OIDC connection with a sealed client secret.
+    let connection_secret = marker("org-connection-secret");
+    let template = new_org_connection(org.id);
+    let connection_sealed = kek
+        .seal(
+            CONNECTION_SECRET_PURPOSE,
+            &connection_aad(t, template.id),
+            connection_secret.as_bytes(),
+        )
+        .expect("seal org connection secret");
+    storage
+        .connections()
+        .create(
+            t,
+            &anvil_core::model::NewConnection {
+                secret_enc: Some(connection_sealed.clone()),
+                ..template
+            },
+        )
+        .await
+        .expect("create org connection");
+
+    // Public by design: a SAML connection's IdP certificate and a domain's TXT challenge token.
+    let saml = new_saml_connection(org.id);
+    storage
+        .connections()
+        .create(t, &saml)
+        .await
+        .expect("create SAML connection");
+    let domain = new_org_domain(org.id, &unique_domain(), None);
+    storage
+        .organizations()
+        .create_domain(t, &domain)
+        .await
+        .expect("create domain");
+
+    // Login flow holding a sealed SAML identity and the sealed invitation return target.
+    let mut flow = new_flow(None, Duration::minutes(10));
+    let subject = marker("saml-subject");
+    let saml_email = format!("{}@example.test", marker("saml-email"));
+    let identity = SealedIdentity {
+        subject: subject.clone(),
+        email: Some(saml_email.clone()),
+        email_verified: true,
+        given_name: None,
+        family_name: None,
+        name: None,
+        metadata: serde_json::Map::new(),
+    };
+    let identity_sealed = b64url(
+        &kek.seal(
+            SAML_IDENTITY_PURPOSE,
+            &upstream_aad(t, flow.id),
+            &serde_json::to_vec(&identity).expect("encode identity"),
+        )
+        .expect("seal SAML identity"),
+    );
+    let target = parse_return_target(&format!("/ui/invitation?token={token}"))
+        .expect("an allowlisted return target");
+    let return_to_sealed = b64url(
+        &kek.seal(
+            RETURN_TO_PURPOSE,
+            &upstream_aad(t, flow.id),
+            target.as_path().as_bytes(),
+        )
+        .expect("seal return target"),
+    );
+    flow.state = serde_json::to_string(&FlowState::Login(LoginState {
+        saml: Some(Box::new(SamlPending {
+            connection_id: saml.id,
+            request_id: format!("_{}", uuid::Uuid::now_v7().simple()),
+            relay_state_hash: b64url(&secret_hash("relay-state")),
+            binding_hash: b64url(&secret_hash("binding-cookie")),
+            created_at: now_ms().unix_timestamp(),
+            identity_sealed: Some(identity_sealed.clone()),
+        })),
+        return_to_sealed: Some(return_to_sealed.clone()),
+        ..LoginState::default()
+    }))
+    .expect("encode flow state");
+    storage.flows().create(t, &flow).await.expect("create flow");
+
+    // The sealed values open only under their own flow (AAD binding).
+    let other_flow = anvil_core::model::FlowId::new_v7();
+    for (purpose, sealed) in [
+        (SAML_IDENTITY_PURPOSE, &identity_sealed),
+        (RETURN_TO_PURPOSE, &return_to_sealed),
+    ] {
+        let raw = anvil_jose::encoding::b64url_decode(sealed).expect("base64url");
+        assert!(kek.open(purpose, &upstream_aad(t, flow.id), &raw).is_ok());
+        assert!(
+            kek.open(purpose, &upstream_aad(t, other_flow), &raw)
+                .is_err(),
+            "a value sealed into one flow must not open under another"
+        );
+    }
+
+    let token_link = format!("token={token}");
+    let plaintexts: Vec<(&str, &[u8])> = vec![
+        ("invitation token", token.as_bytes()),
+        ("invitation token in a link", token_link.as_bytes()),
+        ("org connection secret", connection_secret.as_bytes()),
+        ("sealed SAML subject", subject.as_bytes()),
+        ("sealed SAML email", saml_email.as_bytes()),
+    ];
+    let cert_body = b"TUlJQ29udHJhY3Q=";
+
+    // Raw scan while the storage is open (database file + WAL).
+    let raw = raw_database_bytes(&path);
+    assert!(
+        raw.iter().any(|(_, bytes)| contains(bytes, cert_body)),
+        "positive control: the raw scan must find the public SAML certificate"
+    );
+    for (what, secret) in &plaintexts {
+        for (file, bytes) in &raw {
+            assert!(!contains(bytes, secret), "{what} in plaintext in {file}");
+        }
+    }
+    drop(storage);
+
+    // Checkpoint the WAL and scan the main file again.
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(SqliteConnectOptions::new().filename(&path))
+        .await
+        .expect("plain connection");
+    sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+        .execute(&pool)
+        .await
+        .expect("checkpoint");
+    pool.close().await;
+    let main = std::fs::read(&path).expect("read database file");
+    assert!(
+        contains(&main, domain.token.as_bytes()),
+        "positive control: the checkpointed file holds the public domain challenge token"
+    );
+    for (what, secret) in &plaintexts {
+        assert!(
+            !contains(&main, secret),
+            "{what} in plaintext in the checkpointed database file"
+        );
+    }
+
+    // Column scan.
+    let pool = inspect(&path).await;
+    let columns = all_columns(&pool).await;
+    for (what, secret) in &plaintexts {
+        assert_eq!(
+            hits_anywhere(&pool, &columns, secret).await,
+            0,
+            "{what} is stored in plaintext in some column"
+        );
+    }
+    // Positive controls: public values, the sealed state keys and the sealed bytes are found.
+    assert!(hits_anywhere(&pool, &columns, cert_body).await > 0);
+    assert!(hits_anywhere(&pool, &columns, domain.token.as_bytes()).await > 0);
+    assert_eq!(
+        hits_anywhere(&pool, &columns, return_to_sealed.as_bytes()).await,
+        1,
+        "the flow state holds the sealed return target"
+    );
+    assert_eq!(
+        hits_anywhere(&pool, &columns, identity_sealed.as_bytes()).await,
+        1,
+        "the flow state holds the sealed SAML identity"
+    );
+    assert_eq!(
+        hits_anywhere(&pool, &columns, &connection_sealed).await,
+        1,
+        "the org connection secret is stored sealed"
+    );
+    // The invitation digest is stored once, as exactly 32 bytes in org_invitation.token_hash.
+    assert_eq!(
+        hits_anywhere(&pool, &columns, &token_hash.0).await,
+        1,
+        "the invitation digest is stored once"
+    );
+    let found: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM org_invitation WHERE token_hash = ?1 AND length(token_hash) = 32",
+    )
+    .bind(token_hash.0.as_slice())
+    .fetch_one(&pool)
+    .await
+    .expect("find invitation digest");
+    assert_eq!(found, 1, "org_invitation.token_hash holds the token digest");
 }

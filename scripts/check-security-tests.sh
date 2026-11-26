@@ -51,14 +51,30 @@
 # the loopback-only healthcheck, passkey enrolment and passkey second factor challenges, the
 # config body limit, the 0.4 admin routes and telemetry redaction.
 #
+# Release 1.0 (beta) adds the Phase 6 controls: the SAML signature-wrapping corpus (every case of
+# security_saml.rs, decision D4), the SAML conditions (core saml::validate), the SAML flow (binding
+# cookie, replay incl. across instances, unsolicited responses, cross-flow, expiry, operator flag,
+# ACS body limit, generic error), org connections (write-only secrets, SSRF-guarded metadata URL,
+# org isolation), domain rules and the uniform DNS outcome, one verified org per domain, routing
+# guards, local-method refusal on routed domains, enumeration on the identifier-first page,
+# invitations (hashed token, single use, expiry, enumeration, GET consumes nothing, registration
+# modes), the sealed invitation return target, the org claim with the membership re-check at
+# refresh, org:admin bounding and reservation (DCR, CIMD, system tenant), org-admin principal
+# isolation, cross-org email trust, org JIT, the org config exclusion, the keys API and the
+# second-factor passkey picker.
+#
 # Controls deliberately not mapped here:
 #   - "Test code" (SEC-06): enforced by scripts/check-release-graph.sh, not by a unit test.
 #   - Released-migration immutability: enforced by scripts/check-migrations.sh (and its
 #     --self-test), which `just ci` runs as migrations-check.
+#   - One aws-lc-rs and one aws-lc-sys version in Cargo.lock: enforced by scripts/check-deps.sh
+#     (and its --self-test, which includes a second aws-lc version), which `just ci` runs as deps.
 #   - Browser-level behaviour (passkey ceremony, consent, sessions, a11y, and for 0.3 the
 #     upstream sign-in and linking journeys, RP-Initiated and Back-Channel Logout, email code and
 #     magic link, MFA policy and step-up, theme preview, i18n; for 0.4 the multi-tenant console
-#     pages, the MCP authorization journey and in-flow passkey enrolment): Playwright specs under
+#     pages, the MCP authorization journey and in-flow passkey enrolment; for 1.0 the console
+#     organization, SSO, domain and keys pages, the org switcher, invitations, SAML sign-in,
+#     home-realm discovery and its no-JavaScript variant): Playwright specs under
 #     tests/e2e/specs, run by the e2e workflow, plus the OpenID conformance plans (conformance
 #     workflow).
 #   - JIT sign-up racing a concurrent registration of the same email cannot be produced over HTTP;
@@ -706,6 +722,295 @@ body limit: config routes 1 MiB and no more|$W/security_body_limit.rs|config_rou
 admin v0.4: new routes require their scopes|$W/security_admin_v04.rs|v04_admin_routes_require_scopes
 admin v0.4: new routes isolate tenants|$W/security_admin_v04.rs|v04_admin_routes_isolate_tenants
 telemetry: no personal data, secrets or client IPs in logs, spans or metrics|crates/anvilid/tests/telemetry_redaction.rs|telemetry_carries_no_personal_data_secrets_or_client_ips
+saml corpus (D4): valid responses accepted, claims only from the verified node|$W/security_saml.rs|saml_accepts_valid_rsa_and_ecdsa_responses
+saml corpus (D4): valid responses accepted, claims only from the verified node|$W/security_saml.rs|saml_accepts_assertion_with_other_prefixes
+saml corpus (D4): valid responses accepted, claims only from the verified node|$W/security_saml.rs|saml_reads_claims_only_from_the_verified_assertion
+saml corpus (D4): signature wrapping and signature placement|$W/security_saml.rs|saml_rejects_xsw1_forged_response_wraps_signed_response_in_signature
+saml corpus (D4): signature wrapping and signature placement|$W/security_saml.rs|saml_rejects_xsw2_signed_response_detached_before_signature
+saml corpus (D4): signature wrapping and signature placement|$W/security_saml.rs|saml_rejects_xsw3_cloned_assertion_before_signed
+saml corpus (D4): signature wrapping and signature placement|$W/security_saml.rs|saml_rejects_xsw3_clone_with_the_signed_id
+saml corpus (D4): signature wrapping and signature placement|$W/security_saml.rs|saml_rejects_cloned_assertion_after_signed
+saml corpus (D4): signature wrapping and signature placement|$W/security_saml.rs|saml_rejects_xsw4_signed_assertion_wrapped_in_forged_assertion
+saml corpus (D4): signature wrapping and signature placement|$W/security_saml.rs|saml_rejects_xsw5_signature_moved_to_forged_assertion
+saml corpus (D4): signature wrapping and signature placement|$W/security_saml.rs|saml_rejects_xsw6_signed_assertion_inside_signature_of_forged
+saml corpus (D4): signature wrapping and signature placement|$W/security_saml.rs|saml_rejects_xsw7_signed_assertion_wrapped_in_extensions
+saml corpus (D4): signature wrapping and signature placement|$W/security_saml.rs|saml_rejects_xsw8_signed_assertion_in_signature_object
+saml corpus (D4): signature wrapping and signature placement|$W/security_saml.rs|saml_rejects_signed_assertion_in_subject_confirmation_data
+saml corpus (D4): signature wrapping and signature placement|$W/security_saml.rs|saml_rejects_signed_assertion_in_advice
+saml corpus (D4): signature wrapping and signature placement|$W/security_saml.rs|saml_rejects_signature_moved_to_sibling
+saml corpus (D4): signature wrapping and signature placement|$W/security_saml.rs|saml_rejects_assertion_signature_not_after_issuer
+saml corpus (D4): signature wrapping and signature placement|$W/security_saml.rs|saml_rejects_response_signature_out_of_place
+saml corpus (D4): signature wrapping and signature placement|$W/security_saml.rs|saml_rejects_stray_signature_in_extensions
+saml corpus (D4): signature wrapping and signature placement|$W/security_saml.rs|saml_rejects_two_response_signatures
+saml corpus (D4): signature wrapping and signature placement|$W/security_saml.rs|saml_rejects_foreign_signed_element_in_extensions
+saml corpus (D4): signature required, configured key only|$W/security_saml.rs|saml_rejects_unsigned_assertion
+saml corpus (D4): signature required, configured key only|$W/security_saml.rs|saml_rejects_signed_response_with_unsigned_assertion
+saml corpus (D4): signature required, configured key only|$W/security_saml.rs|saml_rejects_empty_signature_value
+saml corpus (D4): signature required, configured key only|$W/security_saml.rs|saml_rejects_empty_digest_value
+saml corpus (D4): signature required, configured key only|$W/security_saml.rs|saml_rejects_keyinfo_key_injection
+saml corpus (D4): signature required, configured key only|$W/security_saml.rs|saml_rejects_keyinfo_retrieval_method
+saml corpus (D4): signature required, configured key only|$W/security_saml.rs|saml_rejects_tampered_assertion
+saml corpus (D4): signature required, configured key only|$W/security_saml.rs|saml_rejects_invalid_response_signature
+saml corpus (D4): comment and markup injection in text nodes|$W/security_saml.rs|saml_rejects_comment_in_name_id
+saml corpus (D4): comment and markup injection in text nodes|$W/security_saml.rs|saml_rejects_comment_in_attribute_value
+saml corpus (D4): comment and markup injection in text nodes|$W/security_saml.rs|saml_rejects_element_in_name_id
+saml corpus (D4): no DTDs, entities or resource exhaustion|$W/security_saml.rs|saml_rejects_doctype_without_entities
+saml corpus (D4): no DTDs, entities or resource exhaustion|$W/security_saml.rs|saml_rejects_billion_laughs
+saml corpus (D4): no DTDs, entities or resource exhaustion|$W/security_saml.rs|saml_rejects_external_entity
+saml corpus (D4): namespace and canonicalization tricks|$W/security_saml.rs|saml_rejects_redefined_saml_prefix
+saml corpus (D4): namespace and canonicalization tricks|$W/security_saml.rs|saml_rejects_redefined_ds_prefix
+saml corpus (D4): namespace and canonicalization tricks|$W/security_saml.rs|saml_rejects_default_namespace_trick
+saml corpus (D4): namespace and canonicalization tricks|$W/security_saml.rs|saml_rejects_attribute_pollution_prefixed_id
+saml corpus (D4): namespace and canonicalization tricks|$W/security_saml.rs|saml_rejects_void_canonicalization_relative_namespace
+saml corpus (D4): namespace and canonicalization tricks|$W/security_saml.rs|saml_rejects_void_canonicalization_in_transform
+saml corpus (D4): comment and markup injection in text nodes|$W/security_saml.rs|saml_rejects_processing_instruction
+saml corpus (D4): algorithm and transform allow-list|$W/security_saml.rs|saml_rejects_sha1_signature_method
+saml corpus (D4): algorithm and transform allow-list|$W/security_saml.rs|saml_rejects_sha1_digest
+saml corpus (D4): algorithm and transform allow-list|$W/security_saml.rs|saml_rejects_hmac_signature_method
+saml corpus (D4): comment and markup injection in text nodes|$W/security_saml.rs|saml_rejects_c14n_with_comments
+saml corpus (D4): algorithm and transform allow-list|$W/security_saml.rs|saml_rejects_inclusive_c14n
+saml corpus (D4): algorithm and transform allow-list|$W/security_saml.rs|saml_rejects_xpath_transform
+saml corpus (D4): algorithm and transform allow-list|$W/security_saml.rs|saml_rejects_xslt_transform
+saml corpus (D4): algorithm and transform allow-list|$W/security_saml.rs|saml_rejects_extra_transform
+saml corpus (D4): algorithm and transform allow-list|$W/security_saml.rs|saml_rejects_missing_transform
+saml corpus (D4): algorithm and transform allow-list|$W/security_saml.rs|saml_rejects_reordered_transforms
+saml corpus (D4): exact signature reference|$W/security_saml.rs|saml_rejects_reference_uri_empty
+saml corpus (D4): exact signature reference|$W/security_saml.rs|saml_rejects_reference_to_another_element
+saml corpus (D4): exact signature reference|$W/security_saml.rs|saml_rejects_reference_uri_external_url
+saml corpus (D4): exact signature reference|$W/security_saml.rs|saml_rejects_two_references
+saml corpus (D4): exact signature reference|$W/security_saml.rs|saml_rejects_signature_object
+saml corpus (D4): exact signature reference|$W/security_saml.rs|saml_rejects_reference_uri_relative_file
+saml corpus (D4): strict response structure|$W/security_saml.rs|saml_rejects_duplicate_ids
+saml corpus (D4): strict response structure|$W/security_saml.rs|saml_rejects_second_assertion
+saml corpus (D4): strict response structure|$W/security_saml.rs|saml_rejects_encrypted_assertion
+saml corpus (D4): strict response structure|$W/security_saml.rs|saml_rejects_encrypted_id
+saml corpus (D4): strict response structure|$W/security_saml.rs|saml_rejects_wrong_root_or_version
+saml corpus (D4): strict response structure|$W/security_saml.rs|saml_rejects_unknown_response_child
+saml corpus (D4): no DTDs, entities or resource exhaustion|$W/security_saml.rs|saml_rejects_deep_nesting
+saml corpus (D4): no DTDs, entities or resource exhaustion|$W/security_saml.rs|saml_rejects_oversized_response
+saml corpus (D4): no DTDs, entities or resource exhaustion|$W/security_saml.rs|saml_rejects_markup_flood
+saml conditions: destination, issuer, status, subject, audience and time checks|crates/anvil-core/src/saml/validate.rs|rejects_destination_mismatch
+saml conditions: destination, issuer, status, subject, audience and time checks|crates/anvil-core/src/saml/validate.rs|rejects_destination_missing
+saml conditions: destination, issuer, status, subject, audience and time checks|crates/anvil-core/src/saml/validate.rs|rejects_response_in_response_to_mismatch
+saml conditions: destination, issuer, status, subject, audience and time checks|crates/anvil-core/src/saml/validate.rs|rejects_non_success_status
+saml conditions: destination, issuer, status, subject, audience and time checks|crates/anvil-core/src/saml/validate.rs|rejects_response_issuer_mismatch
+saml conditions: destination, issuer, status, subject, audience and time checks|crates/anvil-core/src/saml/validate.rs|rejects_issue_instant_in_the_future
+saml conditions: destination, issuer, status, subject, audience and time checks|crates/anvil-core/src/saml/validate.rs|rejects_issue_instant_too_old
+saml conditions: destination, issuer, status, subject, audience and time checks|crates/anvil-core/src/saml/validate.rs|rejects_missing_assertion_id
+saml conditions: destination, issuer, status, subject, audience and time checks|crates/anvil-core/src/saml/validate.rs|rejects_assertion_issuer_mismatch
+saml conditions: destination, issuer, status, subject, audience and time checks|crates/anvil-core/src/saml/validate.rs|rejects_empty_name_id
+saml conditions: destination, issuer, status, subject, audience and time checks|crates/anvil-core/src/saml/validate.rs|rejects_transient_name_id
+saml conditions: destination, issuer, status, subject, audience and time checks|crates/anvil-core/src/saml/validate.rs|rejects_missing_subject_confirmation
+saml conditions: destination, issuer, status, subject, audience and time checks|crates/anvil-core/src/saml/validate.rs|rejects_non_bearer_subject_confirmation
+saml conditions: destination, issuer, status, subject, audience and time checks|crates/anvil-core/src/saml/validate.rs|rejects_recipient_mismatch
+saml conditions: destination, issuer, status, subject, audience and time checks|crates/anvil-core/src/saml/validate.rs|rejects_confirmation_in_response_to_mismatch
+saml conditions: destination, issuer, status, subject, audience and time checks|crates/anvil-core/src/saml/validate.rs|rejects_confirmation_without_not_on_or_after
+saml conditions: destination, issuer, status, subject, audience and time checks|crates/anvil-core/src/saml/validate.rs|rejects_expired_confirmation
+saml conditions: destination, issuer, status, subject, audience and time checks|crates/anvil-core/src/saml/validate.rs|rejects_missing_conditions
+saml conditions: destination, issuer, status, subject, audience and time checks|crates/anvil-core/src/saml/validate.rs|rejects_conditions_without_not_on_or_after
+saml conditions: destination, issuer, status, subject, audience and time checks|crates/anvil-core/src/saml/validate.rs|rejects_not_yet_valid
+saml conditions: destination, issuer, status, subject, audience and time checks|crates/anvil-core/src/saml/validate.rs|rejects_expired_conditions
+saml conditions: destination, issuer, status, subject, audience and time checks|crates/anvil-core/src/saml/validate.rs|rejects_one_audience_restriction_without_the_sp
+saml conditions: destination, issuer, status, subject, audience and time checks|crates/anvil-core/src/saml/validate.rs|rejects_empty_audience_restriction
+saml conditions: destination, issuer, status, subject, audience and time checks|crates/anvil-core/src/saml/validate.rs|rejects_no_audience_restriction
+saml conditions: destination, issuer, status, subject, audience and time checks|crates/anvil-core/src/saml/validate.rs|rejects_missing_authn_statement
+saml conditions: missing Conditions told apart from a missing NotOnOrAfter|$W/saml_xml_adapter.rs|has_conditions_is_false_without_conditions
+saml conditions: missing Conditions told apart from a missing NotOnOrAfter|$W/saml_xml_adapter.rs|has_conditions_is_true_for_conditions_without_not_on_or_after
+saml adapter: only the configured certificates verify|$W/saml_xml_adapter.rs|another_certificate_or_none_is_refused
+saml adapter: a DOCTYPE anywhere is refused|$W/saml_xml_adapter.rs|doctype_anywhere_is_dtd
+saml adapter: size and depth bounded|$W/saml_xml_adapter.rs|oversized_input_is_size
+saml adapter: size and depth bounded|$W/saml_xml_adapter.rs|depth_65_is_parse_and_depth_64_parses
+saml adapter: metadata refusals|$W/saml_xml_adapter.rs|metadata_refusals
+saml request: relay state integrity|crates/anvil-core/src/saml/request.rs|malformed_relay_state_is_refused
+saml replay: assertion id recorded once|crates/anvil-storage/src/contract/grants.rs|record_jti_saml_assertion_id_replay
+saml flow: binding cookie required|$W/saml_login.rs|saml_acs_without_binding_cookie_at_continue_is_refused
+saml flow: binding cookie required|$W/saml_login.rs|saml_continue_with_foreign_binding_cookie_is_refused
+saml flow: replay refused|$W/saml_login.rs|saml_replayed_response_is_refused
+saml flow: replay refused across instances|$W/saml_login.rs|saml_replayed_response_is_refused_across_instances
+saml flow: unsolicited (IdP-initiated) response refused|$W/saml_login.rs|saml_unsolicited_response_is_refused
+saml flow: response bound to its flow and connection|$W/saml_login.rs|saml_response_for_other_flow_is_refused
+saml flow: response bound to its flow and connection|$W/saml_login.rs|saml_acs_for_other_connection_is_refused
+saml flow: pending request expires|$W/saml_login.rs|saml_pending_request_expires
+saml flow: routes 404 when the operator flag is off|$W/saml_login.rs|saml_routes_404_when_flag_off
+saml flow: ACS body limit 256 KiB|$W/saml_login.rs|saml_acs_body_over_256_kib_is_413
+saml flow: generic error page|$W/saml_login.rs|saml_wrong_audience_is_refused_with_generic_page
+saml flow: transient NameID refused|$W/saml_login.rs|saml_transient_name_id_is_refused
+saml flow: unsigned or foreign-signed response refused|$W/saml_login.rs|saml_unsigned_or_foreign_signed_response_is_refused
+saml flow: foreign-domain email untrusted|$W/saml_login.rs|saml_foreign_domain_email_is_untrusted
+saml flow: tenant MFA policy applies|$W/saml_login.rs|saml_tenant_mfa_policy_applies
+saml connections: refused at tenant level and when the flag is off|$W/admin_org_sso.rs|saml_connection_refused_at_tenant_level
+saml connections: refused at tenant level and when the flag is off|$W/admin_org_sso.rs|saml_connection_refused_when_flag_off
+saml connections: invalid input is 422|$W/admin_org_sso.rs|saml_connection_invalid_input_is_422
+saml connections: metadata URL goes through the SSRF guard|$W/admin_org_sso.rs|metadata_url_to_private_address_is_blocked
+org connections: write-only sealed client secret|$W/admin_org_sso.rs|org_oidc_connection_crud_with_write_only_secret
+org connections: org admin manages its own connections only|$W/admin_org_sso.rs|org_admin_manages_own_connections_only
+org connections: not listed on the tenant sign-in page|$W/upstream_buttons.rs|org_connection_not_listed_on_tenant_sign_in_page
+org branding: org admin brands its own org only|$W/admin_branding.rs|org_admin_can_brand_own_org_only
+domain rules: public suffix, IP, reserved, wildcard, scheme or path refused|$W/security_domains.rs|domain_add_refuses_public_suffix
+domain rules: public suffix, IP, reserved, wildcard, scheme or path refused|$W/security_domains.rs|domain_add_refuses_ip_literal
+domain rules: public suffix, IP, reserved, wildcard, scheme or path refused|$W/security_domains.rs|domain_add_refuses_reserved_name
+domain rules: public suffix, IP, reserved, wildcard, scheme or path refused|$W/security_domains.rs|domain_add_refuses_wildcard
+domain rules: public suffix, IP, reserved, wildcard, scheme or path refused|$W/security_domains.rs|domain_add_refuses_scheme_or_path
+domain rules: exact TXT record, canonical token|crates/anvil-core/src/policy/domain_verification.rs|matches_refuses_near_misses
+domain rules: exact TXT record, canonical token|crates/anvil-core/src/policy/domain_verification.rs|token_bytes_refuses_non_canonical
+domain verification: uniform DNS outcome|$W/security_domains.rs|domain_verification_failures_are_indistinguishable
+domain verification: uniform DNS outcome|crates/anvil-core/src/service/domain_check.rs|errors_and_non_matches_are_one_outcome
+domain verification: uniform DNS outcome|crates/anvil-core/src/service/domain_check.rs|a_value_split_across_two_records_is_not_verified
+domain verification: uniform DNS outcome|crates/anvil-core/src/service/domain_check.rs|failure_is_not_verified
+domain verification: uniform DNS outcome|crates/anvil-core/src/service/domain_check.rs|no_match_is_not_verified
+domain verification: uniform DNS outcome|crates/anvil-core/src/service/domain_check.rs|not_found_is_not_verified
+domain verification: bounded, uncached, FQDN-only resolver|crates/anvil-web/src/adapters/dns_txt.rs|options_are_bounded_uncached_and_fqdn_only
+domain verification: bounded, uncached, FQDN-only resolver|$W/dns_txt_adapter.rs|dns_txt_adapter_has_no_cache
+domain verification: bounded, uncached, FQDN-only resolver|$W/dns_txt_adapter.rs|dns_txt_adapter_queries_fqdn_without_search_suffix
+domain verification: bounded, uncached, FQDN-only resolver|$W/dns_txt_adapter.rs|dns_txt_adapter_timeout_is_bounded
+domain verification: bounded, uncached, FQDN-only resolver|$W/dns_txt_adapter.rs|dns_txt_adapter_verifies_a_record_split_into_strings_but_not_across_records
+domain verification: recheck unverifies after the grace period, leased job|crates/anvilid/tests/jobs.rs|recheck_unverifies_after_grace
+domain verification: recheck unverifies after the grace period, leased job|crates/anvilid/tests/jobs.rs|recheck_job_is_leased
+domain: one verified org per domain|crates/anvil-storage/src/contract/org_domains.rs|domain_mark_verified_one_org_per_domain
+domain: one verified org per domain|crates/anvil-storage/src/contract/org_domains.rs|domain_mark_verified_concurrent_single_winner
+domain: one verified org per domain|$W/security_domains.rs|second_org_cannot_verify_verified_domain
+domain: isolated by tenant and org|crates/anvil-storage/src/contract/org_domains.rs|domains_isolated_by_tenant
+domain: isolated by tenant and org|$W/security_domains.rs|org_admin_cannot_touch_other_org_domains
+routing guards: verified domain and same-org enabled connection only|$W/security_domains.rs|routing_requires_verified_domain
+routing guards: verified domain and same-org enabled connection only|$W/security_domains.rs|routing_target_must_be_same_org_connection
+routing guards: verified domain and same-org enabled connection only|$W/security_domains.rs|disabling_local_password_requires_proven_connection
+routing guards: verified domain and same-org enabled connection only|$W/security_domains.rs|disabled_target_connection_stops_routing
+routing guards: verified domain and same-org enabled connection only|$W/security_domains.rs|domain_delete_stops_routing
+routing guards: verified domain and same-org enabled connection only|crates/anvil-storage/src/contract/org_domains.rs|domain_create_refuses_foreign_routing_connection
+routing guards: verified domain and same-org enabled connection only|crates/anvil-storage/src/contract/org_domains.rs|domain_update_routing_connection_same_org_only
+routing guards: verified domain and same-org enabled connection only|crates/anvil-storage/src/contract/org_domains.rs|domain_routed_domain_requires_verified_routing_enabled_connection
+routing guards: verified domain and same-org enabled connection only|crates/anvil-storage/src/contract/org_domains.rs|domain_unverify_stops_routing
+routing guards: exact domain only, flag-aware|crates/anvil-core/src/policy/home_realm.rs|routes_exact_domain_only
+routing guards: exact domain only, flag-aware|crates/anvil-core/src/policy/home_realm.rs|only_verified_routed_domains_with_a_connection_route
+routing guards: exact domain only, flag-aware|$W/hrd_login.rs|subdomain_of_routed_domain_is_not_routed
+routing guards: exact domain only, flag-aware|$W/hrd_login.rs|routing_ignored_for_saml_when_flag_off
+routing guards: exact domain only, flag-aware|$W/hrd_login.rs|unverified_or_routing_off_domain_is_local
+routing guards: exact domain only, flag-aware|$W/hrd_login.rs|disabled_target_connection_restores_password_sign_in
+routing guards: identify step bound to the flow|$W/hrd_login.rs|identify_requires_the_flow_binding
+routing guards: identify step bound to the flow|crates/anvil-core/src/flow/login.rs|identify_inputs_outside_their_step_are_invalid
+routed domains: local methods refused without allow_local_password|$W/hrd_login.rs|password_refused_for_routed_domain_without_local_password
+routed domains: local methods refused without allow_local_password|$W/hrd_login.rs|email_code_refused_for_routed_domain_without_local_password
+identifier-first: no account enumeration|$W/security_enumeration.rs|non_routed_known_and_unknown_emails_get_identical_password_step
+identifier-first: no account enumeration|crates/anvil-core/src/flow/login.rs|local_route_page_is_identical_for_every_address_but_the_echo
+identifier-first: no account enumeration|$W/hrd_login.rs|locked_page_identical_for_known_and_unknown_identifiers_in_routed_tenant
+identifier-first: flag-aware email-first decision|$W/hrd_login.rs|email_first_not_shown_when_only_route_is_saml_with_flag_off
+identifier-first: flag-aware email-first decision|$W/hrd_login.rs|email_first_not_shown_for_disabled_or_unverified_route
+identifier-first: lock and CAPTCHA pages keep the email-first form in routed tenants|$W/hrd_login.rs|locked_page_in_routed_tenant_shows_email_first_form
+identifier-first: lock and CAPTCHA pages keep the email-first form in routed tenants|$W/hrd_login.rs|captcha_page_in_routed_tenant_shows_email_first_form
+invitations: token hashed, unique hash, closed tokens invalid|crates/anvil-storage/src/contract/org_invitations.rs|invitation_by_hash_and_unique_hash
+invitations: token hashed, unique hash, closed tokens invalid|crates/anvil-storage/src/contract/org_invitations.rs|invitation_closed_tokens_are_invalid
+invitations: token hashed, unique hash, closed tokens invalid|crates/anvil-core/src/service/org_invitation.rs|presented_tokens_are_bounded
+invitations: single use|crates/anvil-storage/src/contract/org_invitations.rs|invitation_accept_concurrent_single_winner
+invitations: single use|$W/org_invitations.rs|invitation_accept_concurrent_posts_one_winner
+invitations: bound to the invited verified email|crates/anvil-storage/src/contract/org_invitations.rs|invitation_accept_wrong_email_writes_nothing
+invitations: bound to the invited verified email|$W/org_invitations.rs|invitation_accept_wrong_account_keeps_token
+invitations: bound to the invited verified email|$W/org_invitations.rs|invitation_unverified_email_account_cannot_accept
+invitations: bound to the invited verified email|$W/org_invitations.rs|invitation_already_member_keeps_token
+invitations: isolated by tenant|crates/anvil-storage/src/contract/org_invitations.rs|invitations_isolated_by_tenant
+invitations: GET consumes nothing, POST needs CSRF|$W/org_invitations.rs|invitation_get_consumes_nothing
+invitations: GET consumes nothing, POST needs CSRF|$W/org_invitations.rs|invitation_page_csrf_required
+invitations: expired, revoked and unknown tokens share one page|$W/org_invitations.rs|invitation_invalid_tokens_share_one_page
+invitations: no enumeration from the admin API|$W/security_admin_v10.rs|invitation_response_identical_for_known_and_unknown_email
+invitations: token and hash never listed|$W/security_admin_v10.rs|invitation_list_never_exposes_token_or_hash
+invitations: registration modes, password policy, existing email|$W/org_invitations.rs|invitation_registration_refused_when_registration_disabled
+invitations: registration modes, password policy, existing email|$W/org_invitations.rs|invitation_registration_password_policy_applies
+invitations: registration modes, password policy, existing email|$W/org_invitations.rs|invitation_registration_breached_password_refused
+invitations: registration modes, password policy, existing email|$W/org_invitations.rs|invitation_registration_existing_email_offers_sign_in
+invitations: no session after a failed registration|$W/org_invitations.rs|invitation_registration_failures_set_no_session
+invitations: registration replaces another user's session|$W/org_invitations.rs|invitation_registration_replaces_other_users_session
+invitations: email template contract exact|crates/anvil-mail/tests/templates.rs|org_invitation_contract_is_exact
+return-to: allowlisted invitation path only, no open redirect|$W/org_invitations.rs|return_to_rejects_open_redirects
+return-to: allowlisted invitation path only, no open redirect|crates/anvil-core/src/policy/return_to.rs|rejects_everything_else
+return-to: allowlisted invitation path only, no open redirect|crates/anvil-core/src/service/flow.rs|return_target_does_not_open_elsewhere_or_tampered
+return-to: tampered or moved sealed value ignored|$W/org_invitations.rs|return_to_tampered_or_moved_sealed_value_is_ignored
+return-to: the authorization request wins|$W/org_invitations.rs|return_to_ignored_with_authorization_request
+return-to: invitation token never stored in plaintext|$W/org_invitations.rs|return_to_token_not_stored_in_plaintext
+return-to: invitation token never stored in plaintext|crates/anvil-core/src/service/flow.rs|return_target_is_sealed_never_plaintext
+return-to: invitation token never stored in plaintext|crates/anvil-core/src/policy/return_to.rs|debug_redacts_the_token
+org claims: membership re-checked at refresh|$W/org_claims.rs|removed_member_refresh_is_invalid_grant
+org claims: membership re-checked at refresh|$W/org_claims.rs|grant_bound_to_an_org_the_user_is_not_in_is_invalid_grant
+org claims: removing a member revokes only that org's tokens|$W/admin_orgs.rs|removing_a_member_revokes_only_their_org_bound_tokens
+org claims: removing a member revokes only that org's tokens|crates/anvil-storage/src/contract/orgs.rs|org_remove_member_revokes_only_that_orgs_families
+org claims: none without an active org|$W/org_claims.rs|no_org_claims_without_active_org
+org claims: mapped attributes cannot spoof or shadow org claims|$W/org_claims.rs|mapped_attribute_cannot_spoof_org_claims
+org claims: mapped attributes cannot spoof or shadow org claims|crates/anvil-core/src/policy/org_claims.rs|renamed_org_rules_are_used_but_never_shadow_reserved_claims
+org claims: mapped attributes cannot spoof or shadow org claims|crates/anvil-core/src/service/claims.rs|org_claims_never_replace_protocol_claims
+org claims: mapped attributes cannot spoof or shadow org claims|crates/anvil-core/src/service/introspect.rs|introspection_claims_never_shadow_response_members
+org claims: organization parameter refused for off clients and non-members|$W/org_claims.rs|organization_parameter_refused_for_off_client
+org claims: organization parameter refused for off clients and non-members|$W/org_claims.rs|nonmember_organization_is_access_denied
+org claims: organization parameter refused for off clients and non-members|crates/anvil-core/src/policy/org_claims.rs|requested_non_member_is_denied
+org claims: organization parameter refused for off clients and non-members|crates/anvil-core/src/policy/org_claims.rs|off_with_request_is_refused
+org claims: prompt=none never shows the switcher|$W/org_claims.rs|prompt_none_multi_org_required_is_interaction_required
+org:admin: bounded to the org-admin permission in the active org|$W/org_claims.rs|org_admin_scope_only_with_org_admin_permission
+org:admin: bounded to the org-admin permission in the active org|$W/org_claims.rs|org_admin_scope_never_without_active_org
+org:admin: bounded to the org-admin permission in the active org|$W/org_claims.rs|client_credentials_never_grants_org_admin
+org:admin: bounded to the org-admin permission in the active org|crates/anvil-core/src/policy/org_claims.rs|org_admin_scope_needs_the_permission_in_the_active_org
+org:admin: reserved from DCR, CIMD and the system tenant|$W/security_org_scopes.rs|dcr_cannot_register_org_admin_scope
+org:admin: reserved from DCR, CIMD and the system tenant|$W/security_org_scopes.rs|dcr_client_organization_policy_is_off
+org:admin: reserved from DCR, CIMD and the system tenant|$W/security_org_scopes.rs|cimd_document_with_org_admin_scope_rejected
+org:admin: reserved from DCR, CIMD and the system tenant|$W/security_org_scopes.rs|system_tenant_client_cannot_allow_org_admin
+org:admin: reserved from DCR, CIMD and the system tenant|$W/security_org_scopes.rs|system_tenant_client_organization_policy_must_be_off
+org:admin: reserved from DCR, CIMD and the system tenant|$W/admin_config.rs|config_validate_refuses_org_admin_on_system_clients
+org switcher: lists and accepts own memberships only|$W/org_switch.rs|switcher_lists_only_own_memberships
+org switcher: lists and accepts own memberships only|$W/org_switch.rs|switcher_refuses_foreign_org
+org switcher: CSRF, single use, bound to its flow|$W/org_switch.rs|switcher_refuses_bad_csrf
+org switcher: CSRF, single use, bound to its flow|$W/org_switch.rs|switcher_choice_cannot_be_replayed
+org switcher: CSRF, single use, bound to its flow|$W/org_switch.rs|switcher_foreign_flow_refused
+org MFA: stricter org policy steps up|$W/org_switch.rs|stricter_org_mfa_triggers_step_up
+org MFA: strictest of tenant, org and client wins|crates/anvil-core/src/policy/mfa.rs|effective_policy_with_org_exhaustive
+org-admin principal: isolated to its org|$W/security_admin_v10.rs|org_admin_token_refused_for_other_org
+org-admin principal: isolated to its org|$W/security_admin_v10.rs|org_admin_token_refused_for_other_tenant
+org-admin principal: isolated to its org|$W/security_admin_v10.rs|org_admin_token_refused_on_tenant_routes
+org-admin principal: isolated to its org|$W/security_admin_v10.rs|org_admin_token_refused_on_installation_routes
+org-admin principal: isolated to its org|$W/security_admin_v10.rs|org_admin_token_refused_for_user_organizations
+org-admin principal: isolated to its org|$W/security_admin_v10.rs|org_admin_token_refused_for_user_email_lookup
+org-admin principal: scope, org_id, audience, JWT and live permission required|$W/security_admin_v10.rs|org_admin_token_without_org_admin_scope_refused
+org-admin principal: scope, org_id, audience, JWT and live permission required|$W/security_admin_v10.rs|org_admin_token_with_mismatched_org_id_refused
+org-admin principal: scope, org_id, audience, JWT and live permission required|$W/security_admin_v10.rs|org_admin_token_without_admin_api_audience_refused
+org-admin principal: scope, org_id, audience, JWT and live permission required|$W/security_admin_v10.rs|org_admin_opaque_token_refused
+org-admin principal: scope, org_id, audience, JWT and live permission required|$W/security_admin_v10.rs|org_admin_token_refused_after_membership_removed
+org-admin principal: scope, org_id, audience, JWT and live permission required|$W/security_admin_v10.rs|org_admin_token_refused_after_org_admin_permission_removed
+org-admin principal: no escalation, last org admin kept|$W/security_admin_v10.rs|org_admin_cannot_add_member_directly
+org-admin principal: no escalation, last org admin kept|$W/security_admin_v10.rs|org_admin_invitation_with_foreign_or_admin_role_refused
+org-admin principal: no escalation, last org admin kept|$W/security_admin_v10.rs|org_role_with_admin_permission_refused
+org-admin principal: no escalation, last org admin kept|$W/security_admin_v10.rs|org_admin_cannot_remove_last_org_admin
+org-admin principal: no escalation, last org admin kept|$W/security_admin_v10.rs|org_admin_cannot_demote_last_org_admin
+orgs: none in the system tenant|$W/security_admin_v10.rs|org_create_refused_in_system_tenant
+orgs: isolated by tenant, members known to the tenant only|crates/anvil-storage/src/contract/orgs.rs|orgs_isolated_by_tenant
+orgs: isolated by tenant, members known to the tenant only|crates/anvil-storage/src/contract/orgs.rs|org_add_member_refuses_unknown_or_foreign
+org roles: org-owned roles only in their org, assignment needs membership|crates/anvil-storage/src/contract/roles.rs|role_org_owned_role_only_in_its_org
+org roles: org-owned roles only in their org, assignment needs membership|crates/anvil-storage/src/contract/roles.rs|role_assign_in_org_requires_membership
+org roles: org assignments never count as tenant administrators|crates/anvil-storage/src/contract/roles.rs|role_holders_of_permission_ignores_org_assignments
+admin v1.0: new routes require their scopes|$W/security_admin_v10.rs|v10_admin_routes_require_scopes
+admin v1.0: new routes require their scopes|$W/security_admin_v10.rs|v10_org_sso_routes_require_scopes
+admin v1.0: per-user organizations and ?email= lookup need their scopes|$W/security_admin_v10.rs|user_organizations_requires_users_or_admin_read_scope
+admin v1.0: per-user organizations and ?email= lookup need their scopes|$W/security_admin_v10.rs|user_email_lookup_requires_users_read_scope
+admin v1.0: per-user organizations and ?email= lookup need their scopes|$W/admin_orgs.rs|user_organizations_unknown_or_foreign_user_is_404
+admin v1.0: per-user organizations and ?email= lookup need their scopes|$W/admin_api.rs|list_users_email_filter_rejects_malformed_and_after
+cross-org email trust: only the org's verified domains and a verified upstream email|$W/enterprise_oidc.rs|unverified_domain_email_is_untrusted
+cross-org email trust: only the org's verified domains and a verified upstream email|$W/enterprise_oidc.rs|upstream_email_verified_false_is_untrusted_even_on_verified_domain
+cross-org email trust: only the org's verified domains and a verified upstream email|$W/security_linking.rs|foreign_domain_email_never_auto_links
+cross-org email trust: only the org's verified domains and a verified upstream email|$W/security_linking.rs|foreign_domain_jit_account_is_unverified_and_cannot_claim_the_address
+cross-org email trust: only the org's verified domains and a verified upstream email|$W/security_linking.rs|tenant_connection_trust_is_unchanged_by_org_domains
+cross-org email trust: only the org's verified domains and a verified upstream email|crates/anvil-core/src/upstream/linking.rs|enterprise_trust_refuses_other_and_sub_domains
+cross-org email trust: only the org's verified domains and a verified upstream email|crates/anvil-core/src/upstream/linking.rs|enterprise_trust_needs_a_verified_org_domain_and_upstream_verification
+cross-org email trust: only the org's verified domains and a verified upstream email|crates/anvil-core/src/upstream/linking.rs|enterprise_trust_refuses_missing_or_malformed_email
+org JIT: refused outside the org's verified domains; tenant connections follow upstream_registration|$W/enterprise_oidc.rs|org_jit_refused_for_email_outside_org_domains_under_closed_registration
+org JIT: refused outside the org's verified domains; tenant connections follow upstream_registration|$W/enterprise_oidc.rs|tenant_connection_jit_still_follows_upstream_registration
+org JIT: refused outside the org's verified domains; tenant connections follow upstream_registration|crates/anvil-core/src/upstream/linking.rs|jit_follows_the_tenant_rule_without_an_org_trusted_email
+org config: org-owned objects excluded from export and prune|$W/admin_config.rs|config_export_excludes_org_connections_and_org_roles
+org config: org-owned objects excluded from export and prune|$W/admin_config.rs|config_plan_never_lists_org_objects_as_deletes
+org config: org-owned objects excluded from export and prune|$W/admin_config.rs|config_apply_prune_keeps_org_connections_and_org_roles
+org config: org-owned objects excluded from export and prune|crates/anvilid/tests/tenant_config.rs|tenant_config_prune_keeps_org_objects
+keys API: scopes, tenant isolation, no private material|$W/admin_keys.rs|keys_routes_require_scopes
+keys API: scopes, tenant isolation, no private material|$W/admin_keys.rs|keys_routes_isolate_tenants
+keys API: scopes, tenant isolation, no private material|$W/admin_keys.rs|keys_list_never_contains_private_material
+keys API: scopes, tenant isolation, no private material|$W/admin_keys.rs|keys_rotate_disabled_alg_is_422
+passkey picker: second-factor options list only the step user's credentials|$W/flow_mfa_policy.rs|second_factor_passkey_options_list_only_the_step_users_credentials
+passkey picker: second-factor options list only the step user's credentials|$W/flow_mfa_policy.rs|identify_step_passkey_options_stay_discoverable
+passkey picker: second-factor options list only the step user's credentials|crates/anvil-core/src/service/flow.rs|allow_credentials_refuse_malformed_options
+release 1.0 secrets at rest: invitation token, org connection secret, sealed SAML identity and return target (SQLite)|crates/anvil-storage-sqlite/tests/plaintext.rs|release_1_0_secrets_never_stored_plaintext
+release 1.0 secrets at rest: invitation token, org connection secret, sealed SAML identity and return target (Postgres)|crates/anvil-storage-postgres/tests/plaintext.rs|release_1_0_secrets_never_stored_plaintext
 EOF
 )
 
