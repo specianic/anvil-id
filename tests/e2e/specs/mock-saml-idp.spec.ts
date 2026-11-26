@@ -95,7 +95,7 @@ test.describe('mock SAML IdP', () => {
     expect(cert.verify(cert.publicKey)).toBe(true);
     expect(cert.publicKey.asymmetricKeyType).toBe('rsa');
     expect(new Date(cert.validTo).getTime()).toBeGreaterThan(Date.now());
-    expect(idp.certPem).not.toContain('PRIVATE KEY');
+    expect(idp.certPem).not.toMatch(/PRIVATE\s+KEY/); // only the certificate is published
 
     const md = idp.metadataXml;
     expect(attr(md, 'md:EntityDescriptor', 'entityID')).toBe(idp.entityId);
