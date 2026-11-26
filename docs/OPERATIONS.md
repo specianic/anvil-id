@@ -101,3 +101,64 @@ Both forms run next to a running server and are audited as `key_rotation_request
 **KEK rotation is not supported in 0.4.** Rotating the KEK means re-sealing every encrypted
 column and invalidating codes derived from it; it is planned for a later release. Until then,
 keep the KEK secret and treat a leaked KEK together with a leaked database as a full compromise.
+
+## Admin access recovery
+
+When nobody can sign in to the console any more (forgotten password, lost second factor, or the
+last administrator lost the `administrator` role), recover access from a shell on the host. There
+is no network endpoint for this; the command needs the server's database configuration (and, for
+SQLite, access to the data directory). It runs next to a running server.
+
+### Recover an existing administrator account
+
+```sh
+anvilid admin recover --email admin@example.com
+# lost second factor as well:
+anvilid admin recover --email admin@example.com --reset-mfa
+```
+
+- Works for accounts of the `system` tenant only. An unknown address, or an account of another
+  tenant, is refused and nothing changes. A blocked account is refused too (see below).
+- Prints a one-time **recovery URL**, valid for one hour, that opens the system tenant's
+  password reset page. Nothing is emailed: hand the URL to the account owner over a trusted
+  channel. Setting the new password signs the account out of every session.
+- Assigns the `administrator` role to the account if it does not hold it.
+- `--reset-mfa` also removes the account's TOTP authenticator (with its recovery codes) and its
+  passkeys. Without it, second factors are left as they are.
+- Audited as `admin_recovery_issued` in the system tenant, with the system actor. The URL is never
+  logged or audited.
+
+### Create a new administrator after a lockout
+
+```sh
+anvilid admin recover
+```
+
+Without `--email` the command prints a one-time **setup URL** (one hour) that creates a new
+system administrator, like the URL printed at first start. It does this only when no active
+system-tenant user holds `admin:write`. If an administrator exists, the command refuses and asks
+for `--email`, so it cannot be used to add administrators quietly. Also audited as
+`admin_recovery_issued`.
+
+## Container health checks
+
+`anvilid healthcheck` probes the readiness endpoint of the server on the same host, for images
+that have no shell or curl (the release image is distroless):
+
+```yaml
+# docker compose
+healthcheck:
+  test: ["CMD", "/usr/local/bin/anvilid", "healthcheck"]
+  interval: 10s
+  timeout: 5s
+  retries: 3
+```
+
+- Sends `GET /health/ready` over plain HTTP/1.1 to `127.0.0.1` on the port of `listen` (a
+  wildcard `listen` address is probed on loopback). Exit code 0 means ready, 1 means not ready or
+  unreachable (for example while the server drains after SIGTERM), 2 means a usage error.
+- `--url http://127.0.0.1:8080/readyz` picks another loopback URL. Only `127.0.0.1`, `[::1]` and
+  `localhost` are accepted, over plain `http`; any other target is refused before a connection is
+  made.
+- When the main listener uses TLS, the healthcheck cannot probe it; use an orchestrator HTTPS
+  probe instead.

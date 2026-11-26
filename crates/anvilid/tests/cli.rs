@@ -360,4 +360,12 @@ fn help_lists_backup_admin_recover_and_healthcheck() {
         backup.contains("create") && backup.contains("restore"),
         "{backup}"
     );
+    assert!(top.contains("healthcheck"), "{top}");
+    let admin = text(&run(dir.path(), &["admin", "--help"], &[]));
+    assert!(admin.contains("recover"), "{admin}");
+    let recover = text(&run(dir.path(), &["admin", "recover", "--help"], &[]));
+    assert!(
+        recover.contains("--email") && recover.contains("--reset-mfa"),
+        "{recover}"
+    );
 }

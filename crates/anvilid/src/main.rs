@@ -3,9 +3,11 @@
 mod backup;
 mod config;
 mod datadir;
+mod healthcheck;
 mod jobs;
 mod keys;
 mod limiter;
+mod recover;
 mod server;
 mod startup;
 mod storage;
@@ -64,6 +66,9 @@ enum Command {
         #[command(subcommand)]
         cmd: BackupCommand,
     },
+    /// Probe the local server's readiness (exit 0 ready, 1 not ready, 2 usage error); loopback
+    /// only, for container health checks.
+    Healthcheck(healthcheck::HealthcheckArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -94,6 +99,10 @@ enum ConfigCommand {
 enum AdminCommand {
     /// Print a new one-time setup URL (valid 1 h) for creating the first administrator.
     SetupUrl(CliOverrides),
+    /// Recover administrator access from a shell on the host (no network equivalent): a
+    /// one-time password-reset URL for --email, or a new-administrator setup URL when no
+    /// administrator is left. Audited.
+    Recover(recover::RecoverArgs),
 }
 
 fn main() -> anyhow::Result<()> {
@@ -131,6 +140,28 @@ fn main() -> anyhow::Result<()> {
         Command::Backup {
             cmd: BackupCommand::Restore(args),
         } => backup_restore(&load(&args.config)?, &args),
+        Command::Admin {
+            cmd: AdminCommand::Recover(args),
+        } => admin_recover(&load(&args.config)?, &args),
+        Command::Healthcheck(args) => {
+            let target = match &args.url {
+                Some(url) => healthcheck::target_from_url(url),
+                None => load(&args.config)
+                    .map_err(|e| format!("{e:#}"))
+                    .and_then(|cfg| {
+                        if cfg.tls.is_some() {
+                            Err(
+                                "the server listens with TLS and the healthcheck speaks plain \
+                                 HTTP; pass --url for a plain-HTTP loopback listener"
+                                    .to_owned(),
+                            )
+                        } else {
+                            healthcheck::target_from_listen(cfg.listen)
+                        }
+                    }),
+            };
+            std::process::exit(healthcheck::run(target));
+        }
     }
 }
 
@@ -192,6 +223,12 @@ async fn setup_url(cfg: &Config) -> anyhow::Result<()> {
 async fn keys_rotate(cfg: &Config, args: &keys::RotateArgs) -> anyhow::Result<()> {
     let _telemetry = telemetry::init_tracing(cfg.log_format, None)?;
     keys::rotate(cfg, args).await
+}
+
+#[tokio::main(flavor = "multi_thread")]
+async fn admin_recover(cfg: &Config, args: &recover::RecoverArgs) -> anyhow::Result<()> {
+    let _telemetry = telemetry::init_tracing(cfg.log_format, None)?;
+    recover::recover(cfg, args).await
 }
 
 #[tokio::main(flavor = "multi_thread")]
