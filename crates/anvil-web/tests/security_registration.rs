@@ -6,6 +6,7 @@
 //! token (401 with `WWW-Authenticate: Bearer`), registration is rate limited in the `Auth` class
 //! and capped by `max_clients`. Refused requests store no client.
 
+mod admin_support;
 mod authz;
 mod dcr_support;
 mod support;
@@ -528,4 +529,106 @@ async fn dcr_max_clients_enforced() {
     let t = tenant(&app, None).await;
     authz::web_client(&app, &t).await;
     assert_eq!(dynamic_clients(&app).await, 2);
+}
+
+#[tokio::test]
+async fn dcr_require_par_must_be_boolean() {
+    let app = app().await;
+    set_policy(&app, DcrPolicy::Open).await;
+    for bad in [json!("yes"), json!(1), json!({"value": true})] {
+        let mut req = web_request();
+        req["require_pushed_authorization_requests"] = bad;
+        assert_registration_error(&register(&app, &req, None).await, "invalid_client_metadata");
+    }
+    assert_eq!(dynamic_clients(&app).await, 0);
+}
+
+/// Stored row of a registered client of the default tenant.
+async fn stored_dynamic(app: &TestApp, client_id: &str) -> anvil_core::model::Client {
+    let t = tenant(app, None).await;
+    app.storage()
+        .clients()
+        .get(t.id, client_id)
+        .await
+        .expect("lookup")
+        .expect("stored")
+}
+
+#[tokio::test]
+async fn headless_native_refused_via_dcr() {
+    let app = app().await;
+    set_policy(&app, DcrPolicy::Open).await;
+    let mut req = web_request();
+    req["headless_native"] = json!(true);
+    req["consent_mode"] = json!("skip_first_party");
+    let resp = register(&app, &req, None).await;
+    assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.text());
+    let body = json(&resp);
+    assert!(body.get("headless_native").is_none(), "{body}");
+    let client_id = body["client_id"].as_str().unwrap().to_owned();
+    let row = stored_dynamic(&app, &client_id).await;
+    assert!(!row.headless_native);
+    assert_eq!(row.consent_mode, anvil_core::model::ConsentMode::Required);
+
+    // An RFC 7592 update cannot set it either.
+    let path = client_path(&app, body["registration_client_uri"].as_str().unwrap());
+    let rat = body["registration_access_token"].as_str().unwrap();
+    let update =
+        json!({"client_id": client_id, "redirect_uris": [authz::RP], "headless_native": true});
+    let resp = send_json(&app, Method::PUT, &path, Some(rat), Some(&update)).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.text());
+    assert!(!stored_dynamic(&app, &client_id).await.headless_native);
+
+    // Nor can an administrator: native headless is for administrator-registered clients only.
+    let token = admin_support::admin_token(&app, "admin:read admin:write").await;
+    let resp = admin_support::call(
+        &app,
+        Method::PATCH,
+        &format!("{}/tenants/default/clients/{client_id}", admin_support::API),
+        Some(&token),
+        Some(json!({"consent_mode": "skip_first_party", "headless_native": true})),
+    )
+    .await;
+    admin_support::assert_field_error(&resp, "headless_native");
+    assert!(!stored_dynamic(&app, &client_id).await.headless_native);
+}
+
+#[tokio::test]
+async fn client_kind_agent_refused_via_dcr_metadata_injection() {
+    let app = app().await;
+    set_policy(&app, DcrPolicy::Open).await;
+    // Unknown metadata is ignored (RFC 7591 §2) and never mapped onto client_kind.
+    for kind in [json!("agent"), json!("application"), json!(7)] {
+        let mut req = web_request();
+        req["client_kind"] = kind;
+        let resp = register(&app, &req, None).await;
+        assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.text());
+        let body = json(&resp);
+        assert!(body.get("client_kind").is_none(), "{body}");
+        let row = stored_dynamic(&app, body["client_id"].as_str().unwrap()).await;
+        assert_eq!(row.client_kind, anvil_core::model::ClientKind::Application);
+    }
+
+    // An administrator may mark a dynamic client as an agent; an RFC 7592 update (which
+    // replaces every registrable value) keeps the marker.
+    let (path, rat, body) = registered(&app).await;
+    let client_id = body["client_id"].as_str().unwrap().to_owned();
+    let token = admin_support::admin_token(&app, "admin:read admin:write").await;
+    let resp = admin_support::call(
+        &app,
+        Method::PATCH,
+        &format!("{}/tenants/default/clients/{client_id}", admin_support::API),
+        Some(&token),
+        Some(json!({"client_kind": "agent"})),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.text());
+    let update =
+        json!({"client_id": client_id, "redirect_uris": [authz::RP], "client_kind": "application"});
+    let resp = send_json(&app, Method::PUT, &path, Some(&rat), Some(&update)).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.text());
+    assert_eq!(
+        stored_dynamic(&app, &client_id).await.client_kind,
+        anvil_core::model::ClientKind::Agent
+    );
 }

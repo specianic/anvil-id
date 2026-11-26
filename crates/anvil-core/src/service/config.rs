@@ -82,9 +82,10 @@ use crate::service::branding::{
     BrandingInput, BrandingService, validate_input as validate_branding,
 };
 use crate::service::client::{
-    ClientInput, ClientOptions, ClientOptionsPatch, ClientPatch, ClientService, RedirectValidator,
-    check_admin_scopes, check_org_policy, uses_secret, validate_client, validate_client_id,
-    validate_client_options, validate_client_phase4, validate_client_secret,
+    ClientInput, ClientOptions, ClientOptionsPatch, ClientPatch, ClientPolicyView, ClientService,
+    RedirectValidator, check_admin_scopes, check_org_policy, uses_secret, validate_client,
+    validate_client_id, validate_client_options, validate_client_phase4, validate_client_policy,
+    validate_client_secret,
 };
 use crate::service::connection::{
     ConnectionPatch, ConnectionService, NewConnectionInput, validate_config,
@@ -98,7 +99,7 @@ use crate::service::role::{
     RoleInput, RoleService, check_escalation, guard_roles_losing_admin, validate_description,
 };
 use crate::service::tenant::{
-    NewTenantInput, TenantPatch, TenantService, normalize_signing_algs,
+    NewTenantInput, TenantPatch, TenantService, headless_origin_issues, normalize_signing_algs,
     registration_settings_issues, validate_display_name, validate_host, validate_locale_tag,
     validate_new_slug, validate_phase4_settings, validate_slug,
 };
@@ -510,6 +511,8 @@ pub struct Validators<'a> {
     pub attribute_check: &'a dyn AttributeSchemaCheck,
     pub url_check: &'a dyn WebhookUrlCheck,
     pub template_check: &'a dyn EmailTemplateCheck,
+    /// Development mode: `headless.allowed_origins` may list localhost http origins.
+    pub dev_mode: bool,
 }
 
 #[derive(Default)]
@@ -608,6 +611,9 @@ fn client_input(c: &ClientSection) -> (ClientInput, ClientOptions) {
             allowed_resources: c.allowed_resources.clone(),
             mfa_policy: c.mfa_policy,
             organization: c.organization,
+            require_pushed_authorization_requests: c.require_pushed_authorization_requests,
+            client_kind: c.client_kind,
+            headless_native: c.headless_native,
         },
     )
 }
@@ -626,7 +632,12 @@ fn duplicates(issues: &mut Issues, section: &str, field: &str, keys: Vec<String>
     }
 }
 
-fn validate_tenant_section(issues: &mut Issues, doc: &TenantConfigDocument, system: bool) {
+fn validate_tenant_section(
+    issues: &mut Issues,
+    doc: &TenantConfigDocument,
+    system: bool,
+    dev_mode: bool,
+) {
     let t = &doc.tenant;
     issues.check("tenant", validate_slug(&t.slug));
     issues.check("tenant", validate_display_name(&t.display_name));
@@ -649,6 +660,14 @@ fn validate_tenant_section(issues: &mut Issues, doc: &TenantConfigDocument, syst
     }
     if let Err(e) = validate_mapping(&s.claims, &doc.attributes) {
         issues.push("tenant.settings.claims", message_of(e));
+    }
+    // The same origin rules as TenantService.
+    for (index, message) in headless_origin_issues(&s.headless, dev_mode) {
+        let path = match index {
+            Some(i) => format!("tenant.settings.headless.allowed_origins[{i}]"),
+            None => "tenant.settings.headless.allowed_origins".to_owned(),
+        };
+        issues.push(path, message);
     }
 }
 
@@ -682,6 +701,14 @@ fn validate_client_section(
     issues.check(p, check_admin_scopes(system, &input.scopes));
     issues.check(p, check_org_policy(system, options.organization));
     issues.check(p, validate_client_options(&input, &options, settings));
+    // Document clients are static (administrator-managed).
+    issues.check(
+        p,
+        validate_client_policy(
+            &ClientPolicyView::of(&input, &options),
+            ClientSource::Static,
+        ),
+    );
     if let Err(e) = validate_client_phase4(&input, &options, v.redirect) {
         uri_error(
             issues,
@@ -742,7 +769,7 @@ pub fn validate_document(
     let mut issues = Issues::default();
     issues.check("", doc.check_header());
     let system = doc.tenant.slug == SYSTEM_TENANT_SLUG;
-    validate_tenant_section(&mut issues, doc, system);
+    validate_tenant_section(&mut issues, doc, system, v.dev_mode);
 
     duplicates(
         &mut issues,
@@ -1056,6 +1083,9 @@ fn client_section(c: &Client) -> ClientSection {
         allowed_resources: c.allowed_resources.clone(),
         mfa_policy: c.mfa_policy,
         organization: c.organization,
+        require_pushed_authorization_requests: c.require_pushed_authorization_requests,
+        client_kind: c.client_kind,
+        headless_native: c.headless_native,
     }
 }
 
@@ -1446,6 +1476,9 @@ pub struct ConfigService {
     pub mail: MailSettingsService,
     /// Whether the installation SMTP (`smtp_url`) is configured.
     pub installation_smtp: bool,
+    /// Whether the server runs in development mode (`AppConfig::dev_mode`): headless origins
+    /// may then be localhost http origins.
+    pub dev_mode: bool,
 }
 
 fn top_fields(c: &ConfigChange) -> BTreeSet<&str> {
@@ -1482,6 +1515,7 @@ impl ConfigService {
             attribute_check: self.attributes.check.as_ref(),
             url_check: self.webhooks.url_check.as_ref(),
             template_check: self.mail.checker.as_ref(),
+            dev_mode: self.dev_mode,
         }
     }
 
@@ -1761,6 +1795,7 @@ impl ConfigService {
                             host: desired.tenant.host.clone(),
                             settings: first_pass_settings(&desired.tenant.settings, None, smtp_now),
                             installation_smtp: self.installation_smtp,
+                            dev_mode: self.dev_mode,
                         },
                         actor(),
                         ctx,
@@ -1784,6 +1819,7 @@ impl ConfigService {
                             )
                         }),
                         installation_smtp: self.installation_smtp,
+                        dev_mode: self.dev_mode,
                     };
                     self.tenants
                         .update(&cur.tenant.slug, patch, None, actor(), ctx)
@@ -1980,6 +2016,10 @@ impl ConfigService {
                 allowed_resources: has("allowed_resources").then(|| s.allowed_resources.clone()),
                 mfa_policy: has("mfa_policy").then_some(s.mfa_policy),
                 organization: has("organization").then_some(s.organization),
+                require_pushed_authorization_requests: has("require_pushed_authorization_requests")
+                    .then_some(s.require_pushed_authorization_requests),
+                client_kind: has("client_kind").then_some(s.client_kind),
+                headless_native: has("headless_native").then_some(s.headless_native),
             };
             if patch != ClientPatch::default() || options != ClientOptionsPatch::default() {
                 self.clients
@@ -2098,6 +2138,7 @@ impl ConfigService {
                     TenantPatch {
                         settings: Some(desired.tenant.settings.clone()),
                         installation_smtp: self.installation_smtp,
+                        dev_mode: self.dev_mode,
                         ..TenantPatch::default()
                     },
                     None,
@@ -2531,6 +2572,7 @@ mod tests {
             attribute_check: &AnySchema,
             url_check: &HttpsOnly,
             template_check: &NoBraces,
+            dev_mode: false,
         }
     }
 
@@ -2556,6 +2598,48 @@ mod tests {
     fn valid_document_passes() {
         validate_document(&doc(), &validators()).unwrap();
         validate_document(&three_clients(), &validators()).unwrap();
+    }
+
+    #[test]
+    fn client_policy_and_headless_origins_are_validated_with_paths() {
+        let mut d = three_clients();
+        // clients[0]: an agent that skips consent.
+        d.clients[0].client_kind = crate::model::ClientKind::Agent;
+        d.clients[0].consent_mode = ConsentMode::SkipFirstParty;
+        // clients[1]: native headless without first-party consent.
+        d.clients[1].headless_native = true;
+        // clients[2]: a valid native headless client, with PAR required.
+        d.clients[2].headless_native = true;
+        d.clients[2].consent_mode = ConsentMode::SkipFirstParty;
+        d.clients[2].require_pushed_authorization_requests = true;
+        d.tenant.settings.headless.allowed_origins = vec![
+            "https://spa.example.test".into(),
+            "https://*.example.test".into(),
+            "https://a.example.test/path".into(),
+            "http://localhost:5173".into(),
+        ];
+        d.tenant.settings.par.require_pushed_authorization_requests = true;
+        let got = paths(validate_document(&d, &validators()));
+        assert_eq!(
+            got,
+            [
+                "tenant.settings.headless.allowed_origins[1]",
+                "tenant.settings.headless.allowed_origins[2]",
+                "tenant.settings.headless.allowed_origins[3]",
+                "clients[0].consent_mode",
+                "clients[1].headless_native",
+            ]
+        );
+        // Development mode accepts the localhost origin.
+        let dev = Validators {
+            dev_mode: true,
+            ..validators()
+        };
+        let got = paths(validate_document(&d, &dev));
+        assert!(
+            !got.contains(&"tenant.settings.headless.allowed_origins[3]".to_owned()),
+            "{got:?}"
+        );
     }
 
     #[test]

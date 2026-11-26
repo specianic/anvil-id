@@ -26,9 +26,9 @@ use crate::error::CoreError;
 use crate::model::{
     AuditAction, AuditActor, AuditDetails, AuditOutcome, CAPTCHA_SECRET_PURPOSE, CaptchaProvider,
     CaptchaSettings, CimdPolicy, CimdSettings, DEFAULT_SIGNING_ALG, DEFAULT_TENANT_SLUG, DcrPolicy,
-    DcrSettings, KeyState, NewSigningKey, NewTenant, Page, PageRequest, RequestContext,
-    SIGNING_KEY_PURPOSE, SYSTEM_TENANT_SLUG, SigningKeyId, Tenant, TenantId, TenantSettings,
-    TenantUpdate, signing_key_aad,
+    DcrSettings, HeadlessSettings, KeyState, NewSigningKey, NewTenant, Page, PageRequest,
+    RequestContext, SIGNING_KEY_PURPOSE, SYSTEM_TENANT_SLUG, SigningKeyId, Tenant, TenantId,
+    TenantSettings, TenantUpdate, signing_key_aad,
 };
 use crate::policy::claims_mapping::validate_mapping;
 use crate::ports::{Storage, StorageError};
@@ -513,6 +513,45 @@ pub fn validate_phase4_settings(
     Ok(())
 }
 
+/// Most entries in `headless.allowed_origins`.
+pub const MAX_HEADLESS_ORIGINS: usize = 50;
+
+/// Problems with a tenant's `headless.allowed_origins`, as `(index, message)`; `index` is
+/// `None` for a problem with the whole list. Each entry must pass
+/// [`HeadlessSettings::validate_origin`] (an exact `https://host[:port]` origin; with `dev`
+/// (development mode), `http://localhost` and `http://127.0.0.1` too). Shared by
+/// [`validate_headless_settings`] and the declarative configuration validator.
+pub fn headless_origin_issues(h: &HeadlessSettings, dev: bool) -> Vec<(Option<usize>, String)> {
+    let mut out = Vec::new();
+    if h.allowed_origins.len() > MAX_HEADLESS_ORIGINS {
+        out.push((
+            None,
+            format!("at most {MAX_HEADLESS_ORIGINS} origins are allowed"),
+        ));
+    }
+    for (i, origin) in h.allowed_origins.iter().enumerate() {
+        if let Err(message) = HeadlessSettings::validate_origin(origin, dev) {
+            out.push((Some(i), message.to_owned()));
+        }
+    }
+    out
+}
+
+/// Checks a tenant's headless settings ([`headless_origin_issues`]). The error is `Validation`
+/// on `headless.allowed_origins`, naming the first bad entry.
+pub fn validate_headless_settings(h: &HeadlessSettings, dev: bool) -> Result<(), CoreError> {
+    match headless_origin_issues(h, dev).into_iter().next() {
+        None => Ok(()),
+        Some((index, message)) => Err(CoreError::Validation {
+            field: "headless.allowed_origins",
+            message: match index {
+                Some(i) => format!("entry {i}: {message}"),
+                None => message,
+            },
+        }),
+    }
+}
+
 /// The settings a tenant update stores: `requested` (if any) with normalised signing algorithms,
 /// the current CAPTCHA settings carried over, then `captcha` applied. A sealed CAPTCHA value in
 /// `requested` that differs from the current one is refused (secrets enter only as plaintext
@@ -612,6 +651,9 @@ pub struct NewTenantInput {
     /// Whether the installation SMTP (`smtp_url`) is configured; enabling `email_otp` or
     /// `magic_link` needs it for a new tenant (which has no SMTP settings of its own yet).
     pub installation_smtp: bool,
+    /// Whether the server runs in development mode (http public URL or `insecure_http`): then
+    /// `headless.allowed_origins` may list `http://localhost` / `http://127.0.0.1` origins.
+    pub dev_mode: bool,
 }
 
 /// Partial tenant update. Slugs are immutable for every tenant (issuers derive from them), so
@@ -624,6 +666,8 @@ pub struct TenantPatch {
     /// Whether the installation SMTP (`smtp_url`) is configured. Together with the tenant's own
     /// SMTP settings it decides whether `email_otp` / `magic_link` may be turned on.
     pub installation_smtp: bool,
+    /// Development mode, as in [`NewTenantInput::dev_mode`].
+    pub dev_mode: bool,
 }
 
 /// Tenant management.
@@ -707,6 +751,7 @@ impl TenantService {
             &settings.dcr,
             &settings.cimd,
         )?;
+        validate_headless_settings(&settings.headless, input.dev_mode)?;
         let now = self.clock.now();
         let new = NewTenant {
             id: TenantId::new_v7(),
@@ -823,6 +868,10 @@ impl TenantService {
                     &new.dcr,
                     &new.cimd,
                 )?;
+            }
+            // And the headless origin allow-list, when it changes.
+            if new.headless != tenant.settings.headless {
+                validate_headless_settings(&new.headless, patch.dev_mode)?;
             }
         }
         let settings_changed = settings.is_some();
@@ -1273,6 +1322,52 @@ mod tests {
         assert_eq!(planned.mfa_policy, crate::model::MfaPolicy::Required);
         assert!(!planned.auto_link);
         assert_eq!(planned.upstream_registration, Some(false));
+    }
+
+    #[test]
+    fn headless_settings_are_validated() {
+        let ok = HeadlessSettings {
+            allowed_origins: vec![
+                "https://spa.example.test".into(),
+                "https://a.example.test:8443".into(),
+            ],
+        };
+        assert!(validate_headless_settings(&ok, false).is_ok());
+        for bad in [
+            "https://*.example.test",
+            "https://a.example.test/path",
+            "http://spa.example.test",
+            "*",
+            "https://a.example.test/",
+        ] {
+            let h = HeadlessSettings {
+                allowed_origins: vec!["https://ok.example.test".into(), bad.into()],
+            };
+            match validate_headless_settings(&h, false) {
+                Err(CoreError::Validation { field, message }) => {
+                    assert_eq!(field, "headless.allowed_origins");
+                    assert!(message.starts_with("entry 1:"), "{message}");
+                }
+                other => panic!("{bad}: {other:?}"),
+            }
+        }
+        let local = HeadlessSettings {
+            allowed_origins: vec!["http://localhost:5173".into()],
+        };
+        assert!(validate_headless_settings(&local, false).is_err());
+        assert!(validate_headless_settings(&local, true).is_ok());
+        let many = HeadlessSettings {
+            allowed_origins: (0..=MAX_HEADLESS_ORIGINS)
+                .map(|i| format!("https://s{i}.example.test"))
+                .collect(),
+        };
+        assert_eq!(
+            headless_origin_issues(&many, false),
+            vec![(
+                None,
+                format!("at most {MAX_HEADLESS_ORIGINS} origins are allowed")
+            )]
+        );
     }
 
     #[test]

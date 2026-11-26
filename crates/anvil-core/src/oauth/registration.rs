@@ -34,6 +34,12 @@
 //!   redirect and post-logout redirect URI host must be listed (a URI without host is refused);
 //! - `backchannel_logout_uri` must be https; `consent_mode` is always `required` and PKCE is always
 //!   required, whatever the request says;
+//! - `require_pushed_authorization_requests` (RFC 9126 §6) is a boolean, default `false`, stored
+//!   and echoed;
+//! - `client_kind` and `headless_native` are administrator-only fields: like every other unknown
+//!   member they are ignored, never mapped, and the result always carries `application` and
+//!   `false`. [`crate::service::client::validate_client_policy`] runs with source `dynamic` as
+//!   for every client write;
 //! - `client_name` and the informational `logo_uri`, `client_uri`, `policy_uri`, `tos_uri` are
 //!   length-capped, and the URIs must be absolute https URIs.
 //!
@@ -44,14 +50,15 @@ use serde_json::{Map, Value};
 
 use crate::error::CoreError;
 use crate::model::{
-    ApplicationType, ClientAuthMethod, ClientType, ConsentMode, DcrSettings, GrantType, Scope,
-    TokenFormat,
+    ApplicationType, ClientAuthMethod, ClientKind, ClientSource, ClientType, ConsentMode,
+    DcrSettings, GrantType, Scope, TokenFormat,
 };
 use crate::oauth::redirect::{MAX_REDIRECT_URI_LEN, validate_redirect_uri};
 use crate::oauth::resource::parse_resources;
 use crate::service::admin_scope::{ORG_ADMIN_SCOPE, is_reserved_admin_token};
 use crate::service::client::{
-    ClientInput, ClientOptions, MAX_REDIRECT_URIS, validate_client, validate_client_phase4,
+    ClientInput, ClientOptions, ClientPolicyView, MAX_REDIRECT_URIS, validate_client,
+    validate_client_phase4, validate_client_policy,
 };
 
 /// Whether a scope token can never be obtained by self-registration (DCR, CIMD, and the tenant's
@@ -122,6 +129,10 @@ impl ValidatedRegistration {
         );
         m.insert("scope".into(), c.scopes.join(" ").into());
         m.insert("allowed_resources".into(), strings(&o.allowed_resources));
+        m.insert(
+            "require_pushed_authorization_requests".into(),
+            o.require_pushed_authorization_requests.into(),
+        );
         if let Some(name) = &self.client_name {
             m.insert("client_name".into(), name.clone().into());
         }
@@ -466,6 +477,9 @@ pub fn validate(
     }
     let backchannel_logout_session_required =
         opt_bool(obj, "backchannel_logout_session_required")?.unwrap_or(false);
+    // RFC 9126 §6 client metadata.
+    let require_pushed_authorization_requests =
+        opt_bool(obj, "require_pushed_authorization_requests")?.unwrap_or(false);
 
     // Display metadata.
     let client_name = match opt_str(obj, "client_name")? {
@@ -515,11 +529,20 @@ pub fn validate(
         allowed_resources,
         mfa_policy: None,
         organization: crate::model::OrgClientPolicy::Off,
+        require_pushed_authorization_requests,
+        // Administrator-only fields: never taken from the request.
+        client_kind: ClientKind::Application,
+        headless_native: false,
     };
 
     // The client rules every client obeys (one implementation: `service::client`).
     validate_client(&client, validate_redirect_uri).map_err(map_client_error)?;
     validate_client_phase4(&client, &options, validate_redirect_uri).map_err(map_client_error)?;
+    validate_client_policy(
+        &ClientPolicyView::of(&client, &options),
+        ClientSource::Dynamic,
+    )
+    .map_err(map_client_error)?;
 
     Ok(ValidatedRegistration {
         client,
@@ -656,6 +679,45 @@ mod tests {
         assert_eq!(v.options.consent_mode, ConsentMode::Required);
         assert_eq!(v.client.require_pkce, Some(true));
         assert!(!v.options.can_introspect);
+    }
+
+    #[test]
+    fn dcr_require_par_is_stored_and_echoed() {
+        let v = open(json!({
+            "redirect_uris": ["https://app.example/cb"],
+            "require_pushed_authorization_requests": true,
+        }))
+        .unwrap();
+        assert!(v.options.require_pushed_authorization_requests);
+        assert_eq!(v.metadata()["require_pushed_authorization_requests"], true);
+        let default = open(json!({"redirect_uris": ["https://app.example/cb"]})).unwrap();
+        assert!(!default.options.require_pushed_authorization_requests);
+        assert_eq!(
+            default.metadata()["require_pushed_authorization_requests"],
+            false
+        );
+        for bad in [json!("yes"), json!(1), json!(["true"])] {
+            assert_meta(open(json!({
+                "redirect_uris": ["https://app.example/cb"],
+                "require_pushed_authorization_requests": bad,
+            })));
+        }
+    }
+
+    #[test]
+    fn client_kind_agent_refused_via_dcr_metadata_injection() {
+        let v = open(json!({
+            "redirect_uris": ["https://app.example/cb"],
+            "client_kind": "agent",
+            "headless_native": true,
+            "consent_mode": "skip_first_party",
+        }))
+        .unwrap();
+        assert_eq!(v.options.client_kind, ClientKind::Application);
+        assert!(!v.options.headless_native);
+        assert_eq!(v.options.consent_mode, ConsentMode::Required);
+        let m = v.metadata();
+        assert!(m.get("client_kind").is_none() && m.get("headless_native").is_none());
     }
 
     #[test]
@@ -1169,6 +1231,7 @@ mod tests {
             Just("post_logout_redirect_uris"),
             Just("backchannel_logout_uri"),
             Just("backchannel_logout_session_required"),
+            Just("require_pushed_authorization_requests"),
             Just("client_name"),
             Just("logo_uri"),
             Just("keys"),

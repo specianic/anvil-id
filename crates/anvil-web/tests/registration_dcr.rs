@@ -270,3 +270,41 @@ async fn path_tenant_registration_uses_its_issuer() {
     let resp = register(&app, &web_request(), None).await;
     assert_eq!(resp.status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn require_pushed_authorization_requests_is_stored_and_echoed() {
+    let app = app().await;
+    let tenant = set_policy(&app, DcrPolicy::Open).await;
+    let mut request = web_request();
+    request["require_pushed_authorization_requests"] = json!(true);
+    let resp = register(&app, &request, None).await;
+    assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.text());
+    let body = json(&resp);
+    assert_eq!(body["require_pushed_authorization_requests"], true);
+    let client_id = str_of(&body, "client_id").to_owned();
+    let rat = str_of(&body, "registration_access_token").to_owned();
+    let path = client_path(&app, str_of(&body, "registration_client_uri"));
+    let row = app
+        .storage()
+        .clients()
+        .get(tenant.id, &client_id)
+        .await
+        .unwrap()
+        .expect("stored");
+    assert!(row.require_pushed_authorization_requests);
+
+    // RFC 7592 read echoes it.
+    let resp = send_json(&app, Method::GET, &path, Some(&rat), None).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.text());
+    assert_eq!(json(&resp)["require_pushed_authorization_requests"], true);
+
+    // An RFC 7592 update replaces every value: omitted means the default (false).
+    let update = json!({"client_id": client_id, "redirect_uris": [authz::RP]});
+    let resp = send_json(&app, Method::PUT, &path, Some(&rat), Some(&update)).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.text());
+    assert_eq!(json(&resp)["require_pushed_authorization_requests"], false);
+
+    // A registration without it echoes false.
+    let resp = register(&app, &web_request(), None).await;
+    assert_eq!(json(&resp)["require_pushed_authorization_requests"], false);
+}

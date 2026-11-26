@@ -147,6 +147,10 @@ pub fn client_metadata(client: &Client) -> Map<String, Value> {
         "allowed_resources".into(),
         strings(&client.allowed_resources),
     );
+    m.insert(
+        "require_pushed_authorization_requests".into(),
+        client.require_pushed_authorization_requests.into(),
+    );
     if let Some(jwks) = client
         .jwks
         .as_deref()
@@ -493,6 +497,9 @@ impl RegistrationService {
             backchannel_logout_uri: Some(o.backchannel_logout_uri),
             backchannel_logout_session_required: Some(o.backchannel_logout_session_required),
             allowed_resources: Some(o.allowed_resources),
+            require_pushed_authorization_requests: Some(o.require_pushed_authorization_requests),
+            // client_kind and headless_native are administrator-only: an RFC 7592 update keeps
+            // the stored values (validate_client_policy still runs on the merged client).
             ..ClientOptionsPatch::default()
         };
         self.clients()
@@ -756,6 +763,15 @@ mod tests {
             }
             if let Some(v) = &u.allowed_resources {
                 c.allowed_resources = v.clone();
+            }
+            if let Some(v) = u.require_pushed_authorization_requests {
+                c.require_pushed_authorization_requests = v;
+            }
+            if let Some(v) = u.client_kind {
+                c.client_kind = v;
+            }
+            if let Some(v) = u.headless_native {
+                c.headless_native = v;
             }
             c.updated_at = now;
             Ok(Some(c.clone()))
@@ -1464,6 +1480,50 @@ mod tests {
         assert!(is_invalid_token(
             &h.svc.read(&h.tenant, &client.client_id, Some(&rat)).await
         ));
+    }
+
+    #[tokio::test]
+    async fn par_metadata_stored_and_admin_fields_never_taken_from_the_request() {
+        let h = Harness::new(DcrPolicy::Open);
+        let reg = h
+            .register(
+                &json!({
+                    "redirect_uris": [RP],
+                    "require_pushed_authorization_requests": true,
+                    "client_kind": "agent",
+                    "headless_native": true,
+                }),
+                None,
+            )
+            .await
+            .unwrap();
+        let c = &reg.client;
+        assert!(c.require_pushed_authorization_requests);
+        assert_eq!(c.client_kind, crate::model::ClientKind::Application);
+        assert!(!c.headless_native);
+        assert_eq!(
+            client_metadata(c)["require_pushed_authorization_requests"],
+            true
+        );
+        // An administrator marks it as an agent; an RFC 7592 update keeps the marker and can
+        // turn PAR off again.
+        let rat = reg.registration_access_token.expose_secret().to_owned();
+        let id = c.client_id.clone();
+        h.fake.clients.lock().unwrap()[0].1.client_kind = crate::model::ClientKind::Agent;
+        let updated = h
+            .svc
+            .update(
+                &h.tenant,
+                &id,
+                Some(&rat),
+                &json!({"client_id": id, "redirect_uris": [RP], "client_kind": "application"}),
+                &RequestContext::system(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated.client_kind, crate::model::ClientKind::Agent);
+        assert!(!updated.require_pushed_authorization_requests);
+        assert!(!updated.headless_native);
     }
 
     #[tokio::test]

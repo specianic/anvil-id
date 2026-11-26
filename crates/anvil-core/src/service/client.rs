@@ -8,7 +8,10 @@
 //! [`validate_client_phase4`] the 0.3 options: post-logout redirect URIs (the redirect URI rules),
 //! the back-channel logout URI (absolute, no fragment, https or loopback http), allowed
 //! resource indicators (RFC 8707 rules of `oauth::resource::parse_resources`) and the client
-//! MFA policy.
+//! MFA policy. [`validate_client_policy`] holds the security-relevant combinations of the 1.0
+//! fields (agent marker, native headless eligibility) and is called on every client write path:
+//! admin API create and update, declarative configuration, dynamic registration (RFC 7591/7592)
+//! and Client ID Metadata Documents.
 //!
 //! Every mutating [`ClientService`] method takes the acting administrator and the request context
 //! and records exactly one audit event after the change commits (`client_created`,
@@ -25,9 +28,9 @@ use crate::clock::Clock;
 use crate::error::CoreError;
 use crate::model::{
     ApplicationType, AuditAction, AuditActor, AuditDetails, AuditOutcome, Client, ClientAuthMethod,
-    ClientId, ClientType, ClientUpdate, ConsentMode, GrantType, MfaPolicy, NewClient,
-    OrgClientPolicy, Page, PageRequest, RequestContext, SYSTEM_TENANT_SLUG, Scope, SecretHash,
-    Tenant, TenantId, TenantSettings, TokenFormat,
+    ClientId, ClientKind, ClientSource, ClientType, ClientUpdate, ConsentMode, GrantType,
+    MfaPolicy, NewClient, OrgClientPolicy, Page, PageRequest, RequestContext, SYSTEM_TENANT_SLUG,
+    Scope, SecretHash, Tenant, TenantId, TenantSettings, TokenFormat,
 };
 use crate::oauth::resource::parse_resources;
 use crate::ports::{Storage, StorageError};
@@ -98,6 +101,15 @@ pub struct ClientOptions {
     pub mfa_policy: Option<MfaPolicy>,
     /// Organization policy (`organization` parameter, org claims); default `off`.
     pub organization: OrgClientPolicy,
+    /// RFC 9126 §6 `require_pushed_authorization_requests`: the client may only use pushed
+    /// authorization requests. Default `false`.
+    pub require_pushed_authorization_requests: bool,
+    /// `agent` marks an AI agent acting for the user (AGT-03); agents never skip consent.
+    /// Settable by administrators only (DCR and CIMD never set it).
+    pub client_kind: ClientKind,
+    /// May use the native headless flow API (UI-05). Administrator-registered, first-party
+    /// (`consent_mode = skip_first_party`), PKCE-required, non-agent clients only.
+    pub headless_native: bool,
 }
 
 /// Partial update of [`ClientOptions`]. `id_token_signed_response_alg: Some(None)` resets the
@@ -116,6 +128,9 @@ pub struct ClientOptionsPatch {
     /// `Some(None)` falls back to the tenant policy.
     pub mfa_policy: Option<Option<MfaPolicy>>,
     pub organization: Option<OrgClientPolicy>,
+    pub require_pushed_authorization_requests: Option<bool>,
+    pub client_kind: Option<ClientKind>,
+    pub headless_native: Option<bool>,
 }
 
 /// A created client. `client_secret` is the plaintext secret, returned exactly once and only for
@@ -380,6 +395,78 @@ pub fn validate_client_phase4(
     Ok(())
 }
 
+/// The client fields [`validate_client_policy`] looks at, taken from a registration being
+/// written (create: input and options; update: the merged values).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClientPolicyView {
+    pub consent_mode: ConsentMode,
+    /// The effective value (`ClientInput::require_pkce` defaults to `true`).
+    pub require_pkce: bool,
+    pub client_kind: ClientKind,
+    pub headless_native: bool,
+}
+
+impl ClientPolicyView {
+    /// The view of a registration and its options.
+    pub fn of(input: &ClientInput, options: &ClientOptions) -> Self {
+        Self {
+            consent_mode: options.consent_mode,
+            require_pkce: input.require_pkce.unwrap_or(true),
+            client_kind: options.client_kind,
+            headless_native: options.headless_native,
+        }
+    }
+}
+
+/// The security rules for the 1.0 client fields, one implementation for every write path
+/// (admin API, declarative configuration, DCR, CIMD). `source` is where the client comes from
+/// (the stored `registration_source` for an update).
+///
+/// - An agent (`client_kind = agent`) never skips consent (decision Q7): `consent_mode` must
+///   be `required`.
+/// - `headless_native` (research Pitfall 9) is for administrator-registered clients only
+///   (`source = static`, never DCR or CIMD), never for an agent, only for a first-party client
+///   (`consent_mode = skip_first_party`) and only with PKCE required.
+///
+/// Errors are `Validation` on `consent_mode` or `headless_native`.
+pub fn validate_client_policy(c: &ClientPolicyView, source: ClientSource) -> Result<(), CoreError> {
+    if c.client_kind == ClientKind::Agent && c.consent_mode == ConsentMode::SkipFirstParty {
+        return Err(invalid(
+            "consent_mode",
+            "agent clients never skip consent; use consent_mode required",
+        ));
+    }
+    if c.headless_native {
+        if source != ClientSource::Static {
+            return Err(invalid(
+                "headless_native",
+                "only administrator-registered clients may use the native headless API \
+                 (never dynamically registered or metadata-document clients)",
+            ));
+        }
+        if c.client_kind == ClientKind::Agent {
+            return Err(invalid(
+                "headless_native",
+                "agent clients may not use the native headless API",
+            ));
+        }
+        if c.consent_mode != ConsentMode::SkipFirstParty {
+            return Err(invalid(
+                "headless_native",
+                "the native headless API is for first-party clients: set consent_mode \
+                 skip_first_party",
+            ));
+        }
+        if !c.require_pkce {
+            return Err(invalid(
+                "headless_native",
+                "the native headless API requires PKCE (require_pkce true)",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn options_of(client: &Client) -> ClientOptions {
     ClientOptions {
         token_format: client.token_format,
@@ -392,6 +479,9 @@ fn options_of(client: &Client) -> ClientOptions {
         allowed_resources: client.allowed_resources.clone(),
         mfa_policy: client.mfa_policy,
         organization: client.organization,
+        require_pushed_authorization_requests: client.require_pushed_authorization_requests,
+        client_kind: client.client_kind,
+        headless_native: client.headless_native,
     }
 }
 
@@ -431,6 +521,12 @@ fn changed_fields(patch: &ClientPatch, options: &ClientOptionsPatch) -> Vec<&'st
     push(options.allowed_resources.is_some(), "allowed_resources");
     push(options.mfa_policy.is_some(), "mfa_policy");
     push(options.organization.is_some(), "organization");
+    push(
+        options.require_pushed_authorization_requests.is_some(),
+        "require_pushed_authorization_requests",
+    );
+    push(options.client_kind.is_some(), "client_kind");
+    push(options.headless_native.is_some(), "headless_native");
     f
 }
 
@@ -624,6 +720,12 @@ impl ClientService {
         check_org_policy(tenant.slug == SYSTEM_TENANT_SLUG, options.organization)?;
         validate_client_options(&input, &options, &tenant.settings)?;
         validate_client_phase4(&input, &options, self.redirect_validator)?;
+        let source = if dynamic.is_some() {
+            ClientSource::Dynamic
+        } else {
+            ClientSource::Static
+        };
+        validate_client_policy(&ClientPolicyView::of(&input, &options), source)?;
         let allowed_resources = parse_resources(&options.allowed_resources)?;
         let provided = chosen.as_ref().and_then(|(_, s)| s.clone());
         let (secret, hash) = match (uses_secret(input.auth_method), provided) {
@@ -670,16 +772,12 @@ impl ClientService {
             allowed_resources,
             mfa_policy: options.mfa_policy,
             metadata_expires_at: None,
-            registration_source: if dynamic.is_some() {
-                crate::model::ClientSource::Dynamic
-            } else {
-                crate::model::ClientSource::Static
-            },
+            registration_source: source,
             registration_access_token_hash: dynamic,
             organization: options.organization,
-            require_pushed_authorization_requests: false,
-            client_kind: crate::model::ClientKind::Application,
-            headless_native: false,
+            require_pushed_authorization_requests: options.require_pushed_authorization_requests,
+            client_kind: options.client_kind,
+            headless_native: options.headless_native,
         };
         let action = if new.registration_access_token_hash.is_some() {
             AuditAction::ClientRegistered
@@ -866,12 +964,25 @@ impl ClientService {
         if let Some(o) = options.organization {
             merged_options.organization = o;
         }
+        if let Some(r) = options.require_pushed_authorization_requests {
+            merged_options.require_pushed_authorization_requests = r;
+        }
+        if let Some(k) = options.client_kind {
+            merged_options.client_kind = k;
+        }
+        if let Some(h) = options.headless_native {
+            merged_options.headless_native = h;
+        }
         check_org_policy(
             tenant.slug == SYSTEM_TENANT_SLUG,
             merged_options.organization,
         )?;
         validate_client_options(&merged, &merged_options, &tenant.settings)?;
         validate_client_phase4(&merged, &merged_options, self.redirect_validator)?;
+        validate_client_policy(
+            &ClientPolicyView::of(&merged, &merged_options),
+            current.registration_source,
+        )?;
         let fields = changed_fields(&patch, &options);
         let update = ClientUpdate {
             name: patch.name.map(|n| n.trim().to_owned()),
@@ -899,9 +1010,9 @@ impl ClientService {
             metadata_expires_at: None,
             registration_access_token_hash: None,
             organization: options.organization,
-            require_pushed_authorization_requests: None,
-            client_kind: None,
-            headless_native: None,
+            require_pushed_authorization_requests: options.require_pushed_authorization_requests,
+            client_kind: options.client_kind,
+            headless_native: options.headless_native,
         };
         let client = self
             .storage
@@ -1572,5 +1683,94 @@ mod tests {
             assert!(check_org_policy(false, p).is_ok());
         }
         assert!(check_org_policy(true, OrgClientPolicy::Off).is_ok());
+    }
+
+    /// Every combination of kind x consent mode x headless_native x require_pkce x source,
+    /// checked against the rules written out independently here.
+    #[test]
+    fn client_policy_truth_table() {
+        let mut accepted = 0;
+        for kind in [ClientKind::Application, ClientKind::Agent] {
+            for consent in [ConsentMode::Required, ConsentMode::SkipFirstParty] {
+                for headless in [false, true] {
+                    for pkce in [false, true] {
+                        for source in [
+                            ClientSource::Static,
+                            ClientSource::Dynamic,
+                            ClientSource::Cimd,
+                        ] {
+                            let view = ClientPolicyView {
+                                consent_mode: consent,
+                                require_pkce: pkce,
+                                client_kind: kind,
+                                headless_native: headless,
+                            };
+                            let agent_skips =
+                                kind == ClientKind::Agent && consent == ConsentMode::SkipFirstParty;
+                            let headless_ok = source == ClientSource::Static
+                                && kind == ClientKind::Application
+                                && consent == ConsentMode::SkipFirstParty
+                                && pkce;
+                            let expected_ok = !agent_skips && (!headless || headless_ok);
+                            let got = validate_client_policy(&view, source);
+                            assert_eq!(got.is_ok(), expected_ok, "{view:?} {source:?}: {got:?}");
+                            if expected_ok {
+                                accepted += 1;
+                            } else if agent_skips {
+                                assert_eq!(field_of(got), "consent_mode", "{view:?}");
+                            } else {
+                                assert_eq!(field_of(got), "headless_native", "{view:?}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // 2 kinds x 2 consent x 2 pkce x 3 sources without headless, minus agent skips (6),
+        // plus the one headless shape (static application first-party with PKCE).
+        assert_eq!(accepted, 24 - 6 + 1);
+    }
+
+    #[test]
+    fn agent_client_cannot_skip_consent() {
+        let view = ClientPolicyView {
+            consent_mode: ConsentMode::SkipFirstParty,
+            require_pkce: true,
+            client_kind: ClientKind::Agent,
+            headless_native: false,
+        };
+        assert_eq!(
+            field_of(validate_client_policy(&view, ClientSource::Static)),
+            "consent_mode"
+        );
+        let required = ClientPolicyView {
+            consent_mode: ConsentMode::Required,
+            ..view
+        };
+        assert!(validate_client_policy(&required, ClientSource::Static).is_ok());
+    }
+
+    #[test]
+    fn policy_view_takes_the_effective_pkce_value() {
+        let options = ClientOptions {
+            consent_mode: ConsentMode::SkipFirstParty,
+            headless_native: true,
+            ..ClientOptions::default()
+        };
+        // `require_pkce: None` means true.
+        let view = ClientPolicyView::of(&public(), &options);
+        assert!(view.require_pkce);
+        assert!(validate_client_policy(&view, ClientSource::Static).is_ok());
+        let no_pkce = ClientInput {
+            require_pkce: Some(false),
+            ..confidential()
+        };
+        assert_eq!(
+            field_of(validate_client_policy(
+                &ClientPolicyView::of(&no_pkce, &options),
+                ClientSource::Static
+            )),
+            "headless_native"
+        );
     }
 }

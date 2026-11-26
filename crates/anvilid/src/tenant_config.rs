@@ -142,6 +142,7 @@ async fn service(cfg: &Config) -> anyhow::Result<ConfigService> {
             tester: Arc::new(anvil_mail::LettreSmtpTester::default()),
         },
         installation_smtp: cfg.smtp_url.is_some(),
+        dev_mode: app_config.dev_mode(),
     })
 }
 

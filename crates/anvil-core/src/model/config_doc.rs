@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use super::attribute::AttributeDefinition;
 use super::branding::ThemeTokens;
 use super::client::{
-    ApplicationType, ClientAuthMethod, ClientType, ConsentMode, GrantType, TokenFormat,
+    ApplicationType, ClientAuthMethod, ClientKind, ClientType, ConsentMode, GrantType, TokenFormat,
 };
 use super::connection::ConnectionConfig;
 use super::organization::OrgClientPolicy;
@@ -134,10 +134,37 @@ pub struct ClientSection {
     /// Organization policy; omitted when `off`.
     #[serde(default, skip_serializing_if = "OrgClientPolicy::is_off")]
     pub organization: OrgClientPolicy,
+    /// RFC 9126 §6: the client must use pushed authorization requests; omitted when `false`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub require_pushed_authorization_requests: bool,
+    /// `application` or `agent` (AGT-03; an agent never skips consent); omitted when
+    /// `application`.
+    #[serde(default, skip_serializing_if = "is_application")]
+    pub client_kind: ClientKind,
+    /// May use the native headless flow API (first-party, PKCE, not an agent); omitted when
+    /// `false`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub headless_native: bool,
 }
 
 fn default_true() -> bool {
     true
+}
+
+#[allow(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde skip_serializing_if passes a reference"
+)]
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+#[allow(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde skip_serializing_if passes a reference"
+)]
+fn is_application(k: &ClientKind) -> bool {
+    *k == ClientKind::Application
 }
 
 /// An upstream identity-provider connection, keyed by slug. Tenant connections only: an
@@ -417,6 +444,38 @@ mod tests {
         ] {
             assert!(serde_json::from_str::<SecretInput>(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn client_v10_fields_default_and_are_omitted_when_default() {
+        let base = r#"{"client_id":"web","name":"Web","client_type":"public","application_type":"web","auth_method":"none"}"#;
+        let c: ClientSection = serde_json::from_str(base).unwrap();
+        assert!(!c.require_pushed_authorization_requests && !c.headless_native);
+        assert_eq!(c.client_kind, ClientKind::Application);
+        let out = serde_json::to_value(&c).unwrap();
+        for key in [
+            "require_pushed_authorization_requests",
+            "client_kind",
+            "headless_native",
+        ] {
+            assert!(out.get(key).is_none(), "{key}");
+        }
+        let set = base.replace(
+            "\"auth_method\":\"none\"",
+            "\"auth_method\":\"none\",\"require_pushed_authorization_requests\":true,\"client_kind\":\"agent\",\"headless_native\":true",
+        );
+        let c: ClientSection = serde_json::from_str(&set).unwrap();
+        assert!(c.require_pushed_authorization_requests && c.headless_native);
+        assert_eq!(c.client_kind, ClientKind::Agent);
+        let out = serde_json::to_value(&c).unwrap();
+        assert_eq!(out["client_kind"], "agent");
+        assert_eq!(out["require_pushed_authorization_requests"], true);
+        assert_eq!(out["headless_native"], true);
+        let unknown = base.replace(
+            "\"auth_method\":\"none\"",
+            "\"auth_method\":\"none\",\"client_kind\":\"robot\"",
+        );
+        assert!(serde_json::from_str::<ClientSection>(&unknown).is_err());
     }
 
     #[test]

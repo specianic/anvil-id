@@ -255,3 +255,59 @@ async fn cimd_http_client_id_rejected_in_production() {
     assert_eq!(docs.total_hits().await, 0);
     assert!(stored(&app, &client_id).await.is_none());
 }
+
+#[tokio::test]
+async fn headless_native_refused_via_cimd() {
+    let (app, docs) = dev_open().await;
+    let tenant = authz::default_tenant(&app);
+    let client_id = docs.url(DOC_PATH);
+    let mut document = doc(&client_id);
+    // Administrator-only fields in a self-published document are never mapped.
+    document["headless_native"] = json!(true);
+    document["client_kind"] = json!("agent");
+    document["consent_mode"] = json!("skip_first_party");
+    docs.serve(DOC_PATH, &document, None).await;
+    let user = authz::user(&app, &tenant, "ada@example.com").await;
+    let session = authz::session(&app, &tenant, user).await;
+    let resp = authz::get(&app, &authorize_path(&client_id, &[]), Some(&session)).await;
+    assert_eq!(resp.status, 303, "{}", resp.text());
+    let row = stored(&app, &client_id).await.expect("materialised");
+    assert!(!row.headless_native);
+    assert_eq!(row.client_kind, anvil_core::model::ClientKind::Application);
+    assert_eq!(row.consent_mode, anvil_core::model::ConsentMode::Required);
+
+    // The shared client policy refuses the flag for a CIMD client whoever asks.
+    let clients = anvil_core::service::client::ClientService {
+        storage: app.storage_arc(),
+        clock: std::sync::Arc::new(cimd_support::FixedClock(anvil_core::ports::Clock::now(
+            app.clock(),
+        ))),
+        redirect_validator: anvil_core::oauth::redirect::validate_redirect_uri,
+    };
+    let err = clients
+        .update(
+            &tenant,
+            &client_id,
+            anvil_core::service::client::ClientPatch::default(),
+            anvil_core::service::client::ClientOptionsPatch {
+                consent_mode: Some(anvil_core::model::ConsentMode::SkipFirstParty),
+                headless_native: Some(true),
+                ..Default::default()
+            },
+            anvil_core::model::AuditActor::admin("test-admin"),
+            &anvil_core::model::RequestContext::system(),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            anvil_core::error::CoreError::Validation {
+                field: "headless_native",
+                ..
+            }
+        ),
+        "{err:?}"
+    );
+    assert!(!stored(&app, &client_id).await.unwrap().headless_native);
+}

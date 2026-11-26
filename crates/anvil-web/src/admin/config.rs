@@ -73,6 +73,7 @@ impl AppState {
                 tester: Arc::new(anvil_mail::LettreSmtpTester::default()),
             },
             installation_smtp: self.config().installation_smtp,
+            dev_mode: self.config().dev_mode(),
         })
     }
 }

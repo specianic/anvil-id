@@ -23,7 +23,11 @@
 //! - `redirect_uris` is required and follows the shared redirect URI rules;
 //! - `grant_types` / `response_types` are intersected with the server's [`ServerCaps`]; an empty
 //!   intersection is rejected;
-//! - `scope` never contains an `admin:` scope; when absent, [`ServerCaps::default_scopes`] apply.
+//! - `scope` never contains an `admin:` scope; when absent, [`ServerCaps::default_scopes`] apply;
+//! - `client_kind`, `headless_native` and `require_pushed_authorization_requests` are never read
+//!   from a document (unknown members are ignored): a CIMD client is always an `application`,
+//!   never native headless, and follows the tenant PAR policy. The shared
+//!   [`crate::service::client::validate_client_policy`] runs with source `cimd`.
 //!
 //! The client rules shared with every other client (name, auth method and grant consistency,
 //! inline JWKS, redirect URI syntax) are those of [`crate::service::client::validate_client`].
@@ -39,7 +43,10 @@ use crate::model::{
 };
 use crate::oauth::redirect::validate_redirect_uri;
 use crate::oauth::registration::is_registration_forbidden_scope;
-use crate::service::client::{ClientInput, MAX_REDIRECT_URIS, uses_secret, validate_client};
+use crate::service::client::{
+    ClientInput, ClientOptions, ClientPolicyView, MAX_REDIRECT_URIS, uses_secret, validate_client,
+    validate_client_policy,
+};
 
 /// Largest accepted metadata document (draft-03 §4: 5 kilobytes).
 pub const MAX_DOCUMENT_BYTES: usize = 5 * 1024;
@@ -82,6 +89,9 @@ impl Default for ServerCaps {
         }
     }
 }
+
+/// Every CIMD client is an ordinary application: the agent marker is administrator-only.
+const CIMD_CLIENT_KIND: crate::model::ClientKind = crate::model::ClientKind::Application;
 
 /// A validated metadata document, ready to be materialised as a client row.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,7 +153,7 @@ impl NewClientMetadata {
             created_at,
             organization: crate::model::OrgClientPolicy::Off,
             require_pushed_authorization_requests: false,
-            client_kind: crate::model::ClientKind::Application,
+            client_kind: CIMD_CLIENT_KIND,
             headless_native: false,
         }
     }
@@ -372,10 +382,21 @@ pub fn validate(
         jwks: jwks.clone(),
         jwks_uri: None,
     };
-    validate_client(&input, validate_redirect_uri).map_err(|e| match e {
+    let to_invalid = |e: CoreError| match e {
         CoreError::Validation { field, message } => invalid(format!("{field}: {message}")),
         other => invalid(other.to_string()),
-    })?;
+    };
+    validate_client(&input, validate_redirect_uri).map_err(to_invalid)?;
+    // The policy of what `to_new_client` stores (consent required, PKCE, application, not
+    // native headless), through the one rule set every client write uses.
+    let options = ClientOptions {
+        consent_mode: ConsentMode::Required,
+        client_kind: CIMD_CLIENT_KIND,
+        headless_native: false,
+        ..ClientOptions::default()
+    };
+    validate_client_policy(&ClientPolicyView::of(&input, &options), ClientSource::Cimd)
+        .map_err(to_invalid)?;
 
     Ok(NewClientMetadata {
         client_id: url.to_owned(),
@@ -672,6 +693,22 @@ mod tests {
         assert_eq!(c.token_format, TokenFormat::Jwt);
         assert_eq!(c.allowed_resources, vec!["https://mcp.example/"]);
         assert_eq!(c.client_type, ClientType::Public);
+    }
+
+    #[test]
+    fn headless_native_refused_via_cimd() {
+        let mut d = doc();
+        d["headless_native"] = json!(true);
+        d["client_kind"] = json!("agent");
+        d["require_pushed_authorization_requests"] = json!(true);
+        d["consent_mode"] = json!("skip_first_party");
+        let m = check(&d).unwrap();
+        let now = OffsetDateTime::UNIX_EPOCH;
+        let c = m.to_new_client(ClientId::new_v7(), now, now, vec![]);
+        assert!(!c.headless_native);
+        assert_eq!(c.client_kind, crate::model::ClientKind::Application);
+        assert!(!c.require_pushed_authorization_requests);
+        assert_eq!(c.consent_mode, ConsentMode::Required);
     }
 
     // ---- validate: rejections ----

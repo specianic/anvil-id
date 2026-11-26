@@ -95,7 +95,7 @@ pub(crate) async fn create_tenant(
     let tenant = state
         .admin_tenants()
         .create(
-            body.into_input(state.config().installation_smtp),
+            body.into_input(state.config().installation_smtp, state.config().dev_mode()),
             auth.actor(),
             &ctx,
         )
@@ -178,7 +178,11 @@ pub(crate) async fn update_tenant(
     auth.require(Resource::Tenants, Access::Write)?;
     let tenants = state.admin_tenants();
     let current = tenants.get(&slug).await?;
-    let (patch, captcha) = body.into_patch(&current.settings, state.config().installation_smtp);
+    let (patch, captcha) = body.into_patch(
+        &current.settings,
+        state.config().installation_smtp,
+        state.config().dev_mode(),
+    );
     let tenant = tenants
         .update(&slug, patch, captcha, auth.actor(), &ctx)
         .await?;

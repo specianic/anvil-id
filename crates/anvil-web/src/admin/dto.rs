@@ -8,14 +8,15 @@ use anvil_core::model::{
     AuditOutcome as CoreAuditOutcome, CaptchaProvider as CoreCaptchaProvider,
     CimdPolicy as CoreCimdPolicy, CimdSettings as CoreCimdSettings,
     ClaimMapping as CoreClaimMapping, Client, ClientAuthMethod as CoreClientAuthMethod,
-    ClientSource as CoreClientSource, ClientType as CoreClientType, Connection,
-    ConnectionConfig as CoreConnectionConfig, ConnectionKind as CoreConnectionKind,
+    ClientKind as CoreClientKind, ClientSource as CoreClientSource, ClientType as CoreClientType,
+    Connection, ConnectionConfig as CoreConnectionConfig, ConnectionKind as CoreConnectionKind,
     ConsentMode as CoreConsentMode, CredentialKind as CoreCredentialKind, CredentialSummary,
     DEFAULT_SIGNING_ALG, DcrPolicy as CoreDcrPolicy, DcrSettings as CoreDcrSettings,
     EmailKind as CoreEmailKind, EndpointOverrides as CoreEndpointOverrides,
-    GrantType as CoreGrantType, IdpMetadata, KeyState as CoreKeyState, MfaPolicy as CoreMfaPolicy,
-    NameIdFormat as CoreNameIdFormat, OAuth2Config as CoreOAuth2Config,
-    OidcConfig as CoreOidcConfig, OrgClientPolicy as CoreOrgClientPolicy, Page,
+    GrantType as CoreGrantType, HeadlessSettings as CoreHeadlessSettings, IdpMetadata,
+    KeyState as CoreKeyState, MfaPolicy as CoreMfaPolicy, NameIdFormat as CoreNameIdFormat,
+    OAuth2Config as CoreOAuth2Config, OidcConfig as CoreOidcConfig,
+    OrgClientPolicy as CoreOrgClientPolicy, Page, ParSettings as CoreParSettings,
     RegistrationMode as CoreRegistrationMode, SamlAttributeMapping as CoreSamlAttributeMapping,
     SamlConfig as CoreSamlConfig, SigningKey as CoreSigningKey, SmtpTls as CoreSmtpTls,
     SocialConfig as CoreSocialConfig, SocialProvider as CoreSocialProvider,
@@ -111,6 +112,12 @@ wire_enum!(
     /// When the consent screen is shown: `required` asks for every scope not granted yet;
     /// `skip_first_party` never asks (first-party clients only).
     ConsentMode => CoreConsentMode { Required, SkipFirstParty }
+);
+wire_enum!(
+    /// What a client is: `application` (default) or `agent`, an AI agent acting for the user
+    /// (the consent page says so). An agent never skips consent. Administrators set it on any
+    /// client; dynamic registration and metadata documents never do.
+    ClientKind => CoreClientKind { Application, Agent }
 );
 wire_enum!(
     /// CAPTCHA provider.
@@ -389,6 +396,10 @@ pub struct TenantSettings {
     pub dcr: DcrSettings,
     /// Client ID Metadata Document policy in force (always `disabled` for `system`).
     pub cimd: CimdSettings,
+    /// Pushed authorization request policy (RFC 9126).
+    pub par: ParSettings,
+    /// Headless flow API settings (browser-mode origin allow-list).
+    pub headless: HeadlessSettings,
 }
 
 impl From<CoreTenantSettings> for TenantSettings {
@@ -411,6 +422,62 @@ impl From<CoreTenantSettings> for TenantSettings {
             claims: s.claims.into(),
             dcr: s.dcr.into(),
             cimd: s.cimd.into(),
+            par: s.par.into(),
+            headless: s.headless.into(),
+        }
+    }
+}
+
+/// Pushed authorization request policy of a tenant (RFC 9126).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct ParSettings {
+    /// Every client of the tenant must use pushed authorization requests (RFC 9126 §5
+    /// `require_pushed_authorization_requests`). Default `false`; a client can still require it
+    /// for itself.
+    pub require_pushed_authorization_requests: bool,
+}
+
+impl From<CoreParSettings> for ParSettings {
+    fn from(p: CoreParSettings) -> Self {
+        Self {
+            require_pushed_authorization_requests: p.require_pushed_authorization_requests,
+        }
+    }
+}
+
+impl From<ParSettings> for CoreParSettings {
+    fn from(p: ParSettings) -> Self {
+        Self {
+            require_pushed_authorization_requests: p.require_pushed_authorization_requests,
+        }
+    }
+}
+
+/// Headless flow API settings of a tenant.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct HeadlessSettings {
+    /// Origins of single-page apps that may call the headless flow API with credentials
+    /// (browser mode). Exact `https://host[:port]` origins, lowercase, no path or wildcard;
+    /// `http://localhost` and `http://127.0.0.1` only in development mode. The app must be
+    /// same-site with the issuer (browsers block cross-site cookies). Empty = only the
+    /// tenant's own origin. At most 50.
+    pub allowed_origins: Vec<String>,
+}
+
+impl From<CoreHeadlessSettings> for HeadlessSettings {
+    fn from(h: CoreHeadlessSettings) -> Self {
+        Self {
+            allowed_origins: h.allowed_origins,
+        }
+    }
+}
+
+impl From<HeadlessSettings> for CoreHeadlessSettings {
+    fn from(h: HeadlessSettings) -> Self {
+        Self {
+            allowed_origins: h.allowed_origins,
         }
     }
 }
@@ -649,6 +716,10 @@ pub struct NewTenantSettings {
     pub dcr: DcrSettings,
     /// Default: disabled.
     pub cimd: CimdSettings,
+    /// Default: pushed authorization requests optional.
+    pub par: ParSettings,
+    /// Default: no extra origins.
+    pub headless: HeadlessSettings,
 }
 
 impl Default for NewTenantSettings {
@@ -667,6 +738,8 @@ impl Default for NewTenantSettings {
             claims: core.claims.into(),
             dcr: core.dcr.into(),
             cimd: core.cimd.into(),
+            par: core.par.into(),
+            headless: core.headless.into(),
         }
     }
 }
@@ -687,8 +760,8 @@ impl From<NewTenantSettings> for CoreTenantSettings {
             cimd: s.cimd.into(),
             claims: s.claims.into(),
             dcr: s.dcr.into(),
-            par: anvil_core::model::ParSettings::default(),
-            headless: anvil_core::model::HeadlessSettings::default(),
+            par: s.par.into(),
+            headless: s.headless.into(),
         }
     }
 }
@@ -735,6 +808,13 @@ pub struct TenantSettingsPatch {
     /// Absent fields stay unchanged. The system tenant refuses any policy but `disabled` (422).
     #[serde(default)]
     pub cimd: Option<CimdSettingsPatch>,
+    /// Replaces the PAR policy.
+    #[serde(default)]
+    pub par: Option<ParSettings>,
+    /// Replaces the headless settings (the whole origin list). Wildcards, paths and non-https
+    /// origins are refused (422).
+    #[serde(default)]
+    pub headless: Option<HeadlessSettings>,
 }
 
 impl TenantSettingsPatch {
@@ -759,7 +839,9 @@ impl TenantSettingsPatch {
             || self.default_locale.is_some()
             || self.claims.is_some()
             || self.dcr.is_some()
-            || self.cimd.is_some();
+            || self.cimd.is_some()
+            || self.par.is_some()
+            || self.headless.is_some();
         let settings = touched.then(|| CoreTenantSettings {
             registration: self.registration.map_or(current.registration, Into::into),
             require_verified_email: self
@@ -791,9 +873,10 @@ impl TenantSettingsPatch {
                 Some(patch) => patch.merge(&current.claims),
                 None => current.claims.clone(),
             },
-            // Not exposed in the admin API yet (07-12): keep the stored values.
-            par: current.par.clone(),
-            headless: current.headless.clone(),
+            par: self.par.map_or_else(|| current.par.clone(), Into::into),
+            headless: self
+                .headless
+                .map_or_else(|| current.headless.clone(), Into::into),
         });
         (settings, captcha)
     }
@@ -905,14 +988,16 @@ pub struct CreateTenant {
 }
 
 impl CreateTenant {
-    /// The core input; `installation_smtp` = whether the installation SMTP is configured.
-    pub fn into_input(self, installation_smtp: bool) -> NewTenantInput {
+    /// The core input; `installation_smtp` = whether the installation SMTP is configured,
+    /// `dev_mode` = whether the server runs in development mode.
+    pub fn into_input(self, installation_smtp: bool, dev_mode: bool) -> NewTenantInput {
         NewTenantInput {
             slug: self.slug,
             display_name: self.display_name,
             host: self.host,
             settings: self.settings.into(),
             installation_smtp,
+            dev_mode,
         }
     }
 }
@@ -933,11 +1018,13 @@ pub struct UpdateTenant {
 
 impl UpdateTenant {
     /// The core patch and CAPTCHA change, with settings merged onto `current`.
-    /// `installation_smtp` = whether the installation SMTP is configured.
+    /// `installation_smtp` = whether the installation SMTP is configured, `dev_mode` = whether
+    /// the server runs in development mode.
     pub fn into_patch(
         self,
         current: &CoreTenantSettings,
         installation_smtp: bool,
+        dev_mode: bool,
     ) -> (TenantPatch, Option<CaptchaChange>) {
         let (settings, captcha) = match self.settings {
             Some(p) => p.merge(current),
@@ -949,6 +1036,7 @@ impl UpdateTenant {
                 host: self.host,
                 settings,
                 installation_smtp,
+                dev_mode,
             },
             captcha,
         )
@@ -993,6 +1081,13 @@ pub struct ClientView {
     pub mfa_policy: Option<MfaPolicy>,
     /// Organization policy (`organization` authorization parameter and org claims).
     pub organization: OrgClientPolicy,
+    /// The client may only use pushed authorization requests (RFC 9126 §6).
+    pub require_pushed_authorization_requests: bool,
+    /// `application` or `agent` (an AI agent; never skips consent).
+    pub client_kind: ClientKind,
+    /// May use the native headless flow API (administrator-registered first-party clients
+    /// with PKCE only).
+    pub headless_native: bool,
     /// How the client came to exist. Dynamic and CIMD clients can be deleted like any client;
     /// a deleted CIMD client is fetched again on its next use if the CIMD policy allows it.
     pub registration_source: ClientSource,
@@ -1033,6 +1128,9 @@ impl From<Client> for ClientView {
             allowed_resources: c.allowed_resources,
             mfa_policy: c.mfa_policy.map(Into::into),
             organization: c.organization.into(),
+            require_pushed_authorization_requests: c.require_pushed_authorization_requests,
+            client_kind: c.client_kind.into(),
+            headless_native: c.headless_native,
             registration_source: c.registration_source.into(),
             metadata_expires_at: c.metadata_expires_at.map(ts),
             created_at: ts(c.created_at),
@@ -1143,6 +1241,16 @@ pub struct CreateClient {
     /// Default `off`. Must be `off` in the system tenant.
     #[serde(default)]
     pub organization: Option<OrgClientPolicy>,
+    /// Default `false`. The client may only use pushed authorization requests (RFC 9126 §6).
+    #[serde(default)]
+    pub require_pushed_authorization_requests: Option<bool>,
+    /// Default `application`. An `agent` must use `consent_mode` `required` (422 otherwise).
+    #[serde(default)]
+    pub client_kind: Option<ClientKind>,
+    /// Default `false`. Needs `consent_mode` `skip_first_party`, PKCE and `client_kind`
+    /// `application` (422 otherwise).
+    #[serde(default)]
+    pub headless_native: Option<bool>,
 }
 
 impl CreateClient {
@@ -1163,6 +1271,11 @@ impl CreateClient {
             allowed_resources: self.allowed_resources.clone(),
             mfa_policy: self.mfa_policy.map(Into::into),
             organization: self.organization.map_or(defaults.organization, Into::into),
+            require_pushed_authorization_requests: self
+                .require_pushed_authorization_requests
+                .unwrap_or(defaults.require_pushed_authorization_requests),
+            client_kind: self.client_kind.map_or(defaults.client_kind, Into::into),
+            headless_native: self.headless_native.unwrap_or(defaults.headless_native),
         };
         (self.into(), options)
     }
@@ -1234,6 +1347,15 @@ pub struct UpdateClient {
     /// Must stay `off` in the system tenant.
     #[serde(default)]
     pub organization: Option<OrgClientPolicy>,
+    #[serde(default)]
+    pub require_pushed_authorization_requests: Option<bool>,
+    /// An `agent` must use `consent_mode` `required` (422 otherwise).
+    #[serde(default)]
+    pub client_kind: Option<ClientKind>,
+    /// Needs `consent_mode` `skip_first_party`, PKCE, `client_kind` `application` and an
+    /// administrator-registered client (422 otherwise).
+    #[serde(default)]
+    pub headless_native: Option<bool>,
 }
 
 impl UpdateClient {
@@ -1250,6 +1372,9 @@ impl UpdateClient {
             allowed_resources: self.allowed_resources,
             mfa_policy: self.mfa_policy.map(|m| m.map(Into::into)),
             organization: self.organization.map(Into::into),
+            require_pushed_authorization_requests: self.require_pushed_authorization_requests,
+            client_kind: self.client_kind.map(Into::into),
+            headless_native: self.headless_native,
         };
         let patch = ClientPatch {
             name: self.name,
