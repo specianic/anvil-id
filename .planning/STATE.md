@@ -6,15 +6,15 @@ current_phase: 04
 current_phase_name: release 0 3 real world logins
 current_plan: 37
 status: executing
-stopped_at: Completed 05-31-PLAN.md
-last_updated: "2026-11-26T06:55:13.781Z"
+stopped_at: Completed 05-33-PLAN.md
+last_updated: "2026-11-26T06:55:33.753Z"
 last_activity: 2026-11-26
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 135
-  completed_plans: 130
-  percent: 96
+  completed_plans: 131
+  percent: 97
 ---
 
 # Project State
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 **Status:** Ready to execute
 **Last Activity:** 2026-11-26
 **Last Activity Description:** 04-32 phase gate complete (430-pair security map, anvilid 0.3.0, 0.3 migrations pinned, every workflow green on 9f88363)
-**Progress:** [██████████] 96%
+**Progress:** [██████████] 97%
 
 Phase 4 has 37 plans (04-01 through 04-37). Every plan except 04-33 (manual real-provider checklist, then tag
 v0.3.0) has a SUMMARY. Current Plan counts plans in execution order: 04-33 is the 37th and last.
@@ -186,6 +186,7 @@ v0.3.0) has a SUMMARY. Current Plan counts plans in execution order: 04-33 is th
 | Phase 05 P26 | 75min | 2 tasks | 10 files |
 | Phase 05 P32 | 45min | 2 tasks | 17 files |
 | Phase 05 P31 | 25min | 3 tasks | 16 files |
+| Phase 05 P33 | 10min | 2 tasks | 13 files |
 
 ## Accumulated Context
 
@@ -433,6 +434,7 @@ Recent decisions affecting current work:
 - [Phase 05]: 05-32: one reserved admin-token rule (admin, admin:*); non-system static clients refuse it (422 on scopes), also in config validate_document
 - [Phase 05]: 05-32: config plan/apply accept 1 MiB bodies (POST exact paths only); every other route stays 64 KiB
 - [Phase 05]: 05-31: anvil_jose::hmac_sha256(key, parts) is the one HMAC-SHA-256 (limiter, email/recovery codes, webhook signatures); JOBS_SHUTDOWN_TIMEOUT derived as WEBHOOK_TIMEOUT + 5 s
+- [Phase 05]: 05-33: account_attributes::attributes_nav is the one rule for the Attributes nav entry; handlers compute it before one-time changes
 
 ### Pending Todos
 
@@ -445,6 +447,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-26T06:55:13.778Z
-Stopped at: Completed 05-31-PLAN.md
+Last session: 2026-11-26T06:55:33.750Z
+Stopped at: Completed 05-33-PLAN.md
 Resume file: None
