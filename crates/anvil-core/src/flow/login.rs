@@ -49,6 +49,27 @@
 //! link signs in with `amr = [otp]` (single factor), then the MFA policy applies as after a
 //! password, and a second factor after it ends in [`SessionAuth::EmailCodeSecondFactor`].
 //!
+//! # Identifier-first sign-in and home-realm discovery (ORG-04)
+//!
+//! A tenant with at least one verified, routed domain starts the login at
+//! [`LoginStep::EmailFirst`] ([`email_first`], form [`IDENTIFY_FORM_ID`]); every other tenant
+//! keeps the combined [`LoginStep::Identify`] form. The service routes the submitted email by its
+//! **domain only** ([`crate::policy::home_realm::route`], no account lookup) into an [`HrdRoute`]
+//! and [`routed`] decides:
+//!
+//! - [`HrdRoute::Local`]: the password step ([`LoginStep::Identify`] with
+//!   [`LoginState::email_first`]: the email is carried in a hidden field and shown read-only). The
+//!   same page for every non-routed address, known or unknown.
+//! - [`HrdRoute::Sso`] with `allow_local_password = false`: [`Identified::StartIdp`] (the
+//!   browser goes straight to the org's IdP).
+//! - [`HrdRoute::Sso`] with `allow_local_password = true` (the default, decision Q6/Q7):
+//!   [`LoginStep::SsoChoice`] ("Continue with single sign-on" or "Use password instead",
+//!   [`IdentifyInput`]).
+//!
+//! Passkeys and upstream buttons are accepted in every primary step ([`LoginStep::is_primary`]).
+//! Password, email-code and magic-link sign-in for an address whose domain forces SSO are refused
+//! by the service with [`USE_SSO`].
+//!
 //! Inputs that do not belong to the current step re-render the step's form with
 //! `flow.invalid_input` and plan no effects.
 //!
@@ -81,6 +102,13 @@ pub const SECOND_FACTOR_PASSKEY_FIELD: &str = "passkey";
 pub const ENROLL_FORM_ID: &str = "mfa-enroll";
 /// Id of the sign-in form shown while an upstream identity waits for link confirmation.
 pub const UPSTREAM_LINK_FORM_ID: &str = "upstream-link";
+/// Id of the email-first form ([`LoginStep::EmailFirst`]).
+pub const IDENTIFY_FORM_ID: &str = "login-identify";
+/// Id of the single-sign-on choice form ([`LoginStep::SsoChoice`]).
+pub const SSO_CHOICE_FORM_ID: &str = "login-sso-choice";
+/// Message key of a local sign-in (password, email code, magic link) refused because the email's
+/// domain signs in through its organization's identity provider.
+pub const USE_SSO: &str = "hrd.use_sso";
 
 /// Login state, stored as flow JSON. Every field has a serde default so flow JSON written by
 /// release 0.1 (`{"kind":"login","identifier":…}`) still decodes.
@@ -136,6 +164,10 @@ pub struct LoginState {
     /// verified identity until the continue step takes it out with a compare-and-swap.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub saml: Option<Box<SamlPending>>,
+    /// The email was entered on the email-first page (home-realm discovery): the password step
+    /// carries it in a hidden field and shows it read-only with a way back to the email page.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub email_first: bool,
 }
 
 /// Where the login stands.
@@ -154,6 +186,23 @@ pub enum LoginStep {
     Enroll { user_id: UserId },
     /// A sign-in email was requested ([`LoginState::email_code`]): enter its code or open its link.
     EmailCode,
+    /// Identifier-first sign-in (the tenant has a routed domain): the email alone, then routing by
+    /// its domain (or a passkey / upstream button).
+    EmailFirst,
+    /// The email's domain routes to `connection_id` and its org still allows passwords: continue
+    /// with single sign-on or use the password instead.
+    SsoChoice { connection_id: ConnectionId },
+}
+
+impl LoginStep {
+    /// Whether a primary authentication (password form, passkey, upstream or SAML start) may
+    /// begin in this step.
+    pub fn is_primary(self) -> bool {
+        matches!(
+            self,
+            Self::Identify | Self::EmailFirst | Self::SsoChoice { .. }
+        )
+    }
 }
 
 /// What follows a successful primary authentication.
@@ -236,7 +285,7 @@ pub(super) fn transition(
 
 /// Passkey options requested: the service creates the challenge and stores it in the state.
 pub(super) fn passkey_options(state: LoginState) -> (FlowState, Vec<Effect>) {
-    if state.step != LoginStep::Identify {
+    if !state.step.is_primary() {
         return invalid_input(state);
     }
     (FlowState::Login(state), vec![Effect::StartPasskey])
@@ -248,7 +297,7 @@ pub(super) fn passkey_assertion(
     mut state: LoginState,
     response_json: String,
 ) -> (FlowState, Vec<Effect>) {
-    if state.step != LoginStep::Identify {
+    if !state.step.is_primary() {
         return invalid_input(state);
     }
     match state.passkey_challenge.take() {
@@ -266,7 +315,7 @@ pub(super) fn passkey_assertion(
         // generic passkey failure. A present challenge is kept for a retry.
         other => {
             state.passkey_challenge = other;
-            let f = form(&state, vec![error("login.passkey_failed")]);
+            let f = current_form(&state, vec![error("login.passkey_failed")]);
             (FlowState::Login(state), vec![Effect::Render(f)])
         }
     }
@@ -517,7 +566,7 @@ impl SamlPending {
 /// `None` unless the login is in its identify step and not a step-up: a SAML sign-in is a
 /// primary authentication.
 pub fn with_saml(state: LoginState, pending: SamlPending) -> Option<LoginState> {
-    if state.step != LoginStep::Identify || state.step_up_session.is_some() {
+    if !state.step.is_primary() || state.step_up_session.is_some() {
         return None;
     }
     Some(LoginState {
@@ -570,6 +619,14 @@ pub(super) fn on_failure(state: &LoginState, failure: Failure) -> FormDescriptio
             };
             email_code::form_for(state.email_code.as_deref(), vec![error(key)])
         }
+        LoginStep::EmailFirst | LoginStep::SsoChoice { .. } => {
+            let key = match failure {
+                Failure::Overloaded => "service.overloaded",
+                Failure::PasskeyInvalid => "login.passkey_failed",
+                _ => "flow.invalid_input",
+            };
+            current_form(state, vec![error(key)])
+        }
     }
 }
 
@@ -580,7 +637,203 @@ pub(super) fn current_form(state: &LoginState, messages: Vec<FormMessage>) -> Fo
         LoginStep::SecondFactor { methods, .. } => second_factor_form(methods, messages),
         LoginStep::Enroll { .. } => enroll_form(messages),
         LoginStep::EmailCode => email_code::form_for(state.email_code.as_deref(), messages),
+        LoginStep::EmailFirst => identify_form(state, messages),
+        LoginStep::SsoChoice { .. } => sso_choice_form(state, messages),
     }
+}
+
+/// The form of the current step with `messages` (for the service's own refusals, e.g.
+/// [`USE_SSO`]).
+pub fn form_with(state: &LoginState, messages: Vec<FormMessage>) -> FormDescription {
+    current_form(state, messages)
+}
+
+/// Where the service routed an email (by its domain only).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HrdRoute {
+    /// Not routed: local sign-in.
+    Local,
+    /// Routed to the org connection `connection_id`.
+    Sso {
+        connection_id: ConnectionId,
+        /// The org still allows password (and email) sign-in for the domain.
+        allow_local_password: bool,
+    },
+}
+
+/// A submission of the email-first page or the single-sign-on choice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IdentifyInput {
+    /// The email typed on the email-first page.
+    Email(String),
+    /// "Continue with single sign-on" (choice step).
+    Sso,
+    /// "Use password instead" (choice step).
+    Password,
+    /// Back to the email page (password step after the email page, or the choice step).
+    Change,
+}
+
+/// What [`identify_input`] needs next.
+#[derive(Debug)]
+pub enum IdentifyStep {
+    /// Route this normalised email by its domain, then call [`routed`] (`chose_sso`: the user
+    /// pressed "Continue with single sign-on").
+    Route {
+        state: LoginState,
+        email: String,
+        chose_sso: bool,
+    },
+    /// Render this state's form (no routing needed).
+    Render(LoginState, FormDescription),
+}
+
+/// The outcome of routing an email.
+#[derive(Debug)]
+pub enum Identified {
+    /// Store this state and render the form.
+    Render(Box<(LoginState, FormDescription)>),
+    /// Start the sign-in at the IdP of this connection (the state is unchanged).
+    StartIdp(ConnectionId),
+}
+
+/// The initial state of an identifier-first login and its email page.
+pub fn email_first() -> (LoginState, FormDescription) {
+    let state = LoginState {
+        step: LoginStep::EmailFirst,
+        ..LoginState::default()
+    };
+    let f = identify_form(&state, Vec::new());
+    (state, f)
+}
+
+/// The email-first page or choice step received `input`. No lookup of any kind happens here.
+pub fn identify_input(mut state: LoginState, input: IdentifyInput) -> IdentifyStep {
+    let invalid = |state: LoginState| {
+        let f = current_form(&state, vec![error("flow.invalid_input")]);
+        IdentifyStep::Render(state, f)
+    };
+    if state.step_up_session.is_some() || state.pending_link.is_some() {
+        return invalid(state);
+    }
+    match (input, state.step) {
+        (IdentifyInput::Email(raw), LoginStep::EmailFirst) => {
+            let raw = raw.trim().to_owned();
+            state.identifier = (!raw.is_empty()).then(|| raw.clone());
+            match normalize_email(&raw) {
+                Ok(email) => IdentifyStep::Route {
+                    state,
+                    email,
+                    chose_sso: false,
+                },
+                Err(_) => {
+                    let f = identify_form(&state, vec![error("email.invalid")]);
+                    IdentifyStep::Render(state, f)
+                }
+            }
+        }
+        (IdentifyInput::Sso, LoginStep::SsoChoice { .. }) => {
+            match state.identifier.as_deref().map(normalize_email) {
+                Some(Ok(email)) => IdentifyStep::Route {
+                    state,
+                    email,
+                    chose_sso: true,
+                },
+                _ => invalid(state),
+            }
+        }
+        (IdentifyInput::Password, LoginStep::SsoChoice { .. }) => {
+            let state = password_step(state);
+            let f = form(&state, Vec::new());
+            IdentifyStep::Render(state, f)
+        }
+        (IdentifyInput::Change, LoginStep::SsoChoice { .. })
+        | (IdentifyInput::Change, LoginStep::Identify)
+            if state.step != LoginStep::Identify || state.email_first =>
+        {
+            state.step = LoginStep::EmailFirst;
+            state.email_first = false;
+            state.passkey_challenge = None;
+            let f = identify_form(&state, Vec::new());
+            IdentifyStep::Render(state, f)
+        }
+        _ => invalid(state),
+    }
+}
+
+/// Applies the routing decision for `email` (see the module docs). `state` carries the entered
+/// identifier.
+pub fn routed(state: LoginState, route: HrdRoute, chose_sso: bool) -> Identified {
+    match route {
+        HrdRoute::Sso {
+            connection_id,
+            allow_local_password,
+        } if chose_sso || !allow_local_password => Identified::StartIdp(connection_id),
+        HrdRoute::Sso { connection_id, .. } => {
+            let state = LoginState {
+                step: LoginStep::SsoChoice { connection_id },
+                email_first: false,
+                passkey_challenge: None,
+                ..state
+            };
+            let f = sso_choice_form(&state, Vec::new());
+            Identified::Render(Box::new((state, f)))
+        }
+        HrdRoute::Local => {
+            let state = password_step(state);
+            let f = form(&state, Vec::new());
+            Identified::Render(Box::new((state, f)))
+        }
+    }
+}
+
+/// The password step after the email page: the identify step with the email locked.
+fn password_step(state: LoginState) -> LoginState {
+    LoginState {
+        step: LoginStep::Identify,
+        email_first: true,
+        passkey_challenge: None,
+        ..state
+    }
+}
+
+/// The email-first form: the email alone, posted to `login/identify`.
+pub(super) fn identify_form(state: &LoginState, messages: Vec<FormMessage>) -> FormDescription {
+    build_form(
+        IDENTIFY_FORM_ID,
+        "login/identify",
+        vec![field(
+            "identifier",
+            FieldKind::Email,
+            "field.email",
+            state.identifier.clone(),
+            true,
+            Some("username"),
+            Vec::new(),
+        )],
+        messages,
+    )
+}
+
+/// The single-sign-on choice form: the email (hidden, shown by the page) and `hrd.sso_explain`.
+/// The page posts `choice=sso` or `choice=password` to `login/identify`.
+pub(super) fn sso_choice_form(state: &LoginState, messages: Vec<FormMessage>) -> FormDescription {
+    let mut all = vec![FormMessage::new(MessageLevel::Info, "hrd.sso_explain")];
+    all.extend(messages);
+    build_form(
+        SSO_CHOICE_FORM_ID,
+        "login/identify",
+        vec![field(
+            "identifier",
+            FieldKind::Hidden,
+            "field.email",
+            state.identifier.clone(),
+            false,
+            None,
+            Vec::new(),
+        )],
+        all,
+    )
 }
 
 /// The enrolment form: the `code` of the newly added authenticator app.
@@ -616,17 +869,23 @@ pub(super) fn form(state: &LoginState, messages: Vec<FormMessage>) -> FormDescri
         }
         None => ("login", messages),
     };
+    // After the email page the address is fixed: carried in a hidden field, shown by the page.
+    let locked = state.email_first && state.pending_link.is_none();
     build_form(
         id,
         "login",
         vec![
             field(
                 "identifier",
-                FieldKind::Email,
+                if locked {
+                    FieldKind::Hidden
+                } else {
+                    FieldKind::Email
+                },
                 "field.email",
                 state.identifier.clone(),
-                true,
-                Some("username"),
+                !locked,
+                (!locked).then_some("username"),
                 Vec::new(),
             ),
             password_field("current-password", Vec::new()),
@@ -1728,5 +1987,269 @@ mod tests {
         assert!(p.is_fresh(at(1_000)));
         assert!(p.is_fresh(at(1_000 + 599)));
         assert!(!p.is_fresh(at(1_000 + 600)));
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Identifier-first sign-in (06-22)
+    // -----------------------------------------------------------------------------------------
+
+    fn conn() -> ConnectionId {
+        ConnectionId::new_v7()
+    }
+
+    fn sso(connection_id: ConnectionId, allow_local_password: bool) -> HrdRoute {
+        HrdRoute::Sso {
+            connection_id,
+            allow_local_password,
+        }
+    }
+
+    /// The email page submitted with `email`: the routing request it produces.
+    fn submitted(email: &str) -> (LoginState, String, bool) {
+        let (state, _) = email_first();
+        match identify_input(state, IdentifyInput::Email(email.into())) {
+            IdentifyStep::Route {
+                state,
+                email,
+                chose_sso,
+            } => (state, email, chose_sso),
+            IdentifyStep::Render(_, f) => panic!("{f:?}"),
+        }
+    }
+
+    fn render(i: Identified) -> (LoginState, FormDescription) {
+        match i {
+            Identified::Render(b) => *b,
+            Identified::StartIdp(c) => panic!("started {c:?}"),
+        }
+    }
+
+    #[test]
+    fn email_first_page_asks_for_the_email_alone() {
+        let (state, f) = email_first();
+        assert_eq!(state.step, LoginStep::EmailFirst);
+        assert_eq!(f.id, IDENTIFY_FORM_ID);
+        assert_eq!(f.action, "login/identify");
+        let names: Vec<&str> = f.fields.iter().map(|x| x.name.as_str()).collect();
+        assert_eq!(names, ["identifier"]);
+        assert_eq!(f.fields[0].kind, FieldKind::Email);
+        // The default login state is still the combined form.
+        let (FlowState::Login(s), f) =
+            FlowState::initial(crate::model::FlowKind::Login, None, &env()).expect("initial")
+        else {
+            panic!("login");
+        };
+        assert_eq!(s.step, LoginStep::Identify);
+        assert_eq!(f.id, "login");
+        assert!(f.fields.iter().any(|x| x.name == "password"));
+    }
+
+    #[test]
+    fn submitting_the_email_routes_its_normalised_address_only() {
+        let (state, email, chose_sso) = submitted("  Alice@Example.COM ");
+        assert_eq!(email, "alice@example.com");
+        assert!(!chose_sso);
+        assert_eq!(state.identifier.as_deref(), Some("Alice@Example.COM"));
+        // A malformed email is re-rendered with an error, no routing.
+        let (state, _) = email_first();
+        match identify_input(state, IdentifyInput::Email("not an email".into())) {
+            IdentifyStep::Render(s, f) => {
+                assert_eq!(s.step, LoginStep::EmailFirst);
+                assert_eq!(f.id, IDENTIFY_FORM_ID);
+                assert_eq!(f.messages[0].key, "email.invalid");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn local_route_is_the_password_step_with_the_email_locked() {
+        let (state, _, _) = submitted("bob@example.com");
+        let (s, f) = render(routed(state, HrdRoute::Local, false));
+        assert_eq!(s.step, LoginStep::Identify);
+        assert!(s.email_first);
+        assert_eq!(f.id, "login");
+        let ident = f.fields.iter().find(|x| x.name == "identifier").unwrap();
+        assert_eq!(ident.kind, FieldKind::Hidden);
+        assert_eq!(ident.value.as_deref(), Some("bob@example.com"));
+        assert!(f.fields.iter().any(|x| x.name == "password"));
+        // The password POST works in that step.
+        let (_, effects) = transition(s, "bob@example.com".into(), PW.into(), &env());
+        assert!(matches!(effects[0], Effect::VerifyPassword { .. }));
+    }
+
+    #[test]
+    fn local_route_page_is_identical_for_every_address_but_the_echo() {
+        let (a, _, _) = submitted("known@example.com");
+        let (b, _, _) = submitted("unknown@example.com");
+        let (_, fa) = render(routed(a, HrdRoute::Local, false));
+        let (_, fb) = render(routed(b, HrdRoute::Local, false));
+        let mask = |f: &FormDescription| {
+            let mut f = f.clone();
+            for x in &mut f.fields {
+                x.value = None;
+            }
+            f
+        };
+        assert_eq!(mask(&fa), mask(&fb));
+    }
+
+    #[test]
+    fn routed_domain_without_local_password_starts_the_idp() {
+        let c = conn();
+        let (state, _, _) = submitted("alice@acme.example");
+        assert!(matches!(
+            routed(state, sso(c, false), false),
+            Identified::StartIdp(id) if id == c
+        ));
+    }
+
+    #[test]
+    fn routed_domain_with_local_password_offers_the_choice() {
+        let c = conn();
+        let (state, _, _) = submitted("alice@acme.example");
+        let (s, f) = render(routed(state, sso(c, true), false));
+        assert_eq!(s.step, LoginStep::SsoChoice { connection_id: c });
+        assert_eq!(f.id, SSO_CHOICE_FORM_ID);
+        assert_eq!(f.messages[0].key, "hrd.sso_explain");
+        assert!(!f.fields.iter().any(|x| x.name == "password"));
+
+        // "Continue with single sign-on": routed again, then the IdP.
+        match identify_input(s.clone(), IdentifyInput::Sso) {
+            IdentifyStep::Route {
+                state,
+                email,
+                chose_sso,
+            } => {
+                assert_eq!(email, "alice@acme.example");
+                assert!(chose_sso);
+                assert!(matches!(
+                    routed(state, sso(c, true), true),
+                    Identified::StartIdp(id) if id == c
+                ));
+            }
+            other => panic!("{other:?}"),
+        }
+        // The route disappeared meanwhile: the password step.
+        let (s2, _) = render(routed(s.clone(), HrdRoute::Local, true));
+        assert_eq!(s2.step, LoginStep::Identify);
+
+        // "Use password instead": the password step, email locked.
+        match identify_input(s.clone(), IdentifyInput::Password) {
+            IdentifyStep::Render(p, f) => {
+                assert_eq!(p.step, LoginStep::Identify);
+                assert!(p.email_first);
+                assert_eq!(f.id, "login");
+            }
+            other => panic!("{other:?}"),
+        }
+        // "Change": back to the email page, prefilled.
+        match identify_input(s, IdentifyInput::Change) {
+            IdentifyStep::Render(p, f) => {
+                assert_eq!(p.step, LoginStep::EmailFirst);
+                assert_eq!(f.id, IDENTIFY_FORM_ID);
+                assert_eq!(f.fields[0].value.as_deref(), Some("alice@acme.example"));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn identify_inputs_outside_their_step_are_invalid() {
+        let invalid = |state: LoginState, input: IdentifyInput| match identify_input(state, input) {
+            IdentifyStep::Render(_, f) => {
+                assert_eq!(
+                    f.messages.last().unwrap().key,
+                    "flow.invalid_input",
+                    "{f:?}"
+                );
+            }
+            other => panic!("{other:?}"),
+        };
+        // The combined form (no routing) takes no email-first input.
+        invalid(
+            LoginState::default(),
+            IdentifyInput::Email("a@b.example".into()),
+        );
+        invalid(LoginState::default(), IdentifyInput::Change);
+        let (first, _) = email_first();
+        invalid(first.clone(), IdentifyInput::Sso);
+        invalid(first.clone(), IdentifyInput::Password);
+        invalid(first.clone(), IdentifyInput::Change);
+        let (_, s) = second_factor_state(BOTH);
+        invalid(s, IdentifyInput::Email("a@b.example".into()));
+        let step_up = LoginState {
+            step: LoginStep::EmailFirst,
+            step_up_session: Some(SessionId::new_v7()),
+            ..LoginState::default()
+        };
+        invalid(step_up, IdentifyInput::Email("a@b.example".into()));
+        // A password POST on the email page is invalid input (the page has no password).
+        let (_, effects) = engine_transition(
+            FlowState::Login(first),
+            FlowInput::Login {
+                identifier: "a@b.example".into(),
+                password: PW.into(),
+            },
+            &env(),
+        );
+        assert_eq!(rendered(&effects).id, IDENTIFY_FORM_ID);
+    }
+
+    #[test]
+    fn passkeys_and_saml_starts_are_accepted_in_every_primary_step() {
+        let (first, _) = email_first();
+        let choice = LoginState {
+            step: LoginStep::SsoChoice {
+                connection_id: conn(),
+            },
+            ..LoginState::default()
+        };
+        for s in [LoginState::default(), first, choice] {
+            let (_, effects) = passkey_options(s.clone());
+            assert!(matches!(effects[..], [Effect::StartPasskey]), "{s:?}");
+            assert!(with_saml(s, saml_pending()).is_some());
+        }
+        let (_, s) = second_factor_state(BOTH);
+        assert!(!s.step.is_primary());
+    }
+
+    #[test]
+    fn new_steps_round_trip_and_old_rows_decode() {
+        let c = conn();
+        for step in [
+            LoginStep::EmailFirst,
+            LoginStep::SsoChoice { connection_id: c },
+        ] {
+            let s = LoginState {
+                identifier: Some("a@b.example".into()),
+                step,
+                email_first: step == LoginStep::EmailFirst,
+                ..LoginState::default()
+            };
+            let json = serde_json::to_string(&FlowState::Login(s.clone())).expect("encode");
+            let FlowState::Login(back) = serde_json::from_str(&json).expect("decode") else {
+                panic!("login");
+            };
+            assert_eq!(back, s);
+        }
+        let old: FlowState = serde_json::from_str(r#"{"kind":"login","step":{"name":"identify"}}"#)
+            .expect("old json");
+        assert!(
+            matches!(old, FlowState::Login(s) if !s.email_first && s.step == LoginStep::Identify)
+        );
+        // `email_first` is not written while false (old readers see the same JSON).
+        let json = serde_json::to_string(&FlowState::Login(LoginState::default())).unwrap();
+        assert!(!json.contains("email_first"));
+    }
+
+    #[test]
+    fn failures_on_the_email_page_keep_the_page() {
+        let (first, _) = email_first();
+        let f = on_failure(&first, Failure::PasskeyInvalid);
+        assert_eq!(f.id, IDENTIFY_FORM_ID);
+        assert_eq!(f.messages[0].key, "login.passkey_failed");
+        let refused = form_with(&first, vec![FormMessage::error(USE_SSO)]);
+        assert_eq!(refused.id, IDENTIFY_FORM_ID);
     }
 }

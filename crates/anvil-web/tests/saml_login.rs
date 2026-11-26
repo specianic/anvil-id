@@ -1105,6 +1105,7 @@ async fn saml_routes_404_when_flag_off() {
         policy: anvil_core::policy::PasswordPolicy::default(),
         kek: app.kek_arc(),
         passkeys: Arc::new(WebauthnPasskeys),
+        saml_enabled: false,
     };
     let accounts = AccountService {
         storage: app.storage_arc(),

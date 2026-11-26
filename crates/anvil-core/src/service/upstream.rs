@@ -100,7 +100,7 @@ use super::flow::{
 };
 use super::session::NewSessionCookie;
 use crate::error::CoreError;
-use crate::flow::engine::{FlowState, LoginState, LoginStep};
+use crate::flow::engine::{FlowState, LoginState};
 use crate::flow::form::{FormMessage, MessageLevel};
 use crate::flow::login::link_confirmation;
 use crate::flow::settings::{SettingsState, is_recent_auth};
@@ -631,7 +631,9 @@ impl UpstreamService<'_> {
                 else {
                     return Err(CoreError::Internal("login flow without login state".into()));
                 };
-                if s.step != LoginStep::Identify || s.step_up_session.is_some() {
+                // Any primary step: the combined form, the email-first page or the
+                // single-sign-on choice (home-realm discovery starts org connections here).
+                if !s.step.is_primary() || s.step_up_session.is_some() {
                     return Err(CoreError::InvalidRequest(
                         "upstream sign-in is not available in this step".into(),
                     ));

@@ -79,7 +79,8 @@ pub(super) struct UpstreamButton {
     pub(super) action: String,
 }
 
-/// The enabled connections of the tenant as buttons for a bound sign-in form (`login` only).
+/// The enabled connections of the tenant as buttons for a bound sign-in form (`login` or the
+/// email-first `login-identify` page).
 /// A storage failure shows no buttons (logged): password sign-in keeps working.
 pub(super) async fn upstream_buttons(
     state: &AppState,
@@ -87,7 +88,8 @@ pub(super) async fn upstream_buttons(
     loc: &Locale,
     form: &FormDescription,
 ) -> Vec<UpstreamButton> {
-    if form.id != "login" {
+    // The combined form, or the email-first page of home-realm discovery (06-22).
+    if form.id != "login" && form.id != anvil_core::flow::login::IDENTIFY_FORM_ID {
         return Vec::new();
     }
     let Some(flow) = flow_of(form) else {

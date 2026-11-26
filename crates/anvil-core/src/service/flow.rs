@@ -123,14 +123,16 @@ use anvil_jose::recovery_code::{normalize_recovery_code, recovery_code_hash};
 use secrecy::{ExposeSecret as _, SecretString};
 use time::{Duration, OffsetDateTime};
 
+use super::account::SettingsBinding;
 use super::account::{
     TotpEnrolment, create_confirmed_totp, enrolment, open_pending_totp, pending_totp_step,
     seal_pending_totp,
 };
 use super::audit::AuditService;
 use super::authorize::{mfa_context, second_factor_methods};
+use super::saml::SamlService;
 use super::session::{NewSessionCookie, SessionService};
-use super::upstream::confirm_link;
+use super::upstream::{StartResult, UpstreamService, confirm_link};
 use crate::error::CoreError;
 use crate::flow::email_code::{self, Check, EmailCodeState};
 use crate::flow::engine::{
@@ -140,22 +142,24 @@ use crate::flow::engine::{
 };
 use crate::flow::form::{FormDescription, FormMessage, MessageLevel};
 use crate::flow::login::{
-    passkey_enrolment_failed, passkey_enrolment_finish as login_passkey_enrolment_finish,
-    passkey_enrolment_user, second_factor_passkey_failed, second_factor_passkey_user,
-    take_passkey_enrolment, take_second_factor_passkey, with_passkey_enrolment,
-    with_second_factor_passkey,
+    HrdRoute, Identified, IdentifyInput, IdentifyStep, USE_SSO, email_first, form_with,
+    identify_input, passkey_enrolment_failed,
+    passkey_enrolment_finish as login_passkey_enrolment_finish, passkey_enrolment_user, routed,
+    second_factor_passkey_failed, second_factor_passkey_user, take_passkey_enrolment,
+    take_second_factor_passkey, with_passkey_enrolment, with_second_factor_passkey,
 };
 use crate::flow::settings::DEFAULT_PASSKEY_LABEL;
 use crate::model::{
     ActorKind, AuditAction, AuditActor, AuditDetails, AuditOutcome, AuthRequestId, BrowserSession,
-    CounterOutcome, CredentialId, CredentialKind, Flow, FlowId, FlowKind, NewEmail, NewFlow,
-    NewPasskey, NewPasswordCredential, NewSelfServiceToken, NewUser, OutboxId, PasskeyCredential,
-    RecoveryCodeHash, RecoveryNotice, RequestContext, SecretHash, SelfServiceKind, SessionId,
-    StandardClaims, TOTP_SEED_PURPOSE, Tenant, TenantId, TotpCredential, User, UserId, UserStatus,
-    credential_aad, seal_payload,
+    Connection, ConnectionKind, CounterOutcome, CredentialId, CredentialKind, Flow, FlowId,
+    FlowKind, NewEmail, NewFlow, NewPasskey, NewPasswordCredential, NewSelfServiceToken, NewUser,
+    OrgId, OutboxId, PasskeyCredential, RecoveryCodeHash, RecoveryNotice, RequestContext,
+    SecretHash, SelfServiceKind, SessionId, StandardClaims, TOTP_SEED_PURPOSE, Tenant, TenantId,
+    TotpCredential, User, UserId, UserStatus, credential_aad, normalize_email, seal_payload,
 };
 use crate::oauth::decision::{SessionDecision, decide};
 use crate::policy::PasswordPolicy;
+use crate::policy::home_realm::{self, Route, RoutedDomain};
 use crate::policy::mfa::{AcrRequest, MfaRequirement, mfa_requirement};
 use crate::ports::{
     AssertionIdentity, BreachChecker, Clock, PasskeyCeremonies, PasskeyError, PasskeyUser,
@@ -336,6 +340,63 @@ pub enum EmailLinkOutcome {
     Rejected(&'static str),
 }
 
+/// An org identity provider to start a sign-in at (home-realm discovery). The caller dispatches
+/// with [`start_idp`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdpStart {
+    /// The connection's slug (the start routes are keyed by slug).
+    pub slug: String,
+    /// A SAML connection ([`SamlService::start`]); otherwise OIDC ([`UpstreamService::start`]).
+    pub saml: bool,
+}
+
+impl IdpStart {
+    fn of(conn: &Connection) -> Self {
+        Self {
+            slug: conn.slug.clone(),
+            saml: conn.kind() == ConnectionKind::Saml,
+        }
+    }
+}
+
+/// Result of [`FlowService::start_login`].
+#[derive(Debug)]
+pub enum LoginStart {
+    /// Set the flow cookie and render the form.
+    Form(StartedFlow),
+    /// Set the flow cookie and start the sign-in at `idp` right away (bound to `started`): the
+    /// request's `login_hint` routed to an org IdP, or its `organization` names an org with
+    /// exactly one enabled enterprise connection.
+    Idp { started: StartedFlow, idp: IdpStart },
+}
+
+/// Result of [`FlowService::identify`].
+#[derive(Debug)]
+pub enum IdentifyOutcome {
+    /// Render (or restart) as for a submission.
+    Done(Box<FlowOutcome>),
+    /// Start the sign-in at the org's IdP with the same flow binding ([`start_idp`]).
+    StartIdp(IdpStart),
+}
+
+/// Starts a sign-in at an org IdP chosen by home-realm discovery: SAML connections through
+/// [`SamlService::start`] (which refuses while `saml_experimental` is off), every other kind
+/// through [`UpstreamService::start`]. The one dispatch by connection kind.
+pub async fn start_idp(
+    idp: &IdpStart,
+    upstream: &UpstreamService<'_>,
+    saml: &SamlService<'_>,
+    cx: &FlowContext<'_>,
+    binding: &SettingsBinding<'_>,
+    current: Option<&BrowserSession>,
+) -> Result<StartResult, CoreError> {
+    if idp.saml {
+        saml.start(cx, binding, &idp.slug).await
+    } else {
+        upstream.start(cx, binding, &idp.slug, current).await
+    }
+}
+
 /// Why a submission does not match its flow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BindingError {
@@ -480,6 +541,9 @@ pub struct FlowService {
     pub kek: Arc<Kek>,
     /// WebAuthn ceremonies (webauthn-rs adapter in the web layer).
     pub passkeys: Arc<dyn PasskeyCeremonies>,
+    /// The operator flag `saml_experimental`: while off, a domain routed to a SAML connection is
+    /// treated as not routed (local sign-in).
+    pub saml_enabled: bool,
 }
 
 enum Step {
@@ -591,8 +655,208 @@ impl FlowService {
         auth_request: Option<AuthRequestId>,
         token: Option<String>,
     ) -> Result<StartedFlow, CoreError> {
-        let (state, form) = FlowState::initial(kind, token, &self.env(cx))?;
+        let (state, form) = self.initial(cx, kind, token).await?;
         self.create_flow(cx, &state, form, auth_request).await
+    }
+
+    /// The initial state and form of a flow of `kind`. A login of a tenant with a routed domain
+    /// starts at the email-first page; every other login keeps the combined form.
+    async fn initial(
+        &self,
+        cx: &FlowContext<'_>,
+        kind: FlowKind,
+        token: Option<String>,
+    ) -> Result<(FlowState, FormDescription), CoreError> {
+        if kind == FlowKind::Login && self.email_first_enabled(cx.tenant.id).await? {
+            let (state, form) = email_first();
+            return Ok((FlowState::Login(state), form));
+        }
+        FlowState::initial(kind, token, &self.env(cx))
+    }
+
+    /// Whether the tenant's sign-in asks for the email first (at least one routed domain).
+    async fn email_first_enabled(&self, tenant: TenantId) -> Result<bool, CoreError> {
+        Ok(self
+            .storage
+            .organizations()
+            .tenant_has_routing(tenant)
+            .await?)
+    }
+
+    /// Whether an org connection can be a home-realm target: enabled, owned by an org, OIDC (or
+    /// SAML while `saml_experimental` is on).
+    fn idp_routable(&self, conn: &Connection) -> bool {
+        conn.enabled
+            && conn.org_id.is_some()
+            && match conn.kind() {
+                ConnectionKind::Oidc => true,
+                ConnectionKind::Saml => self.saml_enabled,
+                _ => false,
+            }
+    }
+
+    /// Routes `email` by its domain only ([`home_realm::route`] over
+    /// [`OrgRepo::routed_domain`](crate::ports::OrgRepo::routed_domain)); no account is looked
+    /// up, so the answer is the same for every address of a domain. The IdP to start comes along
+    /// for a routed domain.
+    async fn hrd_route(
+        &self,
+        tenant: TenantId,
+        email: &str,
+    ) -> Result<(HrdRoute, Option<IdpStart>), CoreError> {
+        let Some(domain) = home_realm::email_domain(email) else {
+            return Ok((HrdRoute::Local, None));
+        };
+        let Some((claim, conn)) = self
+            .storage
+            .organizations()
+            .routed_domain(tenant, &domain)
+            .await?
+        else {
+            return Ok((HrdRoute::Local, None));
+        };
+        if !self.idp_routable(&conn) || conn.org_id != Some(claim.org_id) {
+            return Ok((HrdRoute::Local, None));
+        }
+        let routed: Vec<RoutedDomain> = RoutedDomain::from_org_domain(&claim).into_iter().collect();
+        match home_realm::route(email, &routed) {
+            Route::Sso(target) if target.connection_id == conn.id => Ok((
+                HrdRoute::Sso {
+                    connection_id: conn.id,
+                    allow_local_password: claim.allow_local_password,
+                },
+                Some(IdpStart::of(&conn)),
+            )),
+            _ => Ok((HrdRoute::Local, None)),
+        }
+    }
+
+    /// Whether local sign-in (password, email code, magic link) is refused for `email`: its
+    /// domain routes to an org IdP and the org turned local passwords off (decision Q6/Q7).
+    /// Decided from the domain only. Passkeys are not affected (account-bound and
+    /// phishing-resistant).
+    async fn local_sign_in_refused(
+        &self,
+        tenant: TenantId,
+        email: &str,
+    ) -> Result<bool, CoreError> {
+        Ok(matches!(
+            self.hrd_route(tenant, email).await?.0,
+            HrdRoute::Sso {
+                allow_local_password: false,
+                ..
+            }
+        ))
+    }
+
+    /// The refusal of a local sign-in for a domain that forces SSO: the current step's form with
+    /// [`USE_SSO`], audited `login_failed` (reason `sso_required`, no target: no account was
+    /// looked up).
+    async fn refuse_local(
+        &self,
+        cx: &FlowContext<'_>,
+        exec: &Exec<'_>,
+        state: &FlowState,
+        method: &'static str,
+    ) -> Result<Step, CoreError> {
+        let FlowState::Login(s) = state else {
+            return Err(CoreError::Internal("local sign-in outside a login".into()));
+        };
+        self.audit_login_failed(
+            cx,
+            None,
+            AuditDetails::login(method).with(AuditDetails::reason("sso_required")),
+        )
+        .await?;
+        let form = form_with(s, vec![FormMessage::error(USE_SSO)]);
+        let outcome = self
+            .render(cx, exec.flow, exec.csrf_token, state, form)
+            .await?;
+        Ok(Step::Done(Box::new(outcome)))
+    }
+
+    /// The single enabled, routable connection of the org named by an `organization` request
+    /// parameter (canonical id first, then the exact slug). `None` for an unknown org, or none or
+    /// several connections.
+    async fn org_single_connection(
+        &self,
+        tenant: TenantId,
+        requested: &str,
+    ) -> Result<Option<Connection>, CoreError> {
+        let orgs = self.storage.organizations();
+        let org = match uuid::Uuid::parse_str(requested) {
+            Ok(id) if id.hyphenated().to_string() == requested => {
+                orgs.get(tenant, OrgId(id)).await?
+            }
+            _ => orgs.get_by_slug(tenant, requested).await?,
+        };
+        let Some(org) = org else {
+            return Ok(None);
+        };
+        let mut usable: Vec<Connection> = self
+            .storage
+            .connections()
+            .list_for_org(tenant, org.id)
+            .await?
+            .into_iter()
+            .filter(|c| self.idp_routable(c))
+            .collect();
+        Ok(match usable.len() {
+            1 => usable.pop(),
+            _ => None,
+        })
+    }
+
+    /// The email-first page or the single-sign-on choice was submitted (`POST
+    /// /ui/login/identify?flow=`). Routing uses the email's domain only. Errors: `Forbidden`
+    /// (binding), `InvalidRequest` (not a login flow).
+    pub async fn identify(
+        &self,
+        cx: &FlowContext<'_>,
+        flow_id: FlowId,
+        cookie_token: Option<&str>,
+        csrf_token: &str,
+        input: IdentifyInput,
+    ) -> Result<IdentifyOutcome, CoreError> {
+        let (flow, state) = match self
+            .load(cx, flow_id, cookie_token, csrf_token, FlowKind::Login)
+            .await?
+        {
+            Loaded::Flow(f, s) => (f, s),
+            Loaded::Restarted(outcome) => return Ok(IdentifyOutcome::Done(Box::new(outcome))),
+        };
+        let FlowState::Login(state) = state else {
+            return Err(CoreError::InvalidRequest("not a sign-in flow".into()));
+        };
+        let (state, route, idp, chose_sso) = match identify_input(state, input) {
+            IdentifyStep::Render(state, form) => {
+                let outcome = self
+                    .render(cx, &flow, csrf_token, &FlowState::Login(state), form)
+                    .await?;
+                return Ok(IdentifyOutcome::Done(Box::new(outcome)));
+            }
+            IdentifyStep::Route {
+                state,
+                email,
+                chose_sso,
+            } => {
+                let (route, idp) = self.hrd_route(cx.tenant.id, &email).await?;
+                (state, route, idp, chose_sso)
+            }
+        };
+        match (routed(state, route, chose_sso), idp) {
+            (Identified::Render(b), _) => {
+                let (state, form) = *b;
+                let outcome = self
+                    .render(cx, &flow, csrf_token, &FlowState::Login(state), form)
+                    .await?;
+                Ok(IdentifyOutcome::Done(Box::new(outcome)))
+            }
+            (Identified::StartIdp(_), Some(idp)) => Ok(IdentifyOutcome::StartIdp(idp)),
+            (Identified::StartIdp(_), None) => Err(CoreError::Internal(
+                "home-realm route without a connection".into(),
+            )),
+        }
     }
 
     async fn create_flow(
@@ -645,7 +909,7 @@ impl FlowService {
         kind: FlowKind,
         auth_request: Option<AuthRequestId>,
     ) -> Result<FlowOutcome, CoreError> {
-        let (state, mut form) = FlowState::initial(kind, None, &self.env(cx))?;
+        let (state, mut form) = self.initial(cx, kind, None).await?;
         form.messages
             .insert(0, FormMessage::new(MessageLevel::Error, "flow.expired"));
         let started = self.create_flow(cx, &state, form, auth_request).await?;
@@ -1292,18 +1556,77 @@ impl FlowService {
     /// for which the request decides step-up (`oauth::decision::decide`), the flow starts at the
     /// second-factor or enrolment step for the session's user and later upgrades that session
     /// (module docs); otherwise it is a plain [`FlowService::start`] of a login.
+    ///
+    /// Home-realm discovery (module docs of `flow::login`): an `organization` parameter naming an
+    /// org with exactly one enabled enterprise connection starts at that IdP
+    /// ([`LoginStart::Idp`]). In a tenant with a routed domain, a `login_hint` that is an email
+    /// skips the email page and is routed at once (to the IdP, the single-sign-on choice or the
+    /// password step).
     pub async fn start_login(
         &self,
         cx: &FlowContext<'_>,
         auth_request: Option<AuthRequestId>,
         current: Option<&BrowserSession>,
-    ) -> Result<StartedFlow, CoreError> {
+    ) -> Result<LoginStart, CoreError> {
         if let (Some(request_id), Some(session)) = (auth_request, current)
             && let Some(started) = self.start_step_up(cx, request_id, session).await?
         {
-            return Ok(started);
+            return Ok(LoginStart::Form(started));
         }
-        self.start(cx, FlowKind::Login, auth_request, None).await
+        let tenant = cx.tenant.id;
+        let request = match auth_request {
+            Some(id) => {
+                self.storage
+                    .grants()
+                    .get_authorization_request(tenant, id, self.clock.now())
+                    .await?
+            }
+            None => None,
+        };
+        let params = request.as_ref().map(|r| &r.params);
+        if let Some(requested) = params.and_then(|p| p.organization.as_deref())
+            && let Some(conn) = self.org_single_connection(tenant, requested).await?
+        {
+            let started = self.start(cx, FlowKind::Login, auth_request, None).await?;
+            return Ok(LoginStart::Idp {
+                started,
+                idp: IdpStart::of(&conn),
+            });
+        }
+        if !self.email_first_enabled(tenant).await? {
+            let (state, form) = FlowState::initial(FlowKind::Login, None, &self.env(cx))?;
+            let started = self.create_flow(cx, &state, form, auth_request).await?;
+            return Ok(LoginStart::Form(started));
+        }
+        let (mut state, form) = email_first();
+        let hint = params
+            .and_then(|p| p.login_hint.as_deref())
+            .and_then(|h| normalize_email(h.trim()).ok());
+        let Some(email) = hint else {
+            let started = self
+                .create_flow(cx, &FlowState::Login(state), form, auth_request)
+                .await?;
+            return Ok(LoginStart::Form(started));
+        };
+        state.identifier = Some(email.clone());
+        let (route, idp) = self.hrd_route(tenant, &email).await?;
+        Ok(match (routed(state.clone(), route, false), idp) {
+            (Identified::Render(b), _) => LoginStart::Form(
+                self.create_flow(cx, &FlowState::Login(b.0), b.1, auth_request)
+                    .await?,
+            ),
+            (Identified::StartIdp(_), Some(idp)) => LoginStart::Idp {
+                started: self
+                    .create_flow(cx, &FlowState::Login(state), form, auth_request)
+                    .await?,
+                idp,
+            },
+            (Identified::StartIdp(_), None) => {
+                return Err(CoreError::Internal(
+                    "home-realm route without a connection".into(),
+                ));
+            }
+        })
     }
 
     async fn start_step_up(
@@ -1427,7 +1750,7 @@ impl FlowService {
         old: Option<&Flow>,
         message: FormMessage,
     ) -> Result<StartedFlow, CoreError> {
-        let (state, mut form) = FlowState::initial(FlowKind::Login, None, &self.env(cx))?;
+        let (state, mut form) = self.initial(cx, FlowKind::Login, None).await?;
         form.messages.insert(0, message);
         self.continue_login(cx, old, FlowId::new_v7(), &state, form)
             .await
@@ -1592,6 +1915,17 @@ impl FlowService {
         let Some(ec) = s.email_code.as_deref().filter(|ec| ec.link) else {
             return Ok(EmailLinkOutcome::Rejected(email_code::LINK_INVALID));
         };
+        // The domain forces SSO now (a link sent before the org turned passwords off): nothing
+        // is consumed.
+        if self.local_sign_in_refused(tenant, &ec.email).await? {
+            self.audit_login_failed(
+                cx,
+                None,
+                AuditDetails::login("magic_link").with(AuditDetails::reason("sso_required")),
+            )
+            .await?;
+            return Ok(EmailLinkOutcome::Rejected(USE_SSO));
+        }
         let (check, next) = email_code::check_link(ec, email_code::link_hash(token), now);
         if check != Check::Accepted {
             return Ok(EmailLinkOutcome::Rejected(email_code::LINK_INVALID));
@@ -1669,6 +2003,11 @@ impl FlowService {
         let FlowState::Login(mut s) = decode_state(exec.state_json)? else {
             return Err(CoreError::Internal("email code outside a login".into()));
         };
+        // A domain that forces SSO: refused before any account lookup (nothing is sent).
+        if self.local_sign_in_refused(tenant, email).await? {
+            let state = FlowState::Login(s);
+            return self.refuse_local(cx, exec, &state, "email_code").await;
+        }
         // The same work for every address: lookup, code, link token, both hashes. Only an active
         // account with a verified address gets the email: an unverified address may not belong to
         // the account holder, so it is treated exactly like an unknown one.
@@ -1767,6 +2106,12 @@ impl FlowService {
         // The code method is off (now, or for the email that was sent): not found, no attempt.
         if !cx.tenant.settings.email_otp || !ec.code {
             return Err(CoreError::NotFound);
+        }
+        // The domain forces SSO now (a code sent before the org turned passwords off).
+        if self.local_sign_in_refused(tenant, &ec.email).await? {
+            return self
+                .refuse_local(cx, exec, &FlowState::Login(s.clone()), "email_code")
+                .await;
         }
         let subject = email_code::limit_subject(&self.kek, tenant, &ec.email, ec.user_id);
         let presented = email_code::code_hash(&self.kek, flow.id, code.expose_secret());
@@ -1875,6 +2220,11 @@ impl FlowService {
         let users = self.storage.users();
         match effect {
             Effect::VerifyPassword { email, password } => {
+                // A domain that forces SSO: refused before any account lookup.
+                if self.local_sign_in_refused(tenant, email).await? {
+                    let state = decode_state(exec.state_json)?;
+                    return self.refuse_local(cx, exec, &state, "password").await;
+                }
                 let ident_hash = identifier_hash(email);
                 let user = users.get_by_email(tenant, email).await?;
                 let target = user.as_ref().map(|u| u.id);

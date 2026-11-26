@@ -23,6 +23,18 @@
 //! | `POST /ui/login/second-factor/passkey/start?flow=` | second-factor step: WebAuthn request options (JSON, for webauthn.js) |
 //! | `POST /ui/login/second-factor/passkey/finish?flow=` | second-factor step: the assertion of one of the step user's passkeys (`response`) |
 //! | `/ui/login/email-code[/verify]`, `/ui/login/email-link` | email code and magic link ([`super::email_code`]) |
+//! | `POST /ui/login/identify?flow=` | email-first page and single-sign-on choice (`identifier`, `choice` = `sso` / `password` / `change`) |
+//!
+//! # Identifier-first sign-in (ORG-04)
+//!
+//! A tenant with a verified, routed domain starts at the email-first page (`login_identify.html`,
+//! form `login-identify`, passkey and upstream buttons included); every other tenant keeps the
+//! combined form. The email is routed by its domain only (`FlowService::identify`): an org IdP
+//! (303 to the IdP through the same start as its own route, with the binding cookie), the
+//! single-sign-on choice (form `login-sso-choice`) or the password step (`login.html` with the
+//! email in a hidden field, shown read-only with a "change" button). `login_hint` and
+//! `organization` can skip the email page (`FlowService::start_login`). Plain form posts and 303s
+//! only: no JavaScript is needed.
 //!
 //! When the tenant enables email sign-in (`email_otp` or `magic_link`) the sign-in form is followed
 //! by the "Email me a sign-in code" form (`email_code` template variable), its address prefilled
@@ -65,10 +77,12 @@ use anvil_cache::limiter::Decision;
 use anvil_core::error::CoreError;
 use anvil_core::flow::email_code::{EMAIL_CODE_FORM_ID, LINK_INVALID, OTHER_BROWSER};
 use anvil_core::flow::engine::{FlowEnv, FlowInput, FlowState};
+use anvil_core::flow::form::FieldKind;
 use anvil_core::flow::form::{FormDescription, FormMessage, MessageLevel};
 use anvil_core::flow::login::{
-    ENROLL_FORM_ID, PASSKEY_ENROLMENT_FAILED, SECOND_FACTOR_FORM_ID, SECOND_FACTOR_PASSKEY_FAILED,
-    SECOND_FACTOR_PASSKEY_FIELD, UPSTREAM_LINK_FORM_ID,
+    ENROLL_FORM_ID, IDENTIFY_FORM_ID, IdentifyInput, PASSKEY_ENROLMENT_FAILED,
+    SECOND_FACTOR_FORM_ID, SECOND_FACTOR_PASSKEY_FAILED, SECOND_FACTOR_PASSKEY_FIELD,
+    SSO_CHOICE_FORM_ID, UPSTREAM_LINK_FORM_ID,
 };
 use anvil_core::model::{
     ActorKind, AuditAction, AuditActor, AuditDetails, AuditOutcome, AuthRequestId, BrowserSession,
@@ -76,13 +90,15 @@ use anvil_core::model::{
     normalize_email,
 };
 use anvil_core::ports::RelyingParty;
-use anvil_core::service::account::TotpEnrolment;
+use anvil_core::service::account::{SettingsBinding, TotpEnrolment};
 use anvil_core::service::audit::AuditService;
 use anvil_core::service::flow::{
-    AuthAttempt, FlowContext, FlowOutcome, FlowService, StartedFlow, SubmitResult, bind_form,
-    email_code_enabled,
+    AuthAttempt, FlowContext, FlowOutcome, FlowService, IdentifyOutcome, IdpStart, LoginStart,
+    StartedFlow, SubmitResult, bind_form, email_code_enabled, start_idp,
 };
+use anvil_core::service::saml::SamlService;
 use anvil_core::service::session::SessionService;
+use anvil_core::service::upstream::{StartResult, UpstreamService};
 use axum::Router;
 use axum::extract::rejection::FormRejection;
 use axum::extract::{Form, Query, State};
@@ -124,6 +140,7 @@ impl AppState {
             policy: self.config().password_policy,
             kek: self.kek_arc(),
             passkeys: Arc::new(WebauthnPasskeys),
+            saml_enabled: self.config().saml_experimental,
         }
     }
 
@@ -139,6 +156,7 @@ impl AppState {
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
         .route("/ui/login", get(show).post(submit))
+        .route("/ui/login/identify", post(identify))
         .route("/ui/login/passkey/options", post(passkey_options))
         .route("/ui/login/passkey", post(passkey_submit))
         .route(
@@ -192,7 +210,31 @@ async fn show(
         .start_login(&cx, request, current.as_ref())
         .await
     {
-        Ok(s) => s,
+        Ok(LoginStart::Form(s)) => s,
+        Ok(LoginStart::Idp { started, idp }) => {
+            // Bound to the new flow: its cookie goes out with the redirect to the IdP.
+            let binding = SettingsBinding {
+                flow_id: started.flow_id,
+                cookie_token: Some(started.cookie_token.expose_secret()),
+                csrf_token: &started.form.csrf_token,
+            };
+            let jar = CookieJar::new().add(
+                state
+                    .cookies()
+                    .flow_cookie(&tenant.tenant, started.cookie_token.expose_secret()),
+            );
+            return idp_redirect(
+                &state,
+                &tenant,
+                &loc,
+                &cx,
+                &binding,
+                &idp,
+                current.as_ref(),
+                jar,
+            )
+            .await;
+        }
         Err(e) => return core_error_page_in(&state, Some(&tenant), &loc, &e),
     };
     if started.form.id == "login"
@@ -210,7 +252,7 @@ async fn show(
             .factor_user
             .and_then(|user| factor_token(&state, &tenant, started.flow_id, user)),
         totp: started.totp.as_ref(),
-        upstream: super::upstream::upstream_buttons(&state, &tenant, &loc, &started.form).await,
+        upstream: identify_buttons(&state, &tenant, &loc, &started.form).await,
         ..Extras::default()
     };
     started_response_with(
@@ -385,6 +427,155 @@ async fn submit(
         extras.upstream = identify_buttons(&state, &tenant, &loc, form).await;
     }
     outcome_response_with(&state, &tenant, &loc, result.outcome, &extras)
+}
+
+/// `POST /ui/login/identify?flow=`: the email-first page (`identifier`) or the single-sign-on
+/// choice (`choice` = `sso`, `password` or `change`). No account is looked up, so there is no
+/// brute-force gate: the answer depends on the email's domain only.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "axum handler: one argument per extractor"
+)]
+async fn identify(
+    State(state): State<AppState>,
+    tenant: ResolvedTenant,
+    RequestLocale(loc, _): RequestLocale,
+    AuditContext(ctx): AuditContext,
+    jar: CookieJar,
+    Query(q): Query<UiQuery>,
+    form: Result<Form<UiForm>, FormRejection>,
+) -> Response {
+    let form = match form {
+        Ok(Form(form)) => form,
+        Err(e) => return rejected_form(&state, Some(&tenant), &loc, &e),
+    };
+    let (Some(flow_id), Some(csrf)) = (q.flow_id(), form.csrf_token.as_deref()) else {
+        return csrf_page(&state, Some(&tenant), &loc);
+    };
+    let input = match form.choice.as_deref() {
+        Some("sso") => IdentifyInput::Sso,
+        Some("password") => IdentifyInput::Password,
+        Some("change") => IdentifyInput::Change,
+        _ => IdentifyInput::Email(form.identifier.clone().unwrap_or_default()),
+    };
+    let cookie = jar
+        .get(&state.cookies().flow_name(&tenant.tenant))
+        .map(|c| c.value().to_owned());
+    let base = ui_base(&tenant);
+    let rp = tenant_relying_party(&tenant);
+    let cx = FlowContext {
+        tenant: &tenant.tenant,
+        issuer: &tenant.issuer,
+        ui_base: &base,
+        rp: &rp,
+        ctx: &ctx,
+    };
+    let result = state
+        .ui_flow_service()
+        .identify(&cx, flow_id, cookie.as_deref(), csrf, input)
+        .await;
+    match result {
+        Ok(IdentifyOutcome::Done(outcome)) => {
+            let mut extras = Extras::default();
+            if let FlowOutcome::Render(f) = outcome.as_ref() {
+                extras.upstream = identify_buttons(&state, &tenant, &loc, f).await;
+            }
+            outcome_response_with(&state, &tenant, &loc, *outcome, &extras)
+        }
+        Ok(IdentifyOutcome::StartIdp(idp)) => {
+            let current = match current_browser_session(&state, &tenant, &jar).await {
+                Ok(s) => s,
+                Err(e) => return core_error_page_in(&state, Some(&tenant), &loc, &e),
+            };
+            let binding = SettingsBinding {
+                flow_id,
+                cookie_token: cookie.as_deref(),
+                csrf_token: csrf,
+            };
+            idp_redirect(
+                &state,
+                &tenant,
+                &loc,
+                &cx,
+                &binding,
+                &idp,
+                current.as_ref(),
+                CookieJar::new(),
+            )
+            .await
+        }
+        Err(CoreError::Forbidden) => csrf_page(&state, Some(&tenant), &loc),
+        Err(CoreError::InvalidRequest(_)) => restart_login(&state, &tenant, &loc).await,
+        Err(e) => core_error_page_in(&state, Some(&tenant), &loc, &e),
+    }
+}
+
+/// Starts the sign-in at the org IdP home-realm discovery chose (`start_idp`: the same starts as
+/// `POST /ui/login/upstream/{slug}` and `POST /ui/login/saml/{slug}/start`) and answers 303 to
+/// the IdP with the binding cookie, added to `jar`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "threads the request's locale, context and binding"
+)]
+async fn idp_redirect(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    loc: &Locale,
+    cx: &FlowContext<'_>,
+    binding: &SettingsBinding<'_>,
+    idp: &IdpStart,
+    current: Option<&BrowserSession>,
+    jar: CookieJar,
+) -> Response {
+    let flows = state.ui_flow_service();
+    let accounts = state.ui_account_service();
+    let xml = state.saml_xml();
+    let upstream = UpstreamService {
+        flows: &flows,
+        accounts: &accounts,
+        client: state.upstream(),
+    };
+    let saml = SamlService {
+        flows: &flows,
+        accounts: &accounts,
+        client: state.upstream(),
+        saml_xml: xml.as_ref(),
+        enabled: state.config().saml_experimental,
+    };
+    match start_idp(idp, &upstream, &saml, cx, binding, current).await {
+        Ok(StartResult::Redirect(r)) => {
+            let Ok(location) = HeaderValue::from_str(&r.url) else {
+                return core_error_page_in(
+                    state,
+                    Some(tenant),
+                    loc,
+                    &CoreError::Internal("unusable identity provider URL".into()),
+                );
+            };
+            let jar = jar.add(
+                state
+                    .cookies()
+                    .upstream_binding_cookie(&tenant.tenant, r.binding_cookie.expose_secret()),
+            );
+            (
+                StatusCode::SEE_OTHER,
+                jar,
+                [
+                    (header::LOCATION, location),
+                    (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+                ],
+            )
+                .into_response()
+        }
+        Ok(StartResult::Done(outcome)) => {
+            super::upstream::outcome_page(state, tenant, loc, *outcome, false).await
+        }
+        Err(CoreError::Forbidden) => csrf_page(state, Some(tenant), loc),
+        Err(CoreError::InvalidRequest(_) | CoreError::NotFound | CoreError::FeatureDisabled(_)) => {
+            restart_login(state, tenant, loc).await
+        }
+        Err(e) => core_error_page_in(state, Some(tenant), loc, &e),
+    }
 }
 
 /// The upstream sign-in buttons of a sign-in form ([`super::upstream::upstream_buttons`]: only
@@ -1062,6 +1253,8 @@ pub(super) struct UiForm {
     pub(super) factor_token: Option<String>,
     /// Passkey assertion JSON (webauthn.js).
     pub(super) response: Option<String>,
+    /// The single-sign-on choice of the email-first sign-in (`sso`, `password`, `change`).
+    pub(super) choice: Option<String>,
     /// Turnstile widget response.
     #[serde(rename = "cf-turnstile-response")]
     pub(super) turnstile_response: Option<String>,
@@ -1166,6 +1359,7 @@ pub(super) fn form_status(form: &FormDescription) -> StatusCode {
 pub(super) fn form_template(form_id: &str) -> (&'static str, &'static str) {
     match form_id {
         "login" => ("login.html", "title.login"),
+        IDENTIFY_FORM_ID | SSO_CHOICE_FORM_ID => ("login_identify.html", "title.login"),
         UPSTREAM_LINK_FORM_ID => ("upstream_link.html", "title.upstream_link"),
         SECOND_FACTOR_FORM_ID => ("second_factor.html", "title.second_factor"),
         ENROLL_FORM_ID => ("mfa_enroll.html", "title.mfa_enroll"),
@@ -1195,7 +1389,7 @@ pub(super) fn links_for(
         carry_ui_locales(&url, loc)
     };
     match form_id {
-        "login" => PageLinks {
+        "login" | IDENTIFY_FORM_ID | SSO_CHOICE_FORM_ID => PageLinks {
             login: None,
             registration: (tenant.tenant.settings.registration == RegistrationMode::Open)
                 .then(|| with_request("/ui/registration")),
@@ -1277,6 +1471,14 @@ struct EmailCodeView {
     value: Option<String>,
 }
 
+/// The email entered on the email-first page, shown read-only on the password step and the
+/// single-sign-on choice, with the "change" form (posts `choice=change`).
+#[derive(Serialize)]
+struct ChangeEmailView {
+    action: String,
+    email: String,
+}
+
 /// Values of the `captcha.html` partial.
 #[derive(Serialize)]
 struct CaptchaView {
@@ -1324,6 +1526,7 @@ pub(super) fn render_tenant_form_with(
     let mut secret_groups = None;
     let mut email_code = None;
     let mut resend_action = None;
+    let mut change_email = None;
     match (form.id.as_str(), flow_of(&form)) {
         (EMAIL_CODE_FORM_ID, Some(flow)) => {
             factor_token = extras.factor_token.clone();
@@ -1332,7 +1535,7 @@ pub(super) fn render_tenant_form_with(
                 loc,
             ));
         }
-        ("login" | UPSTREAM_LINK_FORM_ID, Some(flow)) => {
+        ("login" | UPSTREAM_LINK_FORM_ID | IDENTIFY_FORM_ID, Some(flow)) => {
             if tenant_relying_party(tenant).is_ok() {
                 passkey = Some(PasskeyView {
                     options_url: format!("{base}/login/passkey/options?flow={flow}"),
@@ -1394,10 +1597,25 @@ pub(super) fn render_tenant_form_with(
                 .and_then(|f| f.value.clone()),
         });
     }
+    // After the email page the address is fixed (hidden field): show it with a way back.
+    if matches!(form.id.as_str(), "login" | SSO_CHOICE_FORM_ID)
+        && let Some(flow) = flow_of(&form)
+        && let Some(email) = form
+            .fields
+            .iter()
+            .find(|f| f.name == "identifier" && f.kind == FieldKind::Hidden)
+            .and_then(|f| f.value.clone())
+    {
+        change_email = Some(ChangeEmailView {
+            action: carry_ui_locales(&format!("{base}/login/identify?flow={flow}"), loc),
+            email,
+        });
+    }
     form.action = carry_ui_locales(&form.action, loc);
     let ctx = minijinja::context! {
         page => page.into_value(),
         form => Value::from(Serde(&form)),
+        change_email => Value::from(Serde(&change_email)),
         passkey => Value::from(Serde(&passkey)),
         passkey_enroll => Value::from(Serde(&passkey_enroll)),
         passkey_second_factor => Value::from(Serde(&passkey_second_factor)),

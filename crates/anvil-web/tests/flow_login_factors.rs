@@ -146,6 +146,7 @@ impl Fixture {
             policy: PasswordPolicy::default(),
             kek: Arc::clone(&kek),
             passkeys: passkeys.clone(),
+            saml_enabled: false,
         };
         let now = OffsetDateTime::from_unix_timestamp(T).expect("time");
         let phc = hasher.hash(PASSWORD).await.expect("hash");
