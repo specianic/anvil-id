@@ -5,7 +5,8 @@ their old passwords after a migration. On the first successful sign-in the passw
 transparently re-hashed with the current Argon2id parameters.
 
 There is one import implementation. The `anvilid users import` command and the management API
-both call it, and both produce the same per-record report.
+both call it, and both produce the same per-record report. Users can also be exported: one user,
+all users of a tenant, or a user's GDPR data-subject bundle (see [Export](#export)).
 
 ## Import
 
@@ -37,6 +38,35 @@ written to stdout as well.
 non-zero when at least one record was rejected or on any error (unknown tenant, unreadable file,
 database not installed). Records accepted before a rejection are imported, so after fixing the
 listed lines you can run the same file again: already imported users report `unchanged`.
+
+### Importing through the management API
+
+```sh
+curl -sS -X POST "https://id.example.com/api/admin/v1/tenants/default/users/import?source=legacy-app" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/x-ndjson" \
+  --data-binary @batch.ndjson
+```
+
+`POST /api/admin/v1/tenants/{slug}/users/import` takes the same NDJSON records as the command in
+the request body and returns the [report](#report) as JSON.
+
+| Query parameter | Meaning |
+| --- | --- |
+| `dry_run=true` | Validate and report, write nothing (see [Dry run](#dry-run)) |
+| `update=true` | Like `--update` |
+| `source=<LABEL>` | Like `--source` (1-64 characters) |
+
+Any other query parameter is refused with a 422 problem.
+
+- **Scope:** `admin:users:write` (or `admin:write`).
+- **Content type:** `application/x-ndjson` is required; anything else is a 400 problem.
+- **Size:** at most 1,000 records (non-blank lines) and 1 MiB per request. A larger request is
+  refused with a 413 problem and nothing is imported. The 1 MiB limit applies to this one route
+  only; every other route keeps the default 64 KiB. Split larger files into batches, or use the
+  command, which batches for you.
+- A line that is not valid UTF-8 or not a valid record is reported as `rejected` /
+  `invalid_record` with its line number. The report never repeats the line.
 
 ### Record format
 
@@ -139,6 +169,25 @@ values of the Firebase project's password hash parameters:
 | salt separator | `base64_salt_separator` |
 | rounds | `rounds` |
 | memory cost | `mem_cost` |
+
+Hash profiles are managed through the management API:
+
+| Request | Scope | Meaning |
+| --- | --- | --- |
+| `GET /api/admin/v1/tenants/{slug}/password-hash-profiles` | `admin:settings:read` | List the profiles (public parameters only) |
+| `POST /api/admin/v1/tenants/{slug}/password-hash-profiles` | `admin:settings:write` | Create a profile; returns it with its `id` |
+| `DELETE /api/admin/v1/tenants/{slug}/password-hash-profiles/{id}` | `admin:settings:write` | Delete a profile (409 while imported hashes reference it) |
+
+`admin:read` and `admin:write` work as well.
+
+```json
+{"name": "firebase-prod", "kind": "firebase_scrypt", "signer_key": "<base64_signer_key>", "salt_separator": "<base64_salt_separator>", "rounds": 8, "mem_cost": 14}
+```
+
+`signer_key` and `salt_separator` are standard base64, exactly as Firebase shows them. The
+response contains `id`, `name`, `kind`, `salt_separator`, `rounds`, `mem_cost` and `created_at`,
+but never the signer key. The key is write-only: it is not in any response, and the OpenAPI
+document marks it `writeOnly`.
 
 The verification follows the published algorithm (github.com/firebase/scrypt): scrypt over the
 password with the user's salt followed by the salt separator, `N = 2^mem_cost`, `r = rounds`,
@@ -254,3 +303,134 @@ not distinguishable by scheme. A known account with an imported hash can take a 
 than one with an Argon2id hash (for example scrypt with a large `N`), which reveals that the
 account was imported. Both cases are existing accounts, so this does not reveal whether an
 address is registered; the difference disappears as users sign in and are re-hashed.
+
+## Export
+
+Users can be exported in three ways. Each one has its own fixed list of fields (an allow-list).
+A field added to the user model is not exported until it is added to the export on purpose.
+Secrets are never exported: no TOTP seed, recovery code, passkey key material, sealed blob,
+token hash, client secret or signer key. Password hashes are left out too, except for the one
+command-line option described in [Password hashes](#password-hashes). Timestamps are RFC 3339 in
+UTC with milliseconds (`2026-11-25T12:00:00.000Z`).
+
+| Mode | Command line | Management API |
+| --- | --- | --- |
+| One user (JSON) | `anvilid users export --user <UUID>` | `GET /api/admin/v1/tenants/{slug}/users/{user_id}/export` |
+| GDPR bundle (JSON) | `anvilid users export --user <UUID> --gdpr` | `GET /api/admin/v1/tenants/{slug}/users/{user_id}/export?profile=gdpr` |
+| All users (NDJSON) | `anvilid users export` | `GET /api/admin/v1/tenants/{slug}/users/export` |
+
+### Exporting from the command line
+
+```sh
+anvilid users export --tenant default --out users.ndjson
+anvilid users export --tenant default --user 0192f0c1-1111-7aaa-8bbb-0123456789ab --gdpr --out ada.json
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--tenant <SLUG>` | Tenant to export (default `default`) |
+| `--user <UUID>` | Export one user as a JSON document instead of every user |
+| `--gdpr` | With `--user`: the GDPR data-subject bundle |
+| `--include-password-hashes` | Bulk export only: add each user's stored password hash (see [Password hashes](#password-hashes)) |
+| `--out <PATH>` | Write to a file created with mode 0600 (an existing file is truncated and tightened to 0600) instead of stdout |
+
+Without `--out`, the output goes to stdout and the command prints no log or audit lines there, so
+the output stays valid JSON or NDJSON. The audit event is still stored in the database.
+
+### Exporting through the management API
+
+- **Scope:** `admin:users:export`, or the `admin:write` umbrella. `admin:read`,
+  `admin:users:read` and `admin:users:write` do not grant it, and get 403. Reading users one
+  page at a time and pulling every user out in one call are separate grants.
+- Responses carry `Cache-Control: no-store`.
+- The only query parameter is `profile=gdpr` on the single-user route. Any other parameter is
+  refused with a 422 problem, including every spelling of a password-hash option.
+- A user of another tenant, or an unknown user, is a 404.
+- The bulk route streams `application/x-ndjson`, one user per line in user id order. It reads the
+  users 100 at a time, so the server never holds the whole tenant in memory. If reading fails
+  after the response has started, the last line is `{"error":"export_failed"}` and the stream
+  ends. Treat an output with that line as incomplete.
+
+### User record
+
+The single-user export and each line of the bulk export are a user record:
+
+| Field | Content |
+| --- | --- |
+| `id`, `email`, `email_verified`, `username`, `status` | The user |
+| `claims` | The OpenID Connect standard claims, field by field (`address` as an object) |
+| `attributes` | Custom attribute values |
+| `created_at`, `updated_at`, `last_login_at` | Timestamps |
+| `roles` | Tenant roles (`id`, `name`) |
+| `organizations` | Memberships: `org_id`, `slug`, `display_name`, `roles` |
+| `identity_links` | Linked upstream accounts: `connection_id`, `connection` (slug or `null`), `subject` |
+| `credentials` | Metadata only: `id`, `kind`, `label`, `created_at`, `last_used_at` |
+| `password_hash` | Only in a command-line bulk export with `--include-password-hashes`, for users who have a password. Otherwise the field is absent |
+
+### GDPR data-subject bundle
+
+The bundle is a machine-readable copy of every category of personal data AnvilID stores about
+one user, for access and portability requests:
+
+| Key | Content |
+| --- | --- |
+| `export_format_version` | `1` |
+| `generated_at` | When the bundle was produced |
+| `subject` | `id`, `email`, `email_verified`, `username`, `status`, `claims`, `created_at`, `updated_at`, `last_login_at` |
+| `attributes` | Custom attribute values |
+| `credentials` | `items` (metadata as above), `password_set`, `totp_enrolled`, `recovery_codes_remaining` (a count) |
+| `sessions` | Active sessions: `id`, `created_at`, `last_seen_at`, `auth_time`, `expires_at`, `authentication_methods`, `ip`, `user_agent` |
+| `consents` | `client_id`, `scopes`, `resources`, `created_at`, `updated_at`, `revoked_at` |
+| `token_families` | Refresh token families in every state: `id`, `client_id`, `scope`, `resources`, `created_at`, `expires_at`, `revoked_at`, `revoked_reason` (never token values or hashes) |
+| `identity_links` | `connection_id`, `connection`, `subject`, `email_at_link`, `metadata`, `created_at`, `last_used_at` |
+| `roles`, `organizations` | As in the user record |
+| `audit_events` | Events where the user is the actor or the target: `id`, `at`, `action`, `outcome`, `actor`, `actor_client_id`, `target`, `ip`, `user_agent`, `details` |
+| `pending_self_service_tokens` | Pending email verification, password reset and similar links, as `kind` and `expires_at` only |
+| `operator_statement` | Always `null`. See below |
+
+The bundle names other people only by role. In `audit_events`, `actor` is `subject`,
+`administrator`, `another_user`, `system` or `client`. A client keeps its client id, because it
+is an application and not a person. A target that is another user of the tenant becomes
+`another_user`. IP address and user agent appear only on the subject's own events. Detail
+values whose key mentions a user, an email or an actor are replaced with `redacted`, unless the
+value is the subject's own id.
+
+Webhook deliveries are not included: they are copies of the audit events that are already in
+the bundle.
+
+The bundle has no field for a password hash at all, and neither the command line nor the API
+can add one.
+
+#### Operator statement
+
+A data-subject response also needs information that only the operator knows: the purposes of
+processing, the recipients and the retention periods. AnvilID cannot know these, so
+`operator_statement` is always `null`. Before handing the bundle over, fill in the slot as
+`{"purposes": "...", "recipients": "...", "retention": "..."}`, or send that information
+alongside the bundle.
+
+### Password hashes
+
+Password hashes leave AnvilID only through the command line:
+
+```sh
+anvilid users export --tenant default --include-password-hashes --out users-with-hashes.ndjson
+```
+
+- The option works only for the bulk export. The command refuses it together with `--user` or
+  `--gdpr`.
+- The command prints a warning on stderr. The output holds secrets: store it like a backup (the
+  `--out` file is created with mode 0600) and delete it once the migration is done.
+- The export is audited with `include_password_hashes: true`.
+
+No HTTP route can export password hashes. The management API has no such option: the bulk
+route uses an export without hashes, and unknown query parameters are refused. The single-user
+export and the GDPR bundle never carry a hash.
+
+### Export audit
+
+Every export records one `user_exported` audit event with `mode` (`single`, `gdpr` or `bulk`),
+`count` and `include_password_hashes`. Single and GDPR exports have the user as the target. A
+bulk export over the API that ends early, because of a read error or because the client
+disconnected, is recorded with outcome `failure` and the number of users sent so far. A refused
+request (wrong scope, unknown user, invalid parameter) is not an export and records nothing.

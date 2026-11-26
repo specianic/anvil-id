@@ -986,6 +986,41 @@ export interface paths {
         patch: operations["updateOrganizationRole"];
         trace?: never;
     };
+    "/api/admin/v1/tenants/{slug}/password-hash-profiles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the password hash profiles of a tenant (no key material). */
+        get: operations["listPasswordHashProfiles"];
+        put?: never;
+        /** Create a Firebase scrypt hash profile. The signer key is sealed and never returned. */
+        post: operations["createPasswordHashProfile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/password-hash-profiles/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete a hash profile (409 while imported password hashes reference it). */
+        delete: operations["deletePasswordHashProfile"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/tenants/{slug}/roles": {
         parameters: {
             query?: never;
@@ -1143,6 +1178,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/tenants/{slug}/users/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Export every user of the tenant as NDJSON (streamed; never includes password hashes). */
+        get: operations["exportUsers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/users/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Import users with their existing password hashes (one batch of NDJSON records). */
+        post: operations["importUsers"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/tenants/{slug}/users/{user_id}": {
         parameters: {
             query?: never;
@@ -1215,6 +1284,23 @@ export interface paths {
          *     be removed here.
          */
         delete: operations["deleteUserCredential"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/users/{user_id}/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Export one user as JSON, or their GDPR data-subject bundle (`profile=gdpr`). */
+        get: operations["exportUser"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -1904,6 +1990,30 @@ export interface components {
             /** @description Default: `true` for Google, Apple and GitHub, `false` otherwise. */
             trust_email_verified?: boolean | null;
         };
+        /** @description A new hash profile. `Debug` never prints the signer key. */
+        CreateHashProfile: {
+            /** @description The hash algorithm family; only `firebase_scrypt` today. */
+            kind: string;
+            /**
+             * Format: int32
+             * @description Firebase `mem_cost`.
+             */
+            mem_cost: number;
+            /** @description Unique name in the tenant (1-64 characters). */
+            name: string;
+            /**
+             * Format: int32
+             * @description Firebase `rounds`.
+             */
+            rounds: number;
+            /** @description Firebase `base64_salt_separator` (standard base64, at most 64 bytes decoded). */
+            salt_separator: string;
+            /**
+             * @description Firebase `base64_signer_key` (standard base64, 1-256 bytes decoded). Write-only: never
+             *     returned.
+             */
+            signer_key: string;
+        };
         /** @description Body of `POST /tenants`. */
         CreateTenant: {
             display_name: string;
@@ -2135,6 +2245,29 @@ export interface components {
          * @enum {string}
          */
         GrantType: "authorization_code" | "refresh_token" | "client_credentials";
+        /** @description Every hash profile of a tenant. */
+        HashProfileList: {
+            items: components["schemas"]["HashProfileView"][];
+        };
+        /** @description A hash profile: public parameters only (the signer key is never returned). */
+        HashProfileView: {
+            /** @description RFC 3339. */
+            created_at: string;
+            /**
+             * Format: uuid
+             * @description Referenced by imported Firebase records (`"profile": "<id>"`).
+             */
+            id: string;
+            /** @description `firebase_scrypt`. */
+            kind: string;
+            /** Format: int32 */
+            mem_cost: number;
+            name: string;
+            /** Format: int32 */
+            rounds: number;
+            /** @description Standard base64. */
+            salt_separator: string;
+        };
         /** @description Headless flow API settings of a tenant. */
         HeadlessSettings: {
             /**
@@ -2146,6 +2279,52 @@ export interface components {
              * @default []
              */
             allowed_origins: string[];
+        };
+        /**
+         * @description Counts per outcome; `weak` counts accepted records whose hash is below the recommended
+         *     parameters.
+         */
+        ImportCountsView: {
+            /** Format: int64 */
+            conflict: number;
+            /** Format: int64 */
+            created: number;
+            /** Format: int64 */
+            rejected: number;
+            /** Format: int64 */
+            unchanged: number;
+            /** Format: int64 */
+            updated: number;
+            /** Format: int64 */
+            weak: number;
+        };
+        /** @description The outcome of one record (by line number of the body). */
+        ImportRecordView: {
+            /** @description 1-based line number in the request body. */
+            line: number;
+            /** @description `created`, `unchanged`, `conflict`, `updated` or `rejected`. */
+            outcome: string;
+            /**
+             * @description Why the record was rejected: `invalid_email`, `invalid_record`, `unknown_scheme`,
+             *     `weak_parameters`, `over_cap`, `refused_variant`, `unknown_profile` or `id_conflict`.
+             */
+            reason?: string | null;
+            /**
+             * Format: uuid
+             * @description The created, updated or matching user.
+             */
+            user_id?: string | null;
+            /**
+             * @description The imported hash is accepted but below the recommended parameters (it is replaced by an
+             *     Argon2id hash at the user's first sign-in).
+             */
+            weak: boolean;
+        };
+        /** @description The report of one import request. Carries no password hash material. */
+        ImportReportView: {
+            counts: components["schemas"]["ImportCountsView"];
+            dry_run: boolean;
+            records: components["schemas"]["ImportRecordView"][];
         };
         /** @description An initial access token (never its value). */
         InitialAccessTokenDto: {
@@ -3209,6 +3388,12 @@ export interface components {
             user_id: string;
             values: Record<string, never>;
         };
+        /**
+         * @description A user export document: the `UserExportRecord` (single export, each bulk NDJSON line) or the
+         *     GDPR bundle (`profile=gdpr`); the field lists are in docs/IMPORT-EXPORT.md. Never carries a
+         *     password hash, TOTP seed, recovery code, token hash or other secret.
+         */
+        UserExportDocument: Record<string, never>;
         /** @description One page of users. */
         UserList: {
             items: components["schemas"]["UserView"][];
@@ -8599,6 +8784,189 @@ export interface operations {
             };
         };
     };
+    listPasswordHashProfiles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every profile, in name order */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HashProfileList"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    createPasswordHashProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateHashProfile"];
+            };
+        };
+        responses: {
+            /** @description Created (without the signer key) */
+            201: {
+                headers: {
+                    /** @description URL of the new profile */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HashProfileView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A profile with this name exists */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    deletePasswordHashProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Profile id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or profile */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Imported password hashes still reference the profile */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     listRoles: {
         parameters: {
             query?: never;
@@ -9464,6 +9832,160 @@ export interface operations {
             };
         };
     };
+    exportUsers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One `UserExportRecord` JSON object per line, in user id order. If the export fails mid-stream, the last line is `{"error":"export_failed"}`. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/x-ndjson": string;
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope (requires admin:users:export or admin:write) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown query parameter */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    importUsers: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Validate and report without writing users (default false). The audit event is still
+                 *     recorded, with `dry_run: true`.
+                 */
+                dry_run?: boolean;
+                /**
+                 * @description Overwrite existing users (matched by email) whose data differs, instead of reporting
+                 *     `conflict` (default false).
+                 */
+                update?: boolean;
+                /** @description Label of the source system for the audit event (1-64 characters). */
+                source?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        /** @description One user record per line (docs/IMPORT-EXPORT.md); at most 1,000 records and 1 MiB */
+        requestBody: {
+            content: {
+                "application/x-ndjson": string;
+            };
+        };
+        responses: {
+            /** @description The import report (also for a dry run) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportReportView"];
+                };
+            };
+            /** @description Missing `Content-Type: application/x-ndjson` or unreadable body */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description More than 1,000 records or more than 1 MiB; nothing was imported */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid query (for example the source label) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     getUser: {
         parameters: {
             query?: never;
@@ -9861,6 +10383,70 @@ export interface operations {
             };
             /** @description Unknown tenant, user or credential (or a password) */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    exportUser: {
+        parameters: {
+            query?: {
+                /** @description `gdpr` for the data-subject bundle; absent for the plain user export. */
+                profile?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description User id */
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The user export, or the GDPR bundle with `profile=gdpr` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserExportDocument"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope (requires admin:users:export or admin:write) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or user */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown profile or query parameter */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

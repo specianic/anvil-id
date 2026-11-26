@@ -1309,6 +1309,6 @@ mod tests {
             assert!(!is_logo_upload(p) && !is_config_document(&Method::POST, p));
             assert!(!is_saml_acs(&Method::POST, p));
         }
-        assert!(IMPORT_BODY_LIMIT > crate::BODY_LIMIT);
+        const { assert!(IMPORT_BODY_LIMIT > crate::BODY_LIMIT) };
     }
 }

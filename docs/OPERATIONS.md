@@ -23,6 +23,7 @@ Contents: [What to back up](#what-to-back-up) ·
 [Client registration policies](#client-registration-policies) ·
 [Deploying with Helm or Compose](#deploying-with-helm-or-compose) ·
 [Declarative tenant configuration](#declarative-tenant-configuration) ·
+[User import and export](#user-import-and-export) ·
 [Configuration keys added in 1.0](#configuration-keys-added-in-10) ·
 [SAML (experimental)](#saml-experimental) ·
 [Domain verification and the daily re-check](#domain-verification-and-the-daily-re-check)
@@ -452,6 +453,51 @@ with `invalid_client_metadata`, and a metadata document with `jwks_uri` is treat
 configuration (settings, static clients, connections, branding, roles, attributes, email
 templates, SMTP, webhooks) in a versioned YAML document: [CONFIG-YAML.md](CONFIG-YAML.md).
 Organizations and everything they own are not part of it (1.0).
+
+## User import and export
+
+Moving users in and out of AnvilID is described in [IMPORT-EXPORT.md](IMPORT-EXPORT.md). This is
+the operator's summary.
+
+**Commands.** Both read the server's configuration and can run next to a running server:
+
+```sh
+anvilid users import users.ndjson --tenant default --source legacy-app --dry-run
+anvilid users import users.ndjson --tenant default --source legacy-app
+anvilid users export --tenant default --out users.ndjson
+anvilid users export --tenant default --user <UUID> --gdpr --out subject.json
+```
+
+**Batching.** `users import` reads the file line by line and imports 1,000 records per batch,
+so files of any size use bounded memory. Each batch is one `users_imported` audit event. The
+management API route (`POST /api/admin/v1/tenants/{slug}/users/import`) takes one batch per
+request: at most 1,000 records and 1 MiB, with scope `admin:users:write`. Do a dry run first
+(`--dry-run`, or `dry_run=true`), and run the same file again after fixing rejected lines.
+Records that were already imported report `unchanged`. `users export` and the bulk API export
+read the users 100 at a time and stream them out.
+
+**Scopes.** The export routes need `admin:users:export` or `admin:write`. Neither `admin:read`
+nor `admin:users:write` grants export. Give `admin:users:export` only to the clients that
+really need it. Firebase hash profiles need `admin:settings:write`.
+
+**Audit events.**
+
+| Event | When | Details |
+| --- | --- | --- |
+| `users_imported` | Every import batch, dry runs included | counts per outcome, `weak`, `dry_run`, `source` |
+| `user_created` / `user_updated` | Every user an import created or changed | reason `imported` |
+| `password_profile_created` / `password_profile_deleted` | Firebase hash profiles | name and kind |
+| `user_exported` | Every export (CLI and API) | `mode` (`single`, `gdpr`, `bulk`), `count`, `include_password_hashes` |
+
+Watch for `user_exported` with `include_password_hashes: true`: such an export can only come from
+the command line on the server's host.
+
+**File permissions.** `users export --out` creates the file with mode 0600, and tightens an
+existing file to 0600. Exports hold personal data, and with `--include-password-hashes` they
+hold password hashes. Keep them on encrypted storage, out of shared directories and backups that
+other people can read, and delete them when they are no longer needed. Without `--out` the export
+goes to stdout. Redirect it into a file that only you can read (`umask 077` first). Import files
+contain password hashes as well: delete them once the import is done.
 
 ## Configuration keys added in 1.0
 

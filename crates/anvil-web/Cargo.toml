@@ -28,6 +28,8 @@ bergshamra-xml.workspace = true
 flate2.workspace = true
 fluent-bundle.workspace = true
 fluent-langneg.workspace = true
+# Streamed NDJSON body of the bulk user export (07-17).
+futures-util.workspace = true
 # DNS TXT domain verification adapter (06-10).
 hickory-resolver.workspace = true
 ipnet.workspace = true

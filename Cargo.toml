@@ -31,6 +31,8 @@ anvil-mail = { path = "crates/anvil-mail" }
 # Third-party crates
 tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time", "fs", "process", "io-util"] }
 axum = "0.8.9"
+# Streamed NDJSON bodies (07-17 bulk export); already in the graph through axum.
+futures-util = { version = "0.3.34", default-features = false }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 # Never default features (they include `any`), never `tls-rustls` (= ring), never `sqlite`/`sqlite-unbundled`.
