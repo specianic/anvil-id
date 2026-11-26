@@ -67,9 +67,32 @@ pub fn is_config_document(method: &axum::http::Method, path: &str) -> bool {
     )
 }
 
+/// Largest accepted request body of the SAML assertion consumer service (06-18): the IdP's
+/// HTTP-POST binding carries a base64 `samlp:Response`, often larger than [`crate::BODY_LIMIT`].
+pub const SAML_ACS_BODY_LIMIT: usize = 256 * 1024;
+
+/// Whether a request (before tenant resolution) posts to a SAML assertion consumer service:
+/// `POST [/t/{tenant}]/ui/login/saml/{slug}/acs`, one segment each for tenant and slug.
+pub fn is_saml_acs(method: &axum::http::Method, path: &str) -> bool {
+    if method != axum::http::Method::POST {
+        return false;
+    }
+    let rest = match path.strip_prefix("/t/") {
+        Some(r) => match r.split_once('/') {
+            Some((tenant, r)) if !tenant.is_empty() => r,
+            _ => return false,
+        },
+        None => path.strip_prefix('/').unwrap_or(path),
+    };
+    let Some(rest) = rest.strip_prefix("ui/login/saml/") else {
+        return false;
+    };
+    matches!(rest.split_once('/'), Some((slug, "acs")) if !slug.is_empty() && !slug.contains('/'))
+}
+
 /// Request body limit layer of the whole application: [`crate::BODY_LIMIT`] for every request,
-/// [`LOGO_BODY_LIMIT`] only for the logo upload and [`CONFIG_BODY_LIMIT`] only for configuration
-/// plan/apply. Both the stream limit (`RequestBodyLimit`, 413 up front for a larger
+/// [`LOGO_BODY_LIMIT`] only for the logo upload, [`CONFIG_BODY_LIMIT`] only for configuration
+/// plan/apply and [`SAML_ACS_BODY_LIMIT`] only for the SAML ACS. Both the stream limit (`RequestBodyLimit`, 413 up front for a larger
 /// `Content-Length`) and the extractor limit (`DefaultBodyLimit`) are set per request, so no
 /// other route accepts more than before. The size check runs before admin authentication, as for
 /// every route.
@@ -83,6 +106,8 @@ pub(crate) async fn body_limit(
         LOGO_BODY_LIMIT
     } else if is_config_document(req.method(), path) {
         CONFIG_BODY_LIMIT
+    } else if is_saml_acs(req.method(), path) {
+        SAML_ACS_BODY_LIMIT
     } else {
         crate::BODY_LIMIT
     };
@@ -923,6 +948,26 @@ pub(crate) async fn publish_client_branding(
 mod tests {
     use super::*;
     use axum::http::Method;
+
+    #[test]
+    fn saml_acs_paths() {
+        for p in ["/ui/login/saml/okta/acs", "/t/acme/ui/login/saml/okta/acs"] {
+            assert!(is_saml_acs(&Method::POST, p), "{p}");
+            assert!(!is_saml_acs(&Method::GET, p), "GET {p}");
+        }
+        for p in [
+            "/ui/login/saml//acs",
+            "/ui/login/saml/okta/acs/x",
+            "/ui/login/saml/a/b/acs",
+            "/ui/login/saml/okta/continue",
+            "/ui/login/upstream/okta/acs",
+            "/t//ui/login/saml/okta/acs",
+            "/t/acme/x/ui/login/saml/okta/acs",
+            "/api/ui/login/saml/okta/acs",
+        ] {
+            assert!(!is_saml_acs(&Method::POST, p), "{p}");
+        }
+    }
 
     #[test]
     fn config_document_paths() {
