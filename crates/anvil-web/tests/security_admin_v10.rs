@@ -138,19 +138,26 @@ async fn v10_admin_routes_require_scopes() {
         ),
         (Method::DELETE, format!("{o}/invitations/{inv}"), None, true),
     ];
-    let read = admin_token(&app, "admin:organizations:read").await;
-    let write = admin_token(&app, "admin:organizations:write").await;
+    assert_scope_matrix(&app, routes).await;
+}
+
+/// For each `(method, path, body, is_write)`: no token is 401 with a challenge, another
+/// resource's scope is 403, the read scope on a write is 403, and the route's own scope passes
+/// authorization.
+async fn assert_scope_matrix(app: &TestApp, routes: Vec<(Method, String, Option<Value>, bool)>) {
+    let read = admin_token(app, "admin:organizations:read").await;
+    let write = admin_token(app, "admin:organizations:write").await;
     let other = admin_token(
-        &app,
+        app,
         "admin:users:write admin:settings:write admin:clients:write",
     )
     .await;
     for (method, path, body, is_write) in routes {
         let what = format!("{method} {path}");
-        let resp = call(&app, method.clone(), &path, None, body.clone()).await;
+        let resp = call(app, method.clone(), &path, None, body.clone()).await;
         assert_problem(&resp, 401);
         assert!(resp.header("www-authenticate").is_some(), "{what}");
-        let resp = call(&app, method.clone(), &path, Some(&other), body.clone()).await;
+        let resp = call(app, method.clone(), &path, Some(&other), body.clone()).await;
         assert_eq!(
             resp.status,
             403,
@@ -158,7 +165,7 @@ async fn v10_admin_routes_require_scopes() {
             resp.text()
         );
         if is_write {
-            let resp = call(&app, method.clone(), &path, Some(&read), body.clone()).await;
+            let resp = call(app, method.clone(), &path, Some(&read), body.clone()).await;
             assert_eq!(
                 resp.status,
                 403,
@@ -167,7 +174,7 @@ async fn v10_admin_routes_require_scopes() {
             );
         }
         let granted = if is_write { &write } else { &read };
-        let resp = call(&app, method.clone(), &path, Some(granted), body).await;
+        let resp = call(app, method.clone(), &path, Some(granted), body).await;
         assert!(
             resp.status != 401 && resp.status != 403,
             "{what} with its scope: {} {}",
@@ -175,6 +182,64 @@ async fn v10_admin_routes_require_scopes() {
             resp.text()
         );
     }
+}
+
+#[tokio::test]
+async fn v10_org_sso_routes_require_scopes() {
+    let app = TestApp::with(|c| {
+        c.rate_limits.enabled = false;
+        c.saml_experimental = true;
+    })
+    .await;
+    let tenant = default_tenant(&app);
+    create_org(&app, tenant.id, "acme").await;
+    let o = format!("{API}/tenants/default/organizations/acme");
+    let id = uuid::Uuid::now_v7();
+    let oidc = json!({
+        "slug": "acme-oidc", "display_name": "Acme",
+        "config": {"type": "oidc", "issuer": "https://login.acme-corp.com", "client_id": "c"},
+    });
+    let routes: Vec<(Method, String, Option<Value>, bool)> = vec![
+        (Method::GET, format!("{o}/connections"), None, false),
+        (Method::POST, format!("{o}/connections"), Some(oidc), true),
+        (
+            Method::POST,
+            format!("{o}/connections/saml-metadata"),
+            Some(json!({"xml": "<x/>"})),
+            true,
+        ),
+        (Method::GET, format!("{o}/connections/{id}"), None, false),
+        (
+            Method::PATCH,
+            format!("{o}/connections/{id}"),
+            Some(json!({"display_name": "x"})),
+            true,
+        ),
+        (Method::DELETE, format!("{o}/connections/{id}"), None, true),
+        (
+            Method::PUT,
+            format!("{o}/connections/{id}/secret"),
+            Some(json!({"secret": null})),
+            true,
+        ),
+        (Method::GET, format!("{o}/domains"), None, false),
+        (
+            Method::POST,
+            format!("{o}/domains"),
+            Some(json!({"domain": "acme-corp.com"})),
+            true,
+        ),
+        (Method::GET, format!("{o}/domains/{id}"), None, false),
+        (
+            Method::PATCH,
+            format!("{o}/domains/{id}"),
+            Some(json!({"routing": false})),
+            true,
+        ),
+        (Method::DELETE, format!("{o}/domains/{id}"), None, true),
+        (Method::POST, format!("{o}/domains/{id}/verify"), None, true),
+    ];
+    assert_scope_matrix(&app, routes).await;
 }
 
 #[tokio::test]
@@ -399,6 +464,27 @@ async fn org_admin_token_refused_for_other_org() {
                 Some(json!({"email": "x@example.test"})),
             ),
             (Method::DELETE, format!("{o}/members/{}", f.admin.id), None),
+            // 06-17: connections and domains.
+            (Method::GET, format!("{o}/connections"), None),
+            (
+                Method::POST,
+                format!("{o}/connections"),
+                Some(json!({
+                    "slug": "x", "display_name": "X",
+                    "config": {"type": "oidc", "issuer": "https://idp.x.com", "client_id": "c"},
+                })),
+            ),
+            (
+                Method::POST,
+                format!("{o}/connections/saml-metadata"),
+                Some(json!({"xml": "<x/>"})),
+            ),
+            (Method::GET, format!("{o}/domains"), None),
+            (
+                Method::POST,
+                format!("{o}/domains"),
+                Some(json!({"domain": "evil-corp.com"})),
+            ),
         ] {
             let resp = call(&app, method.clone(), &path, t, body).await;
             assert_problem(&resp, 403);

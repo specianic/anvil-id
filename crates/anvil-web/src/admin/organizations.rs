@@ -17,7 +17,11 @@
 //!   (prefill from pasted or fetched IdP metadata; stores nothing): the org's enterprise
 //!   connections, OIDC or SAML. SAML is experimental: without the operator flag
 //!   `saml_experimental` creating, enabling or changing a SAML connection and the metadata import
-//!   answer 403 `feature_disabled` (disabling and deleting still work).
+//!   answer 403 `feature_disabled` (disabling and deleting still work);
+//! - `GET|POST …/{org}/domains`, `GET|PATCH|DELETE …/{org}/domains/{id}`,
+//!   `POST …/{org}/domains/{id}/verify`: domain claims with the DNS TXT record to publish, one
+//!   uniform `pending` answer for every failed check, one verified org per domain (409), and the
+//!   routing settings with their guards (see `OrgDomainService`).
 //!
 //! **Principals** ([`OrgAdminAuth`]): a system-tenant token needs `admin:organizations:read` for
 //! reads and `admin:organizations:write` for writes (or `admin:read` / `admin:write`). On the
@@ -28,11 +32,14 @@
 
 use anvil_core::error::CoreError;
 use anvil_core::model::{
-    Connection, ConnectionConfig as CoreConnectionConfig, ConnectionId, OrgInvitation,
-    OrgInvitationId, Organization, Role, RoleId, RoleUpdate, Tenant, UserId,
+    Connection, ConnectionConfig as CoreConnectionConfig, ConnectionId, OrgDomain, OrgDomainId,
+    OrgDomainStatus, OrgInvitation, OrgInvitationId, Organization, Role, RoleId, RoleUpdate,
+    Tenant, UserId,
 };
+use anvil_core::policy::domain_verification;
 use anvil_core::service::admin_scope::{Access, Resource};
 use anvil_core::service::connection::{ConnectionOwner, ConnectionPatch, NewConnectionInput};
+use anvil_core::service::org_domain::{DomainPatch, OrgDomainService, VerifyOutcome};
 use anvil_core::service::org_invitation::InvitationInput;
 use anvil_core::service::organization::{MemberInfo, OrgInput, OrgPatch, RoleScope};
 use anvil_core::service::role::RoleInput;
@@ -84,6 +91,13 @@ pub(crate) fn routes() -> OpenApiRouter<AppState> {
             delete_org_connection
         ))
         .routes(routes!(put_org_connection_secret))
+        .routes(routes!(list_org_domains, create_org_domain))
+        .routes(routes!(
+            get_org_domain,
+            update_org_domain,
+            delete_org_domain
+        ))
+        .routes(routes!(verify_org_domain))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1705,4 +1719,358 @@ pub(crate) async fn import_saml_metadata(
     };
     let metadata = service.parse_idp_metadata(field, &xml)?;
     Ok(json(StatusCode::OK, &SamlMetadataView::new(metadata, url)))
+}
+
+// ---------------------------------------------------------------------------------------------
+// Domains (06-17)
+// ---------------------------------------------------------------------------------------------
+
+impl AppState {
+    fn admin_org_domains(&self) -> OrgDomainService {
+        OrgDomainService {
+            storage: self.storage_arc(),
+            clock: self.clock_arc(),
+            lookup: self.domain_txt_arc(),
+        }
+    }
+}
+
+/// Verification state of a domain claim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DomainStatus {
+    Pending,
+    Verified,
+}
+
+/// A domain claimed by an organization, with the DNS record that proves it and its routing
+/// settings.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct DomainView {
+    pub id: Uuid,
+    /// Lowercase A-label.
+    pub domain: String,
+    pub status: DomainStatus,
+    /// The TXT record name to publish: `_anvilid-challenge.{domain}.`.
+    pub record_name: String,
+    /// The TXT record value to publish: `anvilid-domain-verification={token}`.
+    pub record_value: String,
+    /// The connection (of this organization) users of this domain are routed to.
+    pub connection_id: Option<Uuid>,
+    /// Whether identifier-first sign-in routes this domain to `connection_id`.
+    pub routing: bool,
+    /// Whether password sign-in stays available for this domain (default `true`).
+    pub allow_local_password: bool,
+    #[schema(format = DateTime)]
+    pub verified_at: Option<String>,
+    #[schema(format = DateTime)]
+    pub last_checked_at: Option<String>,
+    /// Start of the current run of failed re-checks of a verified domain.
+    #[schema(format = DateTime)]
+    pub failing_since: Option<String>,
+    #[schema(format = DateTime)]
+    pub created_at: String,
+}
+
+impl From<OrgDomain> for DomainView {
+    fn from(d: OrgDomain) -> Self {
+        Self {
+            id: d.id.0,
+            record_name: domain_verification::record_name(&d.domain),
+            record_value: domain_verification::record_value(&d.token),
+            status: match d.status {
+                OrgDomainStatus::Pending => DomainStatus::Pending,
+                OrgDomainStatus::Verified => DomainStatus::Verified,
+            },
+            domain: d.domain,
+            connection_id: d.connection_id.map(|c| c.0),
+            routing: d.routing,
+            allow_local_password: d.allow_local_password,
+            verified_at: d.verified_at.map(ts),
+            last_checked_at: d.last_checked_at.map(ts),
+            failing_since: d.failing_since.map(ts),
+            created_at: ts(d.created_at),
+        }
+    }
+}
+
+/// The organization's domain claims, in domain order.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct DomainList {
+    pub items: Vec<DomainView>,
+}
+
+/// Body of `POST …/{org}/domains`.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct NewDomainDto {
+    /// A registrable domain name (no scheme, port, path, wildcard, IP address, reserved name or
+    /// public suffix); stored as a lowercase A-label.
+    pub domain: String,
+}
+
+/// Body of `PATCH …/{org}/domains/{id}`. Absent fields stay unchanged.
+#[derive(Debug, Default, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DomainPatchDto {
+    /// A connection of this organization; `null` removes the target.
+    #[serde(default, deserialize_with = "double_option")]
+    #[schema(value_type = Option<Uuid>)]
+    pub connection_id: Option<Option<Uuid>>,
+    /// Needs a verified domain and an enabled target connection.
+    #[serde(default)]
+    pub routing: Option<bool>,
+    /// `false` enforces SSO for the domain; it needs routing on and a target connection that has
+    /// completed at least one sign-in (409 otherwise).
+    #[serde(default)]
+    pub allow_local_password: Option<bool>,
+}
+
+fn domain_id(raw: &str) -> AdminResult<OrgDomainId> {
+    Ok(OrgDomainId(path_uuid(raw)?))
+}
+
+/// List the organization's domain claims.
+#[utoipa::path(
+    get,
+    path = "/api/admin/v1/tenants/{slug}/organizations/{org}/domains",
+    tag = "organizations",
+    operation_id = "listOrganizationDomains",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("org" = String, Path, description = "Organization id or slug"),
+    ),
+    responses(
+        (status = 200, description = "The domain claims, in domain order", body = DomainList),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope, or an org admin token of another organization", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant or organization", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:organizations:read"]),
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:read"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn list_org_domains(
+    OrgAdminAuth(auth): OrgAdminAuth,
+    State(state): State<AppState>,
+    Path((slug, org)): Path<(String, String)>,
+) -> AdminResult<Response> {
+    let (_, org) = org_for(&state, &auth, &slug, &org, Access::Read).await?;
+    let items = state
+        .admin_org_domains()
+        .list(&org)
+        .await?
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    Ok(json(StatusCode::OK, &DomainList { items }))
+}
+
+/// Claim a domain for the organization. The answer carries the TXT record to publish; the claim
+/// stays `pending` until verified.
+#[utoipa::path(
+    post,
+    path = "/api/admin/v1/tenants/{slug}/organizations/{org}/domains",
+    tag = "organizations",
+    operation_id = "createOrganizationDomain",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("org" = String, Path, description = "Organization id or slug"),
+    ),
+    request_body = NewDomainDto,
+    responses(
+        (status = 201, description = "Claimed (pending)", body = DomainView, headers(("Location" = String, description = "URL of the new claim"))),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope, or an org admin token of another organization", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant or organization", body = Problem, content_type = "application/problem+json"),
+        (status = 409, description = "The organization already claimed this domain", body = Problem, content_type = "application/problem+json"),
+        (status = 422, description = "Not an acceptable domain (the message names the reason)", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn create_org_domain(
+    OrgAdminAuth(auth): OrgAdminAuth,
+    State(state): State<AppState>,
+    AuditContext(ctx): AuditContext,
+    Path((slug, org)): Path<(String, String)>,
+    AdminJson(body): AdminJson<NewDomainDto>,
+) -> AdminResult<Response> {
+    let (tenant, org) = org_for(&state, &auth, &slug, &org, Access::Write).await?;
+    let claim = state
+        .admin_org_domains()
+        .add(&org, &body.domain, auth.actor(), &ctx)
+        .await?;
+    let location = format!("{}/domains/{}", org_location(&tenant, &org), claim.id);
+    Ok(created(&location, &DomainView::from(claim)))
+}
+
+/// Get one of the organization's domain claims.
+#[utoipa::path(
+    get,
+    path = "/api/admin/v1/tenants/{slug}/organizations/{org}/domains/{id}",
+    tag = "organizations",
+    operation_id = "getOrganizationDomain",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("org" = String, Path, description = "Organization id or slug"),
+        ("id" = uuid::Uuid, Path, description = "Domain claim id"),
+    ),
+    responses(
+        (status = 200, description = "The domain claim", body = DomainView),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope, or an org admin token of another organization", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant, organization or claim (or another organization's claim)", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:organizations:read"]),
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:read"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn get_org_domain(
+    OrgAdminAuth(auth): OrgAdminAuth,
+    State(state): State<AppState>,
+    Path((slug, org, id)): Path<(String, String, String)>,
+) -> AdminResult<Response> {
+    let (_, org) = org_for(&state, &auth, &slug, &org, Access::Read).await?;
+    let claim = state.admin_org_domains().get(&org, domain_id(&id)?).await?;
+    Ok(json(StatusCode::OK, &DomainView::from(claim)))
+}
+
+/// Change the routing settings of a domain claim. Routing needs a verified domain and an
+/// enabled connection of this organization; turning password sign-in off additionally needs a
+/// connection that has completed at least one sign-in (409, lockout guard). Setting
+/// `routing: false, allow_local_password: true` always works (recovery).
+#[utoipa::path(
+    patch,
+    path = "/api/admin/v1/tenants/{slug}/organizations/{org}/domains/{id}",
+    tag = "organizations",
+    operation_id = "updateOrganizationDomain",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("org" = String, Path, description = "Organization id or slug"),
+        ("id" = uuid::Uuid, Path, description = "Domain claim id"),
+    ),
+    request_body = DomainPatchDto,
+    responses(
+        (status = 200, description = "The updated claim", body = DomainView),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope, or an org admin token of another organization", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant, organization or claim (or another organization's claim)", body = Problem, content_type = "application/problem+json"),
+        (status = 409, description = "The settings are not allowed in the claim's state (pending domain, no or disabled target, lockout guard)", body = Problem, content_type = "application/problem+json"),
+        (status = 422, description = "Validation failed (also: the target is not a connection of this organization)", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn update_org_domain(
+    OrgAdminAuth(auth): OrgAdminAuth,
+    State(state): State<AppState>,
+    AuditContext(ctx): AuditContext,
+    Path((slug, org, id)): Path<(String, String, String)>,
+    AdminJson(body): AdminJson<DomainPatchDto>,
+) -> AdminResult<Response> {
+    let (_, org) = org_for(&state, &auth, &slug, &org, Access::Write).await?;
+    let claim = state
+        .admin_org_domains()
+        .update(
+            &org,
+            domain_id(&id)?,
+            DomainPatch {
+                connection_id: body.connection_id.map(|c| c.map(ConnectionId)),
+                routing: body.routing,
+                allow_local_password: body.allow_local_password,
+            },
+            auth.actor(),
+            &ctx,
+        )
+        .await?;
+    Ok(json(StatusCode::OK, &DomainView::from(claim)))
+}
+
+/// Delete a domain claim; routing for the domain stops.
+#[utoipa::path(
+    delete,
+    path = "/api/admin/v1/tenants/{slug}/organizations/{org}/domains/{id}",
+    tag = "organizations",
+    operation_id = "deleteOrganizationDomain",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("org" = String, Path, description = "Organization id or slug"),
+        ("id" = uuid::Uuid, Path, description = "Domain claim id"),
+    ),
+    responses(
+        (status = 204, description = "Deleted"),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope, or an org admin token of another organization", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant, organization or claim (or another organization's claim)", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn delete_org_domain(
+    OrgAdminAuth(auth): OrgAdminAuth,
+    State(state): State<AppState>,
+    AuditContext(ctx): AuditContext,
+    Path((slug, org, id)): Path<(String, String, String)>,
+) -> AdminResult<Response> {
+    let (_, org) = org_for(&state, &auth, &slug, &org, Access::Write).await?;
+    state
+        .admin_org_domains()
+        .delete(&org, domain_id(&id)?, auth.actor(), &ctx)
+        .await?;
+    Ok(no_content())
+}
+
+/// Check the claim's DNS TXT record now. Answers 200 with `status`: `verified`, or `pending`
+/// with the same body whatever the cause (no record, wrong value, DNS failure). 409 when another
+/// organization of the tenant has already verified the domain.
+#[utoipa::path(
+    post,
+    path = "/api/admin/v1/tenants/{slug}/organizations/{org}/domains/{id}/verify",
+    tag = "organizations",
+    operation_id = "verifyOrganizationDomain",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("org" = String, Path, description = "Organization id or slug"),
+        ("id" = uuid::Uuid, Path, description = "Domain claim id"),
+    ),
+    responses(
+        (status = 200, description = "The claim after the check (`status` verified or pending)", body = DomainView),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope, or an org admin token of another organization", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant, organization or claim (or another organization's claim)", body = Problem, content_type = "application/problem+json"),
+        (status = 409, description = "Another organization of the tenant has already verified this domain", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn verify_org_domain(
+    OrgAdminAuth(auth): OrgAdminAuth,
+    State(state): State<AppState>,
+    AuditContext(ctx): AuditContext,
+    Path((slug, org, id)): Path<(String, String, String)>,
+) -> AdminResult<Response> {
+    let (_, org) = org_for(&state, &auth, &slug, &org, Access::Write).await?;
+    let claim = match state
+        .admin_org_domains()
+        .verify(&org, domain_id(&id)?, auth.actor(), &ctx)
+        .await?
+    {
+        VerifyOutcome::Verified(d) | VerifyOutcome::Pending(d) => d,
+    };
+    Ok(json(StatusCode::OK, &DomainView::from(claim)))
 }
