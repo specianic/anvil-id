@@ -19,7 +19,7 @@ start, because they change:
   push to `main`, on `v*` tags and on protocol pull requests. It uses the OIDF suite, self-hosted and
   pinned (`CONFORMANCE_TAG`), against a fresh local instance. It enforces the committed
   `tests/conformance/expected-skips.json` and `expected-failures.json` exactly. Tag runs keep the
-  `conformance-results` artifact for 90 days. See [tests/conformance/README.md](../tests/conformance/README.md).
+  `conformance-results` artifact for 90 days. See [tests/conformance/README.md](https://github.com/specianic/anvil-id/blob/main/tests/conformance/README.md).
 - **Hosted suite (the certification artefact).** The submission's "Conformance Test Suite Software" field
   refers to `www.certification.openid.net`, so the logs you submit must come from the hosted suite. The
   hosted suite has to reach the deployment over the internet, which means a **publicly reachable HTTPS
@@ -31,7 +31,7 @@ run's artifact first).
 ## The five plans
 
 These are the same plan names and variant strings the CI harness runs (from
-[tests/conformance/README.md](../tests/conformance/README.md)). On the hosted suite, choose the plan and set
+[tests/conformance/README.md](https://github.com/specianic/anvil-id/blob/main/tests/conformance/README.md)). On the hosted suite, choose the plan and set
 the variants shown in brackets.
 
 | Profile | Plan | Variants |
