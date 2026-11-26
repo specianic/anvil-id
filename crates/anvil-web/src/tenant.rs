@@ -7,6 +7,18 @@
 //!
 //! If the default tenant does not exist (not installed yet) root requests carry no
 //! [`ResolvedTenant`]; handlers that need one answer with the `not_found` error page.
+//!
+//! ## Unknown-host negative cache (QUAL-05)
+//!
+//! A request whose `Host` is not the public host costs a tenant lookup by host. Hosts that are
+//! **not** a tenant host are remembered in [`AppState::unknown_hosts`] for
+//! [`AppConfig::unknown_host_ttl`](crate::config::AppConfig::unknown_host_ttl) (default 5 s,
+//! bounded to [`UNKNOWN_HOSTS_CAPACITY`](crate::state::UNKNOWN_HOSTS_CAPACITY) entries). A miss
+//! only means "not a host tenant", so serving it from the cache is safe; the one visible effect is
+//! that a **newly configured tenant host starts resolving on each node within that TTL** (there
+//! is deliberately no invalidation hook: the TTL bound is the contract). Positive results, tenant
+//! rows and lookup errors are never cached, so a deleted tenant or a removed host stops resolving
+//! on the very next request.
 
 use anvil_core::model::{DEFAULT_TENANT_SLUG, Tenant, TenantBase, issuer};
 use axum::extract::{FromRequestParts, OptionalFromRequestParts, Request, State};
@@ -158,9 +170,13 @@ pub(crate) async fn resolve(
     let mut host_tenant: Option<Tenant> = None;
     if let Some(host) = request_host(&req)
         && host != state.config().public_url.host_port()
+        && !state.unknown_hosts().contains_key(&host)
     {
         match tenants.get_by_host(&host).await {
-            Ok(t) => host_tenant = t,
+            Ok(Some(t)) => host_tenant = Some(t),
+            // Only misses are cached (see the module docs); a found tenant is looked up again on
+            // every request.
+            Ok(None) => state.unknown_hosts().insert(host, ()),
             Err(e) => {
                 tracing::error!(error = %e, "tenant lookup by host failed");
                 return internal(&state);
