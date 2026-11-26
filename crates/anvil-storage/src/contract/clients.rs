@@ -743,3 +743,41 @@ pub async fn client_registration_token_lookup_and_rotation(s: &TestStorage) {
         "only dynamic clients have a configuration endpoint"
     );
 }
+
+// ---- Phase 6 (plan 06-04): client organization policy; the backends refuse values other than
+// `off` with StorageError::Unsupported until 06-07 / 06-08 ----
+
+pub async fn client_organization_policy_round_trip(s: &TestStorage) {
+    use anvil_core::model::OrgClientPolicy;
+
+    let tenant = seed_tenant(s).await;
+    let clients = s.storage.clients();
+    let mut new = new_client();
+    new.organization = OrgClientPolicy::Required;
+    let created = clients.create(tenant, &new).await.expect("create");
+    assert_eq!(created, expected_client(tenant, &new));
+    assert_eq!(created.organization, OrgClientPolicy::Required);
+    let updated = clients
+        .update(
+            tenant,
+            &new.client_id,
+            &ClientUpdate {
+                organization: Some(OrgClientPolicy::Optional),
+                ..Default::default()
+            },
+            now_ms(),
+        )
+        .await
+        .expect("update")
+        .expect("exists");
+    assert_eq!(updated.organization, OrgClientPolicy::Optional);
+    assert_eq!(
+        clients
+            .get(tenant, &new.client_id)
+            .await
+            .expect("get")
+            .expect("exists")
+            .organization,
+        OrgClientPolicy::Optional
+    );
+}

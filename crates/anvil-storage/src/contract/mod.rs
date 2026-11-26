@@ -35,6 +35,9 @@ mod jobs;
 mod keys;
 mod logout;
 mod mail_settings;
+mod org_domains;
+mod org_invitations;
+mod orgs;
 mod outbox;
 mod registration;
 mod roles;
@@ -59,6 +62,9 @@ pub use jobs::*;
 pub use keys::*;
 pub use logout::*;
 pub use mail_settings::*;
+pub use org_domains::*;
+pub use org_invitations::*;
+pub use orgs::*;
 pub use outbox::*;
 pub use registration::*;
 pub use roles::*;
@@ -317,6 +323,59 @@ macro_rules! storage_contract_tests {
             // setup: the system administrator role
             install_creates_system_administrator_role,
             complete_setup_assigns_administrator_role,
+            // ---- Phase 6 (plan 06-04); backends implement them in 06-07 / 06-08 and fail with
+            // StorageError::Unsupported from their TRANSITIONAL shims until then ----
+            // organizations and members
+            org_create_get_update_delete,
+            org_slug_conflict_per_tenant,
+            org_list_pagination,
+            orgs_isolated_by_tenant,
+            org_add_member_idempotent_with_roles,
+            org_add_member_refuses_unknown_or_foreign,
+            org_remove_member_revokes_only_that_orgs_families,
+            org_delete_cascades_and_revokes_families,
+            org_memberships_of_user,
+            org_list_members_paginates,
+            // invitations
+            invitation_create_list_revoke,
+            invitation_by_hash_and_unique_hash,
+            invitation_accept_adds_membership_and_roles,
+            invitation_accept_wrong_email_writes_nothing,
+            invitation_accept_concurrent_single_winner,
+            invitation_closed_tokens_are_invalid,
+            invitation_existing_member_keeps_token,
+            invitation_accept_with_new_user_is_atomic,
+            invitations_isolated_by_tenant,
+            // domains
+            domain_create_list_get_delete,
+            domain_create_refuses_foreign_routing_connection,
+            domain_mark_verified_one_org_per_domain,
+            domain_mark_verified_concurrent_single_winner,
+            domain_update_routing_connection_same_org_only,
+            domain_routed_domain_requires_verified_routing_enabled_connection,
+            domain_record_check_failure_streak,
+            domain_unverify_stops_routing,
+            domain_due_for_recheck_across_tenants,
+            domain_verified_domains_of_org,
+            domains_isolated_by_tenant,
+            // org roles
+            role_org_owned_name_unique_per_org,
+            role_list_excludes_org_roles,
+            role_assign_in_org_requires_membership,
+            role_org_owned_role_only_in_its_org,
+            role_tenant_role_in_org_scoped_to_that_org,
+            role_holders_of_permission_ignores_org_assignments,
+            role_org_holders_of_permission_counts_in_org_members,
+            // org connections, SAML configs, links, JIT membership
+            connection_org_and_saml_round_trip,
+            connection_has_links,
+            create_user_with_link_with_membership,
+            // org-bound grants, SAML replay, mail, branding, client policy
+            code_and_family_org_round_trip,
+            record_jti_saml_assertion_id_replay,
+            mail_template_org_invitation_round_trip,
+            branding_org_scope_independent,
+            client_organization_policy_round_trip,
         );
     };
     (@each $factory:path; $($name:ident),+ $(,)?) => {

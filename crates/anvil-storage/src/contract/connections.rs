@@ -739,3 +739,182 @@ pub async fn connections_isolated_by_tenant(s: &TestStorage) {
     );
     assert!(repo.get(tenant, c.id).await.expect("get").is_some());
 }
+
+// ---- Phase 6 (plan 06-04): organization connections, SAML configs, has_links and JIT
+// membership; the backends refuse them with StorageError::Unsupported until 06-07 / 06-08 ----
+
+pub async fn connection_org_and_saml_round_trip(s: &TestStorage) {
+    let tenant = seed_tenant(s).await;
+    let repo = s.storage.connections();
+    let org = seed_org(s, tenant).await;
+    let other_org = seed_org(s, tenant).await;
+    let tenant_conn = seed_connection(s, tenant).await;
+
+    let oidc = new_org_connection(org.id);
+    let created = repo.create(tenant, &oidc).await.expect("org oidc");
+    assert_eq!(created, expected_connection(tenant, &oidc));
+    assert_eq!(created.org_id, Some(org.id));
+    let saml = new_saml_connection(org.id);
+    let created_saml = repo.create(tenant, &saml).await.expect("org saml");
+    assert_eq!(created_saml, expected_connection(tenant, &saml));
+    assert_eq!(created_saml.kind().as_str(), "saml");
+    assert_eq!(
+        repo.get(tenant, saml.id).await.expect("get"),
+        Some(created_saml.clone())
+    );
+    assert_eq!(
+        repo.get_by_slug(tenant, &saml.slug).await.expect("by slug"),
+        Some(created_saml.clone())
+    );
+    let other = seed_org_connection(s, tenant, other_org.id).await;
+
+    // `list` returns tenant and org connections; `list_for_org` only that org's.
+    let all: Vec<ConnectionId> = repo
+        .list(tenant)
+        .await
+        .expect("list")
+        .into_iter()
+        .map(|c| c.id)
+        .collect();
+    for id in [tenant_conn.id, oidc.id, saml.id, other.id] {
+        assert!(all.contains(&id), "list includes every connection");
+    }
+    let mut want = vec![created.clone(), created_saml.clone()];
+    want.sort_by(|a, b| a.slug.cmp(&b.slug));
+    assert_eq!(
+        repo.list_for_org(tenant, org.id).await.expect("for org"),
+        want,
+        "slug order, this org only"
+    );
+    assert!(
+        repo.list_for_org(seed_tenant(s).await, org.id)
+            .await
+            .expect("for org from another tenant")
+            .is_empty()
+    );
+
+    // A SAML config update round-trips too.
+    let mut changed = match created_saml.config.clone() {
+        anvil_core::model::ConnectionConfig::Saml(c) => c,
+        other => panic!("expected saml, got {other:?}"),
+    };
+    changed.signing_certs.push(changed.signing_certs[0].clone());
+    let updated = repo
+        .update(
+            tenant,
+            saml.id,
+            &ConnectionUpdate {
+                config: Some(anvil_core::model::ConnectionConfig::Saml(changed.clone())),
+                ..Default::default()
+            },
+            now_ms(),
+        )
+        .await
+        .expect("update")
+        .expect("exists");
+    assert_eq!(
+        updated.config,
+        anvil_core::model::ConnectionConfig::Saml(changed)
+    );
+    assert_eq!(updated.org_id, Some(org.id), "updates keep the org");
+}
+
+pub async fn connection_has_links(s: &TestStorage) {
+    let tenant = seed_tenant(s).await;
+    let repo = s.storage.connections();
+    let org = seed_org(s, tenant).await;
+    let conn = seed_org_connection(s, tenant, org.id).await;
+    let user = seed_user(s, tenant).await;
+    assert!(!repo.has_links(tenant, conn.id).await.expect("has_links"));
+    let link = new_identity_link(user.id, conn.id, "sub-has-links");
+    repo.create_link(tenant, &link).await.expect("link");
+    assert!(repo.has_links(tenant, conn.id).await.expect("has_links"));
+    assert!(
+        !repo
+            .has_links(seed_tenant(s).await, conn.id)
+            .await
+            .expect("has_links from another tenant")
+    );
+    assert!(
+        !repo
+            .has_links(tenant, ConnectionId::new_v7())
+            .await
+            .expect("has_links unknown")
+    );
+    // Keep a password so the link is not the user's last sign-in method.
+    assert_eq!(
+        repo.delete_link(tenant, user.id, link.id, false)
+            .await
+            .expect("delete link"),
+        DeleteLinkOutcome::Deleted
+    );
+    assert!(!repo.has_links(tenant, conn.id).await.expect("has_links"));
+}
+
+pub async fn create_user_with_link_with_membership(s: &TestStorage) {
+    let tenant = seed_tenant(s).await;
+    let repo = s.storage.connections();
+    let orgs = s.storage.organizations();
+    let org = seed_org(s, tenant).await;
+    let role = seed_org_role(s, tenant, org.id, &["docs:read"]).await;
+    let conn = seed_org_connection(s, tenant, org.id).await;
+
+    // With a membership: user, link, membership and its role assignment in one transaction.
+    let new = new_user();
+    let link = new_identity_link(new.id, conn.id, "jit-member");
+    let membership = new_membership(org.id, new.id, &[role.id]);
+    repo.create_user_with_link(tenant, &new, &link, None, None, Some(&membership))
+        .await
+        .expect("create with membership");
+    assert!(
+        orgs.is_member(tenant, org.id, new.id)
+            .await
+            .expect("is_member")
+    );
+    assert_eq!(
+        s.storage
+            .roles()
+            .roles_for_user_in_org(tenant, new.id, org.id)
+            .await
+            .expect("roles")
+            .iter()
+            .map(|r| r.id)
+            .collect::<Vec<_>>(),
+        vec![role.id]
+    );
+
+    // Without one: no membership.
+    let plain = new_user();
+    let plain_link = new_identity_link(plain.id, conn.id, "jit-plain");
+    repo.create_user_with_link(tenant, &plain, &plain_link, None, None, None)
+        .await
+        .expect("create without membership");
+    assert!(
+        !orgs
+            .is_member(tenant, org.id, plain.id)
+            .await
+            .expect("is_member")
+    );
+
+    // A membership that cannot be stored (role of another org) rolls everything back.
+    let other_org = seed_org(s, tenant).await;
+    let foreign_role = seed_org_role(s, tenant, other_org.id, &[]).await;
+    let doomed = new_user();
+    let doomed_link = new_identity_link(doomed.id, conn.id, "jit-doomed");
+    let bad = new_membership(org.id, doomed.id, &[foreign_role.id]);
+    assert!(
+        repo.create_user_with_link(tenant, &doomed, &doomed_link, None, None, Some(&bad))
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        s.storage.users().get(tenant, doomed.id).await.expect("get"),
+        None
+    );
+    assert_eq!(
+        repo.find_link(tenant, conn.id, "jit-doomed")
+            .await
+            .expect("find"),
+        None
+    );
+}

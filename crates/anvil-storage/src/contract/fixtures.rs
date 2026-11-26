@@ -292,7 +292,7 @@ pub fn expected_client(tenant: TenantId, c: &NewClient) -> Client {
         registration_source: c.registration_source,
         metadata_expires_at: c.metadata_expires_at,
         registration_access_token_hash: c.registration_access_token_hash,
-        organization: anvil_core::model::OrgClientPolicy::Off,
+        organization: c.organization,
     }
 }
 
@@ -528,7 +528,7 @@ pub fn expected_code(tenant: TenantId, code: &NewAuthorizationCode) -> Authoriza
         expires_at: code.expires_at,
         created_at: code.created_at,
         resource: code.resource.clone(),
-        org_id: None,
+        org_id: code.org_id,
     }
 }
 
@@ -550,7 +550,7 @@ pub fn expected_family(tenant: TenantId, f: &NewTokenFamily) -> TokenFamily {
         revoked_at: None,
         revoked_reason: None,
         resource: f.resource.clone(),
-        org_id: None,
+        org_id: f.org_id,
     }
 }
 
@@ -904,7 +904,7 @@ pub fn expected_connection(tenant: TenantId, c: &NewConnection) -> anvil_core::m
         trust_email_verified: c.trust_email_verified,
         created_at: c.created_at,
         updated_at: c.created_at,
-        org_id: None,
+        org_id: c.org_id,
     }
 }
 
@@ -1192,4 +1192,290 @@ pub fn new_cimd_client() -> NewClient {
     c.jwks = None;
     c.registration_source = ClientSource::Cimd;
     c
+}
+
+// ---------------------------------------------------------------------------------------------
+// Phase 6: organizations, memberships, invitations, domains
+
+/// An organization with a unique slug and every optional field populated.
+pub fn new_org() -> anvil_core::model::NewOrganization {
+    anvil_core::model::NewOrganization {
+        id: anvil_core::model::OrgId::new_v7(),
+        slug: format!("org-{}", short()),
+        display_name: "Contract Org".to_owned(),
+        mfa_policy: Some(anvil_core::model::MfaPolicy::Required),
+        settings: anvil_core::model::OrgSettings::default(),
+        metadata: serde_json::json!({"plan": "enterprise"}),
+        created_at: now_ms(),
+    }
+}
+
+/// The record `OrgRepo::create` must return.
+pub fn expected_org(
+    tenant: TenantId,
+    o: &anvil_core::model::NewOrganization,
+) -> anvil_core::model::Organization {
+    anvil_core::model::Organization {
+        id: o.id,
+        tenant_id: tenant,
+        slug: o.slug.clone(),
+        display_name: o.display_name.clone(),
+        mfa_policy: o.mfa_policy,
+        settings: o.settings.clone(),
+        metadata: o.metadata.clone(),
+        created_at: o.created_at,
+        updated_at: o.created_at,
+    }
+}
+
+/// Creates an organization.
+pub async fn seed_org(s: &TestStorage, tenant: TenantId) -> anvil_core::model::Organization {
+    s.storage
+        .organizations()
+        .create(tenant, &new_org())
+        .await
+        .expect("creating a seed organization must succeed")
+}
+
+/// A membership of `user` in `org` with `roles` assigned in the org.
+pub fn new_membership(
+    org: anvil_core::model::OrgId,
+    user: UserId,
+    roles: &[RoleId],
+) -> anvil_core::model::NewMembership {
+    anvil_core::model::NewMembership {
+        org_id: org,
+        user_id: user,
+        role_ids: roles.to_vec(),
+        created_at: now_ms(),
+    }
+}
+
+/// Creates a user and makes it a member of `org` with `roles`.
+pub async fn seed_member(
+    s: &TestStorage,
+    tenant: TenantId,
+    org: anvil_core::model::OrgId,
+    roles: &[RoleId],
+) -> User {
+    let user = seed_user(s, tenant).await;
+    assert_eq!(
+        s.storage
+            .organizations()
+            .add_member(tenant, &new_membership(org, user.id, roles))
+            .await
+            .expect("adding a seed member must succeed"),
+        anvil_core::ports::AddMemberOutcome::Added
+    );
+    user
+}
+
+/// A role owned by `org` with a unique name.
+pub fn new_org_role(org: anvil_core::model::OrgId, permissions: &[&str]) -> NewRole {
+    NewRole {
+        org_id: Some(org),
+        ..new_role(permissions)
+    }
+}
+
+/// Creates a role owned by `org`.
+pub async fn seed_org_role(
+    s: &TestStorage,
+    tenant: TenantId,
+    org: anvil_core::model::OrgId,
+    permissions: &[&str],
+) -> Role {
+    s.storage
+        .roles()
+        .create(tenant, &new_org_role(org, permissions))
+        .await
+        .expect("creating a seed org role must succeed")
+}
+
+/// An open invitation of `email` to `org` with `roles`, expiring `expires_in` from now.
+pub fn new_invitation(
+    org: anvil_core::model::OrgId,
+    email: &str,
+    roles: &[RoleId],
+    expires_in: Duration,
+) -> anvil_core::model::NewOrgInvitation {
+    let now = now_ms();
+    anvil_core::model::NewOrgInvitation {
+        id: anvil_core::model::OrgInvitationId::new_v7(),
+        org_id: org,
+        email: email.to_owned(),
+        role_ids: roles.to_vec(),
+        token_hash: unique_hash(),
+        invited_by: AuditActor::system(),
+        created_at: now,
+        expires_at: now + expires_in,
+    }
+}
+
+/// The record `OrgRepo::create_invitation` must return.
+pub fn expected_invitation(
+    tenant: TenantId,
+    i: &anvil_core::model::NewOrgInvitation,
+) -> anvil_core::model::OrgInvitation {
+    anvil_core::model::OrgInvitation {
+        id: i.id,
+        tenant_id: tenant,
+        org_id: i.org_id,
+        email: i.email.clone(),
+        role_ids: i.role_ids.clone(),
+        token_hash: i.token_hash,
+        invited_by: i.invited_by.clone(),
+        created_at: i.created_at,
+        expires_at: i.expires_at,
+        accepted_at: None,
+        accepted_user_id: None,
+        revoked_at: None,
+    }
+}
+
+/// A unique, plausible domain name (lowercase A-label).
+pub fn unique_domain() -> String {
+    format!("d{}.example.com", short())
+}
+
+/// A pending claim of `domain` by `org`, routing to `connection` if given.
+pub fn new_org_domain(
+    org: anvil_core::model::OrgId,
+    domain: &str,
+    connection: Option<ConnectionId>,
+) -> anvil_core::model::NewOrgDomain {
+    anvil_core::model::NewOrgDomain {
+        id: anvil_core::model::OrgDomainId::new_v7(),
+        org_id: org,
+        domain: domain.to_owned(),
+        token: format!("tok{}", short()),
+        connection_id: connection,
+        routing: connection.is_some(),
+        allow_local_password: true,
+        created_at: now_ms(),
+    }
+}
+
+/// The (pending) record `OrgRepo::create_domain` must return.
+pub fn expected_domain(
+    tenant: TenantId,
+    d: &anvil_core::model::NewOrgDomain,
+) -> anvil_core::model::OrgDomain {
+    anvil_core::model::OrgDomain {
+        id: d.id,
+        tenant_id: tenant,
+        org_id: d.org_id,
+        domain: d.domain.clone(),
+        token: d.token.clone(),
+        status: anvil_core::model::OrgDomainStatus::Pending,
+        connection_id: d.connection_id,
+        routing: d.routing,
+        allow_local_password: d.allow_local_password,
+        verified_at: None,
+        last_checked_at: None,
+        failing_since: None,
+        created_at: d.created_at,
+    }
+}
+
+/// An OIDC connection owned by `org`.
+pub fn new_org_connection(org: anvil_core::model::OrgId) -> NewConnection {
+    NewConnection {
+        org_id: Some(org),
+        ..new_connection()
+    }
+}
+
+/// Creates an OIDC connection owned by `org`.
+pub async fn seed_org_connection(
+    s: &TestStorage,
+    tenant: TenantId,
+    org: anvil_core::model::OrgId,
+) -> NewConnection {
+    let c = new_org_connection(org);
+    s.storage
+        .connections()
+        .create(tenant, &c)
+        .await
+        .expect("creating a seed org connection must succeed");
+    c
+}
+
+/// A SAML connection owned by `org`, with every optional field populated. The certificate is
+/// a syntactically valid placeholder (storage never parses it).
+pub fn new_saml_connection(org: anvil_core::model::OrgId) -> NewConnection {
+    let tag = short();
+    NewConnection {
+        id: ConnectionId::new_v7(),
+        slug: format!("saml-{tag}"),
+        display_name: format!("SAML {tag}"),
+        enabled: true,
+        config: ConnectionConfig::Saml(anvil_core::model::SamlConfig {
+            idp_entity_id: format!("https://idp-{tag}.example.test/metadata"),
+            sso_url: format!("https://idp-{tag}.example.test/sso"),
+            signing_certs: vec![
+                "-----BEGIN CERTIFICATE-----\nTUlJQ29udHJhY3Q=\n-----END CERTIFICATE-----"
+                    .to_owned(),
+            ],
+            name_id_format: anvil_core::model::NameIdFormat::EmailAddress,
+            attributes: anvil_core::model::SamlAttributeMapping {
+                email: Some("mail".to_owned()),
+                given_name: Some("givenName".to_owned()),
+                family_name: Some("sn".to_owned()),
+                name: Some("displayName".to_owned()),
+            },
+            metadata_url: Some(format!("https://idp-{tag}.example.test/md")),
+        }),
+        secret_enc: None,
+        trust_email_verified: false,
+        created_at: now_ms(),
+        org_id: Some(org),
+    }
+}
+
+/// A token family of the context bound to `org` (30 days).
+pub fn new_org_family(ctx: &GrantCtx, org: Option<anvil_core::model::OrgId>) -> NewTokenFamily {
+    NewTokenFamily {
+        org_id: org,
+        ..new_family(ctx, Duration::days(30))
+    }
+}
+
+/// Creates a family of `user` (with a fresh client of the tenant) bound to `org`.
+pub async fn seed_family_for(
+    s: &TestStorage,
+    tenant: TenantId,
+    user: &User,
+    org: Option<anvil_core::model::OrgId>,
+) -> TokenFamilyId {
+    let client = seed_client(s, tenant).await;
+    let session = seed_session(s, tenant, user.id).await;
+    let ctx = GrantCtx {
+        tenant,
+        user: user.clone(),
+        client,
+        session,
+    };
+    let family = new_org_family(&ctx, org);
+    s.storage
+        .grants()
+        .create_family(tenant, &family)
+        .await
+        .expect("creating a seed family must succeed");
+    family.id
+}
+
+/// Whether the family is revoked, and why.
+pub async fn family_revocation(
+    s: &TestStorage,
+    tenant: TenantId,
+    id: TokenFamilyId,
+) -> Option<anvil_core::model::RevokeReason> {
+    s.storage
+        .grants()
+        .get_family(tenant, id)
+        .await
+        .expect("get_family")
+        .expect("family exists")
+        .revoked_reason
 }

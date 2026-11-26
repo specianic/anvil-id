@@ -427,3 +427,56 @@ pub async fn client_delete_removes_its_branding(s: &TestStorage) {
         "the deleted client's logo goes with the next purge"
     );
 }
+
+// ---- Phase 6 (plan 06-04): organization branding scope; the backends refuse it with
+// StorageError::Unsupported until 06-07 / 06-08 ----
+
+pub async fn branding_org_scope_independent(s: &TestStorage) {
+    let tenant = seed_tenant(s).await;
+    let repo = s.storage.branding();
+    let org = seed_org(s, tenant).await;
+    let org_key = BrandingScope::Org(org.id).scope_key();
+    let tenant_key = BrandingScope::Tenant.scope_key();
+    let client_key = BrandingScope::Client("app".into()).scope_key();
+    repo.put(
+        tenant,
+        &tenant_key,
+        &new_branding_update("#111111", LogoChange::Keep),
+        now_ms(),
+    )
+    .await
+    .expect("tenant");
+    repo.put(
+        tenant,
+        &client_key,
+        &new_branding_update("#222222", LogoChange::Keep),
+        now_ms(),
+    )
+    .await
+    .expect("client");
+    let org_update = new_branding_update("#333333", LogoChange::Set(new_logo()));
+    let stored = repo
+        .put(tenant, &org_key, &org_update, now_ms())
+        .await
+        .expect("org");
+    assert_eq!(stored.scope_key, org_key);
+    assert_eq!(stored.tokens, org_update.tokens);
+    assert_eq!(repo.get(tenant, &org_key).await.expect("get"), Some(stored));
+    // The scopes do not affect each other.
+    assert!(repo.delete(tenant, &org_key).await.expect("delete org"));
+    assert_eq!(repo.get(tenant, &org_key).await.expect("get"), None);
+    assert!(repo.get(tenant, &tenant_key).await.expect("get").is_some());
+    assert!(repo.get(tenant, &client_key).await.expect("get").is_some());
+    // A draft of the org scope previews independently.
+    let draft = new_branding_draft(Duration::minutes(10));
+    repo.put_draft(tenant, &org_key, &draft, now_ms())
+        .await
+        .expect("org draft");
+    assert_eq!(
+        repo.draft_by_preview(tenant, &draft.preview_token_hash, now_ms())
+            .await
+            .expect("preview")
+            .map(|(k, _)| k),
+        Some(org_key)
+    );
+}

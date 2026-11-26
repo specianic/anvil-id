@@ -1135,3 +1135,85 @@ pub async fn code_and_family_resource_round_trip(s: &TestStorage) {
         resource
     );
 }
+
+// ---- Phase 6 (plan 06-04): org-bound grants and SAML assertion replay; the backends refuse
+// them with StorageError::Unsupported until 06-07 / 06-08 ----
+
+pub async fn code_and_family_org_round_trip(s: &TestStorage) {
+    let ctx = seed_grant_ctx(s).await;
+    let grants = s.storage.grants();
+    let org = seed_org(s, ctx.tenant).await;
+    let family = new_org_family(&ctx, Some(org.id));
+    let code = anvil_core::model::NewAuthorizationCode {
+        org_id: Some(org.id),
+        ..new_code(&ctx, &family, Duration::minutes(5))
+    };
+    grants
+        .create_code(ctx.tenant, &code, &family)
+        .await
+        .expect("create_code");
+    let stored = grants
+        .get_family(ctx.tenant, family.id)
+        .await
+        .expect("get_family")
+        .expect("family");
+    assert_eq!(stored, expected_family(ctx.tenant, &family));
+    assert_eq!(stored.org_id, Some(org.id));
+    match grants
+        .consume_code(ctx.tenant, &code.code_hash, now_ms())
+        .await
+        .expect("consume")
+    {
+        ConsumeOutcome::Consumed(c) => {
+            assert_eq!(c, expected_code(ctx.tenant, &code));
+            assert_eq!(c.org_id, Some(org.id));
+        }
+        other => panic!("expected Consumed, got {other:?}"),
+    }
+    // A family without a code keeps its org too.
+    let service = new_org_family(&ctx, Some(org.id));
+    grants
+        .create_family(ctx.tenant, &service)
+        .await
+        .expect("create_family");
+    assert_eq!(
+        grants
+            .get_family(ctx.tenant, service.id)
+            .await
+            .expect("get_family")
+            .expect("family")
+            .org_id,
+        Some(org.id)
+    );
+}
+
+pub async fn record_jti_saml_assertion_id_replay(s: &TestStorage) {
+    let tenant = seed_tenant(s).await;
+    let grants = s.storage.grants();
+    let hash = unique_hash();
+    let now = now_ms();
+    let exp = now + Duration::hours(1);
+    assert_eq!(
+        grants
+            .record_jti(tenant, ReplayKind::SamlAssertionId, &hash, exp, now)
+            .await
+            .expect("record"),
+        JtiOutcome::Recorded
+    );
+    assert_eq!(
+        grants
+            .record_jti(tenant, ReplayKind::SamlAssertionId, &hash, exp, now_ms())
+            .await
+            .expect("record again"),
+        JtiOutcome::Replayed,
+        "a replayed assertion id is detected"
+    );
+    // Kinds are separate namespaces.
+    assert_eq!(
+        grants
+            .record_jti(tenant, ReplayKind::ClientAssertionJti, &hash, exp, now_ms())
+            .await
+            .expect("record other kind"),
+        JtiOutcome::Recorded
+    );
+}

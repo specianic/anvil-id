@@ -1517,7 +1517,8 @@ pub trait OrgRepo: Send + Sync {
     ///   invitation's role ids that still exists were inserted. Exactly one concurrent caller can
     ///   get `Accepted`; the others get `Invalid`.
     ///
-    /// An unknown user (or one of another tenant) is `Invalid`.
+    /// An unknown user (or one of another tenant) is `Invalid`. The outcomes are decided in the
+    /// order listed (a closed token is `Invalid` whatever the email).
     async fn accept_invitation(
         &self,
         tenant: TenantId,
@@ -1532,7 +1533,8 @@ pub trait OrgRepo: Send + Sync {
     /// the password credential, consumes the token like [`OrgRepo::accept_invitation`] and adds
     /// the membership with the invitation's roles. `Invalid` or `EmailMismatch` (the new user's
     /// email differs from the invitation's) write nothing. `Conflict` (nothing written, the token
-    /// stays open) if the email or username is already taken in the tenant. Exactly one
+    /// stays open) if the email or username is already taken in the tenant. Decided in this
+    /// order: `Invalid`, `EmailMismatch`, then the user insert (`Conflict`). Exactly one
     /// concurrent caller can get `Accepted`.
     async fn accept_invitation_with_new_user(
         &self,

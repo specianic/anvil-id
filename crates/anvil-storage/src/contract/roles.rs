@@ -447,3 +447,411 @@ pub async fn roles_isolated_by_tenant(s: &TestStorage) {
     assert!(!repo.delete(other, role.id).await.expect("delete"));
     assert_eq!(repo.get(tenant, role.id).await.expect("get"), Some(role));
 }
+
+// ---- Phase 6 (plan 06-04): organization-level roles and assignments; the backends refuse
+// them with StorageError::Unsupported until 06-07 / 06-08 ----
+
+fn ids(roles: &[anvil_core::model::Role]) -> Vec<RoleId> {
+    let mut v: Vec<RoleId> = roles.iter().map(|r| r.id).collect();
+    v.sort_by_key(|id| id.0);
+    v
+}
+
+pub async fn role_org_owned_name_unique_per_org(s: &TestStorage) {
+    let tenant = seed_tenant(s).await;
+    let repo = s.storage.roles();
+    let org = seed_org(s, tenant).await;
+    let other_org = seed_org(s, tenant).await;
+    let tenant_role = seed_role(s, tenant, &["docs:read"]).await;
+
+    // An org-owned role may share a tenant role's name.
+    let same_as_tenant = anvil_core::model::NewRole {
+        name: tenant_role.name.clone(),
+        ..new_org_role(org.id, &["docs:read"])
+    };
+    let created = repo
+        .create(tenant, &same_as_tenant)
+        .await
+        .expect("org role with a tenant role's name");
+    assert_eq!(created, expected_role(tenant, &same_as_tenant));
+    assert_eq!(created.org_id, Some(org.id));
+    // The same name twice in one org conflicts; in another org it is fine.
+    let dup = anvil_core::model::NewRole {
+        name: tenant_role.name.clone(),
+        ..new_org_role(org.id, &[])
+    };
+    assert!(matches!(
+        repo.create(tenant, &dup).await,
+        Err(StorageError::Conflict(_))
+    ));
+    assert_eq!(repo.get(tenant, dup.id).await.expect("get"), None);
+    let in_other = anvil_core::model::NewRole {
+        name: tenant_role.name.clone(),
+        ..new_org_role(other_org.id, &[])
+    };
+    repo.create(tenant, &in_other).await.expect("another org");
+    // The tenant-level lookup by name still finds the tenant role only.
+    assert_eq!(
+        repo.get_by_name(tenant, &tenant_role.name)
+            .await
+            .expect("by name"),
+        Some(tenant_role.clone())
+    );
+    // An org of another tenant (or an unknown org) cannot own a role here.
+    let stranger = seed_tenant(s).await;
+    let foreign_org = seed_org(s, stranger).await;
+    let foreign = new_org_role(foreign_org.id, &[]);
+    assert!(matches!(
+        repo.create(tenant, &foreign).await,
+        Err(StorageError::Conflict(_))
+    ));
+    assert_eq!(repo.get(tenant, foreign.id).await.expect("get"), None);
+}
+
+pub async fn role_list_excludes_org_roles(s: &TestStorage) {
+    let tenant = seed_tenant(s).await;
+    let repo = s.storage.roles();
+    let org = seed_org(s, tenant).await;
+    let other_org = seed_org(s, tenant).await;
+    let tenant_role = seed_role(s, tenant, &[]).await;
+    let org_a = seed_org_role(s, tenant, org.id, &[]).await;
+    let org_b = seed_org_role(s, tenant, org.id, &[]).await;
+    seed_org_role(s, tenant, other_org.id, &[]).await;
+
+    assert_eq!(
+        repo.list(tenant).await.expect("list"),
+        vec![tenant_role],
+        "tenant roles only"
+    );
+    let mut want = vec![org_a, org_b];
+    want.sort_by(|x, y| x.name.cmp(&y.name));
+    assert_eq!(
+        repo.list_org_roles(tenant, org.id)
+            .await
+            .expect("org roles"),
+        want,
+        "this org's roles in name order"
+    );
+    assert!(
+        repo.list_org_roles(seed_tenant(s).await, org.id)
+            .await
+            .expect("org roles of a foreign org")
+            .is_empty()
+    );
+}
+
+pub async fn role_assign_in_org_requires_membership(s: &TestStorage) {
+    let tenant = seed_tenant(s).await;
+    let repo = s.storage.roles();
+    let org = seed_org(s, tenant).await;
+    let role = seed_role(s, tenant, &["docs:read"]).await;
+    let outsider = seed_user(s, tenant).await;
+    assert!(
+        !repo
+            .assign_in_org(tenant, role.id, outsider.id, org.id, now_ms())
+            .await
+            .expect("assign"),
+        "a non-member cannot hold roles in the org"
+    );
+    assert!(
+        repo.org_assignments(tenant, org.id, outsider.id)
+            .await
+            .expect("assignments")
+            .is_empty()
+    );
+    let member = seed_member(s, tenant, org.id, &[]).await;
+    assert!(
+        repo.assign_in_org(tenant, role.id, member.id, org.id, now_ms())
+            .await
+            .expect("assign")
+    );
+    // Idempotent.
+    assert!(
+        repo.assign_in_org(tenant, role.id, member.id, org.id, now_ms())
+            .await
+            .expect("assign again")
+    );
+    assert_eq!(
+        repo.org_assignments(tenant, org.id, member.id)
+            .await
+            .expect("assignments"),
+        vec![anvil_core::model::RoleAssignment {
+            role_id: role.id,
+            user_id: member.id,
+            org_id: Some(org.id),
+        }]
+    );
+    // Unknown role, unknown org.
+    assert!(
+        !repo
+            .assign_in_org(tenant, RoleId::new_v7(), member.id, org.id, now_ms())
+            .await
+            .expect("assign unknown role")
+    );
+    assert!(
+        !repo
+            .assign_in_org(
+                tenant,
+                role.id,
+                member.id,
+                anvil_core::model::OrgId::new_v7(),
+                now_ms()
+            )
+            .await
+            .expect("assign in unknown org")
+    );
+}
+
+pub async fn role_org_owned_role_only_in_its_org(s: &TestStorage) {
+    let tenant = seed_tenant(s).await;
+    let repo = s.storage.roles();
+    let a = seed_org(s, tenant).await;
+    let b = seed_org(s, tenant).await;
+    let role_a = seed_org_role(s, tenant, a.id, &["org:admin"]).await;
+    let member = seed_member(s, tenant, a.id, &[]).await;
+    assert_eq!(
+        s.storage
+            .organizations()
+            .add_member(tenant, &new_membership(b.id, member.id, &[]))
+            .await
+            .expect("add to b"),
+        anvil_core::ports::AddMemberOutcome::Added
+    );
+
+    assert!(
+        !repo
+            .assign_in_org(tenant, role_a.id, member.id, b.id, now_ms())
+            .await
+            .expect("assign in b"),
+        "org A's role cannot be assigned in org B"
+    );
+    assert!(
+        !repo
+            .assign(tenant, role_a.id, member.id, now_ms())
+            .await
+            .expect("tenant-wide assign"),
+        "an org-owned role is never assigned tenant-wide"
+    );
+    assert!(
+        repo.roles_for_user(tenant, member.id)
+            .await
+            .expect("tenant roles")
+            .is_empty()
+    );
+    assert!(
+        repo.roles_for_user_in_org(tenant, member.id, b.id)
+            .await
+            .expect("roles in b")
+            .is_empty()
+    );
+    assert!(
+        repo.assign_in_org(tenant, role_a.id, member.id, a.id, now_ms())
+            .await
+            .expect("assign in a")
+    );
+    assert_eq!(
+        ids(&repo
+            .roles_for_user_in_org(tenant, member.id, a.id)
+            .await
+            .expect("roles in a")),
+        vec![role_a.id]
+    );
+}
+
+pub async fn role_tenant_role_in_org_scoped_to_that_org(s: &TestStorage) {
+    let tenant = seed_tenant(s).await;
+    let repo = s.storage.roles();
+    let x = seed_org(s, tenant).await;
+    let y = seed_org(s, tenant).await;
+    let role = seed_role(s, tenant, &["docs:write"]).await;
+    let user = seed_member(s, tenant, x.id, &[]).await;
+    assert_eq!(
+        s.storage
+            .organizations()
+            .add_member(tenant, &new_membership(y.id, user.id, &[]))
+            .await
+            .expect("add to y"),
+        anvil_core::ports::AddMemberOutcome::Added
+    );
+    assert!(
+        repo.assign_in_org(tenant, role.id, user.id, x.id, now_ms())
+            .await
+            .expect("assign in x")
+    );
+
+    assert_eq!(
+        ids(&repo
+            .roles_for_user_in_org(tenant, user.id, x.id)
+            .await
+            .expect("roles in x")),
+        vec![role.id]
+    );
+    assert!(
+        repo.roles_for_user_in_org(tenant, user.id, y.id)
+            .await
+            .expect("roles in y")
+            .is_empty(),
+        "an assignment in X never holds in Y"
+    );
+    assert!(
+        repo.roles_for_user(tenant, user.id)
+            .await
+            .expect("tenant roles")
+            .is_empty(),
+        "an assignment in X is not tenant-wide"
+    );
+    assert!(
+        repo.users_with_role(tenant, role.id, page(None, 10))
+            .await
+            .expect("holders")
+            .items
+            .is_empty(),
+        "users_with_role lists tenant-wide holders only"
+    );
+
+    // A tenant-wide assignment of the same role is separate and does not show in the org view.
+    assert!(
+        repo.assign(tenant, role.id, user.id, now_ms())
+            .await
+            .expect("tenant-wide")
+    );
+    assert!(
+        repo.roles_for_user_in_org(tenant, user.id, y.id)
+            .await
+            .expect("roles in y")
+            .is_empty()
+    );
+    // Unassigning in the org keeps the tenant-wide assignment, and vice versa.
+    assert!(
+        repo.unassign_in_org(tenant, role.id, user.id, x.id)
+            .await
+            .expect("unassign in x")
+    );
+    assert!(
+        !repo
+            .unassign_in_org(tenant, role.id, user.id, x.id)
+            .await
+            .expect("unassign in x again")
+    );
+    assert_eq!(
+        ids(&repo
+            .roles_for_user(tenant, user.id)
+            .await
+            .expect("tenant roles")),
+        vec![role.id]
+    );
+    assert!(
+        repo.assign_in_org(tenant, role.id, user.id, x.id, now_ms())
+            .await
+            .expect("assign in x")
+    );
+    assert!(
+        repo.unassign(tenant, role.id, user.id)
+            .await
+            .expect("unassign tenant-wide")
+    );
+    assert_eq!(
+        ids(&repo
+            .roles_for_user_in_org(tenant, user.id, x.id)
+            .await
+            .expect("roles in x")),
+        vec![role.id]
+    );
+}
+
+pub async fn role_holders_of_permission_ignores_org_assignments(s: &TestStorage) {
+    let tenant = seed_tenant(s).await;
+    let repo = s.storage.roles();
+    let org = seed_org(s, tenant).await;
+    let role = seed_role(s, tenant, &["admin:write"]).await;
+    let org_role = seed_org_role(s, tenant, org.id, &["admin:write"]).await;
+    let member = seed_member(s, tenant, org.id, &[role.id, org_role.id]).await;
+    assert_eq!(
+        repo.holders_of_permission(tenant, "admin:write")
+            .await
+            .expect("holders"),
+        0,
+        "org assignments never count for the tenant-level guard"
+    );
+    assert!(
+        repo.assign(tenant, role.id, member.id, now_ms())
+            .await
+            .expect("tenant-wide")
+    );
+    assert_eq!(
+        repo.holders_of_permission(tenant, "admin:write")
+            .await
+            .expect("holders"),
+        1
+    );
+}
+
+pub async fn role_org_holders_of_permission_counts_in_org_members(s: &TestStorage) {
+    let tenant = seed_tenant(s).await;
+    let repo = s.storage.roles();
+    let org = seed_org(s, tenant).await;
+    let other_org = seed_org(s, tenant).await;
+    let tenant_role = seed_role(s, tenant, &["org:admin"]).await;
+    let org_role = seed_org_role(s, tenant, org.id, &["org:admin", "docs:read"]).await;
+    let reader = seed_org_role(s, tenant, org.id, &["docs:read"]).await;
+
+    // Through a tenant role assigned in the org, and through an org-owned role.
+    let a = seed_member(s, tenant, org.id, &[tenant_role.id]).await;
+    let b = seed_member(s, tenant, org.id, &[org_role.id, tenant_role.id]).await;
+    // Not counted: a reader, a member of another org, a tenant-wide holder, a blocked member.
+    seed_member(s, tenant, org.id, &[reader.id]).await;
+    seed_member(s, tenant, other_org.id, &[tenant_role.id]).await;
+    let tenant_wide = seed_member(s, tenant, org.id, &[]).await;
+    assert!(
+        repo.assign(tenant, tenant_role.id, tenant_wide.id, now_ms())
+            .await
+            .expect("tenant-wide")
+    );
+    let blocked = seed_member(s, tenant, org.id, &[org_role.id]).await;
+    s.storage
+        .users()
+        .update(
+            tenant,
+            blocked.id,
+            &UserUpdate {
+                status: Some(UserStatus::Blocked),
+                ..Default::default()
+            },
+            now_ms(),
+        )
+        .await
+        .expect("block");
+
+    assert_eq!(
+        repo.org_holders_of_permission(tenant, org.id, "org:admin")
+            .await
+            .expect("org holders"),
+        2,
+        "a (tenant role in org) and b (both, counted once)"
+    );
+    assert_eq!(
+        repo.org_holders_of_permission(tenant, other_org.id, "org:admin")
+            .await
+            .expect("org holders"),
+        1
+    );
+    assert!(
+        s.storage
+            .organizations()
+            .remove_member(tenant, org.id, a.id, now_ms())
+            .await
+            .expect("remove a")
+    );
+    assert!(
+        repo.unassign_in_org(tenant, tenant_role.id, b.id, org.id)
+            .await
+            .expect("unassign")
+    );
+    assert_eq!(
+        repo.org_holders_of_permission(tenant, org.id, "org:admin")
+            .await
+            .expect("org holders"),
+        1,
+        "b still holds it through the org-owned role"
+    );
+}
