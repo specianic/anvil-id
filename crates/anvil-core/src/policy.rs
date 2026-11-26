@@ -16,6 +16,8 @@ pub mod home_realm;
 pub mod org_claims;
 // Phase 6 gap closure (plan 06-31)
 pub mod return_to;
+// Phase 7 (plan 07-02)
+pub mod password_import;
 
 /// Length limits in characters (not bytes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
