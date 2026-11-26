@@ -6,14 +6,14 @@ current_phase: 04
 current_phase_name: release 0 3 real world logins
 current_plan: 37
 status: executing
-stopped_at: Completed 05-23-PLAN.md
-last_updated: "2026-11-26T05:26:04.364Z"
+stopped_at: Completed 05-25-PLAN.md
+last_updated: "2026-11-26T05:49:11.087Z"
 last_activity: 2026-11-26
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 131
-  completed_plans: 124
+  completed_plans: 125
   percent: 95
 ---
 
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 **Status:** Ready to execute
 **Last Activity:** 2026-11-26
 **Last Activity Description:** 04-32 phase gate complete (430-pair security map, anvilid 0.3.0, 0.3 migrations pinned, every workflow green on 9f88363)
-**Progress:** [█████████░] 94%
+**Progress:** [██████████] 95%
 
 Phase 4 has 37 plans (04-01 through 04-37). Every plan except 04-33 (manual real-provider checklist, then tag
 v0.3.0) has a SUMMARY. Current Plan counts plans in execution order: 04-33 is the 37th and last.
@@ -180,6 +180,7 @@ v0.3.0) has a SUMMARY. Current Plan counts plans in execution order: 04-33 is th
 | Phase 05 P21 | 55min | 2 tasks | 10 files |
 | Phase 05 P20 | 60min | 2 tasks | 22 files |
 | Phase 05 P23 | 35min | 2 tasks | 16 files |
+| Phase 05 P25 | 55min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -418,6 +419,8 @@ Recent decisions affecting current work:
 - [Phase 05]: 05-20: CAPTCHA and logos are not part of TenantConfig v1; secret references {env}/{file} are CLI-only, the API refuses them
 - [Phase 05]: 05-23: DCR/CIMD settings validated by one function (service::tenant::registration_settings_issues) shared by TenantService and validate_document; system tenant always disabled
 - [Phase 05]: 05-23: admin API validation stays 422; webhook rotation POST /webhooks/{id}/secret; redelivery POST /webhooks/deliveries/{delivery_id}/redeliver; TenantView exposes issuer and discovery_url
+- [Phase 05]: 05-25: MCP docs and mocks pinned to MCP authorization revision 2026-07-28 (checked 2026-11-26)
+- [Phase 05]: 05-25: CIMD clients take resources from dcr.allowed_resources (documented 0.4 limit)
 
 ### Pending Todos
 
@@ -430,6 +433,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-26T05:26:04.360Z
-Stopped at: Completed 05-23-PLAN.md
+Last session: 2026-11-26T05:49:11.084Z
+Stopped at: Completed 05-25-PLAN.md
 Resume file: None
