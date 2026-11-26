@@ -16,6 +16,11 @@
 //! flow cookie and the CSRF token; otherwise the `csrf` error page (403). An expired flow shows
 //! the screen again with a message; an expired or used request is the `flow_expired` page. The
 //! page works without JavaScript and is `Cache-Control: no-store`.
+//!
+//! For a client materialised from a Client ID Metadata Document (CIMD) the page names the client
+//! by the host of its `client_id` URL, shows the self-asserted `client_name` as unverified and
+//! renders the name's initials instead of a logo: the page never loads anything from the client's
+//! servers.
 
 use anvil_core::error::CoreError;
 use anvil_core::flow::consent::scope_description;
@@ -215,6 +220,25 @@ fn request_id(
     }
 }
 
+/// Up to two initials for the avatar of a CIMD client: the first letter or digit of the first
+/// two words of `name`, upper-cased; the first letter or digit of `host` when the name has none.
+fn initials(name: &str, host: &str) -> String {
+    let first = |word: &str| word.chars().find(|c| c.is_alphanumeric());
+    let out: String = name
+        .split_whitespace()
+        .filter_map(first)
+        .take(2)
+        .flat_map(char::to_uppercase)
+        .collect();
+    if out.is_empty() {
+        first(host)
+            .map(|c| c.to_uppercase().collect())
+            .unwrap_or_default()
+    } else {
+        out
+    }
+}
+
 /// Starts a consent flow for `request` (sets its cookie) and renders the screen.
 async fn consent_page(
     state: &AppState,
@@ -247,6 +271,11 @@ async fn consent_page(
         client_id => &page.client_id,
         scopes => minijinja::Value::from(minijinja::value::Serde(&scopes)),
         resources => &page.resources,
+        cimd_host => &page.cimd_host,
+        client_initials => page
+            .cimd_host
+            .as_deref()
+            .map(|host| initials(&page.client_name, host)),
         messages => minijinja::Value::from(minijinja::value::Serde(&messages)),
         csrf_token => flow.csrf_token.expose_secret(),
         action => carry_ui_locales(
@@ -383,5 +412,19 @@ async fn submit(
         }
         Err(CoreError::Forbidden) => csrf_page(&state, Some(&tenant), &loc),
         Err(e) => core_error_page_in(&state, Some(&tenant), &loc, &e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::initials;
+
+    #[test]
+    fn initials_take_two_words_and_fall_back_to_the_host() {
+        assert_eq!(initials("Acme <Bank> Online", "app.example.com"), "AB");
+        assert_eq!(initials("acme", "app.example.com"), "A");
+        assert_eq!(initials("élan vital", "x.example"), "ÉV");
+        assert_eq!(initials("<> !!", "app.example.com"), "A");
+        assert_eq!(initials("", ""), "");
     }
 }

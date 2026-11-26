@@ -5,6 +5,10 @@
     items consent-scope-{n} (data-scope = scope name), buttons consent-allow and consent-deny
     (both name="decision", values allow / deny). Requested resources (only when there are
     any): list consent-resources with items consent-resource-{n} (data-resource = the value).
+    CIMD clients (cimd_host set, plan 05-13): consent-client is the client_id host; block
+    consent-cimd holds the initials avatar consent-avatar (never a remote logo), the
+    self-asserted name consent-client-name with the note consent-cimd-unverified, and
+    consent-cimd-note.
     No JavaScript. -#}
 {% extends "base.html" %}
 {% block heading %}{{ t("consent.heading") }}{% endblock %}
@@ -16,8 +20,15 @@
 </div>
 <form id="consent-form" method="post" action="{{ action }}">
 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+{% if cimd_host %}
+<div class="anvil-consent-cimd" id="consent-cimd">
+<span class="anvil-avatar" id="consent-avatar" aria-hidden="true">{{ client_initials }}</span>
+<p id="consent-client-name"><bdi>{{ client_name }}</bdi> <em class="anvil-muted" id="consent-cimd-unverified">{{ t("consent.cimd_unverified") }}</em></p>
+<p class="anvil-muted" id="consent-cimd-note">{{ t("consent.cimd_note") }}</p>
+</div>
+{% endif %}
 <fieldset class="anvil-consent-scopes" id="consent-scopes">
-<legend><strong id="consent-client">{{ client_name }}</strong> {{ t("consent.would_like_to") }}</legend>
+<legend>{% if cimd_host %}<strong id="consent-client"><bdi>{{ cimd_host }}</bdi></strong>{% else %}<strong id="consent-client">{{ client_name }}</strong>{% endif %} {{ t("consent.would_like_to") }}</legend>
 <ul class="anvil-scope-list">
 {% for s in scopes %}
 <li id="consent-scope-{{ loop.index }}" data-scope="{{ s.name }}">{% if s.description %}{{ s.description }}{% else %}{{ t("scope.use") }} <code>{{ s.name }}</code>{% endif %}</li>

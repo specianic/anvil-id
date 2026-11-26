@@ -3,7 +3,9 @@
 //! `state` and `iss`), remembered grants, a new scope asking again, `prompt=consent` and
 //! `prompt=none`, `skip_first_party` clients, the CSRF/flow binding rejections, double
 //! submission, expired flows, and the page's markup. Also the `id_token_hint` algorithms (the
-//! hint is verified with every algorithm the tenant enables).
+//! hint is verified with every algorithm the tenant enables), remembered consent covering RFC
+//! 8707 resources (plan 05-13), and the screen for CIMD clients (client_id host, unverified
+//! name, no remote logo).
 
 mod authz;
 mod support;
@@ -11,8 +13,10 @@ mod support;
 use std::sync::Arc;
 
 use anvil_core::model::{
-    AuditAction, AuditQuery, Client, ClientUpdate, ConsentMode, FlowId, Tenant, TenantSettings,
-    TenantUpdate, UserId,
+    ApplicationType, AuditAction, AuditQuery, AuthRequestId, AuthorizationParams, Client,
+    ClientAuthMethod, ClientId, ClientSource, ClientType, ClientUpdate, ConsentId, ConsentMode,
+    FlowId, GrantType, NewAuthorizationRequest, NewClient, NewConsent, NewTokenFamily, Tenant,
+    TenantSettings, TenantUpdate, TokenFamilyId, UserId,
 };
 use anvil_core::ports::Clock;
 use anvil_core::service::key::KeyService;
@@ -754,4 +758,367 @@ async fn an_es256_hint_is_rejected_when_the_tenant_does_not_enable_es256() {
         .authorize("openid", &[("prompt", "none"), ("id_token_hint", &hint)])
         .await;
     assert_error_redirect(&resp, RP, "invalid_request", &f.iss);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Remembered consent covers resources (plan 05-13)
+// ---------------------------------------------------------------------------------------------
+
+const MCP: &str = "https://mcp.example/";
+const OTHER: &str = "https://other.example/";
+
+/// [`fixture`] with consent required and a client allowed to request [`MCP`] and [`OTHER`].
+async fn resource_fixture() -> Fixture {
+    let mut f = fixture(ConsentMode::Required).await;
+    f.client = f
+        .app
+        .storage()
+        .clients()
+        .update(
+            f.tenant.id,
+            &f.client.client_id,
+            &ClientUpdate {
+                allowed_resources: Some(vec![MCP.to_owned(), OTHER.to_owned()]),
+                ..ClientUpdate::default()
+            },
+            f.app.clock().now(),
+        )
+        .await
+        .expect("client update")
+        .expect("client exists");
+    f
+}
+
+impl Fixture {
+    async fn granted_resources(&self) -> Option<Vec<String>> {
+        self.app
+            .storage()
+            .grants()
+            .consent(self.tenant.id, self.user, &self.client.client_id)
+            .await
+            .expect("consent lookup")
+            .map(|g| g.resources)
+    }
+}
+
+#[tokio::test]
+async fn remembered_consent_covers_resources_and_a_new_resource_asks_again() {
+    let f = resource_fixture().await;
+    assert_code(
+        &f.decide("openid profile", &[("resource", MCP)], "allow")
+            .await,
+        &f.iss,
+    );
+    assert_eq!(f.granted_resources().await.expect("grant stored"), [MCP]);
+    assert_eq!(
+        f.granted_scopes().await.expect("grant stored"),
+        ["openid", "profile"]
+    );
+
+    // Remembered: the same resource, or none, goes straight to the code.
+    assert_code(
+        &f.authorize("openid profile", &[("resource", MCP)]).await,
+        &f.iss,
+    );
+    assert_code(&f.authorize("openid", &[]).await, &f.iss);
+
+    // Same scopes, a new resource: the screen again, listing the requested resource.
+    let resp = f.authorize("openid profile", &[("resource", OTHER)]).await;
+    let path = f.consent_path(&resp);
+    let (html, action, csrf) = f.open(&path).await;
+    assert!(
+        html.contains(&format!(
+            "id=\"consent-resource-1\" data-resource=\"{OTHER}\""
+        )),
+        "{html}"
+    );
+    assert!(!html.contains("id=\"consent-resource-2\""), "{html}");
+    // With prompt=none the same request is consent_required.
+    let resp = f
+        .authorize("openid profile", &[("resource", OTHER), ("prompt", "none")])
+        .await;
+    assert_eq!(param(&resp, "error").as_deref(), Some("consent_required"));
+
+    // Allow merges the resources (sorted set) and keeps the scopes.
+    assert_code(
+        &f.post(&action, &[("csrf_token", &csrf), ("decision", "allow")])
+            .await,
+        &f.iss,
+    );
+    assert_eq!(f.granted_resources().await.expect("grant"), [MCP, OTHER]);
+    assert_eq!(
+        f.granted_scopes().await.expect("grant"),
+        ["openid", "profile"]
+    );
+    assert_code(
+        &f.authorize("openid profile", &[("resource", OTHER), ("resource", MCP)])
+            .await,
+        &f.iss,
+    );
+
+    // A new scope with a granted resource still asks (scopes are checked as before).
+    let resp = f.authorize("openid email", &[("resource", MCP)]).await;
+    f.consent_path(&resp);
+}
+
+#[tokio::test]
+async fn deny_does_not_add_the_resource() {
+    let f = resource_fixture().await;
+    assert_code(
+        &f.decide("openid", &[("resource", MCP)], "allow").await,
+        &f.iss,
+    );
+    let resp = f.decide("openid", &[("resource", OTHER)], "deny").await;
+    assert_eq!(param(&resp, "error").as_deref(), Some("access_denied"));
+    assert_eq!(f.granted_resources().await.expect("grant"), [MCP]);
+    let resp = f.authorize("openid", &[("resource", OTHER)]).await;
+    f.consent_path(&resp);
+}
+
+#[tokio::test]
+async fn a_grant_without_resources_asks_once_for_a_resource() {
+    let f = resource_fixture().await;
+    // A grant as stored by 0.3: scopes only.
+    let now = f.app.clock().now();
+    f.app
+        .storage()
+        .grants()
+        .upsert_consent(
+            f.tenant.id,
+            &NewConsent {
+                id: ConsentId::new_v7(),
+                user_id: f.user,
+                client_id: f.client.client_id.clone(),
+                scopes: vec!["openid".into(), "profile".into()],
+                resources: vec![],
+                created_at: now,
+            },
+            now,
+        )
+        .await
+        .expect("grant");
+    assert_code(&f.authorize("openid profile", &[]).await, &f.iss);
+
+    // The first request with a resource asks once ...
+    assert_code(
+        &f.decide("openid profile", &[("resource", MCP)], "allow")
+            .await,
+        &f.iss,
+    );
+    assert_eq!(f.granted_resources().await.expect("grant"), [MCP]);
+    // ... and is remembered afterwards.
+    assert_code(
+        &f.authorize("openid profile", &[("resource", MCP)]).await,
+        &f.iss,
+    );
+}
+
+#[tokio::test]
+async fn revoking_consent_revokes_families_and_clears_resources() {
+    let f = resource_fixture().await;
+    assert_code(
+        &f.decide("openid", &[("resource", MCP)], "allow").await,
+        &f.iss,
+    );
+    let now = f.app.clock().now();
+    let family = TokenFamilyId::new_v7();
+    f.app
+        .storage()
+        .grants()
+        .create_family(
+            f.tenant.id,
+            &NewTokenFamily {
+                id: family,
+                client_id: f.client.client_id.clone(),
+                user_id: Some(f.user),
+                scope: "openid".into(),
+                resource: vec![MCP.into()],
+                auth_time: Some(now),
+                acr: None,
+                amr: vec![],
+                session_id: None,
+                claims: None,
+                created_at: now,
+                absolute_expires_at: now + time::Duration::days(1),
+            },
+        )
+        .await
+        .expect("family");
+
+    assert!(
+        f.app
+            .storage()
+            .grants()
+            .revoke_consent(f.tenant.id, f.user, &f.client.client_id, now)
+            .await
+            .expect("revoke")
+    );
+    let family = f
+        .app
+        .storage()
+        .grants()
+        .get_family(f.tenant.id, family)
+        .await
+        .expect("family lookup")
+        .expect("family exists");
+    assert!(
+        family.revoked_at.is_some(),
+        "the client's families are revoked"
+    );
+    assert!(f.granted_resources().await.is_none(), "no active grant");
+
+    // The resource asks again; a new grant holds only what was granted after the revocation.
+    assert_code(
+        &f.decide("openid", &[("resource", OTHER)], "allow").await,
+        &f.iss,
+    );
+    assert_eq!(f.granted_resources().await.expect("grant"), [OTHER]);
+    let resp = f.authorize("openid", &[("resource", MCP)]).await;
+    f.consent_path(&resp);
+}
+
+// ---------------------------------------------------------------------------------------------
+// CIMD clients on the consent screen (plan 05-13)
+// ---------------------------------------------------------------------------------------------
+
+const CIMD_ID: &str = "https://app.example.com/oauth/client.json";
+
+/// A CIMD client row (as 05-15 materialises it) with a self-asserted `name`, inserted directly
+/// through `ClientRepo::upsert_cimd`, and a stored authorization request for it.
+async fn cimd_request(f: &Fixture, name: &str, resources: &[&str]) -> AuthRequestId {
+    let now = f.app.clock().now();
+    let client = f
+        .app
+        .storage()
+        .clients()
+        .upsert_cimd(
+            f.tenant.id,
+            &NewClient {
+                id: ClientId::new_v7(),
+                client_id: CIMD_ID.into(),
+                name: name.into(),
+                client_type: ClientType::Public,
+                application_type: ApplicationType::Web,
+                auth_method: ClientAuthMethod::None,
+                secret_hash: None,
+                jwks: None,
+                redirect_uris: vec![RP.into()],
+                grant_types: vec![GrantType::AuthorizationCode],
+                scopes: vec!["openid".into()],
+                require_pkce: true,
+                created_at: now,
+                token_format: anvil_core::model::TokenFormat::Jwt,
+                consent_mode: ConsentMode::Required,
+                id_token_signed_response_alg: None,
+                can_introspect: false,
+                post_logout_redirect_uris: vec![],
+                backchannel_logout_uri: None,
+                backchannel_logout_session_required: false,
+                allowed_resources: resources.iter().map(|r| (*r).to_owned()).collect(),
+                mfa_policy: None,
+                metadata_expires_at: Some(now + time::Duration::hours(1)),
+                registration_access_token_hash: None,
+                registration_source: ClientSource::Cimd,
+            },
+            now + time::Duration::hours(1),
+            now,
+        )
+        .await
+        .expect("cimd client");
+    assert_eq!(client.registration_source, ClientSource::Cimd);
+    let id = AuthRequestId::new_v7();
+    f.app
+        .storage()
+        .grants()
+        .create_authorization_request(
+            f.tenant.id,
+            &NewAuthorizationRequest {
+                id,
+                client_id: CIMD_ID.into(),
+                params: AuthorizationParams {
+                    redirect_uri: RP.into(),
+                    scope: "openid".into(),
+                    state: Some("st-1".into()),
+                    nonce: None,
+                    code_challenge: Some(CHALLENGE.into()),
+                    prompt: vec![],
+                    max_age: None,
+                    login_hint: None,
+                    acr_values: vec![],
+                    ui_locales: None,
+                    claims: None,
+                    response_mode: anvil_core::oauth::response_mode::ResponseMode::default(),
+                    resource: resources.iter().map(|r| (*r).to_owned()).collect(),
+                },
+                created_at: now,
+                expires_at: now + time::Duration::minutes(10),
+            },
+        )
+        .await
+        .expect("authorization request");
+    id
+}
+
+#[tokio::test]
+async fn a_cimd_client_is_named_by_its_host_with_an_unverified_name_and_no_remote_logo() {
+    let f = fixture(ConsentMode::Required).await;
+    let request = cimd_request(&f, "Acme <Bank>", &[MCP]).await;
+    let (html, _, _) = f.open(&format!("/ui/consent?request={request}")).await;
+
+    // The host of the client_id URL is the client's identity on the page.
+    assert!(
+        html.contains("<strong id=\"consent-client\"><bdi>app.example.com</bdi></strong>"),
+        "{html}"
+    );
+    // The self-asserted name is shown escaped and labelled unverified.
+    assert!(
+        html.contains("<p id=\"consent-client-name\"><bdi>Acme &lt;Bank&gt;</bdi>"),
+        "{html}"
+    );
+    assert!(!html.contains("<Bank>"), "{html}");
+    assert!(
+        html.contains("id=\"consent-cimd-unverified\">(name not verified)</em>"),
+        "{html}"
+    );
+    assert!(html.contains("id=\"consent-cimd-note\""), "{html}");
+    // Initials, never an image from the client's servers.
+    assert!(
+        html.contains("id=\"consent-avatar\" aria-hidden=\"true\">AB</span>"),
+        "{html}"
+    );
+    assert!(
+        !html.contains("<img"),
+        "no image at all on the consent page: {html}"
+    );
+    // The resources are listed as for any client.
+    assert!(
+        html.contains(&format!(
+            "id=\"consent-resource-1\" data-resource=\"{MCP}\""
+        )),
+        "{html}"
+    );
+
+    // German catalog.
+    let resp = f
+        .get(&format!("/ui/consent?request={request}&ui_locales=de"))
+        .await;
+    let html = resp.html();
+    assert!(
+        html.contains("id=\"consent-cimd-unverified\">(Name nicht überprüft)</em>"),
+        "{html}"
+    );
+}
+
+#[tokio::test]
+async fn a_static_client_has_no_cimd_block() {
+    let f = fixture(ConsentMode::Required).await;
+    let resp = f.authorize("openid", &[]).await;
+    let path = f.consent_path(&resp);
+    let (html, _, _) = f.open(&path).await;
+    assert!(
+        html.contains("<strong id=\"consent-client\">Test RP</strong>"),
+        "{html}"
+    );
+    assert!(!html.contains("consent-cimd"), "{html}");
+    assert!(!html.contains("consent-avatar"), "{html}");
 }
