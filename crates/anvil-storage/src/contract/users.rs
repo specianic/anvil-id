@@ -1221,3 +1221,239 @@ pub async fn email_change_concurrent_single_winner(s: &TestStorage) {
     }
     assert_eq!(won, 1, "exactly one concurrent email change must win");
 }
+
+// ---- Phase 7 (plan 07-08): password compare-and-swap and export reads ----
+
+pub async fn password_replace_if_swaps_only_matching(s: &TestStorage) {
+    let tenant = seed_tenant(s).await;
+    let other = seed_tenant(s).await;
+    let new = new_user();
+    let pw = new_password();
+    s.storage
+        .users()
+        .create(tenant, &new, Some(&pw), None, None)
+        .await
+        .expect("create");
+    let later = now_ms() + Duration::seconds(5);
+    assert!(
+        !s.storage
+            .users()
+            .replace_password_if(other, new.id, &pw.phc, "$argon2id$other", later)
+            .await
+            .expect("replace_password_if"),
+        "another tenant's user behaves like a missing one"
+    );
+    assert!(
+        s.storage
+            .users()
+            .replace_password_if(tenant, new.id, &pw.phc, "$argon2id$rehashed", later)
+            .await
+            .expect("replace_password_if"),
+        "the matching PHC is replaced"
+    );
+    let stored = s
+        .storage
+        .users()
+        .password(tenant, new.id)
+        .await
+        .expect("password")
+        .expect("password");
+    assert_eq!(stored.phc, "$argon2id$rehashed");
+    assert_eq!(stored.updated_at, later);
+    assert_eq!(stored.created_at, pw.created_at, "a swap keeps created_at");
+
+    // A user without a password: false, and no password is created.
+    let bare = new_user();
+    s.storage
+        .users()
+        .create(tenant, &bare, None, None, None)
+        .await
+        .expect("create");
+    assert!(
+        !s.storage
+            .users()
+            .replace_password_if(tenant, bare.id, "", "$argon2id$x", later)
+            .await
+            .expect("replace_password_if")
+    );
+    assert_eq!(
+        s.storage
+            .users()
+            .password(tenant, bare.id)
+            .await
+            .expect("password"),
+        None
+    );
+}
+
+pub async fn password_replace_if_wrong_expected_is_noop(s: &TestStorage) {
+    let tenant = seed_tenant(s).await;
+    let new = new_user();
+    let pw = new_password();
+    s.storage
+        .users()
+        .create(tenant, &new, Some(&pw), None, None)
+        .await
+        .expect("create");
+    let later = now_ms() + Duration::seconds(5);
+    for wrong in [
+        "$argon2id$stale".to_owned(),
+        String::new(),
+        format!("{} ", pw.phc),
+        pw.phc.to_uppercase(),
+    ] {
+        assert!(
+            !s.storage
+                .users()
+                .replace_password_if(tenant, new.id, &wrong, "$argon2id$hijack", later)
+                .await
+                .expect("replace_password_if"),
+            "a non-matching expected PHC ({wrong:?}) must not replace"
+        );
+    }
+    let stored = s
+        .storage
+        .users()
+        .password(tenant, new.id)
+        .await
+        .expect("password")
+        .expect("password");
+    assert_eq!(stored.phc, pw.phc, "nothing changed");
+    assert_eq!(stored.updated_at, pw.created_at, "updated_at unchanged");
+}
+
+pub async fn password_replace_if_concurrent_single_winner(s: &TestStorage) {
+    const N: usize = 8;
+    const ROUNDS: usize = 5;
+    let tenant = seed_tenant(s).await;
+    let new = new_user();
+    let pw = new_password();
+    s.storage
+        .users()
+        .create(tenant, &new, Some(&pw), None, None)
+        .await
+        .expect("create");
+    let mut current = pw.phc.clone();
+    for round in 0..ROUNDS {
+        let storage = Arc::clone(&s.storage);
+        let expected = current.clone();
+        let user = new.id;
+        let results = race(N, move |i| {
+            let storage = Arc::clone(&storage);
+            let expected = expected.clone();
+            async move {
+                let candidate = format!("$argon2id$round{round}-writer{i}");
+                let won = storage
+                    .users()
+                    .replace_password_if(tenant, user, &expected, &candidate, now_ms())
+                    .await;
+                (candidate, won)
+            }
+        })
+        .await;
+        let winners: Vec<String> = results
+            .into_iter()
+            .filter_map(|(candidate, r)| match r {
+                Ok(true) => Some(candidate),
+                Ok(false) => None,
+                Err(e) => panic!("round {round}: no storage errors allowed, got {e:?}"),
+            })
+            .collect();
+        assert_eq!(winners.len(), 1, "round {round}: exactly one swap wins");
+        let stored = s
+            .storage
+            .users()
+            .password(tenant, new.id)
+            .await
+            .expect("password")
+            .expect("password");
+        assert_eq!(
+            stored.phc, winners[0],
+            "round {round}: the winner's PHC is stored"
+        );
+        current = stored.phc;
+    }
+}
+
+pub async fn pending_self_service_tokens_existence_only(s: &TestStorage) {
+    let tenant = seed_tenant(s).await;
+    let other = seed_tenant(s).await;
+    let user = seed_user(s, tenant).await;
+    let users = s.storage.users();
+    let recovery = new_self_service_token(
+        SelfServiceKind::Recovery,
+        user.id,
+        &user.email,
+        Duration::hours(1),
+    );
+    users
+        .issue_self_service_token(tenant, &recovery, None)
+        .await
+        .expect("issue");
+    let mut verification = new_self_service_token(
+        SelfServiceKind::Verification,
+        user.id,
+        &user.email,
+        Duration::hours(2),
+    );
+    verification.created_at = recovery.created_at + Duration::milliseconds(1);
+    users
+        .issue_self_service_token(tenant, &verification, None)
+        .await
+        .expect("issue");
+    let expired = new_self_service_token(
+        SelfServiceKind::Invitation,
+        user.id,
+        &user.email,
+        Duration::seconds(-1),
+    );
+    users
+        .issue_self_service_token(tenant, &expired, None)
+        .await
+        .expect("issue");
+    let consumed = new_self_service_token(
+        SelfServiceKind::Verification,
+        user.id,
+        &user.email,
+        Duration::hours(1),
+    );
+    users
+        .issue_self_service_token(tenant, &consumed, None)
+        .await
+        .expect("issue");
+    users
+        .complete_verification(tenant, &consumed.token_hash, now_ms())
+        .await
+        .expect("complete")
+        .expect("consumed");
+    // The verification above consumed only `consumed`; `verification` targets the same email
+    // and stays pending.
+
+    let pending = users
+        .pending_self_service_tokens(tenant, user.id, now_ms())
+        .await
+        .expect("pending");
+    assert_eq!(
+        pending,
+        vec![
+            (SelfServiceKind::Recovery, recovery.expires_at),
+            (SelfServiceKind::Verification, verification.expires_at),
+        ],
+        "only unconsumed, unexpired tokens, oldest first"
+    );
+    assert!(
+        users
+            .pending_self_service_tokens(other, user.id, now_ms())
+            .await
+            .expect("pending")
+            .is_empty(),
+        "tenant isolation"
+    );
+    assert!(
+        users
+            .pending_self_service_tokens(tenant, UserId::new_v7(), now_ms())
+            .await
+            .expect("pending")
+            .is_empty()
+    );
+}

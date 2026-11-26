@@ -976,6 +976,9 @@ mod tests {
         fn organizations(&self) -> &dyn OrgRepo {
             unreachable!("registration service tests do not use organizations")
         }
+        fn password_profiles(&self) -> &dyn crate::ports::PasswordProfileRepo {
+            unreachable!("not used by this test")
+        }
         async fn purge_expired(&self, _: OffsetDateTime) -> Result<u64, StorageError> {
             unsupported()
         }

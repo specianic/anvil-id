@@ -713,6 +713,30 @@ impl UserRepo for SqliteUsers {
         tx.commit().await.map_err(map_err)?;
         Ok(Some(changed))
     }
+
+    async fn replace_password_if(
+        &self,
+        _tenant: TenantId,
+        _user: UserId,
+        _expected: &str,
+        _new_phc: &str,
+        _now: OffsetDateTime,
+    ) -> Result<bool, StorageError> {
+        Err(StorageError::Unsupported(
+            "TRANSITIONAL(07-08): UserRepo::replace_password_if",
+        ))
+    }
+
+    async fn pending_self_service_tokens(
+        &self,
+        _tenant: TenantId,
+        _user: UserId,
+        _now: OffsetDateTime,
+    ) -> Result<Vec<(anvil_core::model::SelfServiceKind, OffsetDateTime)>, StorageError> {
+        Err(StorageError::Unsupported(
+            "TRANSITIONAL(07-08): UserRepo::pending_self_service_tokens",
+        ))
+    }
 }
 
 /// Upserts the password credential of an existing user on `conn`. `false` if the user does not

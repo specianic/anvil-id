@@ -1191,6 +1191,9 @@ mod service_tests {
         fn organizations(&self) -> &dyn OrgRepo {
             unreachable!("session service tests use only sessions and audit")
         }
+        fn password_profiles(&self) -> &dyn crate::ports::PasswordProfileRepo {
+            unreachable!("not used by this test")
+        }
         async fn purge_expired(&self, _now: OffsetDateTime) -> Result<u64, StorageError> {
             Err(StorageError::Unsupported("fake: purge"))
         }

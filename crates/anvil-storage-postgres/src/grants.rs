@@ -671,4 +671,35 @@ impl GrantRepo for PgGrants {
     ) -> Result<bool, StorageError> {
         consent::revoke_consent(&self.pool, tenant, user, client_id, now).await
     }
+
+    async fn families_for_user(
+        &self,
+        _tenant: TenantId,
+        _user: UserId,
+    ) -> Result<Vec<anvil_core::model::TokenFamily>, StorageError> {
+        Err(StorageError::Unsupported(
+            "TRANSITIONAL(07-11): GrantRepo::families_for_user",
+        ))
+    }
+
+    async fn create_pushed_request(
+        &self,
+        _tenant: TenantId,
+        _request: &anvil_core::model::NewPushedRequest,
+    ) -> Result<(), StorageError> {
+        Err(StorageError::Unsupported(
+            "TRANSITIONAL(07-11): GrantRepo::create_pushed_request",
+        ))
+    }
+
+    async fn consume_pushed_request(
+        &self,
+        _tenant: TenantId,
+        _request_uri_hash: &anvil_core::model::RequestUriHash,
+        _now: OffsetDateTime,
+    ) -> Result<Option<anvil_core::model::PushedRequest>, StorageError> {
+        Err(StorageError::Unsupported(
+            "TRANSITIONAL(07-11): GrantRepo::consume_pushed_request",
+        ))
+    }
 }

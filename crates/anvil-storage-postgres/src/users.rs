@@ -701,6 +701,30 @@ impl UserRepo for PgUsers {
         tx.commit().await.map_err(map_err)?;
         user.into_model().map(Some)
     }
+
+    async fn replace_password_if(
+        &self,
+        _tenant: TenantId,
+        _user: UserId,
+        _expected: &str,
+        _new_phc: &str,
+        _now: OffsetDateTime,
+    ) -> Result<bool, StorageError> {
+        Err(StorageError::Unsupported(
+            "TRANSITIONAL(07-11): UserRepo::replace_password_if",
+        ))
+    }
+
+    async fn pending_self_service_tokens(
+        &self,
+        _tenant: TenantId,
+        _user: UserId,
+        _now: OffsetDateTime,
+    ) -> Result<Vec<(anvil_core::model::SelfServiceKind, OffsetDateTime)>, StorageError> {
+        Err(StorageError::Unsupported(
+            "TRANSITIONAL(07-11): UserRepo::pending_self_service_tokens",
+        ))
+    }
 }
 
 /// Inserts or replaces the password of a user of `tenant`. `false` if the user does not exist

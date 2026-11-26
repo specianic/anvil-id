@@ -782,93 +782,114 @@ pub async fn client_organization_policy_round_trip(s: &TestStorage) {
     );
 }
 
-/// TRANSITIONAL(07-08/07-11): until the client columns exist, a create or update carrying a
-/// non-default `require_pushed_authorization_requests`, `client_kind` or `headless_native` is
-/// refused with `Unsupported`, never stored without the value. Defaults still work. 07-08
-/// (SQLite) and 07-11 (Postgres) replace this case with a round-trip test.
-pub async fn client_new_fields_non_default_refused_until_columns_exist(s: &TestStorage) {
+/// The Phase 7 client fields (`require_pushed_authorization_requests`, `client_kind`,
+/// `headless_native`) default on create, round-trip non-default values through create, get,
+/// list and update, and an update leaves unset fields alone.
+pub async fn client_new_fields_round_trip(s: &TestStorage) {
     let tenant = seed_tenant(s).await;
-    let assert_transitional = |r: Result<_, StorageError>, what: &str| match r {
-        Err(StorageError::Unsupported(msg)) => assert!(
-            msg.starts_with("TRANSITIONAL(07-08)") || msg.starts_with("TRANSITIONAL(07-11)"),
-            "{what}: {msg}"
-        ),
-        Err(e) => panic!("{what}: expected Unsupported, got {e:?}"),
-        Ok(_) => panic!("{what}: a non-default value must not be accepted yet"),
-    };
-    type Variant = (&'static str, fn(&mut NewClient));
-    let variants: [Variant; 3] = [
-        ("par", |c| c.require_pushed_authorization_requests = true),
-        ("agent", |c| c.client_kind = ClientKind::Agent),
-        ("headless", |c| c.headless_native = true),
-    ];
-    for (what, set) in variants {
-        let mut new = new_client();
-        set(&mut new);
-        assert_transitional(
-            s.storage.clients().create(tenant, &new).await.map(|_| ()),
-            what,
-        );
-        assert_eq!(
-            s.storage
-                .clients()
-                .get(tenant, &new.client_id)
-                .await
-                .expect("get"),
-            None,
-            "{what}: a refused create stores nothing"
-        );
-    }
+    let clients = s.storage.clients();
 
-    let new = new_client();
-    let created = s
-        .storage
-        .clients()
-        .create(tenant, &new)
-        .await
-        .expect("create");
+    // Defaults.
+    let plain = new_client();
+    let created = clients.create(tenant, &plain).await.expect("create");
+    assert!(!created.require_pushed_authorization_requests);
     assert_eq!(created.client_kind, ClientKind::Application);
-    assert!(!created.require_pushed_authorization_requests && !created.headless_native);
-    let now = created.updated_at + Duration::seconds(1);
-    let updates = [
-        ClientUpdate {
-            require_pushed_authorization_requests: Some(true),
-            ..ClientUpdate::default()
-        },
-        ClientUpdate {
-            client_kind: Some(ClientKind::Agent),
-            ..ClientUpdate::default()
-        },
-        ClientUpdate {
-            headless_native: Some(true),
-            ..ClientUpdate::default()
-        },
-    ];
-    for update in &updates {
-        assert_transitional(
-            s.storage
-                .clients()
-                .update(tenant, &new.client_id, update, now)
-                .await
-                .map(|_| ()),
-            "update",
-        );
-    }
-    // Setting the defaults explicitly is a no-op, not a refusal.
-    let same = ClientUpdate {
-        require_pushed_authorization_requests: Some(false),
-        client_kind: Some(ClientKind::Application),
-        headless_native: Some(false),
-        name: Some("renamed".into()),
-        ..ClientUpdate::default()
-    };
-    let updated = s
-        .storage
-        .clients()
-        .update(tenant, &new.client_id, &same, now)
+    assert!(!created.headless_native);
+
+    // Non-default values on create.
+    let mut agent = new_client();
+    agent.require_pushed_authorization_requests = true;
+    agent.client_kind = ClientKind::Agent;
+    agent.headless_native = true;
+    let created = clients.create(tenant, &agent).await.expect("create");
+    assert_eq!(
+        created,
+        expected_client(tenant, &agent),
+        "create returns every field"
+    );
+    assert_eq!(
+        clients.get(tenant, &agent.client_id).await.expect("get"),
+        Some(created.clone()),
+        "get returns every field"
+    );
+    let listed = clients
+        .list(
+            tenant,
+            PageRequest {
+                after: None,
+                limit: 10,
+            },
+        )
         .await
-        .expect("update")
-        .expect("client exists");
-    assert_eq!(updated.name, "renamed");
-    assert_eq!(updated.client_kind, ClientKind::Application);
+        .expect("list");
+    assert!(listed.items.contains(&created), "list returns every field");
+
+    // Each field on its own through update; the others keep their values.
+    let mut now = created.updated_at;
+    type Check = (ClientUpdate, fn(&anvil_core::model::Client) -> bool);
+    let steps: [Check; 4] = [
+        (
+            ClientUpdate {
+                require_pushed_authorization_requests: Some(true),
+                ..ClientUpdate::default()
+            },
+            |c| {
+                c.require_pushed_authorization_requests
+                    && c.client_kind == ClientKind::Application
+                    && !c.headless_native
+            },
+        ),
+        (
+            ClientUpdate {
+                client_kind: Some(ClientKind::Agent),
+                ..ClientUpdate::default()
+            },
+            |c| {
+                c.require_pushed_authorization_requests
+                    && c.client_kind == ClientKind::Agent
+                    && !c.headless_native
+            },
+        ),
+        (
+            ClientUpdate {
+                headless_native: Some(true),
+                ..ClientUpdate::default()
+            },
+            |c| {
+                c.require_pushed_authorization_requests
+                    && c.client_kind == ClientKind::Agent
+                    && c.headless_native
+            },
+        ),
+        (
+            ClientUpdate {
+                require_pushed_authorization_requests: Some(false),
+                client_kind: Some(ClientKind::Application),
+                headless_native: Some(false),
+                name: Some("renamed".into()),
+                ..ClientUpdate::default()
+            },
+            |c| {
+                !c.require_pushed_authorization_requests
+                    && c.client_kind == ClientKind::Application
+                    && !c.headless_native
+                    && c.name == "renamed"
+            },
+        ),
+    ];
+    for (i, (update, check)) in steps.iter().enumerate() {
+        now += Duration::seconds(1);
+        let updated = clients
+            .update(tenant, &plain.client_id, update, now)
+            .await
+            .expect("update")
+            .expect("client exists");
+        assert!(check(&updated), "step {i}: update result {updated:?}");
+        let read = clients
+            .get(tenant, &plain.client_id)
+            .await
+            .expect("get")
+            .expect("client exists");
+        assert_eq!(read, updated, "step {i}: get after update");
+    }
 }

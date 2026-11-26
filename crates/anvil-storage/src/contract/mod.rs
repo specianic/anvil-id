@@ -39,6 +39,8 @@ mod org_domains;
 mod org_invitations;
 mod orgs;
 mod outbox;
+mod par;
+mod password_profiles;
 mod registration;
 mod roles;
 mod sessions;
@@ -66,6 +68,8 @@ pub use org_domains::*;
 pub use org_invitations::*;
 pub use orgs::*;
 pub use outbox::*;
+pub use par::*;
+pub use password_profiles::*;
 pub use registration::*;
 pub use roles::*;
 pub use sessions::*;
@@ -121,7 +125,6 @@ macro_rules! storage_contract_tests {
             client_set_secret_hash,
             client_delete_revokes_families,
             client_list_pagination,
-            client_new_fields_non_default_refused_until_columns_exist,
             // keys
             key_insert_and_active,
             key_second_active_conflict,
@@ -377,6 +380,31 @@ macro_rules! storage_contract_tests {
             mail_template_org_invitation_round_trip,
             branding_org_scope_independent,
             client_organization_policy_round_trip,
+            // ---- Phase 7 (plan 07-08): PAR, password hash profiles, password compare-and-swap,
+            // the new client fields and the export reads ----
+            // clients
+            client_new_fields_round_trip,
+            // pushed authorization requests
+            par_create_and_consume_round_trip,
+            par_create_duplicate_hash_conflict,
+            par_consume_twice_is_none,
+            par_consume_expired_is_none,
+            par_consume_single_winner_under_concurrency,
+            par_tenant_isolation,
+            par_purged_after_expiry,
+            par_deleted_with_client,
+            // password hash profiles
+            password_profile_create_get_list_delete,
+            password_profile_name_unique_per_tenant,
+            password_profile_tenant_isolation,
+            password_profile_count_references,
+            // users: password compare-and-swap, export reads
+            password_replace_if_swaps_only_matching,
+            password_replace_if_wrong_expected_is_noop,
+            password_replace_if_concurrent_single_winner,
+            pending_self_service_tokens_existence_only,
+            // grants: export read
+            families_for_user_every_state_oldest_first,
         );
     };
     (@each $factory:path; $($name:ident),+ $(,)?) => {

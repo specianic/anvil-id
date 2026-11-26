@@ -79,6 +79,10 @@ use crate::model::{
     TokenFamilyId, TotpCredential, User, UserId, UserUpdate, WebhookDelivery, WebhookDeliveryId,
     WebhookEndpoint, WebhookEndpointId, WebhookEndpointUpdate, WebhookEvent, WebhookResult,
 };
+use crate::model::{
+    NewPasswordHashProfile, NewPushedRequest, PasswordHashProfile, PushedRequest, RequestUriHash,
+    SelfServiceKind,
+};
 
 /// Entry point to all repositories of one storage backend.
 #[async_trait::async_trait]
@@ -103,10 +107,12 @@ pub trait Storage: Send + Sync + 'static {
     fn webhooks(&self) -> &dyn WebhookRepo;
     fn registration(&self) -> &dyn RegistrationRepo;
     fn organizations(&self) -> &dyn OrgRepo;
+    fn password_profiles(&self) -> &dyn PasswordProfileRepo;
 
     /// Batch-deletes expired rows across all tenants: authorization codes, authorization
     /// requests, flows, browser sessions, refresh tokens, opaque access tokens, replay guards,
-    /// self-service tokens and setup tokens with `expires_at <= now`, plus sent or expired outbox
+    /// self-service tokens, setup tokens and pushed authorization requests (consumed or not)
+    /// with `expires_at <= now`, plus sent or expired outbox
     /// emails. Also deletes token families past `absolute_expires_at` that have no unexpired
     /// code (their refresh and access tokens go with them), and `branding_logo` rows that no
     /// `branding` row of the same tenant references. Never deletes a
@@ -205,6 +211,32 @@ pub trait UserRepo: Send + Sync {
         phc: &str,
         now: OffsetDateTime,
     ) -> Result<bool, StorageError>;
+
+    /// Compare-and-swap on the password: in **one statement**, replaces the stored PHC string
+    /// with `new_phc` and sets `updated_at = now` only if the user's password credential
+    /// currently equals `expected` (byte-for-byte). Returns whether it replaced. `false` (nothing
+    /// changed) if the user has no password, the stored PHC differs (another writer got there
+    /// first), or the user belongs to another tenant. Used for transparent rehash on sign-in:
+    /// exactly one concurrent caller with the same `expected` can get `true`, and a password
+    /// changed in the meantime is never overwritten.
+    async fn replace_password_if(
+        &self,
+        tenant: TenantId,
+        user: UserId,
+        expected: &str,
+        new_phc: &str,
+        now: OffsetDateTime,
+    ) -> Result<bool, StorageError>;
+
+    /// The kinds and expiry times of the user's pending self-service tokens (unconsumed and
+    /// `expires_at > now`), oldest first. Read-only, for the data-subject export: existence
+    /// only, never the token hash or the address it was sent to.
+    async fn pending_self_service_tokens(
+        &self,
+        tenant: TenantId,
+        user: UserId,
+        now: OffsetDateTime,
+    ) -> Result<Vec<(SelfServiceKind, OffsetDateTime)>, StorageError>;
 
     /// Sets `last_login_at = now`. A missing user is not an error.
     async fn record_login(
@@ -816,6 +848,69 @@ pub trait GrantRepo: Send + Sync {
         client_id: &str,
         now: OffsetDateTime,
     ) -> Result<bool, StorageError>;
+
+    /// Every token family of `user` in any state (revoked, expired), oldest first. Read-only,
+    /// for the data-subject export; callers never see token hashes through it.
+    async fn families_for_user(
+        &self,
+        tenant: TenantId,
+        user: UserId,
+    ) -> Result<Vec<TokenFamily>, StorageError>;
+
+    /// Stores a pushed authorization request (RFC 9126) keyed by the hash of its
+    /// `request_uri`. `Conflict` on a duplicate `(tenant, request_uri_hash)`. `client_id` must be
+    /// a client of `tenant` (callers authenticate it first); the backend's foreign key rejects
+    /// anything else with an error, and deleting the client deletes its pushed requests.
+    async fn create_pushed_request(
+        &self,
+        tenant: TenantId,
+        request: &NewPushedRequest,
+    ) -> Result<(), StorageError>;
+
+    /// Atomically consumes a pushed request: a single
+    /// `UPDATE ... SET consumed_at = now WHERE tenant_id = ? AND uri_hash = ?
+    /// AND consumed_at IS NULL AND expires_at > now RETURNING ...`. Exactly one concurrent
+    /// caller can receive `Some` (with `consumed_at = Some(now)`). `None` if the request is
+    /// unknown, of another tenant, already consumed or expired. The caller checks that the
+    /// returned `client_id` matches the authorization request's client.
+    async fn consume_pushed_request(
+        &self,
+        tenant: TenantId,
+        request_uri_hash: &RequestUriHash,
+        now: OffsetDateTime,
+    ) -> Result<Option<PushedRequest>, StorageError>;
+}
+
+/// Per-tenant legacy password hash profiles (Firebase scrypt parameters for imported hashes).
+/// The signer key is stored KEK-sealed only (`signer_key_sealed`); storage never sees it in
+/// clear. Every method is tenant-scoped: a profile of another tenant behaves like a missing one.
+#[async_trait::async_trait]
+pub trait PasswordProfileRepo: Send + Sync {
+    /// Stores a profile and returns it. `Conflict` (nothing stored) on a duplicate id or a
+    /// duplicate `name` within the tenant.
+    async fn create(
+        &self,
+        tenant: TenantId,
+        profile: &NewPasswordHashProfile,
+    ) -> Result<PasswordHashProfile, StorageError>;
+
+    async fn get(
+        &self,
+        tenant: TenantId,
+        id: uuid::Uuid,
+    ) -> Result<Option<PasswordHashProfile>, StorageError>;
+
+    /// Every profile of the tenant, in name order.
+    async fn list(&self, tenant: TenantId) -> Result<Vec<PasswordHashProfile>, StorageError>;
+
+    /// Deletes the profile. `false` if unknown. Callers check [`Self::count_references`] first;
+    /// storage does not refuse a referenced profile (the reference lives inside the PHC string).
+    async fn delete(&self, tenant: TenantId, id: uuid::Uuid) -> Result<bool, StorageError>;
+
+    /// Number of password credentials of the tenant whose PHC string starts with
+    /// `$anvil-firebase-scrypt$profile=<id>$` (`<id>` in hyphenated lowercase form).
+    async fn count_references(&self, tenant: TenantId, id: uuid::Uuid)
+    -> Result<u64, StorageError>;
 }
 
 /// First-start installation and setup (installation-wide; no tenant parameter).
@@ -2414,6 +2509,7 @@ mod tests {
         assert_send_sync::<dyn WebhookRepo>();
         assert_send_sync::<dyn RegistrationRepo>();
         assert_send_sync::<dyn OrgRepo>();
+        assert_send_sync::<dyn PasswordProfileRepo>();
         assert_send_sync::<dyn DomainTxtLookup>();
         assert_send_sync::<TxtLookupError>();
         assert_send_sync::<dyn SamlXml>();

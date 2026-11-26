@@ -1216,3 +1216,66 @@ pub async fn record_jti_saml_assertion_id_replay(s: &TestStorage) {
         JtiOutcome::Recorded
     );
 }
+
+// ---- Phase 7 (plan 07-08): export read ----
+
+pub async fn families_for_user_every_state_oldest_first(s: &TestStorage) {
+    let ctx = seed_grant_ctx(s).await;
+    let grants = s.storage.grants();
+    let mut first = new_family(&ctx, Duration::days(30));
+    first.created_at = now_ms() - Duration::seconds(30);
+    let mut expired = new_family(&ctx, Duration::days(30));
+    expired.created_at = first.created_at + Duration::seconds(1);
+    expired.absolute_expires_at = expired.created_at + Duration::seconds(2);
+    let mut revoked = new_family(&ctx, Duration::days(30));
+    revoked.created_at = first.created_at + Duration::seconds(2);
+    for f in [&revoked, &first, &expired] {
+        grants.create_family(ctx.tenant, f).await.expect("create");
+    }
+    let at = now_ms();
+    assert!(
+        grants
+            .revoke_family(ctx.tenant, revoked.id, RevokeReason::Admin, at)
+            .await
+            .expect("revoke")
+    );
+    // Not the user's: a service family, another user's family, another tenant's family.
+    grants
+        .create_family(
+            ctx.tenant,
+            &new_service_family(&ctx.client.client_id, Duration::days(1)),
+        )
+        .await
+        .expect("create");
+    let someone_else = seed_user(s, ctx.tenant).await;
+    seed_family_for(s, ctx.tenant, &someone_else, None).await;
+    let other = seed_grant_ctx(s).await;
+    grants
+        .create_family(other.tenant, &new_family(&other, Duration::days(1)))
+        .await
+        .expect("create");
+
+    let mut revoked_expected = expected_family(ctx.tenant, &revoked);
+    revoked_expected.revoked_at = Some(at);
+    revoked_expected.revoked_reason = Some(RevokeReason::Admin);
+    assert_eq!(
+        grants
+            .families_for_user(ctx.tenant, ctx.user.id)
+            .await
+            .expect("families_for_user"),
+        vec![
+            expected_family(ctx.tenant, &first),
+            expected_family(ctx.tenant, &expired),
+            revoked_expected,
+        ],
+        "every family of the user in any state, oldest first"
+    );
+    assert!(
+        grants
+            .families_for_user(other.tenant, ctx.user.id)
+            .await
+            .expect("families_for_user")
+            .is_empty(),
+        "tenant isolation"
+    );
+}

@@ -32,8 +32,9 @@ mod webhooks;
 
 use anvil_core::ports::{
     AttributeRepo, AuditRepo, BrandingRepo, ClientRepo, ConnectionRepo, FlowRepo, GrantRepo,
-    JobRepo, KeyRepo, LogoutRepo, MailSettingsRepo, OrgRepo, OutboxRepo, RegistrationRepo,
-    RoleRepo, SessionRepo, SetupRepo, Storage, StorageError, TenantRepo, UserRepo, WebhookRepo,
+    JobRepo, KeyRepo, LogoutRepo, MailSettingsRepo, OrgRepo, OutboxRepo, PasswordProfileRepo,
+    RegistrationRepo, RoleRepo, SessionRepo, SetupRepo, Storage, StorageError, TenantRepo,
+    UserRepo, WebhookRepo,
 };
 use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
@@ -191,6 +192,9 @@ impl Storage for PostgresStorage {
     fn organizations(&self) -> &dyn OrgRepo {
         &self.organizations
     }
+    fn password_profiles(&self) -> &dyn PasswordProfileRepo {
+        &PgPasswordProfiles
+    }
 
     async fn purge_expired(&self, now: time::OffsetDateTime) -> Result<u64, StorageError> {
         // Batched `DELETE … WHERE ctid IN (SELECT ctid … LIMIT n)` per table until a batch comes
@@ -211,6 +215,8 @@ impl Storage for PostgresStorage {
             }};
         }
         let mut total = 0u64;
+        // TRANSITIONAL(07-11): pushed_authorization_request does not exist on Postgres yet (its
+        // create refuses with Unsupported, so there is nothing to purge); 07-11 adds the purge.
         total += purge!(
             "DELETE FROM authorization_code WHERE ctid IN
                (SELECT ctid FROM authorization_code WHERE expires_at <= $1 LIMIT $2)"
@@ -713,5 +719,62 @@ mod tests {
             assert_eq!(left, 0, "{table}: rows cascade with the user");
         }
         conn.close().await.expect("close");
+    }
+}
+
+/// TRANSITIONAL(07-11): the `password_hash_profile` table does not exist on Postgres yet. Every
+/// method refuses explicitly; nothing reports a fake success.
+#[derive(Debug, Clone, Copy)]
+struct PgPasswordProfiles;
+
+#[async_trait::async_trait]
+impl PasswordProfileRepo for PgPasswordProfiles {
+    async fn create(
+        &self,
+        _tenant: anvil_core::model::TenantId,
+        _profile: &anvil_core::model::NewPasswordHashProfile,
+    ) -> Result<anvil_core::model::PasswordHashProfile, StorageError> {
+        Err(StorageError::Unsupported(
+            "TRANSITIONAL(07-11): PasswordProfileRepo::create",
+        ))
+    }
+
+    async fn get(
+        &self,
+        _tenant: anvil_core::model::TenantId,
+        _id: uuid::Uuid,
+    ) -> Result<Option<anvil_core::model::PasswordHashProfile>, StorageError> {
+        Err(StorageError::Unsupported(
+            "TRANSITIONAL(07-11): PasswordProfileRepo::get",
+        ))
+    }
+
+    async fn list(
+        &self,
+        _tenant: anvil_core::model::TenantId,
+    ) -> Result<Vec<anvil_core::model::PasswordHashProfile>, StorageError> {
+        Err(StorageError::Unsupported(
+            "TRANSITIONAL(07-11): PasswordProfileRepo::list",
+        ))
+    }
+
+    async fn delete(
+        &self,
+        _tenant: anvil_core::model::TenantId,
+        _id: uuid::Uuid,
+    ) -> Result<bool, StorageError> {
+        Err(StorageError::Unsupported(
+            "TRANSITIONAL(07-11): PasswordProfileRepo::delete",
+        ))
+    }
+
+    async fn count_references(
+        &self,
+        _tenant: anvil_core::model::TenantId,
+        _id: uuid::Uuid,
+    ) -> Result<u64, StorageError> {
+        Err(StorageError::Unsupported(
+            "TRANSITIONAL(07-11): PasswordProfileRepo::count_references",
+        ))
     }
 }

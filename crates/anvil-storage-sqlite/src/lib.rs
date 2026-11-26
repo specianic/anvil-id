@@ -35,6 +35,7 @@ mod mail_settings;
 pub mod migrate;
 mod organizations;
 mod outbox;
+mod password_profiles;
 mod registration;
 mod roles;
 mod sessions;
@@ -48,8 +49,9 @@ use std::time::Duration;
 
 use anvil_core::ports::{
     AttributeRepo, AuditRepo, BrandingRepo, ClientRepo, ConnectionRepo, FlowRepo, GrantRepo,
-    JobRepo, KeyRepo, LogoutRepo, MailSettingsRepo, OrgRepo, OutboxRepo, RegistrationRepo,
-    RoleRepo, SessionRepo, SetupRepo, Storage, StorageError, TenantRepo, UserRepo, WebhookRepo,
+    JobRepo, KeyRepo, LogoutRepo, MailSettingsRepo, OrgRepo, OutboxRepo, PasswordProfileRepo,
+    RegistrationRepo, RoleRepo, SessionRepo, SetupRepo, Storage, StorageError, TenantRepo,
+    UserRepo, WebhookRepo,
 };
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
@@ -68,6 +70,7 @@ use crate::logout::SqliteLogout;
 use crate::mail_settings::SqliteMailSettings;
 use crate::organizations::SqliteOrgs;
 use crate::outbox::SqliteOutbox;
+use crate::password_profiles::SqlitePasswordProfiles;
 use crate::registration::SqliteRegistration;
 use crate::roles::SqliteRoles;
 use crate::sessions::SqliteSessions;
@@ -108,6 +111,7 @@ pub struct SqliteStorage {
     webhooks: SqliteWebhooks,
     registration: SqliteRegistration,
     organizations: SqliteOrgs,
+    password_profiles: SqlitePasswordProfiles,
 }
 
 fn is_memory_url(url: &str) -> bool {
@@ -227,6 +231,10 @@ impl SqliteStorage {
                 writer: writer.clone(),
                 reader: reader.clone(),
             },
+            password_profiles: SqlitePasswordProfiles {
+                writer: writer.clone(),
+                reader: reader.clone(),
+            },
             setup: SqliteSetup {
                 writer: writer.clone(),
                 reader,
@@ -309,6 +317,9 @@ impl Storage for SqliteStorage {
     }
     fn organizations(&self) -> &dyn OrgRepo {
         &self.organizations
+    }
+    fn password_profiles(&self) -> &dyn PasswordProfileRepo {
+        &self.password_profiles
     }
 
     async fn purge_expired(&self, now: time::OffsetDateTime) -> Result<u64, StorageError> {

@@ -1211,6 +1211,9 @@ pub(crate) mod race_fake {
         fn organizations(&self) -> &dyn OrgRepo {
             unreachable!("race fake: organizations")
         }
+        fn password_profiles(&self) -> &dyn crate::ports::PasswordProfileRepo {
+            unreachable!("not used by this test")
+        }
         async fn purge_expired(&self, _now: OffsetDateTime) -> Result<u64, StorageError> {
             unsupported()
         }
