@@ -18,17 +18,26 @@
 //! Release 0.3: upstream connection secrets are stored only KEK-sealed (purpose
 //! `CONNECTION_SECRET_PURPOSE`, AAD `connection_aad(tenant, id)`); the raw file is scanned before
 //! and after a WAL checkpoint, and the AAD binding is checked.
+//!
+//! Release 0.4: an RFC 7591 initial access token and two RFC 7592 registration access tokens
+//! (one stored at registration, one by `set_registration_token`, the rotation path) are stored
+//! only as digests, and a webhook endpoint's signing secrets (current and, after a rotation,
+//! previous) only KEK-sealed under `WEBHOOK_SECRET_PURPOSE` with `webhook_aad(tenant, id)`. The
+//! column scan and the raw file scan cover the `whsec_` secrets and their decoded key bytes.
 
 use std::collections::BTreeMap;
 
 use anvil_core::model::{
-    CAPTCHA_SECRET_PURPOSE, CaptchaProvider, CaptchaSettings, CredentialId, NewAccessToken,
-    NewEmail, NewTotp, OutboxId, RecoveryCodeHash, ReplayKind, SMTP_PASSWORD_PURPOSE, SecretHash,
+    CAPTCHA_SECRET_PURPOSE, CaptchaProvider, CaptchaSettings, ClientSource, CredentialId,
+    InitialAccessTokenId, NewAccessToken, NewEmail, NewInitialAccessToken, NewTotp,
+    NewWebhookEndpoint, OutboxId, RecoveryCodeHash, ReplayKind, SMTP_PASSWORD_PURPOSE, SecretHash,
     SelfServiceKind, SmtpSettings, SmtpTls, TOTP_SEED_PURPOSE, TenantId, TenantSettings,
-    TenantUpdate, UserId, credential_aad, seal_payload,
+    TenantUpdate, UserId, WEBHOOK_SECRET_PURPOSE, WebhookEndpointId, WebhookEventType,
+    credential_aad, seal_payload, webhook_aad,
 };
 use anvil_core::ports::{RotateOutcome, Storage};
 use anvil_jose::encoding::{b64url, secret_hash};
+use anvil_jose::webhook::{generate_webhook_secret, parse_webhook_secret};
 use anvil_jose::{
     Kek, TotpSecret, generate_recovery_codes, normalize_recovery_code, recovery_code_hash,
 };
@@ -55,6 +64,8 @@ const HASH_COLUMNS: &[(&str, &str)] = &[
     ("replay_guard", "value_hash"),
     ("recovery_code", "code_hash"),
     ("access_token", "token_hash"),
+    ("initial_access_token", "token_hash"),
+    ("client", "registration_access_token_hash"),
 ];
 
 fn marker(kind: &str) -> String {
@@ -236,7 +247,69 @@ async fn seed(storage: &SqliteStorage) -> Seeded {
         .await
         .expect("opaque access token");
 
-    let phase3_secrets = seed_phase3(storage, tenant, ctx.user.id).await;
+    // Release 0.4: RFC 7591 initial access token, stored as a digest.
+    let iat_marker = track("initial-access-token", "initial_access_token", "token_hash");
+    storage
+        .registration()
+        .create_iat(
+            tenant,
+            &NewInitialAccessToken {
+                id: InitialAccessTokenId::new_v7(),
+                description: "plaintext scan".to_owned(),
+                token_hash: hash_of(&iat_marker),
+                expires_at: Some(now_ms() + Duration::hours(24)),
+                uses_remaining: Some(1),
+                created_at: now_ms(),
+            },
+        )
+        .await
+        .expect("create_iat");
+
+    // RFC 7592 registration access tokens: one stored with the dynamic client, one set later
+    // (the path a rotation takes).
+    let rat_marker = track(
+        "registration-access-token",
+        "client",
+        "registration_access_token_hash",
+    );
+    let mut dynamic = new_client();
+    dynamic.client_id = format!("dyn-{}", uuid::Uuid::now_v7().simple());
+    dynamic.registration_source = ClientSource::Dynamic;
+    dynamic.registration_access_token_hash = Some(hash_of(&rat_marker));
+    storage
+        .clients()
+        .create(tenant, &dynamic)
+        .await
+        .expect("dynamic client");
+    let rotated_rat_marker = track(
+        "registration-access-token-rotated",
+        "client",
+        "registration_access_token_hash",
+    );
+    let mut rotated = new_client();
+    rotated.client_id = format!("dyn-{}", uuid::Uuid::now_v7().simple());
+    rotated.registration_source = ClientSource::Dynamic;
+    storage
+        .clients()
+        .create(tenant, &rotated)
+        .await
+        .expect("second dynamic client");
+    assert!(
+        storage
+            .clients()
+            .set_registration_token(
+                tenant,
+                &rotated.client_id,
+                Some(&hash_of(&rotated_rat_marker)),
+                now_ms(),
+            )
+            .await
+            .expect("set_registration_token"),
+        "the second dynamic client exists"
+    );
+
+    let mut phase3_secrets = seed_phase3(storage, tenant, ctx.user.id).await;
+    phase3_secrets.extend(seed_webhook_secrets(storage, tenant).await);
 
     Seeded {
         markers,
@@ -349,6 +422,79 @@ async fn seed_phase3(
         .expect("tenant exists");
 
     secrets
+}
+
+/// Release 0.4: a webhook endpoint whose signing secret is sealed exactly as
+/// `service::webhook::seal_webhook_secret` does, then rotated so that `previous_secret_enc` is
+/// populated too. Returns the plaintext forms (the `whsec_` strings and their HMAC key bytes).
+async fn seed_webhook_secrets(
+    storage: &SqliteStorage,
+    tenant: TenantId,
+) -> Vec<(&'static str, Vec<u8>)> {
+    let kek = Kek::generate();
+    let id = WebhookEndpointId::new_v7();
+    let seal = |secret: &str| {
+        kek.seal(
+            WEBHOOK_SECRET_PURPOSE,
+            &webhook_aad(tenant, id),
+            secret.as_bytes(),
+        )
+        .expect("seal webhook secret")
+    };
+    let first = generate_webhook_secret();
+    let second = generate_webhook_secret();
+    storage
+        .webhooks()
+        .create_endpoint(
+            tenant,
+            &NewWebhookEndpoint {
+                id,
+                name: "plaintext-scan".to_owned(),
+                url: "https://hooks.example.test/anvil".to_owned(),
+                events: vec![WebhookEventType::UserCreated],
+                enabled: true,
+                secret_enc: seal(&first),
+                created_at: now_ms(),
+            },
+        )
+        .await
+        .expect("create_endpoint");
+    assert!(
+        storage
+            .webhooks()
+            .rotate_secret(
+                tenant,
+                id,
+                &seal(&second),
+                now_ms() + Duration::hours(24),
+                now_ms(),
+            )
+            .await
+            .expect("rotate_secret"),
+        "the endpoint exists"
+    );
+    let stored = storage
+        .webhooks()
+        .get_endpoint(tenant, id)
+        .await
+        .expect("get_endpoint")
+        .expect("endpoint exists");
+    assert!(
+        stored.previous_secret_enc.is_some(),
+        "the rotation keeps the previous sealed secret"
+    );
+    vec![
+        ("webhook secret", first.as_bytes().to_vec()),
+        (
+            "webhook key bytes",
+            parse_webhook_secret(&first).expect("key").to_vec(),
+        ),
+        ("rotated webhook secret", second.as_bytes().to_vec()),
+        (
+            "rotated webhook key bytes",
+            parse_webhook_secret(&second).expect("key").to_vec(),
+        ),
+    ]
 }
 
 /// Raw bytes of the database file and its WAL (whichever exist).

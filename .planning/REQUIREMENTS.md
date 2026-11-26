@@ -35,7 +35,7 @@ Source of truth for wording and detail: [docs/PRD.md](../docs/PRD.md) §8–9. I
 - [x] **OIDC-14**: Authorization requests honor prompt (none/login/consent/select_account/create), max_age, login_hint, acr_values [0.3]
 - [x] **OIDC-15**: Access tokens are RFC 9068 JWTs by default or opaque per client, audience-restricted [0.2]
 - [x] **OIDC-16**: Clients can request audience-bound tokens with resource indicators (RFC 8707) [0.3]
-- [ ] **OIDC-17**: Clients can register dynamically (RFC 7591/7592) under an admin policy: disabled / allow-listed / open [0.4]
+- [x] **OIDC-17**: Clients can register dynamically (RFC 7591/7592) under an admin policy: disabled / allow-listed / open [0.4]
 - [ ] **OIDC-18**: Clients can use pushed authorization requests (RFC 9126) [1.0]
 - [ ] **OIDC-23**: The OpenID conformance suite passes in CI for Basic OP, Config OP, Form Post, RP-Initiated Logout and Back-Channel Logout; certification filed [1.0]
 - [x] **OIDC-24**: Authorization responses include the `iss` parameter (RFC 9207) [0.1]
@@ -55,7 +55,7 @@ Source of truth for wording and detail: [docs/PRD.md](../docs/PRD.md) §8–9. I
 - [x] **AUTH-10**: User can list and revoke their sessions; idle and absolute timeouts apply; admins can revoke sessions [0.2]
 - [x] **AUTH-11**: Upstream identities link to existing accounts only on verified email or explicit confirmation [0.3]
 - [x] **AUTH-13**: User can manage profile, email (re-verified), password, passkeys, MFA, sessions and connected apps from an account page [0.3]
-- [ ] **AUTH-14**: Admin can define custom user attributes per tenant with JSON Schema, controlling validation, editability and claims [0.4]
+- [x] **AUTH-14**: Admin can define custom user attributes per tenant with JSON Schema, controlling validation, editability and claims [0.4]
 
 ### Login UI and branding
 
@@ -68,11 +68,11 @@ Source of truth for wording and detail: [docs/PRD.md](../docs/PRD.md) §8–9. I
 
 ### Tenants, organizations and roles
 
-- [ ] **ORG-01**: Operator can run multiple isolated tenants, each with its own issuer (path-based by default, host-based optional) [0.1 data model, 0.4 UI]
+- [x] **ORG-01**: Operator can run multiple isolated tenants, each with its own issuer (path-based by default, host-based optional) [0.1 data model, 0.4 UI]
 - [ ] **ORG-02**: Tenant admin can create organizations with membership, invitations, org-scoped roles, org claim in tokens and an org switcher [1.0]
 - [ ] **ORG-03**: Organization admin can configure enterprise SSO connections (SAML 2.0 SP, OIDC RP) with JIT provisioning [1.0]
 - [ ] **ORG-04**: Users are routed to their organization's IdP by email domain; domains are verified by DNS TXT record [1.0]
-- [ ] **ORG-05**: Admin can define roles and permissions at tenant and org level, emitted as token claims [0.4]
+- [x] **ORG-05**: Admin can define roles and permissions at tenant and org level, emitted as token claims [0.4]
 
 ### Administration, API and operations
 
@@ -80,29 +80,29 @@ Source of truth for wording and detail: [docs/PRD.md](../docs/PRD.md) §8–9. I
 - [ ] **ADM-02**: Admin can manage tenants, users, clients, organizations, connections, branding, keys, sessions and the audit log from the console [0.2–1.0]
 - [x] **ADM-03**: On an empty database the operator gets a one-time setup URL to create the first admin; there are no default credentials [0.1]
 - [x] **ADM-04**: Every security-relevant event and admin action is audited, queryable in the console and streamable as JSON [0.2]
-- [ ] **ADM-05**: Integrators receive signed, retried webhooks for user and session lifecycle events [0.4]
-- [ ] **ADM-06**: Operator can export and idempotently apply a tenant's configuration as YAML [0.4]
-- [ ] **ADM-07**: Operator can use the `anvilid` CLI to serve, migrate, back up/restore, import/export, rotate keys and recover admin access [0.1+]
+- [x] **ADM-05**: Integrators receive signed, retried webhooks for user and session lifecycle events [0.4]
+- [x] **ADM-06**: Operator can export and idempotently apply a tenant's configuration as YAML [0.4]
+- [x] **ADM-07**: Operator can use the `anvilid` CLI to serve, migrate, back up/restore, import/export, rotate keys and recover admin access [0.1+]
 - [ ] **ADM-08**: Admin can import users with password hashes (bcrypt, scrypt incl. Firebase, PBKDF2, Argon2, salted SHA-2) [1.0]
 - [ ] **ADM-09**: Admin can export users individually and in bulk, including a GDPR data-subject export [1.0]
 
 ### Machine and agent identity
 
-- [ ] **AGT-01**: MCP clients can obtain audience-bound tokens (RFC 8414 metadata, RFC 8707 resource indicators), with docs for publishing RFC 9728 resource metadata [0.4]
-- [ ] **AGT-02**: Clients can identify themselves with Client ID Metadata Documents under admin policy [0.4]
+- [x] **AGT-01**: MCP clients can obtain audience-bound tokens (RFC 8414 metadata, RFC 8707 resource indicators), with docs for publishing RFC 9728 resource metadata [0.4]
+- [x] **AGT-02**: Clients can identify themselves with Client ID Metadata Documents under admin policy [0.4]
 - [ ] **AGT-03**: The consent screen clearly identifies agent clients and requested scopes, and supports incremental scope step-up [1.0]
 
 ### Operations (PRD §9.1)
 
 - [x] **OPS-01**: Operator can download one static binary (linux amd64/arm64, macOS) or a container image under 50 MB
 - [x] **OPS-02**: AnvilID runs on embedded SQLite by default and on PostgreSQL for production, with no other required dependency
-- [ ] **OPS-03**: Operator can run multiple stateless instances on one Postgres without extra coordination services
+- [x] **OPS-03**: Operator can run multiple stateless instances on one Postgres without extra coordination services
 - [x] **OPS-04**: Migrations run automatically, are tested between consecutive minor versions, and are never destructive without an explicit flag
 - [x] **OPS-05**: Operator can start with zero configuration; in production only the public URL is expected
 - [x] **OPS-06**: AnvilID behaves correctly behind reverse proxies via trusted-proxy configuration
-- [ ] **OPS-07**: Operator can back up and restore online (SQLite snapshot; Postgres guidance)
-- [ ] **OPS-08**: Operator can monitor health endpoints, Prometheus metrics, OpenTelemetry traces and structured JSON logs
-- [ ] **OPS-09**: Operator can deploy with the in-repo Helm chart and Docker Compose examples
+- [x] **OPS-07**: Operator can back up and restore online (SQLite snapshot; Postgres guidance)
+- [x] **OPS-08**: Operator can monitor health endpoints, Prometheus metrics, OpenTelemetry traces and structured JSON logs
+- [x] **OPS-09**: Operator can deploy with the in-repo Helm chart and Docker Compose examples
 
 ### Security (PRD §9.2)
 
@@ -121,7 +121,7 @@ Source of truth for wording and detail: [docs/PRD.md](../docs/PRD.md) §8–9. I
 - [x] **QUAL-02**: The same test suite runs against SQLite and Postgres
 - [ ] **QUAL-03**: Public APIs are versioned; breaking changes only in major versions
 - [x] **QUAL-04**: Zero-config `docker run` → OIDC login in a sample app takes ≤ 2 minutes (scripted check)
-- [ ] **QUAL-05**: Idle memory < 100 MB; token endpoint ≥ 1,000 req/s at p99 < 50 ms on 4 vCPU with Postgres
+- [x] **QUAL-05**: Idle memory < 100 MB; token endpoint ≥ 1,000 req/s at p99 < 50 ms on 4 vCPU with Postgres
 
 ## v2 Requirements (after 1.0)
 
@@ -190,7 +190,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | OIDC-14 | Phase 4 (subset in Phase 2, see note) | Complete |
 | OIDC-15 | Phase 3 | Complete |
 | OIDC-16 | Phase 4 | Complete |
-| OIDC-17 | Phase 5 | Pending |
+| OIDC-17 | Phase 5 | Complete |
 | OIDC-18 | Phase 7 | Pending |
 | OIDC-23 | Phase 7 | Pending |
 | OIDC-24 | Phase 2 | Complete |
@@ -207,39 +207,39 @@ Which phases cover which requirements. Updated during roadmap creation.
 | AUTH-10 | Phase 3 | Complete |
 | AUTH-11 | Phase 4 | Complete |
 | AUTH-13 | Phase 4 | Complete |
-| AUTH-14 | Phase 5 | Pending |
+| AUTH-14 | Phase 5 | Complete |
 | UI-01 | Phase 2 | Complete |
 | UI-02 | Phase 3 | Complete |
 | UI-03 | Phase 4 | Complete |
 | UI-04 | Phase 4 | Complete |
 | UI-05 | Phase 7 | Pending |
 | UI-07 | Phase 3 | Complete |
-| ORG-01 | Phase 5 | Pending |
+| ORG-01 | Phase 5 | Complete |
 | ORG-02 | Phase 6 | Pending |
 | ORG-03 | Phase 6 | Pending |
 | ORG-04 | Phase 6 | Pending |
-| ORG-05 | Phase 5 | Pending |
+| ORG-05 | Phase 5 | Complete |
 | ADM-01 | Phase 2 | Complete |
 | ADM-02 | Phase 6 | Pending |
 | ADM-03 | Phase 2 | Complete |
 | ADM-04 | Phase 3 | Complete |
-| ADM-05 | Phase 5 | Pending |
-| ADM-06 | Phase 5 | Pending |
-| ADM-07 | Phase 5 | Pending |
+| ADM-05 | Phase 5 | Complete |
+| ADM-06 | Phase 5 | Complete |
+| ADM-07 | Phase 5 | Complete |
 | ADM-08 | Phase 7 | Pending |
 | ADM-09 | Phase 7 | Pending |
-| AGT-01 | Phase 5 | Pending |
-| AGT-02 | Phase 5 | Pending |
+| AGT-01 | Phase 5 | Complete |
+| AGT-02 | Phase 5 | Complete |
 | AGT-03 | Phase 7 | Pending |
 | OPS-01 | Phase 2 | Complete |
 | OPS-02 | Phase 2 | Complete |
-| OPS-03 | Phase 5 | Pending |
+| OPS-03 | Phase 5 | Complete |
 | OPS-04 | Phase 3 | Complete |
 | OPS-05 | Phase 2 | Complete |
 | OPS-06 | Phase 3 | Complete |
-| OPS-07 | Phase 5 | Pending |
-| OPS-08 | Phase 5 | Pending |
-| OPS-09 | Phase 5 | Pending |
+| OPS-07 | Phase 5 | Complete |
+| OPS-08 | Phase 5 | Complete |
+| OPS-09 | Phase 5 | Complete |
 | SEC-01 | Phase 2 | Complete |
 | SEC-02 | Phase 3 | Complete |
 | SEC-03 | Phase 4 | Complete |
@@ -252,7 +252,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | QUAL-02 | Phase 2 | Complete |
 | QUAL-03 | Phase 7 | Pending |
 | QUAL-04 | Phase 2 | Complete |
-| QUAL-05 | Phase 5 | Pending |
+| QUAL-05 | Phase 5 | Complete |
 
 **Partial pull-ins:**
 - OIDC-14: per research conflict C2 (user decision), release 0.1 (Phase 2) already ships the subset the
@@ -272,6 +272,12 @@ Which phases cover which requirements. Updated during roadmap creation.
   Real-provider verification is the manual pre-release checklist `docs/social-login-checklist.md`,
   run by the owner before tagging v0.3.0 (04-33 release gate).
 
+**Scope notes (Phase 5, release 0.4):**
+- ORG-05: 0.4 ships tenant-level roles and permissions emitted as token claims. Org-level roles
+  arrive with organizations (ORG-02, Phase 6); the role schema is ready for an org scope.
+- QUAL-05: measured by the `load` workflow (perf job, median of 3 trials) on the documented
+  4 vCPU GitHub runner against Postgres; numbers in the 05-28 summary.
+
 **Coverage:**
 - v1 requirements: 84 total
 - Mapped to phases: 84
@@ -279,4 +285,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 ---
 *Requirements defined: 2026-11-25*
-*Last updated: 2026-11-26 at the Phase 4 gate (04-32)*
+*Last updated: 2026-11-26 at the Phase 5 gate (05-28)*

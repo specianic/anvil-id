@@ -15,6 +15,12 @@
 //! (seed bytes, hex and base32; each recovery code; the SMTP password; the captcha secret) may
 //! appear in any column.
 //!
+//! Release 0.4 secrets: an initial access token and two registration access tokens (one stored
+//! with the dynamic client, one set by `set_registration_token`) are stored only as hashes, and a
+//! webhook endpoint's signing secrets (current and, after a rotation, previous) only sealed with
+//! `Kek::seal(WEBHOOK_SECRET_PURPOSE, webhook_aad(tenant, id), secret)`. Neither the `whsec_`
+//! strings nor their decoded key bytes may appear in any column.
+//!
 //! Run with `cargo test`, not nextest: the container is shared per test binary.
 
 mod support;
@@ -22,13 +28,15 @@ mod support;
 use std::collections::BTreeMap;
 
 use anvil_core::model::{
-    CAPTCHA_SECRET_PURPOSE, CaptchaProvider, CaptchaSettings, CredentialId, FlowKind,
-    NewBrowserSession, NewEmail, NewFlow, NewRefreshToken, NewSelfServiceToken, NewSetupToken,
-    NewTotp, OutboxId, RecoveryCodeHash, ReplayKind, SMTP_PASSWORD_PURPOSE, SecretHash,
-    SelfServiceKind, SmtpSettings, SmtpTls, TOTP_SEED_PURPOSE, TenantSettings, TenantUpdate,
-    credential_aad, seal_payload,
+    CAPTCHA_SECRET_PURPOSE, CaptchaProvider, CaptchaSettings, ClientSource, CredentialId, FlowKind,
+    InitialAccessTokenId, NewBrowserSession, NewEmail, NewFlow, NewInitialAccessToken,
+    NewRefreshToken, NewSelfServiceToken, NewSetupToken, NewTotp, NewWebhookEndpoint, OutboxId,
+    RecoveryCodeHash, ReplayKind, SMTP_PASSWORD_PURPOSE, SecretHash, SelfServiceKind, SmtpSettings,
+    SmtpTls, TOTP_SEED_PURPOSE, TenantSettings, TenantUpdate, WEBHOOK_SECRET_PURPOSE,
+    WebhookEndpointId, WebhookEventType, credential_aad, seal_payload, webhook_aad,
 };
 use anvil_jose::encoding::{b64url, secret_hash};
+use anvil_jose::webhook::{generate_webhook_secret, parse_webhook_secret};
 use anvil_jose::{Kek, TotpSecret, generate_recovery_codes, recovery_code_hash};
 use anvil_storage::contract::*;
 use sqlx::{Connection, PgConnection, Row};
@@ -350,6 +358,98 @@ async fn secrets_never_stored_plaintext() {
         .expect("tenant update")
         .expect("tenant exists");
 
+    // --- Release 0.4 secrets ----------------------------------------------------------------
+    let iat = marker("iat");
+    s.storage
+        .registration()
+        .create_iat(
+            ctx.tenant,
+            &NewInitialAccessToken {
+                id: InitialAccessTokenId::new_v7(),
+                description: "plaintext scan".to_owned(),
+                token_hash: iat.hash,
+                expires_at: Some(now + Duration::hours(24)),
+                uses_remaining: Some(1),
+                created_at: now,
+            },
+        )
+        .await
+        .expect("create_iat");
+
+    let rat = marker("rat");
+    let mut dynamic = new_client();
+    dynamic.client_id = format!("dyn-{}", Uuid::now_v7().simple());
+    dynamic.registration_source = ClientSource::Dynamic;
+    dynamic.registration_access_token_hash = Some(rat.hash);
+    s.storage
+        .clients()
+        .create(ctx.tenant, &dynamic)
+        .await
+        .expect("dynamic client");
+    let rotated_rat = marker("ratrotated");
+    let mut rotated = new_client();
+    rotated.client_id = format!("dyn-{}", Uuid::now_v7().simple());
+    rotated.registration_source = ClientSource::Dynamic;
+    s.storage
+        .clients()
+        .create(ctx.tenant, &rotated)
+        .await
+        .expect("second dynamic client");
+    assert!(
+        s.storage
+            .clients()
+            .set_registration_token(ctx.tenant, &rotated.client_id, Some(&rotated_rat.hash), now)
+            .await
+            .expect("set_registration_token"),
+        "the second dynamic client exists"
+    );
+
+    let endpoint_id = WebhookEndpointId::new_v7();
+    let seal_webhook = |secret: &str| {
+        kek.seal(
+            WEBHOOK_SECRET_PURPOSE,
+            &webhook_aad(ctx.tenant, endpoint_id),
+            secret.as_bytes(),
+        )
+        .expect("seal webhook secret")
+    };
+    let webhook_secret = generate_webhook_secret();
+    let rotated_webhook_secret = generate_webhook_secret();
+    s.storage
+        .webhooks()
+        .create_endpoint(
+            ctx.tenant,
+            &NewWebhookEndpoint {
+                id: endpoint_id,
+                name: "plaintext-scan".to_owned(),
+                url: "https://hooks.example.test/anvil".to_owned(),
+                events: vec![WebhookEventType::UserCreated],
+                enabled: true,
+                secret_enc: seal_webhook(&webhook_secret),
+                created_at: now,
+            },
+        )
+        .await
+        .expect("create_endpoint");
+    assert!(
+        s.storage
+            .webhooks()
+            .rotate_secret(
+                ctx.tenant,
+                endpoint_id,
+                &seal_webhook(&rotated_webhook_secret),
+                now + Duration::hours(24),
+                now,
+            )
+            .await
+            .expect("rotate_secret"),
+        "the endpoint exists"
+    );
+    let webhook_keys = [
+        parse_webhook_secret(&webhook_secret).expect("key"),
+        parse_webhook_secret(&rotated_webhook_secret).expect("key"),
+    ];
+
     let seed_hex: String = seed.as_bytes().iter().map(|b| format!("{b:02x}")).collect();
     let mut phase3_plain: Vec<(String, String)> = vec![
         (
@@ -359,6 +459,11 @@ async fn secrets_never_stored_plaintext() {
         ("TOTP seed (hex)".to_owned(), seed_hex),
         ("SMTP password".to_owned(), smtp_password),
         ("captcha secret".to_owned(), captcha_secret),
+        ("webhook secret".to_owned(), webhook_secret.to_string()),
+        (
+            "rotated webhook secret".to_owned(),
+            rotated_webhook_secret.to_string(),
+        ),
     ];
     for (i, code) in recovery_plain.iter().enumerate() {
         phase3_plain.push((format!("recovery code {i}"), code.to_string()));
@@ -376,6 +481,9 @@ async fn secrets_never_stored_plaintext() {
         &jti,
         // The single-use token inside the email link.
         &link,
+        &iat,
+        &rat,
+        &rotated_rat,
     ];
 
     // --- inspect the raw rows -------------------------------------------------------------
@@ -404,6 +512,10 @@ async fn secrets_never_stored_plaintext() {
     );
     for (table, column) in [
         ("credential", "data"),
+        ("initial_access_token", "token_hash"),
+        ("client", "registration_access_token_hash"),
+        ("webhook_endpoint", "secret_enc"),
+        ("webhook_endpoint", "previous_secret_enc"),
         ("recovery_code", "code_hash"),
         ("smtp_settings", "password_enc"),
         ("tenant", "settings"),
@@ -431,6 +543,24 @@ async fn secrets_never_stored_plaintext() {
     assert!(
         raw_seed_hits.is_empty(),
         "the raw TOTP seed bytes were found in {raw_seed_hits:?}"
+    );
+    // Nor the decoded webhook HMAC keys.
+    for key in &webhook_keys {
+        let hits = raw_bytes_locations(&mut conn, &columns, key).await;
+        assert!(hits.is_empty(), "a raw webhook key was found in {hits:?}");
+    }
+    let webhook_rows = count(
+        &mut conn,
+        "SELECT count(*) FROM webhook_endpoint WHERE secret_enc IS NOT NULL
+            AND previous_secret_enc IS NOT NULL AND $1 IS NOT NULL AND $2 IS NOT NULL"
+            .to_owned(),
+        "",
+        &[],
+    )
+    .await;
+    assert_eq!(
+        webhook_rows, 1,
+        "the endpoint stores its current and previous secrets (sealed)"
     );
     // Positive controls for the Phase 3 rows: they exist and hold the sealed/hashed forms.
     let stored_codes = count(
@@ -513,6 +643,9 @@ async fn secrets_never_stored_plaintext() {
         ("admin_setup_token", "token_hash", &setup),
         ("self_service_token", "token_hash", &self_service),
         ("replay_guard", "value_hash", &jti),
+        ("initial_access_token", "token_hash", &iat),
+        ("client", "registration_access_token_hash", &rat),
+        ("client", "registration_access_token_hash", &rotated_rat),
     ];
     for (table, column, m) in hash_columns {
         let (t, c) = (ident(table), ident(column));

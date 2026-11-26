@@ -18,6 +18,10 @@
 #   crates/<c>/tests/<t>.rs              -> integration test <t> of crate <c>
 #   crates/anvil-storage/src/contract/*  -> the `contract` test of anvil-storage-sqlite (the suite
 #                                           is instantiated there by storage_contract_tests!)
+#   crates/anvil-cache/src/limiter/contract.rs
+#                                        -> the `limiter_contract` test of anvil-cache (included
+#                                           with #[path], instantiated per backend by
+#                                           limiter_contract_tests!)
 #   crates/<c>/src/**                    -> unit tests of crate <c>
 #
 # Release 0.2 adds the Phase 3 controls: passkeys, TOTP and recovery codes, introspection and
@@ -34,13 +38,27 @@
 # step-up, session switch, email change, theme validation, cookie names, per-route body limits and
 # the admin scope of the new routes.
 #
+# Release 0.4 adds the Phase 5 controls: dynamic client registration (policy, 404 when disabled,
+# system tenant, initial and registration access tokens, redirect allow-list, software_statement,
+# admin scope, max clients, rate limit), Client ID Metadata Documents (policy and allow-list
+# before any fetch, private destinations, redirects, 5 KiB cap, client_id match, no shared
+# secrets, no jwks_uri, http refused in production, errors not cached, never redirects, fetch
+# budget), resource-aware consent, webhooks (signature, SSRF at create and send, redirects,
+# write-only sealed secrets, no personal data, exactly-once claims and leases), custom attribute
+# schemas, claim mapping, RBAC (isolation, admin-scope bounding, escalation, last administrator),
+# the shared Redis limiter (contract equivalence with the in-process limiter, fail-closed outage,
+# hashed keys), declarative tenant configuration, backup/restore guards, local admin recovery,
+# the loopback-only healthcheck, passkey enrolment and passkey second factor challenges, the
+# config body limit, the 0.4 admin routes and telemetry redaction.
+#
 # Controls deliberately not mapped here:
 #   - "Test code" (SEC-06): enforced by scripts/check-release-graph.sh, not by a unit test.
 #   - Released-migration immutability: enforced by scripts/check-migrations.sh (and its
 #     --self-test), which `just ci` runs as migrations-check.
 #   - Browser-level behaviour (passkey ceremony, consent, sessions, a11y, and for 0.3 the
 #     upstream sign-in and linking journeys, RP-Initiated and Back-Channel Logout, email code and
-#     magic link, MFA policy and step-up, theme preview, i18n): Playwright specs under
+#     magic link, MFA policy and step-up, theme preview, i18n; for 0.4 the multi-tenant console
+#     pages, the MCP authorization journey and in-flow passkey enrolment): Playwright specs under
 #     tests/e2e/specs, run by the e2e workflow, plus the OpenID conformance plans (conformance
 #     workflow).
 #   - JIT sign-up racing a concurrent registration of the same email cannot be produced over HTTP;
@@ -486,6 +504,208 @@ cookies: names unique per tenant|crates/anvil-web/src/cookies.rs|tenants_created
 body limit: 413 per route family, 400 KiB only for logos|$W/security_body_limit.rs|protocol_and_page_routes_answer_413_above_64_kib
 body limit: 413 per route family, 400 KiB only for logos|$W/security_body_limit.rs|admin_json_routes_answer_413_above_64_kib
 body limit: 413 per route family, 400 KiB only for logos|$W/security_body_limit.rs|logo_uploads_accept_up_to_400_kib_and_no_more
+dcr: disabled policy is 404|$W/security_registration.rs|dcr_disabled_returns_404
+dcr: system tenant always disabled|$W/security_registration.rs|dcr_system_tenant_always_disabled
+dcr: system tenant always disabled|$W/security_admin_v04.rs|system_tenant_registration_policies_forced_disabled
+dcr: system tenant always disabled|$W/security_admin_config.rs|system_document_keeps_registration_disabled_and_the_console_client_out
+dcr: allow-listed policy requires an initial access token|$W/security_registration.rs|dcr_allow_listed_requires_initial_access_token
+dcr: allow-listed policy requires an initial access token|crates/anvil-core/src/service/registration.rs|dcr_allow_listed_requires_initial_access_token
+dcr: initial access token single use|$W/security_registration.rs|dcr_initial_access_token_single_use
+dcr: initial access token single use|$W/security_registration.rs|dcr_rejected_metadata_keeps_the_single_use_token
+dcr: initial access token single use|crates/anvil-core/src/service/registration.rs|dcr_initial_access_token_single_use
+dcr: initial access token single use under concurrency|crates/anvil-storage/src/contract/registration.rs|iat_single_use_concurrent_single_winner
+dcr: initial access token expiry and revocation|$W/security_registration.rs|dcr_expired_initial_access_token_refused
+dcr: initial access token expiry and revocation|$W/security_registration.rs|dcr_revoked_initial_access_token_refused
+dcr: initial access token expiry and revocation|crates/anvil-core/src/service/registration.rs|dcr_expired_initial_access_token_refused
+dcr: initial access token expiry and revocation|crates/anvil-core/src/service/registration.rs|dcr_revoked_initial_access_token_refused
+dcr: initial access token expiry and revocation|crates/anvil-storage/src/contract/registration.rs|iat_expired_or_revoked_not_consumed
+dcr: initial access token hashed at rest, shown once|$W/security_registration.rs|dcr_initial_access_token_hashed_at_rest
+dcr: initial access token hashed at rest, shown once|$W/security_admin_v04.rs|initial_access_token_shown_once
+dcr: initial and registration access tokens hashed at rest (SQLite)|crates/anvil-storage-sqlite/tests/plaintext.rs|secrets_never_stored_plaintext
+dcr: initial and registration access tokens hashed at rest (Postgres)|crates/anvil-storage-postgres/tests/plaintext.rs|secrets_never_stored_plaintext
+dcr: registration access token required (RFC 7592)|$W/security_registration.rs|dcr_registration_access_token_required
+dcr: registration access token required (RFC 7592)|$W/security_registration.rs|dcr_wrong_registration_access_token_401
+dcr: registration access token required (RFC 7592)|crates/anvil-core/src/service/registration.rs|dcr_registration_access_token_required
+dcr: registration access token required (RFC 7592)|crates/anvil-core/src/service/registration.rs|dcr_wrong_registration_access_token_refused
+dcr: static clients not manageable through RFC 7592|$W/security_registration.rs|dcr_static_client_not_manageable
+dcr: update constraints|$W/security_registration.rs|dcr_update_constraints_rejected
+dcr: redirect host allow-list|$W/security_registration.rs|dcr_redirect_host_allow_list_enforced
+dcr: redirect host allow-list|crates/anvil-core/src/oauth/registration.rs|dcr_redirect_host_allow_list_enforced
+dcr: redirect URI rules|crates/anvil-core/src/oauth/registration.rs|dcr_redirect_uri_rules_rejected
+dcr: redirect URI rules|crates/anvil-core/src/oauth/registration.rs|dcr_web_client_loopback_http_rejected
+dcr: redirect URI rules|crates/anvil-core/src/oauth/registration.rs|dcr_native_client_redirect_rules_rejected
+dcr: software_statement rejected|$W/security_registration.rs|dcr_software_statement_rejected
+dcr: software_statement rejected|crates/anvil-core/src/oauth/registration.rs|dcr_software_statement_rejected
+dcr: admin scope never registrable|$W/security_registration.rs|dcr_admin_scope_never_registrable
+dcr: admin scope never registrable|crates/anvil-core/src/oauth/registration.rs|dcr_admin_scope_never_registrable
+dcr: scopes and resources only from the tenant policy|crates/anvil-core/src/oauth/registration.rs|dcr_scope_outside_allowed_scopes_rejected
+dcr: scopes and resources only from the tenant policy|crates/anvil-core/src/oauth/registration.rs|dcr_resource_outside_allowed_resources_rejected
+dcr: metadata and request shape|$W/security_registration.rs|dcr_metadata_and_request_shape_rejected
+dcr: metadata and request shape|crates/anvil-core/src/oauth/registration.rs|dcr_public_client_credentials_rejected
+dcr: metadata and request shape|crates/anvil-core/src/oauth/registration.rs|dcr_client_credentials_without_allow_rejected
+dcr: jwks_uri rejected, private_key_jwt needs inline jwks|crates/anvil-core/src/oauth/registration.rs|dcr_jwks_uri_rejected
+dcr: jwks_uri rejected, private_key_jwt needs inline jwks|crates/anvil-core/src/oauth/registration.rs|dcr_private_key_jwt_requires_inline_jwks
+dcr: max clients|$W/security_registration.rs|dcr_max_clients_enforced
+dcr: max clients|crates/anvil-core/src/service/registration.rs|dcr_max_clients_enforced
+dcr: rate limited|$W/security_registration.rs|dcr_rate_limited
+cimd: policy checked before any fetch|$W/security_cimd.rs|cimd_policy_checked_before_fetch
+cimd: policy checked before any fetch|crates/anvil-core/src/oauth/cimd.rs|cimd_url_checked_before_document
+cimd: host allow-list checked before any fetch|$W/security_cimd.rs|cimd_allow_list_checked_before_fetch
+cimd: private destinations blocked|$W/security_cimd.rs|cimd_private_destination_blocked
+cimd: redirects not followed|$W/security_cimd.rs|cimd_redirect_not_followed
+cimd: document size capped at 5 KiB|$W/security_cimd.rs|cimd_document_over_5k_rejected
+cimd: document size capped at 5 KiB|crates/anvil-core/src/oauth/cimd.rs|cimd_document_over_5k_rejected
+cimd: client_id must match the document URL|$W/security_cimd.rs|cimd_client_id_mismatch_rejected
+cimd: client_id must match the document URL|crates/anvil-core/src/oauth/cimd.rs|cimd_client_id_mismatch_rejected
+cimd: shared-secret methods rejected|$W/security_cimd.rs|cimd_shared_secret_method_rejected
+cimd: shared-secret methods rejected|crates/anvil-core/src/oauth/cimd.rs|cimd_shared_secret_method_rejected
+cimd: shared-secret methods rejected|crates/anvil-core/src/oauth/cimd.rs|cimd_client_secret_rejected
+cimd: jwks_uri rejected, private_key_jwt needs inline jwks|$W/security_cimd.rs|cimd_jwks_uri_document_rejected
+cimd: jwks_uri rejected, private_key_jwt needs inline jwks|crates/anvil-core/src/oauth/cimd.rs|cimd_jwks_uri_rejected
+cimd: jwks_uri rejected, private_key_jwt needs inline jwks|crates/anvil-core/src/oauth/cimd.rs|cimd_private_key_jwt_requires_inline_jwks
+cimd: http client_id rejected in production (loopback too)|$W/security_cimd.rs|cimd_http_client_id_rejected_in_production
+cimd: http client_id rejected in production (loopback too)|crates/anvil-core/src/oauth/cimd.rs|cimd_http_rejected_in_production_including_loopback
+cimd: admin scope never granted|crates/anvil-core/src/oauth/cimd.rs|cimd_admin_scope_rejected
+cimd: fetch errors are not cached|$W/security_cimd.rs|cimd_fetch_error_not_cached
+cimd: refused documents not stored|$W/cimd.rs|resolver_refused_documents_are_invalid_client_and_not_stored
+cimd: disabled policy never fetches|$W/cimd.rs|resolver_disabled_policy_never_fetches_and_hides_cimd_rows
+cimd: failure never redirects to the client|$W/security_cimd.rs|cimd_failure_never_redirects
+cimd: fetch rate limited|$W/security_cimd.rs|cimd_fetch_rate_limited
+cimd: consent names the host, unverified name, no remote logo|$W/consent.rs|a_cimd_client_is_named_by_its_host_with_an_unverified_name_and_no_remote_logo
+mcp: CIMD client token only for its resource|$W/resource_indicators.rs|a_cimd_client_gets_a_token_for_the_mcp_server_and_no_other_resource
+consent: a new resource asks again|$W/consent.rs|remembered_consent_covers_resources_and_a_new_resource_asks_again
+consent: a new resource asks again|$W/consent.rs|a_grant_without_resources_asks_once_for_a_resource
+consent: a new resource asks again|crates/anvil-core/src/flow/consent.rs|a_new_resource_requires_consent
+consent: deny does not add the resource|$W/consent.rs|deny_does_not_add_the_resource
+consent: revocation clears resources|$W/consent.rs|revoking_consent_revokes_families_and_clears_resources
+webhook: signature verifies, tampering fails|$W/security_webhooks.rs|webhook_signature_verifies_and_tampered_body_fails
+webhook: signature verifies, tampering fails|crates/anvil-jose/src/webhook.rs|signature_matches_spec_test_vector
+webhook: signature verifies, tampering fails|crates/anvil-jose/src/webhook.rs|signature_changes_with_every_input
+webhook: signature verifies, tampering fails|crates/anvil-jose/src/webhook.rs|parse_rejects_bad_secrets
+webhook: both secrets sign during rotation only|$W/webhooks.rs|worker_signs_with_both_secrets_during_rotation_window
+webhook: SSRF refused at create|$W/security_webhooks.rs|webhook_url_private_ip_refused_at_create
+webhook: SSRF refused at create|$W/webhooks.rs|service_refuses_loopback_and_plain_http_in_production
+webhook: SSRF refused at send|$W/security_webhooks.rs|webhook_send_blocked_for_private_destination
+webhook: redirects not followed|$W/security_webhooks.rs|webhook_redirect_not_followed
+webhook: redirects not followed|$W/webhooks.rs|worker_redirect_is_a_failure_and_retried
+webhook: secret write-only|$W/security_webhooks.rs|webhook_secret_never_returned_after_create
+webhook: secret write-only|$W/security_admin_v04.rs|webhook_secret_write_only_in_api
+webhook: secret sealed at rest (SQLite)|crates/anvil-storage-sqlite/tests/plaintext.rs|secrets_never_stored_plaintext
+webhook: secret sealed at rest (Postgres)|crates/anvil-storage-postgres/tests/plaintext.rs|secrets_never_stored_plaintext
+webhook: payloads carry no personal data|$W/security_webhooks.rs|webhook_payload_has_no_pii
+webhook: payloads carry no personal data|crates/anvil-core/src/policy/webhook_event.rs|payloads_never_carry_personal_data
+webhook: failed actions emit nothing|crates/anvil-core/src/policy/webhook_event.rs|failures_never_emit
+webhook: each delivery claimed once under concurrency|crates/anvil-storage/src/contract/webhooks.rs|webhook_claim_concurrent_each_row_once
+webhook: each delivery claimed once under concurrency|crates/anvilid/tests/webhook_worker.rs|two_workers_deliver_each_row_exactly_once
+webhook: lease outlives the request timeout|crates/anvilid/tests/webhook_worker.rs|lease_holds_in_flight_rows_past_the_request_timeout
+webhook: shutdown waits for an in-flight request|crates/anvilid/src/main.rs|jobs_shutdown_timeout_covers_a_webhook_request
+webhook: tenant isolation|crates/anvil-storage/src/contract/webhooks.rs|webhooks_isolated_by_tenant
+attributes: remote schema references refused without network|$W/security_attributes.rs|attribute_schema_remote_ref_refused
+attributes: remote schema references refused without network|crates/anvil-web/src/adapters/attribute_schema.rs|remote_ref_is_refused_without_network
+attributes: schema size and depth capped|$W/security_attributes.rs|attribute_schema_size_capped
+attributes: schema size and depth capped|crates/anvil-web/src/adapters/attribute_schema.rs|oversized_schema_is_refused
+attributes: schema size and depth capped|crates/anvil-web/src/adapters/attribute_schema.rs|deeply_nested_schema_is_refused
+attributes: patterns run in linear time|$W/security_attributes.rs|attribute_pattern_is_linear_time
+attributes: patterns run in linear time|crates/anvil-web/src/adapters/attribute_schema.rs|redos_pattern_runs_in_linear_time
+attributes: patterns run in linear time|crates/anvil-web/src/adapters/attribute_schema.rs|backtracking_only_patterns_are_refused
+attributes: values validated on every write|$W/security_attributes.rs|attribute_values_validated_on_write
+attributes: values validated on every write|$W/account_attributes.rs|invalid_values_are_refused_with_field_errors
+attributes: validation errors never echo values|crates/anvil-web/src/adapters/attribute_schema.rs|errors_never_echo_instance_values
+attributes: cross-tenant refused|$W/security_attributes.rs|attribute_other_tenant_user_refused
+attributes: cross-tenant refused|$W/admin_attributes.rs|attributes_of_another_tenant_are_404
+attributes: cross-tenant refused|crates/anvil-storage/src/contract/attributes.rs|attributes_isolated_by_tenant
+attributes: non-editable attributes refused on the account page|$W/account_attributes.rs|non_editable_attributes_are_refused
+claims: mapping never overrides reserved claims|$W/security_rbac.rs|claim_mapping_collision_rejected
+claims: mapping never overrides reserved claims|crates/anvil-core/src/policy/claims_mapping.rs|validate_mapping_rejects_reserved_claims
+claims: mapping never overrides reserved claims|crates/anvil-core/src/policy/claims_mapping.rs|mapping_never_overrides_reserved_or_earlier_claims_at_runtime
+claims: mapping never overrides reserved claims|crates/anvil-core/src/policy/claims_mapping.rs|output_never_contains_protocol_claims
+claims: mapping never overrides reserved claims|crates/anvil-core/src/service/claims.rs|access_token_extras_never_override_or_add_reserved_claims
+claims: mapping never overrides reserved claims|crates/anvil-core/src/service/claims.rs|id_token_extras_never_set_reserved_protocol_claims
+rbac: tenant isolation|$W/security_rbac.rs|assigning_another_tenants_role_is_refused
+rbac: tenant isolation|$W/security_rbac.rs|assigning_to_another_tenants_user_is_refused
+rbac: tenant isolation|crates/anvil-storage/src/contract/roles.rs|role_assign_refuses_foreign_tenant
+rbac: tenant isolation|crates/anvil-storage/src/contract/roles.rs|roles_isolated_by_tenant
+rbac: admin scopes bounded by role permissions|$W/security_rbac.rs|admin_scope_requires_role_permission
+rbac: admin scopes bounded by role permissions|$W/security_rbac.rs|user_without_roles_gets_no_admin_scope
+rbac: admin scopes bounded by role permissions|crates/anvil-core/src/service/role.rs|bound_admin_scope_intersects_with_roles
+rbac: non-system tenant roles never grant admin scopes|$W/security_rbac.rs|non_system_tenant_role_never_grants_admin_scopes
+rbac: non-system tenant roles never grant admin scopes|crates/anvil-core/src/service/role.rs|non_system_roles_never_grant_admin_scopes
+rbac: no escalation beyond the caller's scopes|$W/security_rbac.rs|role_assignment_beyond_caller_scopes_is_refused
+rbac: no escalation beyond the caller's scopes|crates/anvil-core/src/service/role.rs|escalation_is_refused_beyond_the_callers_scopes
+rbac: last administrator kept (unassign, role delete, user delete, disable)|$W/security_rbac.rs|last_administrator_cannot_be_unassigned
+rbac: last administrator kept (unassign, role delete, user delete, disable)|$W/security_rbac.rs|last_administrator_role_cannot_be_deleted
+rbac: last administrator kept (unassign, role delete, user delete, disable)|$W/security_rbac.rs|last_administrator_cannot_be_deleted
+rbac: last administrator kept (unassign, role delete, user delete, disable)|$W/security_rbac.rs|last_administrator_cannot_be_disabled
+rbac: role routes require their scopes|$W/security_rbac.rs|role_routes_require_scopes
+static clients: admin scopes refused outside the system tenant|$W/security_admin_v04.rs|static_client_admin_scope_refused_outside_system_tenant
+static clients: admin scopes refused outside the system tenant|$W/security_admin.rs|system_clients_need_full_admin
+static clients: admin scopes refused outside the system tenant|$W/security_admin_config.rs|config_apply_refuses_admin_scope_on_non_system_client
+static clients: system tenant keeps admin scopes, legacy rows stay editable|$W/security_admin_v04.rs|system_tenant_static_client_may_hold_admin_scopes
+static clients: system tenant keeps admin scopes, legacy rows stay editable|$W/security_admin_v04.rs|legacy_admin_scope_client_stays_editable
+limiter: shared backend has the in-process semantics (contract)|crates/anvil-cache/src/limiter/contract.rs|gcra_burst_is_exact_then_denied_for_one_interval
+limiter: shared backend has the in-process semantics (contract)|crates/anvil-cache/src/limiter/contract.rs|gcra_denial_does_not_consume_quota
+limiter: shared backend has the in-process semantics (contract)|crates/anvil-cache/src/limiter/contract.rs|gcra_keys_are_isolated
+limiter: shared backend has the in-process semantics (contract)|crates/anvil-cache/src/limiter/contract.rs|backoff_free_attempts_then_doubling_lock_capped
+limiter: shared backend has the in-process semantics (contract)|crates/anvil-cache/src/limiter/contract.rs|backoff_keys_are_isolated_by_tier_and_tenant
+limiter: shared backend has the in-process semantics (contract)|crates/anvil-cache/src/limiter/contract.rs|gate_denies_while_the_strict_key_is_locked
+limiter: shared backend has the in-process semantics (contract)|crates/anvil-cache/src/limiter/contract.rs|gate_strict_lock_takes_precedence_over_captcha
+limiter: Redis outage fails closed for auth and the gate|crates/anvil-cache/tests/limiter_contract.rs|redis_outage_auth_and_gate_fail_closed_breaker_skips_then_recovers
+limiter: Redis outage fails closed for auth and the gate|crates/anvilid/tests/limiter_redis.rs|redis_outage_login_fails_closed_or_local_token_keeps_issuing_then_recovers
+limiter: Redis outage local mode is explicit|crates/anvil-cache/tests/limiter_contract.rs|redis_outage_local_mode_uses_the_in_process_limiter
+limiter: unreachable Redis fails startup|crates/anvil-cache/tests/limiter_contract.rs|redis_connect_fails_fast_when_unreachable
+limiter: unreachable Redis fails startup|crates/anvilid/tests/config_phase5.rs|redis_url_unreachable_fails_startup_explicitly
+limiter: nodes share one budget|crates/anvil-cache/tests/limiter_contract.rs|redis_instances_share_one_budget
+limiter: nodes share one budget|crates/anvilid/tests/limiter_redis.rs|redis_two_nodes_share_one_client_token_budget
+limiter: Redis keys are hashed (no IPs or identifiers in clear)|crates/anvil-cache/tests/limiter_contract.rs|redis_key_names_are_hashed
+limiter: Redis keys are hashed (no IPs or identifiers in clear)|crates/anvilid/src/limiter.rs|key_hasher_is_hmac_under_the_derived_ratelimit_key
+secret hygiene: Redis and OTLP URL credentials redacted|crates/anvilid/tests/config_phase5.rs|credentials_in_redis_and_otel_urls_are_redacted
+config: apply never reads server environment or files|$W/security_admin_config.rs|config_apply_never_reads_server_env_or_files
+config: export contains no secrets or hashes|$W/security_admin_config.rs|config_export_contains_no_secrets_or_hashes
+config: plans never print inline secrets|crates/anvil-core/src/service/config.rs|inline_secret_uses_the_supplied_equality_and_never_prints_it
+config: invalid document changes nothing|$W/security_admin_config.rs|config_apply_invalid_document_changes_nothing
+config: invalid document changes nothing|crates/anvilid/tests/tenant_config.rs|invalid_documents_are_reported_by_path
+config: apply requires admin write|$W/security_admin_config.rs|config_apply_requires_admin_write
+config: apply cannot lock out system admins|$W/security_admin_config.rs|config_apply_cannot_lock_out_system_admins
+config: system tenant rules|crates/anvil-core/src/service/config.rs|system_tenant_rules
+config: CLI deletions need --prune, non-terminal apply needs --yes|crates/anvilid/tests/tenant_config.rs|deletions_need_prune
+config: CLI deletions need --prune, non-terminal apply needs --yes|crates/anvilid/tests/tenant_config.rs|apply_without_yes_on_a_non_terminal_refuses
+backup: restore refuses while the server runs (serve.lock)|crates/anvilid/tests/backup.rs|backup_restore_refuses_while_the_server_runs
+backup: restore refuses corrupt and foreign files|crates/anvilid/tests/backup.rs|backup_restore_refuses_corrupt_and_foreign_files
+backup: restore refuses corrupt and foreign files|crates/anvil-storage-sqlite/src/backup.rs|inspect_rejects_truncated_and_foreign_files
+backup: restore refuses a backup from a newer binary|crates/anvil-storage-sqlite/src/backup.rs|restore_inspection_refuses_a_backup_from_a_newer_binary
+backup: restore refuses a wrong KEK and overwrites only with --yes|crates/anvilid/tests/backup.rs|backup_restore_refuses_a_wrong_kek_and_an_existing_database_without_yes
+backup: never creates a missing source|crates/anvil-storage-sqlite/src/backup.rs|backup_never_creates_a_missing_source
+admin recover: local only, no HTTP route|crates/anvilid/tests/admin_recover.rs|admin_recovery_has_no_http_route
+admin recover: unknown, other-tenant and blocked accounts refused|crates/anvilid/tests/admin_recover.rs|admin_recover_refuses_unknown_and_other_tenant_emails
+admin recover: unknown, other-tenant and blocked accounts refused|crates/anvilid/tests/admin_recover.rs|admin_recover_refuses_blocked_accounts
+admin recover: recovery URL expires|crates/anvilid/tests/admin_recover.rs|admin_recover_token_expires_after_one_hour
+admin recover: fresh admin only after a lockout|crates/anvilid/tests/admin_recover.rs|admin_recover_creates_fresh_admin_when_locked_out
+admin recover: fresh admin only after a lockout|crates/anvilid/tests/admin_recover.rs|admin_recover_without_email_refused_when_admin_exists
+healthcheck: non-loopback hosts refused without connecting|crates/anvilid/tests/healthcheck.rs|healthcheck_refuses_other_hosts_without_connecting
+healthcheck: non-loopback hosts refused without connecting|crates/anvilid/src/healthcheck.rs|other_hosts_schemes_and_credentials_are_refused
+healthcheck: not ready or draining fails|crates/anvilid/tests/healthcheck.rs|healthcheck_fails_when_not_ready_or_unreachable
+healthcheck: not ready or draining fails|crates/anvilid/tests/healthcheck.rs|healthcheck_fails_while_the_server_drains
+passkey enrolment: challenge single use|$W/flow_mfa_policy.rs|a_replayed_passkey_enrolment_challenge_is_refused
+passkey enrolment: challenge single use|$W/flow_mfa_policy.rs|a_successful_passkey_enrolment_cannot_be_replayed
+passkey enrolment: challenge single use|crates/anvil-core/src/flow/login.rs|passkey_enrolment_challenge_is_taken_out_once
+passkey enrolment: challenge bound to its flow and step|$W/flow_mfa_policy.rs|a_passkey_enrolment_challenge_from_another_flow_is_refused
+passkey enrolment: challenge bound to its flow and step|$W/flow_mfa_policy.rs|a_passkey_finish_without_a_pending_challenge_is_refused
+passkey enrolment: challenge bound to its flow and step|$W/flow_mfa_policy.rs|an_abandoned_passkey_enrolment_challenge_is_refused
+passkey enrolment: challenge bound to its flow and step|$W/flow_mfa_policy.rs|passkey_enrolment_routes_are_bound_to_the_flow_and_its_enrolment_step
+passkey second factor: passkey-only user gets the passkey step|$W/flow_mfa_policy.rs|passkey_only_user_gets_the_passkey_second_factor_not_enrolment
+passkey second factor: bound to the step user|$W/flow_mfa_policy.rs|second_factor_passkey_of_another_user_is_refused
+passkey second factor: bound to the step user|$W/flow_mfa_policy.rs|second_factor_passkey_unknown_credential_is_refused
+passkey second factor: challenge single use|$W/flow_mfa_policy.rs|second_factor_passkey_challenge_cannot_be_replayed
+passkey second factor: challenge single use|crates/anvil-core/src/flow/login.rs|second_factor_passkey_challenge_is_taken_out_once_and_only_in_its_step
+passkey second factor: challenge bound to the flow and step|$W/flow_mfa_policy.rs|second_factor_passkey_cross_flow_challenge_is_refused
+passkey second factor: challenge bound to the flow and step|$W/flow_mfa_policy.rs|identify_step_passkey_challenge_is_not_accepted_at_second_factor
+passkey second factor: challenge bound to the flow and step|$W/flow_mfa_policy.rs|second_factor_passkey_finish_without_challenge_is_refused
+passkey second factor: challenge bound to the flow and step|$W/flow_mfa_policy.rs|second_factor_passkey_options_refused_outside_the_second_factor_step
+passkey second factor: a code is not a passkey|crates/anvil-core/src/flow/login.rs|a_totp_code_at_a_passkey_only_step_is_invalid_input
+body limit: config routes 1 MiB and no more|$W/security_body_limit.rs|config_routes_accept_up_to_1_mib_and_no_more
+admin v0.4: new routes require their scopes|$W/security_admin_v04.rs|v04_admin_routes_require_scopes
+admin v0.4: new routes isolate tenants|$W/security_admin_v04.rs|v04_admin_routes_isolate_tenants
+telemetry: no personal data, secrets or client IPs in logs, spans or metrics|crates/anvilid/tests/telemetry_redaction.rs|telemetry_carries_no_personal_data_secrets_or_client_ips
 EOF
 )
 
@@ -498,6 +718,10 @@ owner() {
   local f=$1 crate rest
   if [[ $f == crates/anvil-storage/src/contract/* ]]; then
     echo "anvil-storage-sqlite|tests/contract.rs"
+    return
+  fi
+  if [[ $f == crates/anvil-cache/src/limiter/contract.rs ]]; then
+    echo "anvil-cache|tests/limiter_contract.rs"
     return
   fi
   crate=${f#crates/}
@@ -518,7 +742,7 @@ check_source() {
     if [[ ! -f $root/$file ]]; then
       violation "$control: $file does not exist (expected fn $fn)"
       fail=1
-    elif ! grep -Eq "^[[:space:]]*(pub(\([a-z]+\))? )?(async )?fn ${fn}[[:space:]]*\(" "$root/$file"; then
+    elif ! grep -Eq "^[[:space:]]*(pub(\([a-z]+\))? )?(async )?fn ${fn}[[:space:]]*[(<]" "$root/$file"; then
       violation "$control: no fn $fn in $file"
       fail=1
     fi
