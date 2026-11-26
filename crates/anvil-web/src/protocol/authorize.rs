@@ -11,6 +11,8 @@
 //! - `Consent` → `303` to `{issuer}/ui/consent?request={id}` (the consent screen, which continues
 //!   the request through [`AppState::authorize_response`]);
 //! - `SelectAccount` → `303` to `{issuer}/ui/select-account?request={id}` (the account chooser);
+//! - `SelectOrganization` → `303` to `{issuer}/ui/select-organization?request={id}` (the
+//!   organization switcher, when the client requires an org and the user belongs to several);
 //! - `Register` → `303` to `{issuer}/ui/registration?request={id}` (`prompt=create`; the
 //!   registration resumes the request through `/authorize/continue`);
 //! - `ErrorPage` → the themed `400` error page, never a redirect (unknown client, unregistered
@@ -176,6 +178,9 @@ fn respond(state: &AppState, tenant: &ResolvedTenant, outcome: AuthorizeOutcome)
         }
         AuthorizeOutcome::SelectAccount { request_id } => {
             see_other(&tenant.ui_url(&format!("/ui/select-account?request={request_id}")))
+        }
+        AuthorizeOutcome::SelectOrganization { request_id } => {
+            see_other(&tenant.ui_url(&format!("/ui/select-organization?request={request_id}")))
         }
         AuthorizeOutcome::Register { request_id } => {
             see_other(&tenant.ui_url(&format!("/ui/registration?request={request_id}")))

@@ -36,6 +36,19 @@
 //! `organization` parameter and the user's memberships
 //! ([`resolve_active_org`](crate::policy::org_claims::resolve_active_org), [`bind_active_org`])
 //! and bound to the code and its token family. It never comes from a cookie or the session.
+//! When the client requires an org and the user belongs to several, none was requested and the
+//! request is interactive, the request is stored and the user picks one on the organization
+//! switcher ([`AuthorizeOutcome::SelectOrganization`], [`AuthorizeService::start_select_organization`],
+//! [`AuthorizeService::choose_organization`]). The switcher lists only the user's own
+//! memberships; the choice is written into the stored request's `organization` parameter, so the
+//! normal resolution selects it. Switching orgs later is a new authorization request with
+//! `organization=<other>` (also with `prompt=none` and an existing session); a token family keeps
+//! the org it was issued for.
+//!
+//! The effective MFA policy is the strictest of tenant, active org and client
+//! ([`effective_policy_for`]): once the session's user, the request's `organization` parameter
+//! and the client's org policy select an org, its `mfa_policy` takes part in the step-up decision
+//! before a code is issued.
 //!
 //! The protocol decisions live in pure functions ([`crate::oauth::authorize_request::validate`],
 //! [`crate::oauth::decision::decide`], [`build_code`], [`AuthorizationResponse`]);
@@ -57,14 +70,14 @@ use crate::flow::consent::{ConsentDecision, ConsentState, requested_scopes};
 use crate::flow::login::SecondFactorMethods;
 use crate::model::{
     AuthRequestId, AuthorizationParams, BrowserSession, Client, FlowId, FlowKind, GrantType,
-    NewAuthorizationCode, NewAuthorizationRequest, NewFlow, NewTokenFamily, OrgId, SecretHash,
-    Tenant, TenantId, TokenFamilyId, UserId, UserStatus,
+    NewAuthorizationCode, NewAuthorizationRequest, NewFlow, NewTokenFamily, OrgClientPolicy, OrgId,
+    Organization, SecretHash, Tenant, TenantId, TokenFamilyId, UserId, UserStatus,
 };
 use crate::oauth::authorize_request::{AuthorizeError, PROMPT_CREATE, RawParams, validate};
 use crate::oauth::decision::{MfaContext, SessionDecision, decide, requested_acr, session_is_mfa};
 use crate::oauth::redirect::redirect_matches;
 use crate::oauth::response_mode::AuthorizationResponse;
-use crate::policy::mfa::effective_policy;
+use crate::policy::mfa::effective_policy_for;
 use crate::policy::org_claims::{ActiveOrg, resolve_active_org};
 use crate::ports::{ClientMetadataFetcher, Clock, Storage};
 use crate::service::client_resolver::{ClientResolver, is_url_client_id};
@@ -92,6 +105,9 @@ pub enum AuthorizeOutcome {
     /// `prompt=select_account` with a session: send the user to the account chooser, which calls
     /// [`AuthorizeService::choose_account`].
     SelectAccount { request_id: AuthRequestId },
+    /// The client requires an org and the user belongs to several, none requested: send the
+    /// user to the organization switcher, which calls [`AuthorizeService::choose_organization`].
+    SelectOrganization { request_id: AuthRequestId },
     /// `prompt=create`: send the user to the registration page for the stored request; the
     /// request resumes through [`AuthorizeService::resume`] once the new account is signed in.
     Register { request_id: AuthRequestId },
@@ -137,9 +153,45 @@ pub(crate) async fn second_factor_methods(
     })
 }
 
-/// The MFA inputs of a request for `session`'s user: effective policy of tenant and client,
-/// the request's `acr`, and (only when a single-factor session would be checked) whether the
-/// user has a second factor (TOTP or a passkey, [`second_factor_methods`]).
+/// The active-org decision for `user` at `client` with the request's `organization` parameter
+/// ([`resolve_active_org`] over the user's memberships). The one place that loads the
+/// memberships for an authorization (MFA policy and the org bound to the code).
+async fn active_org_of(
+    storage: &dyn Storage,
+    tenant: TenantId,
+    client: &Client,
+    params: &AuthorizationParams,
+    user: UserId,
+) -> Result<ActiveOrg, CoreError> {
+    let memberships = if client.organization.is_off() {
+        // `off` never selects an org, whatever the memberships.
+        Vec::new()
+    } else {
+        storage
+            .organizations()
+            .memberships_of_user(tenant, user)
+            .await?
+    };
+    Ok(resolve_active_org(
+        client.organization,
+        params.organization.as_deref(),
+        &memberships,
+    ))
+}
+
+/// The org MFA policy taking part in the effective policy: the selected org's own policy; none
+/// while no org is selected (the switcher, a refusal, or no org at all).
+fn org_mfa_policy(active: &ActiveOrg) -> Option<crate::model::MfaPolicy> {
+    match active {
+        ActiveOrg::Selected(org) => org.mfa_policy,
+        _ => None,
+    }
+}
+
+/// The MFA inputs of a request for `session`'s user: effective policy of tenant, active org and
+/// client ([`effective_policy_for`]; the org once the session's user and the request select
+/// one), the request's `acr`, and (only when a single-factor session would be checked) whether
+/// the user has a second factor (TOTP or a passkey, [`second_factor_methods`]).
 pub(crate) async fn mfa_context(
     storage: &dyn Storage,
     tenant: &Tenant,
@@ -147,9 +199,16 @@ pub(crate) async fn mfa_context(
     params: &AuthorizationParams,
     session: Option<&BrowserSession>,
 ) -> Result<MfaContext, CoreError> {
+    let org = match (client, session) {
+        (Some(c), Some(s)) => {
+            org_mfa_policy(&active_org_of(storage, tenant.id, c, params, s.user_id).await?)
+        }
+        _ => None,
+    };
     let mut ctx = MfaContext {
-        policy: effective_policy(
+        policy: effective_policy_for(
             tenant.settings.mfa_policy,
+            org,
             client.and_then(|c| c.mfa_policy),
         ),
         acr: requested_acr(params),
@@ -203,6 +262,46 @@ pub enum SelectAccountStart {
     },
     /// The request expired, was used, or its client is gone.
     RequestExpired,
+}
+
+/// One org on the switcher (a membership of the signed-in user).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrgOption {
+    pub id: OrgId,
+    pub slug: String,
+    pub display_name: String,
+}
+
+/// What the organization switcher shows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectOrganizationPage {
+    pub request_id: AuthRequestId,
+    pub client_name: String,
+    /// The session user's memberships only, by display name.
+    pub organizations: Vec<OrgOption>,
+}
+
+/// Result of opening the organization switcher.
+#[derive(Debug)]
+pub enum SelectOrganizationStart {
+    Started {
+        flow: StartedConsentFlow,
+        page: SelectOrganizationPage,
+    },
+    /// The request expired, was used, its client is gone, or it does not need a choice (the
+    /// client does not require an org, or the request already names one).
+    RequestExpired,
+}
+
+/// The switcher's answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OrgChoice {
+    /// The choice was recorded; continue with this outcome.
+    Continue(AuthorizeOutcome),
+    /// The switcher flow expired or was already used (show the switcher again).
+    FlowExpired,
+    /// The submitted org is not one of the user's memberships; nothing changed.
+    NotAMember,
 }
 
 /// Builds a code and its pre-created token family. Returns the plaintext code (sent to the
@@ -261,7 +360,7 @@ pub fn build_code(
 pub enum OrgRefusal {
     /// Answer the client with this error through the response mode.
     Error(CoreError),
-    /// The user must pick one of several orgs (no `prompt=none`).
+    /// The user must pick one of several orgs (no `prompt=none`): the organization switcher.
     SelectionRequired,
 }
 
@@ -274,7 +373,7 @@ pub enum OrgRefusal {
 /// | `Denied` (not a member, or `required` without any membership) | `access_denied` |
 /// | `Refused` (the client's policy is `off`) | `invalid_request` |
 /// | `NeedsChoice` with `prompt=none` | `interaction_required` |
-/// | `NeedsChoice` otherwise | [`OrgRefusal::SelectionRequired`] |
+/// | `NeedsChoice` otherwise | [`OrgRefusal::SelectionRequired`] (the switcher) |
 ///
 /// An org is never picked silently.
 pub fn bind_active_org(active: ActiveOrg, prompt_none: bool) -> Result<Option<OrgId>, OrgRefusal> {
@@ -308,6 +407,9 @@ enum Stage {
     AfterConsent { approved: bool },
     /// After "Continue as …" on the account chooser: decide again without `select_account`.
     AfterAccountChosen,
+    /// After the organization switcher: the switcher comes after the consent decision, so
+    /// `select_account` and `consent` were answered.
+    AfterOrganizationChosen,
 }
 
 impl Stage {
@@ -320,7 +422,7 @@ impl Stage {
             .filter(|p| match self {
                 Self::AfterLogin => true,
                 Self::AfterAccountChosen => p.as_str() != "select_account",
-                Self::AfterConsent { .. } => {
+                Self::AfterConsent { .. } | Self::AfterOrganizationChosen => {
                     p.as_str() != "select_account" && p.as_str() != "consent"
                 }
             })
@@ -511,15 +613,21 @@ impl AuthorizeService {
                     .await?
                 {
                     Ok(ConsentDecision::Skip) => {
-                        let org = match self
+                        match self
                             .active_org(tenant, issuer, &client, &params, &session)
                             .await?
                         {
-                            Ok(org) => org,
-                            Err(answer) => return Ok(answer),
-                        };
-                        self.issue(tenant, issuer, &client, &params, &session, org, now)
-                            .await
+                            OrgStep::Bind(org) => {
+                                self.issue(tenant, issuer, &client, &params, &session, org, now)
+                                    .await
+                            }
+                            OrgStep::Answer(answer) => Ok(answer),
+                            OrgStep::Choose => {
+                                let request_id =
+                                    self.store_request(tenant, &client, &params, now).await?;
+                                Ok(AuthorizeOutcome::SelectOrganization { request_id })
+                            }
+                        }
                     }
                     Ok(ConsentDecision::Required) => {
                         let request_id = self.store_request(tenant, &client, &params, now).await?;
@@ -681,6 +789,23 @@ impl AuthorizeService {
                         return Ok(error_response(&params, &error, issuer));
                     }
                 }
+                // The org is decided before the request is used up: the switcher keeps it.
+                let org = match self
+                    .active_org(tenant, issuer, &client, &params, &session)
+                    .await?
+                {
+                    OrgStep::Bind(org) => org,
+                    OrgStep::Choose => {
+                        return Ok(AuthorizeOutcome::SelectOrganization { request_id });
+                    }
+                    OrgStep::Answer(answer) => {
+                        self.storage
+                            .grants()
+                            .delete_authorization_request(tenant.id, request_id)
+                            .await?;
+                        return Ok(answer);
+                    }
+                };
                 // Deleting first makes the request single-use: a concurrent resume loses.
                 if !self
                     .storage
@@ -690,13 +815,6 @@ impl AuthorizeService {
                 {
                     return Ok(flow_expired());
                 }
-                let org = match self
-                    .active_org(tenant, issuer, &client, &params, &session)
-                    .await?
-                {
-                    Ok(org) => org,
-                    Err(answer) => return Ok(answer),
-                };
                 self.issue(tenant, issuer, &client, &params, &session, org, now)
                     .await
             }
@@ -712,6 +830,78 @@ impl AuthorizeService {
                 Ok(error_response(&params, &error, issuer))
             }
         }
+    }
+
+    /// Opens a flow bound to `session`'s user and to `request_id` (a `FlowKind::Consent` flow
+    /// in its connected-apps form, see the module docs). Used by the account chooser and the
+    /// organization switcher.
+    async fn open_request_flow(
+        &self,
+        tenant: &Tenant,
+        session: &BrowserSession,
+        request_id: AuthRequestId,
+        now: OffsetDateTime,
+    ) -> Result<StartedConsentFlow, CoreError> {
+        let cookie = random_token();
+        let csrf = random_token();
+        let new = NewFlow {
+            id: FlowId::new_v7(),
+            kind: FlowKind::Consent,
+            state: ConsentState::for_apps(session.user_id).to_json(),
+            csrf_hash: SecretHash(secret_hash(&csrf)),
+            cookie_hash: SecretHash(secret_hash(&cookie)),
+            auth_request_id: Some(request_id),
+            created_at: now,
+            expires_at: now + FLOW_LIFETIME,
+        };
+        self.storage.flows().create(tenant.id, &new).await?;
+        Ok(StartedConsentFlow {
+            flow_id: new.id,
+            cookie_token: SecretString::from(cookie),
+            csrf_token: SecretString::from(csrf),
+        })
+    }
+
+    /// Checks a submission against a flow opened by [`Self::open_request_flow`]: it must carry
+    /// the flow's cookie and CSRF token, and the flow must belong to `session`'s user and to
+    /// `request_id`; otherwise [`CoreError::Forbidden`]. `Ok(None)` when the flow expired or was
+    /// already used. Does not use the flow up.
+    async fn bound_request_flow(
+        &self,
+        tenant: &Tenant,
+        session: &BrowserSession,
+        request_id: AuthRequestId,
+        binding: &AccountChoiceBinding<'_>,
+        now: OffsetDateTime,
+    ) -> Result<Option<FlowId>, CoreError> {
+        if session.tenant_id != tenant.id {
+            return Err(CoreError::Forbidden);
+        }
+        let Some(flow) = self
+            .storage
+            .flows()
+            .get(tenant.id, binding.flow_id, now)
+            .await?
+        else {
+            return Ok(None);
+        };
+        if flow.kind != FlowKind::Consent {
+            return Err(CoreError::Forbidden);
+        }
+        match check_binding(&flow, binding.cookie_token, binding.csrf_token, now) {
+            Ok(()) => {}
+            Err(BindingError::Expired) => return Ok(None),
+            Err(BindingError::Forbidden) => return Err(CoreError::Forbidden),
+        }
+        let state =
+            ConsentState::from_json(&flow.state).map_err(|e| CoreError::Internal(e.to_string()))?;
+        if state.user != session.user_id
+            || state.request.is_some()
+            || flow.auth_request_id != Some(request_id)
+        {
+            return Err(CoreError::Forbidden);
+        }
+        Ok(Some(flow.id))
     }
 
     /// Opens the account chooser for a stored request: a flow bound to the session's user and
@@ -745,25 +935,11 @@ impl AuthorizeService {
         let Some(user) = self.storage.users().get(tenant.id, session.user_id).await? else {
             return Err(CoreError::Forbidden);
         };
-        let cookie = random_token();
-        let csrf = random_token();
-        let new = NewFlow {
-            id: FlowId::new_v7(),
-            kind: FlowKind::Consent,
-            state: ConsentState::for_apps(session.user_id).to_json(),
-            csrf_hash: SecretHash(secret_hash(&csrf)),
-            cookie_hash: SecretHash(secret_hash(&cookie)),
-            auth_request_id: Some(request_id),
-            created_at: now,
-            expires_at: now + FLOW_LIFETIME,
-        };
-        self.storage.flows().create(tenant.id, &new).await?;
+        let flow = self
+            .open_request_flow(tenant, session, request_id, now)
+            .await?;
         Ok(SelectAccountStart::Started {
-            flow: StartedConsentFlow {
-                flow_id: new.id,
-                cookie_token: SecretString::from(cookie),
-                csrf_token: SecretString::from(csrf),
-            },
+            flow,
             page: SelectAccountPage {
                 request_id,
                 client_name: client.name,
@@ -793,34 +969,13 @@ impl AuthorizeService {
         choice: AccountChoice,
     ) -> Result<Option<AuthorizeOutcome>, CoreError> {
         let now = self.clock.now();
-        if session.tenant_id != tenant.id {
-            return Err(CoreError::Forbidden);
-        }
-        let Some(flow) = self
-            .storage
-            .flows()
-            .get(tenant.id, binding.flow_id, now)
+        let Some(flow_id) = self
+            .bound_request_flow(tenant, &session, request_id, binding, now)
             .await?
         else {
             return Ok(None);
         };
-        if flow.kind != FlowKind::Consent {
-            return Err(CoreError::Forbidden);
-        }
-        match check_binding(&flow, binding.cookie_token, binding.csrf_token, now) {
-            Ok(()) => {}
-            Err(BindingError::Expired) => return Ok(None),
-            Err(BindingError::Forbidden) => return Err(CoreError::Forbidden),
-        }
-        let state =
-            ConsentState::from_json(&flow.state).map_err(|e| CoreError::Internal(e.to_string()))?;
-        if state.user != session.user_id
-            || state.request.is_some()
-            || flow.auth_request_id != Some(request_id)
-        {
-            return Err(CoreError::Forbidden);
-        }
-        if !self.storage.flows().delete(tenant.id, flow.id).await? {
+        if !self.storage.flows().delete(tenant.id, flow_id).await? {
             return Ok(None);
         }
         match choice {
@@ -849,9 +1004,152 @@ impl AuthorizeService {
         }
     }
 
+    /// The stored request and its client when the request waits for an org choice: the client
+    /// requires an org and the request names none. `None` otherwise (expired, used, client gone,
+    /// or no choice to make).
+    async fn request_awaiting_org(
+        &self,
+        tenant: &Tenant,
+        request_id: AuthRequestId,
+        now: OffsetDateTime,
+    ) -> Result<Option<(crate::model::AuthorizationRequest, Client)>, CoreError> {
+        let Some(request) = self
+            .storage
+            .grants()
+            .get_authorization_request(tenant.id, request_id, now)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let Some(client) = self
+            .storage
+            .clients()
+            .get(tenant.id, &request.client_id)
+            .await?
+        else {
+            return Ok(None);
+        };
+        if client.organization != OrgClientPolicy::Required || request.params.organization.is_some()
+        {
+            return Ok(None);
+        }
+        Ok(Some((request, client)))
+    }
+
+    /// Opens the organization switcher for a stored request: a flow bound to the session's user
+    /// and to the request, and the user's own memberships (never another org of the tenant).
+    pub async fn start_select_organization(
+        &self,
+        tenant: &Tenant,
+        session: &BrowserSession,
+        request_id: AuthRequestId,
+    ) -> Result<SelectOrganizationStart, CoreError> {
+        if session.tenant_id != tenant.id {
+            return Err(CoreError::Forbidden);
+        }
+        let now = self.clock.now();
+        let Some((_, client)) = self.request_awaiting_org(tenant, request_id, now).await? else {
+            return Ok(SelectOrganizationStart::RequestExpired);
+        };
+        let organizations = org_options(
+            self.storage
+                .organizations()
+                .memberships_of_user(tenant.id, session.user_id)
+                .await?,
+        );
+        let flow = self
+            .open_request_flow(tenant, session, request_id, now)
+            .await?;
+        Ok(SelectOrganizationStart::Started {
+            flow,
+            page: SelectOrganizationPage {
+                request_id,
+                client_name: client.name,
+                organizations,
+            },
+        })
+    }
+
+    /// Applies the switcher's choice of `org` for `request_id`. The submission must carry the
+    /// switcher flow's cookie and CSRF token, and the flow must belong to the session's user and
+    /// to this request; otherwise [`CoreError::Forbidden`].
+    ///
+    /// `org` must be one of the user's memberships ([`OrgChoice::NotAMember`] otherwise, nothing
+    /// changes). The flow is then used up, and the choice is written into the stored request's
+    /// `organization` parameter by compare-and-swap: the request is deleted (only one
+    /// submission wins) and stored again under the same id with the org, keeping its creation
+    /// and expiry times. A request that no longer waits for a choice (already chosen, used or
+    /// expired) is the `flow_expired` page. The request then continues: the org's MFA policy
+    /// applies (step-up before the code), and the code is bound to the org.
+    pub async fn choose_organization(
+        &self,
+        tenant: &Tenant,
+        issuer: &str,
+        request_id: AuthRequestId,
+        session: BrowserSession,
+        binding: &AccountChoiceBinding<'_>,
+        org: OrgId,
+    ) -> Result<OrgChoice, CoreError> {
+        let now = self.clock.now();
+        let Some(flow_id) = self
+            .bound_request_flow(tenant, &session, request_id, binding, now)
+            .await?
+        else {
+            return Ok(OrgChoice::FlowExpired);
+        };
+        let Some((request, _)) = self.request_awaiting_org(tenant, request_id, now).await? else {
+            return Ok(OrgChoice::Continue(flow_expired()));
+        };
+        let member = self
+            .storage
+            .organizations()
+            .memberships_of_user(tenant.id, session.user_id)
+            .await?
+            .into_iter()
+            .any(|o| o.id == org);
+        if !member {
+            return Ok(OrgChoice::NotAMember);
+        }
+        if !self.storage.flows().delete(tenant.id, flow_id).await? {
+            return Ok(OrgChoice::FlowExpired);
+        }
+        // Compare-and-swap: only the submission whose delete succeeds writes the choice.
+        if !self
+            .storage
+            .grants()
+            .delete_authorization_request(tenant.id, request_id)
+            .await?
+        {
+            return Ok(OrgChoice::Continue(flow_expired()));
+        }
+        let mut params = request.params;
+        params.organization = Some(org.to_string());
+        self.storage
+            .grants()
+            .create_authorization_request(
+                tenant.id,
+                &NewAuthorizationRequest {
+                    id: request_id,
+                    client_id: request.client_id,
+                    params,
+                    created_at: request.created_at,
+                    expires_at: request.expires_at,
+                },
+            )
+            .await?;
+        self.continue_request(
+            tenant,
+            issuer,
+            request_id,
+            Some(session),
+            Stage::AfterOrganizationChosen,
+        )
+        .await
+        .map(OrgChoice::Continue)
+    }
+
     /// The org this authorization is bound to, from the client's policy, the request's
     /// `organization` parameter and `session`'s user's memberships ([`bind_active_org`]).
-    /// `Err` carries the answer when no org can be bound.
     async fn active_org(
         &self,
         tenant: &Tenant,
@@ -859,27 +1157,22 @@ impl AuthorizeService {
         client: &Client,
         params: &AuthorizationParams,
         session: &BrowserSession,
-    ) -> Result<Result<Option<OrgId>, AuthorizeOutcome>, CoreError> {
-        let requested = params.organization.as_deref();
-        let memberships = if client.organization.is_off() {
-            // `off` never selects an org, whatever the memberships.
-            Vec::new()
-        } else {
-            self.storage
-                .organizations()
-                .memberships_of_user(tenant.id, session.user_id)
-                .await?
-        };
-        let active = resolve_active_org(client.organization, requested, &memberships);
+    ) -> Result<OrgStep, CoreError> {
+        let active = active_org_of(
+            self.storage.as_ref(),
+            tenant.id,
+            client,
+            params,
+            session.user_id,
+        )
+        .await?;
         let prompt_none = params.prompt.iter().any(|p| p == "none");
         Ok(match bind_active_org(active, prompt_none) {
-            Ok(org) => Ok(org),
-            Err(OrgRefusal::Error(error)) => Err(error_response(params, &error, issuer)),
-            // TRANSITIONAL(06-19): the organization switcher page replaces this error page.
-            Err(OrgRefusal::SelectionRequired) => Err(AuthorizeOutcome::ErrorPage {
-                error_key: "invalid_request",
-                detail: "organization selection required".to_owned(),
-            }),
+            Ok(org) => OrgStep::Bind(org),
+            Err(OrgRefusal::Error(error)) => {
+                OrgStep::Answer(error_response(params, &error, issuer))
+            }
+            Err(OrgRefusal::SelectionRequired) => OrgStep::Choose,
         })
     }
 
@@ -962,6 +1255,36 @@ impl AuthorizeService {
                 }),
         )
     }
+}
+
+/// What the authorization does about the org once the session and consent are settled.
+#[derive(Debug)]
+enum OrgStep {
+    /// Bind this org (or none) to the code.
+    Bind(Option<OrgId>),
+    /// Answer the client (an error through the response mode).
+    Answer(AuthorizeOutcome),
+    /// Show the organization switcher.
+    Choose,
+}
+
+/// The switcher's entries for `memberships`, by display name, then slug.
+fn org_options(memberships: Vec<Organization>) -> Vec<OrgOption> {
+    let mut out: Vec<OrgOption> = memberships
+        .into_iter()
+        .map(|o| OrgOption {
+            id: o.id,
+            slug: o.slug,
+            display_name: o.display_name,
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        a.display_name
+            .to_lowercase()
+            .cmp(&b.display_name.to_lowercase())
+            .then_with(|| a.slug.cmp(&b.slug))
+    });
+    out
 }
 
 fn flow_expired() -> AuthorizeOutcome {
@@ -1213,6 +1536,71 @@ mod tests {
         assert_eq!(
             bind_active_org(resolve_active_org(Off, None, &two), true).unwrap(),
             None
+        );
+    }
+
+    #[test]
+    fn org_mfa_policy_is_part_of_the_strictest_policy() {
+        use crate::model::MfaPolicy::{Off, Optional, Required};
+        let mut strict = org("strict");
+        strict.mfa_policy = Some(Required);
+        let mut lax = org("lax");
+        lax.mfa_policy = Some(Off);
+        let policy = |tenant, active: &ActiveOrg, client| {
+            effective_policy_for(tenant, org_mfa_policy(active), client)
+        };
+        // A stricter org raises the tenant's optional policy ...
+        assert_eq!(
+            policy(Optional, &ActiveOrg::Selected(strict.clone()), None),
+            Required
+        );
+        // ... an org that is off never weakens the tenant or the client.
+        assert_eq!(
+            policy(Required, &ActiveOrg::Selected(lax.clone()), None),
+            Required
+        );
+        assert_eq!(
+            policy(Off, &ActiveOrg::Selected(lax.clone()), Some(Optional)),
+            Optional
+        );
+        // An org without its own policy adds nothing.
+        assert_eq!(
+            policy(Optional, &ActiveOrg::Selected(org("plain")), None),
+            Optional
+        );
+        // Until an org is selected only tenant and client count.
+        for undecided in [
+            ActiveOrg::NeedsChoice,
+            ActiveOrg::NoOrg,
+            ActiveOrg::Denied,
+            ActiveOrg::Refused,
+        ] {
+            assert_eq!(org_mfa_policy(&undecided), None);
+        }
+    }
+
+    #[test]
+    fn switcher_lists_memberships_by_display_name() {
+        let mut b = org("beta");
+        b.display_name = "Beta".to_owned();
+        let mut a = org("acme");
+        a.display_name = "acme corp".to_owned();
+        let options = org_options(vec![b.clone(), a.clone()]);
+        assert_eq!(
+            options.iter().map(|o| o.slug.as_str()).collect::<Vec<_>>(),
+            ["acme", "beta"]
+        );
+        assert_eq!(options[0].id, a.id);
+        assert_eq!(options[1].display_name, "Beta");
+        assert!(org_options(Vec::new()).is_empty());
+    }
+
+    #[test]
+    fn after_the_switcher_select_account_and_consent_are_answered() {
+        let all = prompts(&["login", "consent", "select_account"]);
+        assert_eq!(
+            Stage::AfterOrganizationChosen.prompt(&all),
+            prompts(&["login"])
         );
     }
 }

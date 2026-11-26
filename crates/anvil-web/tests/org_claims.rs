@@ -816,11 +816,16 @@ async fn prompt_none_multi_org_required_is_interaction_required() {
     let resp = authorize(&app, &rp, None, SCOPE, &[("prompt", "none")]).await;
     assert_eq!(redirect_error(&resp), "login_required");
 
-    // Without prompt=none an org is never picked silently: an explicit page, no code.
-    // TRANSITIONAL(06-19): becomes the organization switcher.
+    // Without prompt=none an org is never picked silently: the organization switcher (06-19),
+    // no code.
     let resp = authorize(&app, &rp, Some(&c.cookie), SCOPE, &[]).await;
-    authz::assert_error_page(&resp, "invalid_request");
-    assert!(resp.html().contains("organization selection required"));
+    assert_eq!(resp.status, 303, "{}", resp.text());
+    let location = support::location(&resp);
+    assert!(
+        location.contains("/ui/select-organization?request="),
+        "{location}"
+    );
+    assert!(authz::param(&resp, "code").is_none(), "no code");
 
     // Naming one of them works, with or without prompt=none.
     for extra in [
