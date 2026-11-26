@@ -278,7 +278,13 @@ async fn submit(
     match guard_attempt(&state, &strict, &loose, captcha.is_some()).await {
         Decision::Deny { retry_after } => {
             return match posted_login_form(&state, &tenant, &posted) {
-                Ok(form) => locked_page(&state, &tenant, &loc, form, retry_after, None),
+                Ok(form) => {
+                    let extras = Extras {
+                        upstream: identify_buttons(&state, &tenant, &loc, &form).await,
+                        ..Extras::default()
+                    };
+                    locked_page_with(&state, &tenant, &loc, form, retry_after, extras)
+                }
                 Err(e) => core_error_page_in(&state, Some(&tenant), &loc, &e),
             };
         }
@@ -291,6 +297,7 @@ async fn submit(
                         form.messages = vec![FormMessage::error(key)];
                         let extras = Extras {
                             captcha: Some(settings),
+                            upstream: identify_buttons(&state, &tenant, &loc, &form).await,
                             ..Extras::default()
                         };
                         render_tenant_form_with(
@@ -327,7 +334,11 @@ async fn submit(
             match guard_attempt(&state, &strict, &loose, captcha.is_some()).await {
                 Decision::Deny { retry_after } => {
                     if let FlowOutcome::Render(form) = result.outcome {
-                        return locked_page(&state, &tenant, &loc, form, retry_after, None);
+                        let extras = Extras {
+                            upstream: identify_buttons(&state, &tenant, &loc, &form).await,
+                            ..Extras::default()
+                        };
+                        return locked_page_with(&state, &tenant, &loc, form, retry_after, extras);
                     }
                 }
                 Decision::RequireCaptcha => extras.captcha = captcha,
@@ -341,9 +352,21 @@ async fn submit(
         _ => {}
     }
     if let FlowOutcome::Render(form) = &result.outcome {
-        extras.upstream = super::upstream::upstream_buttons(&state, &tenant, &loc, form).await;
+        extras.upstream = identify_buttons(&state, &tenant, &loc, form).await;
     }
     outcome_response_with(&state, &tenant, &loc, result.outcome, &extras)
+}
+
+/// The upstream sign-in buttons of a sign-in form ([`super::upstream::upstream_buttons`]: only
+/// the identify step lists them). Every page that re-renders the sign-in form passes them, so a
+/// locked or CAPTCHA-gated user still sees the other ways to sign in.
+async fn identify_buttons(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    loc: &Locale,
+    form: &FormDescription,
+) -> Vec<super::upstream::UpstreamButton> {
+    super::upstream::upstream_buttons(state, tenant, loc, form).await
 }
 
 /// The binding fields of a password POST, for pages rendered without running the flow (lock,
@@ -410,15 +433,27 @@ pub(super) fn locked_page(
     state: &AppState,
     tenant: &ResolvedTenant,
     loc: &Locale,
-    mut form: FormDescription,
+    form: FormDescription,
     retry_after: Duration,
     factor_token: Option<String>,
 ) -> Response {
-    form.messages = vec![too_many_attempts(retry_after)];
     let extras = Extras {
         factor_token,
         ..Extras::default()
     };
+    locked_page_with(state, tenant, loc, form, retry_after, extras)
+}
+
+/// [`locked_page`] with sign-in page extras (the sign-in form's upstream buttons).
+fn locked_page_with(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    loc: &Locale,
+    mut form: FormDescription,
+    retry_after: Duration,
+    extras: Extras<'_>,
+) -> Response {
+    form.messages = vec![too_many_attempts(retry_after)];
     let mut resp = render_tenant_form_with(
         state,
         tenant,
@@ -611,7 +646,13 @@ async fn passkey_submit(
             identifier: "",
         };
         return match posted_login_form(&state, &tenant, &posted) {
-            Ok(form) => locked_page(&state, &tenant, &loc, form, retry_after, None),
+            Ok(form) => {
+                let extras = Extras {
+                    upstream: identify_buttons(&state, &tenant, &loc, &form).await,
+                    ..Extras::default()
+                };
+                locked_page_with(&state, &tenant, &loc, form, retry_after, extras)
+            }
             Err(e) => core_error_page_in(&state, Some(&tenant), &loc, &e),
         };
     }
@@ -636,7 +677,11 @@ async fn passkey_submit(
                 guard_attempt(&state, &key, &key, false).await,
                 &result.outcome,
             ) {
-                return locked_page(&state, &tenant, &loc, form.clone(), retry_after, None);
+                let extras = Extras {
+                    upstream: identify_buttons(&state, &tenant, &loc, form).await,
+                    ..Extras::default()
+                };
+                return locked_page_with(&state, &tenant, &loc, form.clone(), retry_after, extras);
             }
         }
         Some(AuthAttempt::PasskeySucceeded { .. }) => {
@@ -651,7 +696,11 @@ async fn passkey_submit(
         }
         _ => {}
     }
-    outcome_response(&state, &tenant, &loc, result.outcome)
+    let mut extras = Extras::default();
+    if let FlowOutcome::Render(form) = &result.outcome {
+        extras.upstream = identify_buttons(&state, &tenant, &loc, form).await;
+    }
+    outcome_response_with(&state, &tenant, &loc, result.outcome, &extras)
 }
 
 fn no_store(mut resp: Response) -> Response {
