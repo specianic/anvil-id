@@ -266,18 +266,27 @@ mod capture {
 // ---------------------------------------------------------------------------------------------
 
 mod spans {
+    //! A process-wide subscriber that records only on threads with an active [`Recording`].
+    //!
+    //! A scoped `set_default` subscriber is not enough here: while it is the only registered
+    //! dispatcher, tracing-core computes the interest of a callsite first hit on *another* test
+    //! thread from that thread's (empty) default and caches `never`, so this test's own request
+    //! would then skip the event or span. A global subscriber answers `sometimes` for every
+    //! callsite on every thread and decides per thread in `enabled`.
+
+    use std::cell::RefCell;
     use std::collections::{BTreeMap, HashMap};
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Mutex, OnceLock};
 
     use tracing::span::{Attributes, Id, Record};
+    use tracing::subscriber::Interest;
     use tracing::{Event, Metadata, Subscriber};
 
     pub type Fields = BTreeMap<String, String>;
 
     #[derive(Default)]
     pub struct Inner {
-        next: AtomicU64,
         spans: Mutex<HashMap<u64, (&'static Metadata<'static>, Fields)>>,
         pub events: Mutex<Vec<(String, Fields)>>,
     }
@@ -295,6 +304,14 @@ mod spans {
         }
     }
 
+    thread_local! {
+        static ACTIVE: RefCell<Option<Arc<Inner>>> = const { RefCell::new(None) };
+    }
+
+    fn active() -> Option<Arc<Inner>> {
+        ACTIVE.with(|a| a.borrow().clone())
+    }
+
     struct Visit<'a>(&'a mut Fields);
 
     impl tracing::field::Visit for Visit<'_> {
@@ -306,48 +323,84 @@ mod spans {
         }
     }
 
-    /// A minimal subscriber recording span fields and events.
-    #[derive(Clone, Default)]
-    pub struct Capture(pub Arc<Inner>);
+    /// The global subscriber: forwards to the current thread's recording, if any.
+    struct Capture {
+        next: AtomicU64,
+    }
 
     impl Subscriber for Capture {
+        fn register_callsite(&self, _: &'static Metadata<'static>) -> Interest {
+            Interest::sometimes()
+        }
         fn enabled(&self, _: &Metadata<'_>) -> bool {
-            true
+            active().is_some()
         }
         fn new_span(&self, attrs: &Attributes<'_>) -> Id {
-            let id = self.0.next.fetch_add(1, Ordering::Relaxed) + 1;
-            let mut fields = Fields::new();
-            attrs.record(&mut Visit(&mut fields));
-            self.0
-                .spans
-                .lock()
-                .expect("spans")
-                .insert(id, (attrs.metadata(), fields));
+            let id = self.next.fetch_add(1, Ordering::Relaxed) + 1;
+            if let Some(inner) = active() {
+                let mut fields = Fields::new();
+                attrs.record(&mut Visit(&mut fields));
+                inner
+                    .spans
+                    .lock()
+                    .expect("spans")
+                    .insert(id, (attrs.metadata(), fields));
+            }
             Id::from_u64(id)
         }
         fn record(&self, span: &Id, values: &Record<'_>) {
-            if let Some((_, fields)) = self
-                .0
-                .spans
-                .lock()
-                .expect("spans")
-                .get_mut(&span.into_u64())
+            if let Some(inner) = active()
+                && let Some((_, fields)) =
+                    inner.spans.lock().expect("spans").get_mut(&span.into_u64())
             {
                 values.record(&mut Visit(fields));
             }
         }
         fn record_follows_from(&self, _: &Id, _: &Id) {}
         fn event(&self, event: &Event<'_>) {
-            let mut fields = Fields::new();
-            event.record(&mut Visit(&mut fields));
-            self.0
-                .events
-                .lock()
-                .expect("events")
-                .push((event.metadata().target().to_owned(), fields));
+            if let Some(inner) = active() {
+                let mut fields = Fields::new();
+                event.record(&mut Visit(&mut fields));
+                inner
+                    .events
+                    .lock()
+                    .expect("events")
+                    .push((event.metadata().target().to_owned(), fields));
+            }
         }
         fn enter(&self, _: &Id) {}
         fn exit(&self, _: &Id) {}
+    }
+
+    /// Installs the global subscriber once for this test binary.
+    pub fn install() {
+        static INSTALLED: OnceLock<()> = OnceLock::new();
+        INSTALLED.get_or_init(|| {
+            tracing::subscriber::set_global_default(Capture {
+                next: AtomicU64::new(0),
+            })
+            .expect("first subscriber of this binary");
+        });
+    }
+
+    /// Records spans and events on the current thread until dropped. Call [`install`] first,
+    /// early enough that no callsite registration on another thread can still race with it.
+    pub struct Recording(pub Arc<Inner>);
+
+    impl Recording {
+        pub fn start() -> Self {
+            let inner = Arc::new(Inner::default());
+            ACTIVE.with(|a| *a.borrow_mut() = Some(Arc::clone(&inner)));
+            // Recompute cached interest, in case a registration raced with `install`.
+            tracing::callsite::rebuild_interest_cache();
+            Self(inner)
+        }
+    }
+
+    impl Drop for Recording {
+        fn drop(&mut self) {
+            ACTIVE.with(|a| *a.borrow_mut() = None);
+        }
     }
 }
 
@@ -497,17 +550,18 @@ async fn metrics_route_follows_the_configuration() {
 
 #[tokio::test]
 async fn request_span_carries_the_route_template_not_the_uri() {
+    spans::install();
     let app = TestApp::new().await;
     token_support::acme(&app).await;
-    let subscriber = spans::Capture::default();
-    let inner = Arc::clone(&subscriber.0);
-    let guard = tracing::subscriber::set_default(subscriber);
+    // The request runs on this thread (current-thread runtime), so it is what gets recorded.
+    let recording = spans::Recording::start();
+    let inner = Arc::clone(&recording.0);
     let resp = app
         .get(&format!(
             "/t/acme/authorize?login_hint={EMAIL}&client_id=unknown-client&state=s3cr3t-state"
         ))
         .await;
-    drop(guard);
+    drop(recording);
 
     let spans = inner.spans("http.request");
     let span = spans
