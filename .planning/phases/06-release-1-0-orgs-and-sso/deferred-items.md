@@ -20,3 +20,13 @@
 - (from 06-14, decision for gap plan) Org JIT currently follows the tenant `upstream_registration` setting, so a B2B tenant with closed registration silently blocks org SSO sign-ups. Orchestrator recommendation: JIT through an *org-owned* connection is allowed regardless of tenant registration (an admin explicitly configured the org connection and verified the domain); tenant-level connections keep following `upstream_registration`. Needs a test and a docs line.
 - (from 06-13) The org claim mapping rules are not yet on the admin tenant-settings DTO (06-09/06-02 note). Whichever later plan owns admin/dto.rs + tenants.rs should expose them, or the gate gap plan.
 - (from 06-13/06-14) New negative test names (org_claims.rs, enterprise_oidc.rs, security_linking.rs additions) must be added to scripts/check-security-tests.sh at the gate (06-26).
+
+## From 06-21
+
+- (API gap, console workaround in place) There is no per-user membership list in the admin API. The
+  console's user page "Organizations" card lists the tenant's organizations (up to 2000) and asks
+  each for `GET …/{org}/members/{user_id}/roles` (404 = not a member): N requests per user page. A
+  `GET /tenants/{slug}/users/{user_id}/organizations` endpoint (one `OrgRepo` query) would replace it.
+- (API gap, console workaround in place) `GET /tenants/{slug}/users` has no email filter, so "add
+  member by email" pages through the users list (up to 10000 users, then asks for the user id). An
+  `?email=` filter on listUsers would make the lookup one request.

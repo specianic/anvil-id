@@ -6,15 +6,15 @@ current_phase: 05
 current_phase_name: release 0 4 operate it
 current_plan: 33
 status: executing
-stopped_at: Completed 06-12-PLAN.md
-last_updated: "2026-11-26T11:27:33.220Z"
+stopped_at: Completed 06-21-PLAN.md
+last_updated: "2026-11-26T11:54:19.470Z"
 last_activity: 2026-11-26
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 162
-  completed_plans: 149
-  percent: 92
+  completed_plans: 150
+  percent: 93
 ---
 
 # Project State
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 **Status:** Ready to execute
 **Last Activity:** 2026-11-26
 **Last Activity Description:** 05-28 phase gate complete (632-pair security map, 0.4 plaintext scan, anvilid 0.4.0, 0.4 migrations pinned, every workflow incl. load and deploy green on f80dcb4)
-**Progress:** [█████████░] 92%
+**Progress:** [█████████░] 93%
 
 Phase 5 has 33 plans (05-01 through 05-33). Every plan except 05-29 (release v0.4.0 after owner sign-off) has a
 SUMMARY. Current Plan counts plans in execution order: 05-29 is the 33rd and last. Phase 4 still has one open plan, 04-33 (manual real-provider checklist, then tag v0.3.0); it must be
@@ -206,6 +206,7 @@ done before 05-29 tags v0.4.0.
 | Phase 06 P13 | 45min | 2 tasks | 13 files |
 | Phase 06 P14 | about 1h | 2 tasks | 7 files |
 | Phase 06 P12 | 75min | 3 tasks | 11 files |
+| Phase 06 P21 | 45min | 2 tasks | 16 files |
 
 ## Accumulated Context
 
@@ -479,6 +480,7 @@ Recent decisions affecting current work:
 - [Phase 06]: 06-13: lost org membership at code exchange/refresh revokes the family and answers invalid_grant; introspection/UserInfo recompute role and org claims at read time for JWT and opaque tokens
 - [Phase 06]: 06-14: org connection email trust = enterprise_email_trust over the org's verified domains, AND-ed with the connection trust (OIDC); complete_identity is the one Login completion path (SAML reuses it); org JIT follows the tenant upstream_registration
 - [Phase 06]: 06-12: org-admin principal = OrgAdminAuth (same verification path as AdminAuth); 401 for tokens not for the admin API, 403 for valid tokens that are not org admins of the path org; tenant-restricted system admins deferred to Phase 7
+- [Phase 06]: 06-21: console org layout uses route-link section nav (ORG_SECTIONS) so 06-23 adds sibling files; user memberships and add-member-by-email are console-side workarounds for missing API filters (deferred-items)
 
 ### Pending Todos
 
@@ -491,6 +493,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-26T11:27:33.216Z
-Stopped at: Completed 06-12-PLAN.md
+Last session: 2026-11-26T11:54:19.467Z
+Stopped at: Completed 06-21-PLAN.md
 Resume file: None
