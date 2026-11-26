@@ -3,7 +3,9 @@
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
+use super::attribute::{ClaimRule, TokenTarget};
 use super::ids::{TenantId, str_enum};
+use super::registration::{CimdPolicy, CimdSettings, DcrPolicy, DcrSettings};
 use crate::error::CoreError;
 
 /// Slug of the installation's system tenant (holds the administrators and the admin client).
@@ -90,6 +92,14 @@ pub struct TenantSettings {
     /// Page language when neither `ui_locales` nor `Accept-Language` matches.
     #[serde(default = "default_locale")]
     pub default_locale: String,
+    /// Dynamic client registration policy (disabled by default; always disabled for the system
+    /// tenant, see [`TenantSettings::effective_dcr`]).
+    pub dcr: DcrSettings,
+    /// Client ID Metadata Document policy (disabled by default; always disabled for the system
+    /// tenant, see [`TenantSettings::effective_cimd`]).
+    pub cimd: CimdSettings,
+    /// How roles and permissions are mapped into tokens.
+    pub claims: ClaimMappingSettings,
 }
 
 impl Default for TenantSettings {
@@ -105,6 +115,9 @@ impl Default for TenantSettings {
             auto_link: true,
             upstream_registration: None,
             default_locale: default_locale(),
+            dcr: DcrSettings::default(),
+            cimd: CimdSettings::default(),
+            claims: ClaimMappingSettings::default(),
         }
     }
 }
@@ -119,6 +132,70 @@ impl TenantSettings {
             }
         }
         algs
+    }
+
+    /// The DCR settings in force for the tenant `tenant_slug`: the system tenant never allows
+    /// dynamic registration, whatever its stored settings say.
+    pub fn effective_dcr(&self, tenant_slug: &str) -> DcrSettings {
+        let mut dcr = self.dcr.clone();
+        if tenant_slug == SYSTEM_TENANT_SLUG {
+            dcr.policy = DcrPolicy::Disabled;
+        }
+        dcr
+    }
+
+    /// The CIMD settings in force for the tenant `tenant_slug`: the system tenant never accepts
+    /// metadata-document clients, whatever its stored settings say.
+    pub fn effective_cimd(&self, tenant_slug: &str) -> CimdSettings {
+        let mut cimd = self.cimd.clone();
+        if tenant_slug == SYSTEM_TENANT_SLUG {
+            cimd.policy = CimdPolicy::Disabled;
+        }
+        cimd
+    }
+}
+
+/// Mapping of a user's roles and permissions into tokens (no expression language in 0.4).
+/// `None` disables a mapping.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ClaimMappingSettings {
+    /// Default: claim `roles` in the access token, ID token and userinfo, gated by scope `roles`.
+    pub roles: Option<ClaimRule>,
+    /// Default: claim `permissions` in the access token only, not gated by a scope.
+    pub permissions: Option<ClaimRule>,
+}
+
+impl Default for ClaimMappingSettings {
+    fn default() -> Self {
+        Self {
+            roles: Some(ClaimRule {
+                claim: "roles".to_owned(),
+                tokens: vec![
+                    TokenTarget::AccessToken,
+                    TokenTarget::IdToken,
+                    TokenTarget::Userinfo,
+                ],
+                scope: Some("roles".to_owned()),
+            }),
+            permissions: Some(ClaimRule {
+                claim: "permissions".to_owned(),
+                tokens: vec![TokenTarget::AccessToken],
+                scope: None,
+            }),
+        }
+    }
+}
+
+impl Tenant {
+    /// [`TenantSettings::effective_dcr`] for this tenant.
+    pub fn effective_dcr(&self) -> DcrSettings {
+        self.settings.effective_dcr(&self.slug)
+    }
+
+    /// [`TenantSettings::effective_cimd`] for this tenant.
+    pub fn effective_cimd(&self) -> CimdSettings {
+        self.settings.effective_cimd(&self.slug)
     }
 }
 
@@ -486,6 +563,53 @@ mod tests {
         }
         assert!(MfaPolicy::Required > MfaPolicy::Optional);
         assert!(MfaPolicy::Optional > MfaPolicy::Off);
+    }
+
+    #[test]
+    fn settings_written_by_0_3_still_parse() {
+        let v03 = r#"{"registration":"open","require_verified_email":true,"signing_algs":["RS256"],"captcha":null,"mfa_policy":"required","email_otp":true,"magic_link":false,"auto_link":false,"upstream_registration":false,"default_locale":"de"}"#;
+        let s: TenantSettings = serde_json::from_str(v03).unwrap();
+        assert_eq!(s.mfa_policy, MfaPolicy::Required);
+        assert_eq!(s.default_locale, "de");
+        assert!(!s.auto_link);
+        assert_eq!(s.dcr, DcrSettings::default());
+        assert_eq!(s.dcr.policy, DcrPolicy::Disabled);
+        assert_eq!(s.cimd, CimdSettings::default());
+        assert_eq!(s.cimd.policy, CimdPolicy::Disabled);
+        assert_eq!(s.claims, ClaimMappingSettings::default());
+        let roles = s.claims.roles.expect("default roles mapping");
+        assert_eq!(roles.claim, "roles");
+        assert_eq!(roles.scope.as_deref(), Some("roles"));
+        assert_eq!(roles.tokens.len(), 3);
+        let perms = s.claims.permissions.expect("default permissions mapping");
+        assert_eq!(perms.tokens, vec![TokenTarget::AccessToken]);
+        assert_eq!(perms.scope, None);
+        // Round trip keeps the new sections.
+        let json = serde_json::to_string(&TenantSettings::default()).unwrap();
+        assert_eq!(
+            serde_json::from_str::<TenantSettings>(&json).unwrap(),
+            TenantSettings::default()
+        );
+    }
+
+    #[test]
+    fn system_tenant_never_allows_dcr_or_cimd() {
+        let mut s = TenantSettings::default();
+        s.dcr.policy = DcrPolicy::Open;
+        s.cimd.policy = CimdPolicy::Open;
+        assert_eq!(
+            s.effective_dcr(SYSTEM_TENANT_SLUG).policy,
+            DcrPolicy::Disabled
+        );
+        assert_eq!(
+            s.effective_cimd(SYSTEM_TENANT_SLUG).policy,
+            CimdPolicy::Disabled
+        );
+        assert_eq!(s.effective_dcr("acme").policy, DcrPolicy::Open);
+        assert_eq!(
+            s.effective_cimd(DEFAULT_TENANT_SLUG).policy,
+            CimdPolicy::Open
+        );
     }
 
     #[test]

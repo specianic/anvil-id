@@ -158,6 +158,9 @@ async fn rp_session_for(app: &TestApp, user: UserId, session: SessionId, uri: &s
                 allowed_resources: vec![],
                 mfa_policy: None,
                 created_at: now,
+                metadata_expires_at: None,
+                registration_access_token_hash: None,
+                registration_source: anvil_core::model::ClientSource::Static,
             },
         )
         .await

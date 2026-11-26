@@ -250,6 +250,9 @@ async fn logout_wakes_the_worker_and_the_rp_gets_the_token_without_waiting_for_t
                 backchannel_logout_session_required: true,
                 allowed_resources: vec![],
                 mfa_policy: None,
+                metadata_expires_at: None,
+                registration_access_token_hash: None,
+                registration_source: anvil_core::model::ClientSource::Static,
             },
         )
         .await

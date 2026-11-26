@@ -5,6 +5,11 @@
 
 use crate::ports::StorageError;
 
+/// The one `error_description` of every grant failure (`invalid_grant`): never say which binding
+/// failed, and never reveal that refresh-token reuse was detected.
+pub const INVALID_GRANT_DESCRIPTION: &str =
+    "the grant is invalid, expired or was issued to another client";
+
 /// Every failure the core reports to the web layer.
 #[derive(Debug, thiserror::Error)]
 pub enum CoreError {
@@ -50,6 +55,27 @@ pub enum CoreError {
     /// Delivered to the RP like `login_required`.
     #[error("unmet_authentication_requirements")]
     UnmetAuthenticationRequirements,
+    /// RFC 7591 §3.2.2: registration metadata is invalid or not allowed by the tenant's policy.
+    #[error("invalid_client_metadata: {0}")]
+    InvalidClientMetadata(String),
+    /// RFC 7591 §3.2.2: a registered redirect URI is invalid or not allowed.
+    #[error("invalid_redirect_uri: {0}")]
+    InvalidRedirectUri(String),
+    /// RFC 7591 §3.2.2: software statements are not accepted.
+    #[error("invalid_software_statement")]
+    InvalidSoftwareStatement,
+    /// A Client ID Metadata Document could not be fetched or validated right now. 503 at the
+    /// token endpoint; the error page at /authorize (never a redirect to an unverified URI).
+    #[error("client metadata unavailable: {0}")]
+    ClientMetadataUnavailable(String),
+    /// The change would leave the system tenant without an administrator.
+    #[error("last administrator")]
+    LastAdministrator,
+    /// Refresh-token reuse was detected (the family is revoked). On the wire this is exactly the
+    /// `invalid_grant` response of [`CoreError::InvalidGrant`] with
+    /// [`INVALID_GRANT_DESCRIPTION`]; the separate variant only feeds metrics.
+    #[error("invalid_grant: refresh token reuse")]
+    RefreshTokenReuse,
     /// RFC 6750 bearer token error.
     #[error("invalid_token: {0}")]
     InvalidToken(String),
@@ -85,7 +111,7 @@ impl CoreError {
         match self {
             Self::InvalidRequest(_) => "invalid_request",
             Self::InvalidClient { .. } => "invalid_client",
-            Self::InvalidGrant(_) => "invalid_grant",
+            Self::InvalidGrant(_) | Self::RefreshTokenReuse => "invalid_grant",
             Self::UnauthorizedClient(_) => "unauthorized_client",
             Self::UnsupportedGrantType => "unsupported_grant_type",
             Self::UnsupportedResponseType => "unsupported_response_type",
@@ -101,6 +127,11 @@ impl CoreError {
             Self::UnmetAuthenticationRequirements => "unmet_authentication_requirements",
             Self::InvalidToken(_) => "invalid_token",
             Self::InsufficientScope(_) => "insufficient_scope",
+            Self::InvalidClientMetadata(_) => "invalid_client_metadata",
+            Self::InvalidRedirectUri(_) => "invalid_redirect_uri",
+            Self::InvalidSoftwareStatement => "invalid_software_statement",
+            Self::ClientMetadataUnavailable(_) => "temporarily_unavailable",
+            Self::LastAdministrator => "conflict",
             Self::Validation { .. } => "invalid_request",
             Self::NotFound => "not_found",
             Self::Conflict(_) => "conflict",
@@ -116,12 +147,16 @@ impl CoreError {
             Self::InvalidClient { .. } | Self::InvalidToken(_) => 401,
             Self::InsufficientScope(_) | Self::Forbidden => 403,
             Self::NotFound => 404,
-            Self::Conflict(_) => 409,
+            Self::Conflict(_) | Self::LastAdministrator => 409,
             Self::Validation { .. } => 422,
-            Self::Overloaded => 503,
+            Self::Overloaded | Self::ClientMetadataUnavailable(_) => 503,
             Self::Internal(_) | Self::Storage(_) => 500,
             Self::InvalidRequest(_)
             | Self::InvalidGrant(_)
+            | Self::RefreshTokenReuse
+            | Self::InvalidClientMetadata(_)
+            | Self::InvalidRedirectUri(_)
+            | Self::InvalidSoftwareStatement
             | Self::UnauthorizedClient(_)
             | Self::UnsupportedGrantType
             | Self::UnsupportedResponseType
@@ -150,7 +185,18 @@ impl CoreError {
             | Self::InvalidToken(m)
             | Self::InsufficientScope(m)
             | Self::InvalidTarget(m)
+            | Self::InvalidClientMetadata(m)
+            | Self::InvalidRedirectUri(m)
             | Self::Conflict(m) => m.clone(),
+            Self::RefreshTokenReuse => INVALID_GRANT_DESCRIPTION.to_owned(),
+            Self::InvalidSoftwareStatement => "software statements are not accepted".to_owned(),
+            // The inner reason (fetch error class, host) is for logs only.
+            Self::ClientMetadataUnavailable(_) => {
+                "the client metadata document is unavailable, retry later".to_owned()
+            }
+            Self::LastAdministrator => {
+                "the system tenant must keep at least one administrator".to_owned()
+            }
             Self::InvalidClient { reason, .. } => reason.clone(),
             Self::Validation { field, message } => format!("{field}: {message}"),
             Self::UnsupportedGrantType => "the grant type is not supported".to_owned(),
@@ -248,6 +294,28 @@ mod tests {
             (CoreError::Conflict(s("x")), "conflict", 409),
             (CoreError::Forbidden, "forbidden", 403),
             (CoreError::Overloaded, "temporarily_unavailable", 503),
+            (
+                CoreError::InvalidClientMetadata(s("x")),
+                "invalid_client_metadata",
+                400,
+            ),
+            (
+                CoreError::InvalidRedirectUri(s("x")),
+                "invalid_redirect_uri",
+                400,
+            ),
+            (
+                CoreError::InvalidSoftwareStatement,
+                "invalid_software_statement",
+                400,
+            ),
+            (
+                CoreError::ClientMetadataUnavailable(s("x")),
+                "temporarily_unavailable",
+                503,
+            ),
+            (CoreError::LastAdministrator, "conflict", 409),
+            (CoreError::RefreshTokenReuse, "invalid_grant", 400),
             (CoreError::Internal(s("x")), "server_error", 500),
             (
                 CoreError::Storage(StorageError::Conflict(s("x"))),
@@ -273,6 +341,21 @@ mod tests {
             assert!(!err.description().contains("hunter2"), "{err:?}");
             assert_eq!(err.description(), "internal server error");
         }
+    }
+
+    #[test]
+    fn refresh_token_reuse_is_indistinguishable_from_invalid_grant() {
+        let reuse = CoreError::RefreshTokenReuse;
+        let grant = CoreError::InvalidGrant(INVALID_GRANT_DESCRIPTION.to_owned());
+        assert_eq!(reuse.oauth_error(), grant.oauth_error());
+        assert_eq!(reuse.http_status(), grant.http_status());
+        assert_eq!(reuse.description(), grant.description());
+    }
+
+    #[test]
+    fn client_metadata_unavailable_does_not_leak_its_reason() {
+        let e = CoreError::ClientMetadataUnavailable("connect to 10.0.0.7 refused".into());
+        assert!(!e.description().contains("10.0.0.7"));
     }
 
     #[test]

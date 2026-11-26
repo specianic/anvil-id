@@ -343,6 +343,7 @@ impl ConsentService {
                     client_id: pending.client_id.clone(),
                     scopes: pending.scopes.clone(),
                     created_at: now,
+                    resources: Vec::new(),
                 },
                 now,
             )

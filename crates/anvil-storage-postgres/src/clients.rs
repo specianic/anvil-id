@@ -1,9 +1,9 @@
 //! `ClientRepo` on Postgres.
 
 use anvil_core::model::{
-    ApplicationType, BrandingScope, Client, ClientAuthMethod, ClientId, ClientType, ClientUpdate,
-    ConsentMode, GrantType, MfaPolicy, NewClient, Page, PageRequest, RevokeReason, SecretHash,
-    TenantId, TokenFormat,
+    ApplicationType, BrandingScope, Client, ClientAuthMethod, ClientId, ClientSource, ClientType,
+    ClientUpdate, ConsentMode, GrantType, MfaPolicy, NewClient, Page, PageRequest, RevokeReason,
+    SecretHash, TenantId, TokenFormat,
 };
 use anvil_core::ports::{ClientRepo, StorageError};
 use sqlx::PgPool;
@@ -97,6 +97,10 @@ impl ClientRow {
                 .as_deref()
                 .map(|m| enum_from("client.mfa_policy", m, MfaPolicy::parse))
                 .transpose()?,
+            // TRANSITIONAL(05-07): no registration columns yet; every stored client is static.
+            metadata_expires_at: None,
+            registration_access_token_hash: None,
+            registration_source: ClientSource::Static,
         })
     }
 }
@@ -128,6 +132,10 @@ pub(crate) fn client_from_new(tenant: TenantId, c: &NewClient) -> Client {
         backchannel_logout_session_required: c.backchannel_logout_session_required,
         allowed_resources: c.allowed_resources.clone(),
         mfa_policy: c.mfa_policy,
+        // TRANSITIONAL(05-07): refuse_registration_fields guarantees the defaults.
+        metadata_expires_at: None,
+        registration_access_token_hash: None,
+        registration_source: ClientSource::Static,
     }
 }
 
@@ -140,6 +148,7 @@ pub(crate) async fn insert_client<'e, E>(
 where
     E: sqlx::PgExecutor<'e>,
 {
+    refuse_registration_fields(c)?;
     let post_logout = to_json(
         "client.post_logout_redirect_uris",
         &c.post_logout_redirect_uris,
@@ -251,6 +260,7 @@ impl ClientRepo for PgClients {
         update: &ClientUpdate,
         now: OffsetDateTime,
     ) -> Result<Option<Client>, StorageError> {
+        refuse_registration_update(update)?;
         let post_logout = update
             .post_logout_redirect_uris
             .as_ref()
@@ -409,4 +419,30 @@ impl ClientRepo for PgClients {
         tx.commit().await.map_err(map_err)?;
         Ok(true)
     }
+}
+
+/// TRANSITIONAL(05-07): the 0.4 registration columns do not exist yet on this backend. Non-default values are
+/// refused explicitly instead of being dropped silently.
+fn refuse_registration_fields(c: &NewClient) -> Result<(), StorageError> {
+    // TRANSITIONAL(05-07)
+    if c.registration_source != ClientSource::Static
+        || c.metadata_expires_at.is_some()
+        || c.registration_access_token_hash.is_some()
+    {
+        return Err(StorageError::Unsupported(
+            "client registration fields are not stored by this backend yet",
+        ));
+    }
+    Ok(())
+}
+
+/// TRANSITIONAL(05-07): see [`refuse_registration_fields`].
+fn refuse_registration_update(u: &ClientUpdate) -> Result<(), StorageError> {
+    // TRANSITIONAL(05-07)
+    if u.metadata_expires_at.is_some() || u.registration_access_token_hash.is_some() {
+        return Err(StorageError::Unsupported(
+            "client registration fields are not stored by this backend yet",
+        ));
+    }
+    Ok(())
 }

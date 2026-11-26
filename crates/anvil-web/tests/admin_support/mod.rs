@@ -64,6 +64,9 @@ pub async fn system_client(app: &TestApp, scopes: &[&str]) -> String {
                 backchannel_logout_session_required: false,
                 allowed_resources: vec![],
                 mfa_policy: None,
+                metadata_expires_at: None,
+                registration_access_token_hash: None,
+                registration_source: anvil_core::model::ClientSource::Static,
             },
         )
         .await

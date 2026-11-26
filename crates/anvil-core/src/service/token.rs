@@ -131,7 +131,7 @@ pub fn check_client_grant(client: &Client, grant: GrantType) -> Result<(), CoreE
 
 fn invalid_grant() -> CoreError {
     // One description for every grant failure: never say which binding failed.
-    CoreError::InvalidGrant("the grant is invalid, expired or was issued to another client".into())
+    CoreError::InvalidGrant(crate::error::INVALID_GRANT_DESCRIPTION.to_owned())
 }
 
 /// Binds a consumed code to the request: same client, same `redirect_uri` (required, exact),

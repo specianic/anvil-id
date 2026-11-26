@@ -10,8 +10,10 @@ use serde_json::{Map, Value};
 use time::OffsetDateTime;
 
 use super::credential::CredentialKind;
-use super::ids::{AuditEventId, TenantId, str_enum};
+use super::ids::{AuditEventId, TenantId, WebhookDeliveryId, str_enum};
 use super::mail_settings::EmailKind;
+use super::registration::ClientSource;
+use super::webhook::{WebhookEvent, WebhookEventType};
 
 /// Longest stored user agent, in characters.
 pub const MAX_USER_AGENT_CHARS: usize = 256;
@@ -172,6 +174,30 @@ pub enum AuditAction {
     ProfileUpdated,
     StepUpCompleted,
     EmailCodeSent,
+    RoleCreated,
+    RoleUpdated,
+    RoleDeleted,
+    RoleAssigned,
+    RoleUnassigned,
+    AttributeDefined,
+    AttributeDeleted,
+    UserAttributesUpdated,
+    WebhookEndpointCreated,
+    WebhookEndpointUpdated,
+    WebhookEndpointDeleted,
+    WebhookSecretRotated,
+    WebhookEndpointDisabled,
+    WebhookDeliveryFailed,
+    WebhookTestSent,
+    WebhookRedelivered,
+    ClientRegistered,
+    ClientRegistrationUpdated,
+    ClientRegistrationDeleted,
+    CimdClientRefreshed,
+    InitialAccessTokenCreated,
+    InitialAccessTokenRevoked,
+    TenantConfigApplied,
+    AdminRecoveryIssued,
 }
 
 str_enum!(AuditAction {
@@ -231,6 +257,30 @@ str_enum!(AuditAction {
     ProfileUpdated => "profile_updated",
     StepUpCompleted => "step_up_completed",
     EmailCodeSent => "email_code_sent",
+    RoleCreated => "role_created",
+    RoleUpdated => "role_updated",
+    RoleDeleted => "role_deleted",
+    RoleAssigned => "role_assigned",
+    RoleUnassigned => "role_unassigned",
+    AttributeDefined => "attribute_defined",
+    AttributeDeleted => "attribute_deleted",
+    UserAttributesUpdated => "user_attributes_updated",
+    WebhookEndpointCreated => "webhook_endpoint_created",
+    WebhookEndpointUpdated => "webhook_endpoint_updated",
+    WebhookEndpointDeleted => "webhook_endpoint_deleted",
+    WebhookSecretRotated => "webhook_secret_rotated",
+    WebhookEndpointDisabled => "webhook_endpoint_disabled",
+    WebhookDeliveryFailed => "webhook_delivery_failed",
+    WebhookTestSent => "webhook_test_sent",
+    WebhookRedelivered => "webhook_redelivered",
+    ClientRegistered => "client_registered",
+    ClientRegistrationUpdated => "client_registration_updated",
+    ClientRegistrationDeleted => "client_registration_deleted",
+    CimdClientRefreshed => "cimd_client_refreshed",
+    InitialAccessTokenCreated => "initial_access_token_created",
+    InitialAccessTokenRevoked => "initial_access_token_revoked",
+    TenantConfigApplied => "tenant_config_applied",
+    AdminRecoveryIssued => "admin_recovery_issued",
 });
 
 /// Structured event details. Only typed constructors build it, and none of them accepts a
@@ -325,6 +375,52 @@ impl AuditDetails {
         d
     }
 
+    /// A role by name.
+    pub fn role(name: &str) -> Self {
+        Self::one("role", Value::from(name))
+    }
+
+    /// A custom attribute definition by name (never a user's value).
+    pub fn attribute(name: &str) -> Self {
+        Self::one("attribute", Value::from(name))
+    }
+
+    /// A webhook endpoint by name (never its URL secret or signing secret).
+    pub fn webhook_endpoint(name: &str) -> Self {
+        Self::one("endpoint", Value::from(name))
+    }
+
+    /// A webhook event type.
+    pub fn webhook_event(event_type: WebhookEventType) -> Self {
+        Self::one("event_type", Value::from(event_type.as_str()))
+    }
+
+    /// A webhook delivery: its id, the attempts made and a fixed error class (`timeout`,
+    /// `status`, `blocked`, ...). Never a response body.
+    pub fn webhook_delivery(
+        id: WebhookDeliveryId,
+        attempts: u32,
+        error_class: &'static str,
+    ) -> Self {
+        let mut d = Self::one("delivery_id", Value::from(id.to_string()));
+        d.0.insert("attempts".into(), Value::from(attempts));
+        d.0.insert("error_class".into(), Value::from(error_class));
+        d
+    }
+
+    /// How a client was registered (`static`, `dynamic`, `cimd`).
+    pub fn client_source(source: ClientSource) -> Self {
+        Self::one("source", Value::from(source.as_str()))
+    }
+
+    /// Counts of an applied configuration plan.
+    pub fn config_plan(creates: u64, updates: u64, deletes: u64) -> Self {
+        let mut d = Self::one("creates", Value::from(creates));
+        d.0.insert("updates".into(), Value::from(updates));
+        d.0.insert("deletes".into(), Value::from(deletes));
+        d
+    }
+
     /// Merges `other` into `self` (later keys win).
     pub fn with(mut self, other: AuditDetails) -> Self {
         self.0.extend(other.0);
@@ -364,6 +460,9 @@ pub struct NewAuditEvent {
     pub outcome: AuditOutcome,
     pub ctx: RequestContext,
     pub details: AuditDetails,
+    /// The webhook event this action fans out to, computed inside `AuditService` (05-14).
+    /// Construction sites set `None`.
+    pub webhook: Option<WebhookEvent>,
 }
 
 /// A stored audit event.
@@ -411,7 +510,11 @@ mod tests {
         for v in AuditOutcome::ALL {
             assert_eq!(AuditOutcome::parse(v.as_str()), Some(*v));
         }
-        assert_eq!(AuditAction::ALL.len(), 56);
+        assert_eq!(AuditAction::ALL.len(), 80);
+        assert_eq!(
+            AuditAction::AdminRecoveryIssued.as_str(),
+            "admin_recovery_issued"
+        );
         assert_eq!(
             AuditAction::PasskeyCloneSuspected.as_str(),
             "passkey_clone_suspected"
@@ -462,6 +565,32 @@ mod tests {
         assert_eq!(
             AuditAction::BackchannelLogoutFailed.as_str(),
             "backchannel_logout_failed"
+        );
+        assert_eq!(AuditDetails::role("ops").as_map()["role"], "ops");
+        assert_eq!(
+            AuditDetails::attribute("dept").as_map()["attribute"],
+            "dept"
+        );
+        assert_eq!(
+            AuditDetails::webhook_endpoint("crm").as_map()["endpoint"],
+            "crm"
+        );
+        assert_eq!(
+            AuditDetails::webhook_event(WebhookEventType::UserCreated).as_map()["event_type"],
+            "user.created"
+        );
+        let id = WebhookDeliveryId::new_v7();
+        let w = AuditDetails::webhook_delivery(id, 10, "timeout");
+        assert_eq!(w.as_map()["delivery_id"], id.to_string());
+        assert_eq!(w.as_map()["error_class"], "timeout");
+        assert_eq!(
+            AuditDetails::client_source(ClientSource::Cimd).as_map()["source"],
+            "cimd"
+        );
+        let p = AuditDetails::config_plan(1, 2, 0);
+        assert_eq!(
+            (p.as_map()["creates"].clone(), p.as_map()["deletes"].clone()),
+            (1.into(), 0.into())
         );
     }
 }

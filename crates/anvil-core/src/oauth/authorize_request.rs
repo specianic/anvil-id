@@ -478,6 +478,9 @@ pub(crate) mod tests {
             backchannel_logout_session_required: false,
             allowed_resources: vec![],
             mfa_policy: None,
+            metadata_expires_at: None,
+            registration_access_token_hash: None,
+            registration_source: crate::model::ClientSource::Static,
         }
     }
 

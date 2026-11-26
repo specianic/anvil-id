@@ -249,6 +249,10 @@ pub fn new_client() -> NewClient {
         backchannel_logout_session_required: false,
         allowed_resources: vec![],
         mfa_policy: None,
+        // Phase 5 defaults; client_phase5_fields_never_dropped covers non-default values.
+        registration_source: anvil_core::model::ClientSource::Static,
+        metadata_expires_at: None,
+        registration_access_token_hash: None,
     }
 }
 
@@ -279,6 +283,9 @@ pub fn expected_client(tenant: TenantId, c: &NewClient) -> Client {
         mfa_policy: c.mfa_policy,
         created_at: c.created_at,
         updated_at: c.created_at,
+        registration_source: c.registration_source,
+        metadata_expires_at: c.metadata_expires_at,
+        registration_access_token_hash: c.registration_access_token_hash,
     }
 }
 
@@ -668,6 +675,7 @@ pub fn new_consent(user: UserId, client_id: &str, scopes: &[&str]) -> NewConsent
         client_id: client_id.to_owned(),
         scopes: scopes.iter().map(|s| (*s).to_owned()).collect(),
         created_at: now_ms(),
+        resources: Vec::new(),
     }
 }
 
@@ -750,6 +758,7 @@ pub fn new_audit_event(
             Some(format!("trace-{}", short())),
         ),
         details: AuditDetails::login("password").with(AuditDetails::reason("contract")),
+        webhook: None,
     }
 }
 

@@ -185,6 +185,29 @@ pub async fn tenant_update_settings_round_trip(s: &TestStorage) {
         auto_link: true,
         upstream_registration: None,
         default_locale: "en".to_owned(),
+        // Phase 5 sections live in the settings JSON: non-default values must round-trip.
+        dcr: anvil_core::model::DcrSettings {
+            policy: anvil_core::model::DcrPolicy::AllowListed,
+            allowed_redirect_hosts: vec!["app.example".to_owned()],
+            allowed_scopes: vec!["openid".to_owned()],
+            allowed_resources: vec!["https://api.example".to_owned()],
+            allow_client_credentials: true,
+            max_clients: 10,
+        },
+        cimd: anvil_core::model::CimdSettings {
+            policy: anvil_core::model::CimdPolicy::AllowListed,
+            allowed_hosts: vec!["mcp.example".to_owned()],
+            min_cache_secs: 60,
+            max_cache_secs: 600,
+        },
+        claims: anvil_core::model::ClaimMappingSettings {
+            roles: None,
+            permissions: Some(anvil_core::model::ClaimRule {
+                claim: "perms".to_owned(),
+                tokens: vec![anvil_core::model::TokenTarget::IdToken],
+                scope: Some("perms".to_owned()),
+            }),
+        },
     };
     let updated = repo
         .update(

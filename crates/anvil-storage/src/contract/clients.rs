@@ -405,3 +405,116 @@ pub async fn client_phase4_fields_round_trip(s: &TestStorage) {
         "absent fields are unchanged"
     );
 }
+
+/// Phase 5 fields (client registration source and RFC 7592 token hash, CIMD expiry, consent
+/// resources, audit webhook fan-out) are either persisted faithfully or refused with
+/// `StorageError::Unsupported`; a backend never accepts and silently drops them.
+pub async fn client_phase5_fields_never_dropped(s: &TestStorage) {
+    use anvil_core::model::{
+        AuditAction, AuditOutcome, ClientSource, WebhookEvent, WebhookEventType,
+    };
+
+    let tenant = seed_tenant(s).await;
+    let clients = s.storage.clients();
+
+    // Create with non-default registration fields.
+    let mut new = new_client();
+    new.registration_source = ClientSource::Dynamic;
+    new.registration_access_token_hash = Some(unique_hash());
+    new.metadata_expires_at = Some(now_ms() + Duration::hours(1));
+    match clients.create(tenant, &new).await {
+        Ok(created) => {
+            assert_eq!(created, expected_client(tenant, &new));
+            assert_eq!(
+                clients.get(tenant, &new.client_id).await.expect("get"),
+                Some(created)
+            );
+        }
+        Err(StorageError::Unsupported(_)) => {
+            assert_eq!(
+                clients.get(tenant, &new.client_id).await.expect("get"),
+                None,
+                "a refused create must not store anything"
+            );
+        }
+        Err(e) => panic!("create: unexpected error {e:?}"),
+    }
+
+    // Update with non-default registration fields.
+    let existing = seed_client(s, tenant).await;
+    let expires = now_ms() + Duration::hours(2);
+    let hash = unique_hash();
+    let update = ClientUpdate {
+        metadata_expires_at: Some(Some(expires)),
+        registration_access_token_hash: Some(Some(hash)),
+        ..ClientUpdate::default()
+    };
+    match clients
+        .update(tenant, &existing.client_id, &update, now_ms())
+        .await
+    {
+        Ok(Some(updated)) => {
+            assert_eq!(updated.metadata_expires_at, Some(expires));
+            assert_eq!(updated.registration_access_token_hash, Some(hash));
+        }
+        Ok(None) => panic!("update of an existing client must return it"),
+        Err(StorageError::Unsupported(_)) => {
+            assert_eq!(
+                clients.get(tenant, &existing.client_id).await.expect("get"),
+                Some(existing.clone()),
+                "a refused update must not change anything"
+            );
+        }
+        Err(e) => panic!("update: unexpected error {e:?}"),
+    }
+
+    // Consent covering resources.
+    let ctx = seed_grant_ctx(s).await;
+    let mut consent = new_consent(ctx.user.id, &ctx.client.client_id, &["openid"]);
+    consent.resources = vec![
+        "https://b.example".to_owned(),
+        "https://a.example".to_owned(),
+    ];
+    match s
+        .storage
+        .grants()
+        .upsert_consent(ctx.tenant, &consent, now_ms())
+        .await
+    {
+        Ok(grant) => assert_eq!(
+            grant.resources,
+            vec![
+                "https://a.example".to_owned(),
+                "https://b.example".to_owned()
+            ],
+            "resources must be stored sorted"
+        ),
+        Err(StorageError::Unsupported(_)) => assert_eq!(
+            s.storage
+                .grants()
+                .consent(ctx.tenant, ctx.user.id, &ctx.client.client_id)
+                .await
+                .expect("consent"),
+            None,
+            "a refused consent must not be stored"
+        ),
+        Err(e) => panic!("upsert_consent: unexpected error {e:?}"),
+    }
+
+    // Audit event with a webhook fan-out.
+    let mut event = new_audit_event(
+        AuditAction::UserCreated,
+        AuditOutcome::Success,
+        "admin-1",
+        "user-1",
+        now_ms(),
+    );
+    event.webhook = Some(WebhookEvent {
+        event_type: WebhookEventType::UserCreated,
+        payload_json: "{}".to_owned(),
+    });
+    match s.storage.audit().append(tenant, &event).await {
+        Ok(()) | Err(StorageError::Unsupported(_)) => {}
+        Err(e) => panic!("audit append: unexpected error {e:?}"),
+    }
+}

@@ -489,6 +489,9 @@ impl ClientService {
             backchannel_logout_session_required: options.backchannel_logout_session_required,
             allowed_resources,
             mfa_policy: options.mfa_policy,
+            metadata_expires_at: None,
+            registration_access_token_hash: None,
+            registration_source: crate::model::ClientSource::Static,
         };
         // A client_id collision is astronomically unlikely; retry once with a fresh id.
         let client = match self.storage.clients().create(tenant.id, &new).await {
@@ -635,6 +638,8 @@ impl ClientService {
                 .map(parse_resources)
                 .transpose()?,
             mfa_policy: options.mfa_policy,
+            metadata_expires_at: None,
+            registration_access_token_hash: None,
         };
         let client = self
             .storage

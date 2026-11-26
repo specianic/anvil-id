@@ -69,6 +69,7 @@ impl AuditService {
             outcome,
             ctx: ctx.clone(),
             details,
+            webhook: None,
         };
         self.storage.audit().append(tenant, &event).await?;
         if let Some(mirror) = MIRROR.get() {
@@ -144,6 +145,7 @@ mod tests {
                 Some("trace-1".into()),
             ),
             details: AuditDetails::login("password").with(AuditDetails::reason("wrong_password")),
+            webhook: None,
         };
         let json: Value = serde_json::from_str(&event_json(tenant, &event)).unwrap();
         let obj = json.as_object().unwrap();

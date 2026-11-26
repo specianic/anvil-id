@@ -161,7 +161,11 @@ fn error_key(err: &CoreError) -> &'static str {
         CoreError::NotFound => "not_found",
         CoreError::InvalidRequest(_)
         | CoreError::Validation { .. }
-        | CoreError::InvalidTarget(_) => "invalid_request",
+        | CoreError::InvalidTarget(_)
+        | CoreError::InvalidClientMetadata(_)
+        | CoreError::InvalidRedirectUri(_)
+        | CoreError::InvalidSoftwareStatement => "invalid_request",
+        // ClientMetadataUnavailable (503) and everything else: the generic sentence.
         _ => "server_error",
     }
 }
@@ -255,6 +259,84 @@ mod tests {
             assert_eq!(body["error"], "server_error");
             assert_eq!(body["error_description"], "internal server error");
         }
+    }
+
+    async fn raw(resp: Response) -> (StatusCode, Vec<(String, Vec<u8>)>, Vec<u8>) {
+        let status = resp.status();
+        let mut headers: Vec<(String, Vec<u8>)> = resp
+            .headers()
+            .iter()
+            .map(|(k, v)| (k.as_str().to_owned(), v.as_bytes().to_vec()))
+            .collect();
+        headers.sort();
+        let body = resp.into_body().collect().await.expect("body").to_bytes();
+        (status, headers, body.to_vec())
+    }
+
+    #[tokio::test]
+    async fn refresh_token_reuse_renders_exactly_like_invalid_grant() {
+        let reuse = raw(oauth_json(&CoreError::RefreshTokenReuse)).await;
+        let grant = raw(oauth_json(&CoreError::InvalidGrant(
+            anvil_core::error::INVALID_GRANT_DESCRIPTION.to_owned(),
+        )))
+        .await;
+        assert_eq!(reuse, grant, "the wire must not reveal reuse detection");
+        assert_eq!(reuse.0, StatusCode::BAD_REQUEST);
+        let reuse = raw(problem_json(&CoreError::RefreshTokenReuse)).await;
+        let grant = raw(problem_json(&CoreError::InvalidGrant(
+            anvil_core::error::INVALID_GRANT_DESCRIPTION.to_owned(),
+        )))
+        .await;
+        assert_eq!(reuse, grant);
+    }
+
+    #[tokio::test]
+    async fn phase5_errors_map_through_the_single_table() {
+        let cases = [
+            (
+                CoreError::InvalidClientMetadata("bad".into()),
+                400,
+                "invalid_client_metadata",
+            ),
+            (
+                CoreError::InvalidRedirectUri("bad".into()),
+                400,
+                "invalid_redirect_uri",
+            ),
+            (
+                CoreError::InvalidSoftwareStatement,
+                400,
+                "invalid_software_statement",
+            ),
+            (
+                CoreError::ClientMetadataUnavailable("connect refused".into()),
+                503,
+                "temporarily_unavailable",
+            ),
+        ];
+        for (err, status, code) in cases {
+            let resp = oauth_json(&err);
+            assert_eq!(resp.status().as_u16(), status, "{err:?}");
+            let body = body_json(resp).await;
+            assert_eq!(body["error"], code, "{err:?}");
+            assert!(
+                !body["error_description"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("connect refused"),
+                "{err:?}"
+            );
+        }
+        let resp = problem_json(&CoreError::LastAdministrator);
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            error_key(&CoreError::InvalidSoftwareStatement),
+            "invalid_request"
+        );
+        assert_eq!(
+            error_key(&CoreError::ClientMetadataUnavailable("x".into())),
+            "server_error"
+        );
     }
 
     #[tokio::test]

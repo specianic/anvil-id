@@ -1,9 +1,9 @@
 //! `ClientRepo` on SQLite.
 
 use anvil_core::model::{
-    ApplicationType, BrandingScope, Client, ClientAuthMethod, ClientId, ClientType, ClientUpdate,
-    ConsentMode, MfaPolicy, NewClient, Page, PageRequest, RevokeReason, SecretHash, TenantId,
-    TokenFormat,
+    ApplicationType, BrandingScope, Client, ClientAuthMethod, ClientId, ClientSource, ClientType,
+    ClientUpdate, ConsentMode, MfaPolicy, NewClient, Page, PageRequest, RevokeReason, SecretHash,
+    TenantId, TokenFormat,
 };
 use anvil_core::ports::{ClientRepo, StorageError};
 use sqlx::{SqliteConnection, SqlitePool};
@@ -87,6 +87,10 @@ impl TryFrom<ClientRow> for Client {
                 .as_deref()
                 .map(|p| parse_enum(p, MfaPolicy::parse, "client.mfa_policy"))
                 .transpose()?,
+            // TRANSITIONAL(05-06): no registration columns yet; every stored client is static.
+            metadata_expires_at: None,
+            registration_access_token_hash: None,
+            registration_source: ClientSource::Static,
         })
     }
 }
@@ -98,6 +102,7 @@ pub(crate) async fn insert_client(
     tenant: TenantId,
     client: &NewClient,
 ) -> Result<Client, StorageError> {
+    refuse_registration_fields(client)?;
     let client_type = client.client_type.as_str();
     let application_type = client.application_type.as_str();
     let auth_method = client.auth_method.as_str();
@@ -175,6 +180,10 @@ pub(crate) async fn insert_client(
         backchannel_logout_session_required: client.backchannel_logout_session_required,
         allowed_resources: client.allowed_resources.clone(),
         mfa_policy: client.mfa_policy,
+        // TRANSITIONAL(05-06): refuse_registration_fields guarantees the defaults.
+        metadata_expires_at: None,
+        registration_access_token_hash: None,
+        registration_source: ClientSource::Static,
     })
 }
 
@@ -265,6 +274,7 @@ impl ClientRepo for SqliteClients {
         update: &ClientUpdate,
         now: OffsetDateTime,
     ) -> Result<Option<Client>, StorageError> {
+        refuse_registration_update(update)?;
         let redirect_uris = update
             .redirect_uris
             .as_ref()
@@ -434,4 +444,30 @@ impl ClientRepo for SqliteClients {
         tx.commit().await.map_err(map_err)?;
         Ok(true)
     }
+}
+
+/// TRANSITIONAL(05-06): the 0.4 registration columns do not exist yet on this backend. Non-default values are
+/// refused explicitly instead of being dropped silently.
+fn refuse_registration_fields(c: &NewClient) -> Result<(), StorageError> {
+    // TRANSITIONAL(05-06)
+    if c.registration_source != ClientSource::Static
+        || c.metadata_expires_at.is_some()
+        || c.registration_access_token_hash.is_some()
+    {
+        return Err(StorageError::Unsupported(
+            "client registration fields are not stored by this backend yet",
+        ));
+    }
+    Ok(())
+}
+
+/// TRANSITIONAL(05-06): see [`refuse_registration_fields`].
+fn refuse_registration_update(u: &ClientUpdate) -> Result<(), StorageError> {
+    // TRANSITIONAL(05-06)
+    if u.metadata_expires_at.is_some() || u.registration_access_token_hash.is_some() {
+        return Err(StorageError::Unsupported(
+            "client registration fields are not stored by this backend yet",
+        ));
+    }
+    Ok(())
 }

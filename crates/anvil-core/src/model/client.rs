@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use super::ids::{ClientId, SecretHash, TenantId, str_enum};
+use super::registration::ClientSource;
 use super::tenant::MfaPolicy;
 
 /// RFC 6749 §2.1 client type.
@@ -132,6 +133,12 @@ pub struct Client {
     pub allowed_resources: Vec<String>,
     /// MFA policy of this client; `None` = inherit the tenant's. Strictest wins.
     pub mfa_policy: Option<MfaPolicy>,
+    /// How the client was created (static, RFC 7591 dynamic registration or CIMD).
+    pub registration_source: ClientSource,
+    /// CIMD clients: when the cached metadata document must be re-fetched; `None` otherwise.
+    pub metadata_expires_at: Option<OffsetDateTime>,
+    /// Dynamic clients: hash of the RFC 7592 registration access token; `None` otherwise.
+    pub registration_access_token_hash: Option<SecretHash>,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
 }
@@ -160,6 +167,12 @@ pub struct NewClient {
     pub backchannel_logout_session_required: bool,
     pub allowed_resources: Vec<String>,
     pub mfa_policy: Option<MfaPolicy>,
+    /// How the client was created (static, RFC 7591 dynamic registration or CIMD).
+    pub registration_source: ClientSource,
+    /// CIMD clients: when the cached metadata document must be re-fetched; `None` otherwise.
+    pub metadata_expires_at: Option<OffsetDateTime>,
+    /// Dynamic clients: hash of the RFC 7592 registration access token; `None` otherwise.
+    pub registration_access_token_hash: Option<SecretHash>,
     pub created_at: OffsetDateTime,
 }
 
@@ -185,6 +198,10 @@ pub struct ClientUpdate {
     pub allowed_resources: Option<Vec<String>>,
     /// `Some(None)` resets to inheriting the tenant policy.
     pub mfa_policy: Option<Option<MfaPolicy>>,
+    /// CIMD refresh: `Some(None)` clears the expiry.
+    pub metadata_expires_at: Option<Option<OffsetDateTime>>,
+    /// RFC 7592 token rotation: `Some(None)` clears the hash.
+    pub registration_access_token_hash: Option<Option<SecretHash>>,
 }
 
 #[cfg(test)]

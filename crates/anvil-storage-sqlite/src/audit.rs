@@ -71,6 +71,12 @@ impl TryFrom<AuditRow> for AuditEvent {
 #[async_trait::async_trait]
 impl AuditRepo for SqliteAudit {
     async fn append(&self, tenant: TenantId, event: &NewAuditEvent) -> Result<(), StorageError> {
+        // TRANSITIONAL(05-06): webhook fan-out is not stored yet; refuse instead of dropping the event.
+        if event.webhook.is_some() {
+            return Err(StorageError::Unsupported(
+                "webhook events are not stored by this backend yet",
+            ));
+        }
         let at = odt_to_ms(event.at);
         let actor_kind = event.actor.kind.as_str();
         let action = event.action.as_str();

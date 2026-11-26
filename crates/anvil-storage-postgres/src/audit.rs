@@ -74,6 +74,12 @@ impl AuditRow {
 #[async_trait::async_trait]
 impl AuditRepo for PgAudit {
     async fn append(&self, tenant: TenantId, e: &NewAuditEvent) -> Result<(), StorageError> {
+        // TRANSITIONAL(05-07): webhook fan-out is not stored yet; refuse instead of dropping the event.
+        if e.webhook.is_some() {
+            return Err(StorageError::Unsupported(
+                "webhook events are not stored by this backend yet",
+            ));
+        }
         let details = serde_json::Value::Object(e.details.as_map().clone());
         sqlx::query!(
             "INSERT INTO audit_event

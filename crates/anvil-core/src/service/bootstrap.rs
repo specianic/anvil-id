@@ -178,6 +178,9 @@ pub fn build_mgmt_client(now: OffsetDateTime) -> (NewClient, SecretString) {
         backchannel_logout_session_required: false,
         allowed_resources: vec![],
         mfa_policy: None,
+        metadata_expires_at: None,
+        registration_access_token_hash: None,
+        registration_source: crate::model::ClientSource::Static,
     };
     (client, secret)
 }
@@ -220,6 +223,9 @@ pub fn build_console_client(now: OffsetDateTime, public_url: &PublicUrl) -> NewC
         backchannel_logout_session_required: false,
         allowed_resources: vec![],
         mfa_policy: None,
+        metadata_expires_at: None,
+        registration_access_token_hash: None,
+        registration_source: crate::model::ClientSource::Static,
     }
 }
 
@@ -638,6 +644,9 @@ mod tests {
             backchannel_logout_session_required: false,
             allowed_resources: vec![],
             mfa_policy: None,
+            metadata_expires_at: None,
+            registration_access_token_hash: None,
+            registration_source: crate::model::ClientSource::Static,
         }
     }
 
@@ -763,6 +772,9 @@ mod tests {
             backchannel_logout_session_required: false,
             allowed_resources: vec![],
             mfa_policy: None,
+            metadata_expires_at: None,
+            registration_access_token_hash: None,
+            registration_source: crate::model::ClientSource::Static,
         };
         let expected_secret = secret.expose_secret().to_owned();
         let r = setup_outcome(SetupOutcome::Completed { user, client }, secret).unwrap();

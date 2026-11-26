@@ -3,9 +3,11 @@
 //! Pure data. Callers generate identifiers and timestamps (truncated with [`truncate_to_ms`]);
 //! repositories only persist them.
 
+mod attribute;
 mod audit;
 mod branding;
 mod client;
+mod config_doc;
 mod connection;
 mod consent;
 mod credential;
@@ -17,14 +19,19 @@ mod key;
 mod logout;
 mod mail_settings;
 mod outbox;
+mod registration;
+mod role;
 mod session;
 mod setup;
 mod tenant;
 mod user;
+mod webhook;
 
+pub use attribute::*;
 pub use audit::*;
 pub use branding::*;
 pub use client::*;
+pub use config_doc::*;
 pub use connection::*;
 pub use consent::*;
 pub use credential::*;
@@ -32,18 +39,22 @@ pub use flow::*;
 pub use grant::*;
 pub use ids::{
     AuditEventId, AuthRequestId, ClientId, CodeHash, ConnectionId, ConsentId, CredentialId, FlowId,
-    IdentityLinkId, InvalidLength, LogoutDeliveryId, OutboxId, Page, PageRequest, SecretHash,
-    SessionId, SigningKeyId, TenantId, TokenFamilyId, UserId,
+    IdentityLinkId, InitialAccessTokenId, InvalidLength, LogoutDeliveryId, OutboxId, Page,
+    PageRequest, RoleId, SecretHash, SessionId, SigningKeyId, TenantId, TokenFamilyId, UserId,
+    WebhookDeliveryId, WebhookEndpointId,
 };
 pub use job::*;
 pub use key::*;
 pub use logout::*;
 pub use mail_settings::*;
 pub use outbox::*;
+pub use registration::*;
+pub use role::*;
 pub use session::*;
 pub use setup::*;
 pub use tenant::*;
 pub use user::*;
+pub use webhook::*;
 
 use time::OffsetDateTime;
 

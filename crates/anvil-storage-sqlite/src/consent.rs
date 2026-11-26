@@ -31,6 +31,8 @@ impl TryFrom<ConsentRow> for ConsentGrant {
             created_at: ms_to_odt(r.created_at)?,
             updated_at: ms_to_odt(r.updated_at)?,
             revoked_at: opt_ms_to_odt(r.revoked_at)?,
+            // TRANSITIONAL(05-06): no resources column yet.
+            resources: Vec::new(),
         })
     }
 }
@@ -106,6 +108,12 @@ pub(crate) async fn upsert(
     consent: &NewConsent,
     now: OffsetDateTime,
 ) -> Result<ConsentGrant, StorageError> {
+    // TRANSITIONAL(05-06): consent resources are not stored yet; refuse instead of dropping them.
+    if !consent.resources.is_empty() {
+        return Err(StorageError::Unsupported(
+            "consent resources are not stored by this backend yet",
+        ));
+    }
     let mut tx = writer.begin().await.map_err(map_err)?;
     let existing = grant_on(&mut tx, tenant, consent.user_id, &consent.client_id).await?;
     let mut merged: BTreeSet<String> = consent.scopes.iter().cloned().collect();

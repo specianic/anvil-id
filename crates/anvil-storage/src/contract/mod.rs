@@ -220,6 +220,8 @@ macro_rules! storage_contract_tests {
             // StorageError::Unsupported from their TRANSITIONAL shims until then ----
             // clients, grants, access tokens: new fields
             client_phase4_fields_round_trip,
+            // Phase 5 (plan 05-01): persisted faithfully or refused, never dropped
+            client_phase5_fields_never_dropped,
             code_and_family_resource_round_trip,
             access_token_resource_round_trip,
             // flows

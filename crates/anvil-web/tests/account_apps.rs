@@ -71,6 +71,7 @@ async fn grant(app: &TestApp, tenant: TenantId, user: &User, rp: &Rp, scopes: &[
                 client_id: rp.id().to_owned(),
                 scopes: scopes.iter().map(|s| (*s).to_owned()).collect(),
                 created_at: now,
+                resources: Vec::new(),
             },
             now,
         )

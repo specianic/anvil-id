@@ -63,6 +63,9 @@ fn client(
             "https://other.example.test/v1".into(),
         ],
         mfa_policy: None,
+        registration_source: anvil_core::model::ClientSource::Static,
+        metadata_expires_at: None,
+        registration_access_token_hash: None,
         created_at: at,
         updated_at: at,
     }

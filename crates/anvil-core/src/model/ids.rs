@@ -87,6 +87,22 @@ v7_id!(
     /// Identifier of a queued back-channel logout delivery.
     LogoutDeliveryId
 );
+v7_id!(
+    /// Identifier of a tenant-scoped role (RBAC).
+    RoleId
+);
+v7_id!(
+    /// Identifier of a webhook endpoint.
+    WebhookEndpointId
+);
+v7_id!(
+    /// Identifier of a queued webhook delivery.
+    WebhookDeliveryId
+);
+v7_id!(
+    /// Identifier of an initial access token for dynamic client registration (RFC 7591 §3).
+    InitialAccessTokenId
+);
 
 /// SHA-256 hash of a secret (authorization code, refresh token, session cookie, flow CSRF token,
 /// self-service token, setup token, client secret digest). Secrets are stored and looked up only
@@ -199,6 +215,10 @@ mod tests {
         assert_eq!(ConnectionId::new_v7().0.get_version_num(), 7);
         assert_eq!(IdentityLinkId::new_v7().0.get_version_num(), 7);
         assert_eq!(LogoutDeliveryId::new_v7().0.get_version_num(), 7);
+        assert_eq!(RoleId::new_v7().0.get_version_num(), 7);
+        assert_eq!(WebhookEndpointId::new_v7().0.get_version_num(), 7);
+        assert_eq!(WebhookDeliveryId::new_v7().0.get_version_num(), 7);
+        assert_eq!(InitialAccessTokenId::new_v7().0.get_version_num(), 7);
     }
 
     #[test]

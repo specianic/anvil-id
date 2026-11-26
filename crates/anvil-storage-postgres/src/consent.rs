@@ -34,6 +34,8 @@ impl ConsentRow {
             created_at: self.created_at,
             updated_at: self.updated_at,
             revoked_at: self.revoked_at,
+            // TRANSITIONAL(05-07): no resources column yet.
+            resources: Vec::new(),
         })
     }
 }
@@ -88,6 +90,12 @@ pub(crate) async fn upsert_consent(
     c: &NewConsent,
     now: OffsetDateTime,
 ) -> Result<ConsentGrant, StorageError> {
+    // TRANSITIONAL(05-07): consent resources are not stored yet; refuse instead of dropping them.
+    if !c.resources.is_empty() {
+        return Err(StorageError::Unsupported(
+            "consent resources are not stored by this backend yet",
+        ));
+    }
     let mut scopes = c.scopes.clone();
     scopes.sort();
     scopes.dedup();

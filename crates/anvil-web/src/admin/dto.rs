@@ -174,6 +174,30 @@ wire_enum!(
         ProfileUpdated,
         StepUpCompleted,
         EmailCodeSent,
+        RoleCreated,
+        RoleUpdated,
+        RoleDeleted,
+        RoleAssigned,
+        RoleUnassigned,
+        AttributeDefined,
+        AttributeDeleted,
+        UserAttributesUpdated,
+        WebhookEndpointCreated,
+        WebhookEndpointUpdated,
+        WebhookEndpointDeleted,
+        WebhookSecretRotated,
+        WebhookEndpointDisabled,
+        WebhookDeliveryFailed,
+        WebhookTestSent,
+        WebhookRedelivered,
+        ClientRegistered,
+        ClientRegistrationUpdated,
+        ClientRegistrationDeleted,
+        CimdClientRefreshed,
+        InitialAccessTokenCreated,
+        InitialAccessTokenRevoked,
+        TenantConfigApplied,
+        AdminRecoveryIssued,
     }
 );
 wire_enum!(
@@ -409,6 +433,9 @@ impl From<NewTenantSettings> for CoreTenantSettings {
             auto_link: s.auto_link,
             upstream_registration: s.upstream_registration,
             default_locale: s.default_locale,
+            cimd: Default::default(),
+            claims: Default::default(),
+            dcr: Default::default(),
         }
     }
 }
@@ -486,6 +513,10 @@ impl TenantSettingsPatch {
             default_locale: self
                 .default_locale
                 .unwrap_or_else(|| current.default_locale.clone()),
+            // 0.4 sections are not part of this patch: keep the stored values.
+            dcr: current.dcr.clone(),
+            cimd: current.cimd.clone(),
+            claims: current.claims.clone(),
         });
         (settings, captcha)
     }
