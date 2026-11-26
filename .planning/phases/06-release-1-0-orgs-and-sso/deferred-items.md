@@ -49,3 +49,4 @@
   replace/remove, secret via a ref), used by the org connections panel. The tenant page
   `connections/$connectionId.tsx` still has its own `SecretCard` with the same logic (06-23 did not
   own that file); it should switch to `SecretRotation` in the gate gap plan.
+- (decision, for 06-24) SAML e2e: use option (a): the mock SAML IdP (tests/e2e/lib/mock-saml-idp.ts) gets an https listener with its in-memory key/cert and the specs set ignoreHTTPSErrors; the product keeps requiring https SSO URLs (no loopback-http exception). 06-24 may edit mock-saml-idp.ts as a forced extra.
