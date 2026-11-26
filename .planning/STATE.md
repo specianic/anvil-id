@@ -6,15 +6,15 @@ current_phase: 05
 current_phase_name: release 0 4 operate it
 current_plan: 33
 status: executing
-stopped_at: "Completed 05-28-PLAN.md (Phase 5 gate green on f80dcb4); pending: 04-33 manual provider checklist + v0.3.0 tag (owner), then 05-29 v0.4.0"
-last_updated: "2026-11-26T08:24:29.701Z"
+stopped_at: Completed 06-03-PLAN.md
+last_updated: "2026-11-26T09:08:26.574Z"
 last_activity: 2026-11-26
 progress:
   total_phases: 7
   completed_phases: 3
-  total_plans: 143
-  completed_plans: 133
-  percent: 93
+  total_plans: 162
+  completed_plans: 134
+  percent: 83
 ---
 
 # Project State
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 **Status:** Ready to execute
 **Last Activity:** 2026-11-26
 **Last Activity Description:** 05-28 phase gate complete (632-pair security map, 0.4 plaintext scan, anvilid 0.4.0, 0.4 migrations pinned, every workflow incl. load and deploy green on f80dcb4)
-**Progress:** [█████████░] 93%
+**Progress:** [████████░░] 83%
 
 Phase 5 has 33 plans (05-01 through 05-33). Every plan except 05-29 (release v0.4.0 after owner sign-off) has a
 SUMMARY. Current Plan counts plans in execution order: 05-29 is the 33rd and last. Phase 4 still has one open plan, 04-33 (manual real-provider checklist, then tag v0.3.0); it must be
@@ -190,6 +190,7 @@ done before 05-29 tags v0.4.0.
 | Phase 05 P33 | 10min | 2 tasks | 13 files |
 | Phase 05 P30 | 80min | 2 tasks | 13 files |
 | Phase 05 P28 | 75min | 2 tasks | 10 files |
+| Phase 06 P03 | 25min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -443,6 +444,7 @@ Recent decisions affecting current work:
 - [Phase 05]: 05-28: Redis breaker test proves the skip by exact retry_after/error counts, not a wall-clock bound
 - [Phase 05]: 05-28: HA shared-limit burst opens connections before the barrier (window excludes TCP setup); 1 s guard and bound unchanged
 - [Phase 05]: 05-28: all 14 Phase 5 requirements ticked; ORG-05 for its tenant-level 0.4 scope (org roles in Phase 6)
+- [Phase 06]: 06-03: mock DNS answers non-TXT queries for known names with NODATA (ENODATA), unknown names NXDOMAIN; mock SAML IdP signs only the Assertion and each bad variant changes exactly one property
 
 ### Pending Todos
 
@@ -455,6 +457,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-26T08:24:29.699Z
-Stopped at: Completed 05-28-PLAN.md (Phase 5 gate green on f80dcb4); pending: 04-33 manual provider checklist + v0.3.0 tag (owner), then 05-29 v0.4.0
+Last session: 2026-11-26T09:08:26.571Z
+Stopped at: Completed 06-03-PLAN.md
 Resume file: None
