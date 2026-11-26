@@ -6,14 +6,14 @@ current_phase: 05
 current_phase_name: release 0 4 operate it
 current_plan: 33
 status: executing
-stopped_at: Completed 06-03-PLAN.md
-last_updated: "2026-11-26T09:08:26.574Z"
+stopped_at: Completed 06-01-PLAN.md
+last_updated: "2026-11-26T09:25:19.954Z"
 last_activity: 2026-11-26
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 162
-  completed_plans: 134
+  completed_plans: 135
   percent: 83
 ---
 
@@ -191,6 +191,7 @@ done before 05-29 tags v0.4.0.
 | Phase 05 P30 | 80min | 2 tasks | 13 files |
 | Phase 05 P28 | 75min | 2 tasks | 10 files |
 | Phase 06 P03 | 25min | 2 tasks | 7 files |
+| Phase 06 P01 | 75min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -445,6 +446,7 @@ Recent decisions affecting current work:
 - [Phase 05]: 05-28: HA shared-limit burst opens connections before the barrier (window excludes TCP setup); 1 s guard and bound unchanged
 - [Phase 05]: 05-28: all 14 Phase 5 requirements ticked; ORG-05 for its tenant-level 0.4 scope (org roles in Phase 6)
 - [Phase 06]: 06-03: mock DNS answers non-TXT queries for known names with NODATA (ENODATA), unknown names NXDOMAIN; mock SAML IdP signs only the Assertion and each bad variant changes exactly one property
+- [Phase 06]: D4 spike passed: bergshamra-dsig 0.12.0 on aws-lc + uppsala; chrono allowed only via wrapper tsp-ltv (owner review pending)
 
 ### Pending Todos
 
@@ -457,6 +459,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-26T09:08:26.571Z
-Stopped at: Completed 06-03-PLAN.md
+Last session: 2026-11-26T09:25:19.948Z
+Stopped at: Completed 06-01-PLAN.md
 Resume file: None
