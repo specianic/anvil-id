@@ -6,7 +6,9 @@ use std::time::{Duration, Instant};
 
 use anvil_core::model::{EmailKind, EmailTemplate};
 use anvil_core::ports::EmailTemplateCheck;
-use anvil_mail::check::{optional_variables, sample_context, sample_variants, variables};
+use anvil_mail::check::{
+    has_contract, optional_variables, sample_context, sample_variants, variables,
+};
 use anvil_mail::{EmailRenderer, MailError, TemplateChecker};
 use time::OffsetDateTime;
 
@@ -32,7 +34,9 @@ fn valid_template_passes() {
 
 #[test]
 fn every_kind_accepts_a_template_using_all_its_variables() {
-    for kind in EmailKind::ALL {
+    // Kinds without a contract yet (TRANSITIONAL(06-20): org_invitation) are refused instead;
+    // see `kinds_without_a_contract_are_refused`.
+    for kind in EmailKind::ALL.iter().filter(|k| has_contract(**k)) {
         // Optional variables need a guard (they are absent from some emails).
         let body: String = variables(*kind)
             .iter()
@@ -48,6 +52,23 @@ fn every_kind_accepts_a_template_using_all_its_variables() {
             .check(*kind, "Subject {{ tenant_name }}", &body, &body)
             .unwrap_or_else(|e| panic!("{kind:?}: {e:?}"));
         assert_eq!(sample_context(*kind).len(), variables(*kind).len());
+    }
+}
+
+#[test]
+fn kinds_without_a_contract_are_refused() {
+    let without: Vec<EmailKind> = EmailKind::ALL
+        .iter()
+        .copied()
+        .filter(|k| !has_contract(*k))
+        .collect();
+    assert_eq!(without, [EmailKind::OrgInvitation]);
+    for kind in without {
+        let err = TemplateChecker
+            .check(kind, "Subject {{ tenant_name }}", "body", "body")
+            .unwrap_err();
+        assert!(err.message.contains("no template contract"), "{err:?}");
+        assert!(variables(kind).is_empty());
     }
 }
 

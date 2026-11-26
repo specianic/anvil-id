@@ -16,6 +16,7 @@
 //! | `login_code`         | `tenant_name`, `code`?, `link`?, `expires_minutes` |
 //! | `email_change`       | `tenant_name`, `link`, `new_email`, `expires_minutes` |
 //! | `email_changed`      | `tenant_name`, `new_email`                  |
+//! | `org_invitation`     | none yet: checking or rendering it is an error ([`has_contract`]) |
 //!
 //! A variable marked `?` is optional ([`optional_variables`]): a payload may omit it. A
 //! `login_code` email carries `code` when the tenant has `email_otp` on and `link` when it has
@@ -54,7 +55,8 @@ use minijinja::{Environment, ErrorKind};
 
 use crate::render::{clean_subject, environment};
 
-/// The variables a template of `kind` may use (see the module docs).
+/// The variables a template of `kind` may use (see the module docs). Empty for kinds without a
+/// contract yet ([`has_contract`]); those are rejected by [`TemplateChecker`] and the renderer.
 pub fn variables(kind: EmailKind) -> &'static [&'static str] {
     match kind {
         EmailKind::Verification | EmailKind::Recovery | EmailKind::Invitation => {
@@ -65,7 +67,22 @@ pub fn variables(kind: EmailKind) -> &'static [&'static str] {
         EmailKind::LoginCode => &["tenant_name", "code", "link", "expires_minutes"],
         EmailKind::EmailChange => &["tenant_name", "link", "new_email", "expires_minutes"],
         EmailKind::EmailChanged => &["tenant_name", "new_email"],
+        // TRANSITIONAL(06-20): the organization invitation gets its variable contract and
+        // default templates in plan 06-20. Until then checking or rendering it is an explicit
+        // error, never an empty email.
+        EmailKind::OrgInvitation => &[],
     }
+}
+
+/// Whether `kind` has a variable contract (and default templates).
+pub fn has_contract(kind: EmailKind) -> bool {
+    // TRANSITIONAL(06-20): see `variables`.
+    !matches!(kind, EmailKind::OrgInvitation)
+}
+
+/// The error for a kind without a contract.
+pub(crate) fn no_contract_message(kind: EmailKind) -> String {
+    format!("no template contract for kind {} yet", kind.as_str())
 }
 
 /// The variables of `kind` that a payload may omit (see the module docs). At least one of them
@@ -129,6 +146,9 @@ impl EmailTemplateCheck for TemplateChecker {
         html: &str,
         text: &str,
     ) -> Result<(), TemplateIssue> {
+        if !has_contract(kind) {
+            return Err(issue("subject", None, &no_contract_message(kind)));
+        }
         if subject.contains(['\r', '\n']) {
             return Err(issue("subject", None, "the subject must be a single line"));
         }

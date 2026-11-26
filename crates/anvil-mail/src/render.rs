@@ -100,6 +100,9 @@ impl EmailRenderer {
         kind: EmailKind,
         payload: &BTreeMap<String, String>,
     ) -> Result<(String, String, String), MailError> {
+        if !crate::check::has_contract(kind) {
+            return Err(MailError::Template(crate::check::no_contract_message(kind)));
+        }
         // A kind with optional variables needs at least one of them (`login_code`: the code or
         // the link); an email with neither would sign nobody in.
         let optional = crate::check::optional_variables(kind);
@@ -302,6 +305,28 @@ mod tests {
                     "{name}: link missing from html"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn org_invitation_without_contract_is_an_explicit_error() {
+        // TRANSITIONAL(06-20): no contract yet, so no empty email either.
+        let r = EmailRenderer::embedded();
+        let t = EmailTemplate {
+            kind: EmailKind::OrgInvitation,
+            subject: "Join".into(),
+            body_html: "<p>hi</p>".into(),
+            body_text: "hi".into(),
+            updated_at: time::OffsetDateTime::UNIX_EPOCH,
+        };
+        for override_ in [None, Some(&t)] {
+            let err = r
+                .render_with(override_, EmailKind::OrgInvitation, &payload("https://x"))
+                .unwrap_err();
+            assert!(
+                matches!(&err, MailError::Template(m) if m.contains("no template contract")),
+                "{err:?}"
+            );
         }
     }
 
