@@ -266,6 +266,49 @@ clients created through CIMD or DCR get `consent_mode: required`.
   `consent_required`.
 - Users can revoke an app at `/ui/account/apps`, which also revokes its refresh tokens.
 
+### Agent clients (1.0)
+
+An AI agent that acts for a user should be recognisable as one before the user grants it
+anything. An administrator marks such a client with `client_kind: agent`:
+
+- in the admin console (client settings), in the management API (`client_kind` on
+  `POST`/`PATCH /api/admin/v1/tenants/{slug}/clients…`), or in tenant YAML
+  (`clients[].client_kind`, see [Declarative tenant configuration](CONFIG-YAML.md));
+- on any client, including dynamically registered and metadata-document clients. An RFC 7592
+  update by the client keeps the marker.
+
+Dynamic registration and metadata documents can never set `client_kind` themselves: the key is
+ignored like any unknown metadata. In 1.0 there is no automatic agent default for dynamic or
+metadata-document clients.
+
+The consent screen then shows an "AI agent / automated client" badge. Every client, agent or
+not, also gets a provenance note saying how it is known to AnvilID:
+
+| Client | Provenance note (English catalog) |
+| --- | --- |
+| static (created by an administrator) | "Registered by your administrator." |
+| dynamic (`/register`, RFC 7591) | "Registered itself through dynamic registration. Its details are not verified." |
+| Client ID Metadata Document | "Identified by its metadata document at `<host>`. Its name is not verified." |
+
+Agent clients never skip consent: `consent_mode: skip_first_party` is refused for them on every
+write path (422 naming `consent_mode`), so the user always decides what an agent may do.
+
+### Incremental consent (step-up)
+
+When a client that already has a remembered consent asks for more, the consent screen lists only
+what is **new**: the scopes and resources not granted yet. What the user already allowed is
+folded into a collapsed "Already allowed" block.
+
+- **Allow** stores the union of the old and the new grant.
+- **Deny** returns `access_denied` to the client and leaves the remembered consent exactly as it
+  was: the client keeps what the user allowed before.
+- A request with `prompt=none` that needs a new scope or resource fails with `consent_required`,
+  as before.
+- `prompt=consent` shows the screen again even when everything is covered.
+
+For an agent, this means it can start with narrow scopes and ask for more only when a task needs
+them, and the user sees exactly what the additional request adds.
+
 ## Tokens and how the MCP server validates them
 
 A client that sends `resource=https://mcp.example.com/mcp` to `/authorize` and `/token` (MCP
