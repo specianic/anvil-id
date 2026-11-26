@@ -66,7 +66,7 @@ Versions are the latest stable releases as of the date above. Pin them in the wo
 
 **Banned dependencies** (enforced with cargo-deny): `openssl`, `native-tls`, `ring` as a second crypto
 backend, the RustCrypto `rsa` crate for private-key operations (unpatched timing side channel),
-`chrono`, `samael`/`xmlsec` (C XML security libraries), `oxide-auth`.
+`chrono` (except through `tsp-ltv`, below), `samael`/`xmlsec` (C XML security libraries), `oxide-auth`.
 
 "Single crypto backend" applies to **our own** signing, encryption and key handling: all of it goes
 through aws-lc-rs. One exception is accepted: webauthn-rs pulls in RustCrypto crates (via
@@ -78,6 +78,15 @@ MPL-2.0 licences, which `deny.toml` accepts per crate rather than globally.
 A second, narrower exception: totp-rs computes TOTP codes with RustCrypto `hmac`/`sha1`. This is
 code computation over a seed that is stored sealed with aws-lc-rs (AES-256-GCM under the KEK) and
 opened only for the check; no key material is generated or stored by RustCrypto code.
+
+A third exception, for `chrono` (1.0, decision Q2 option A; **owner review pending**): the SAML
+signature verifier `bergshamra-keys` hard-depends on `tsp-ltv` (its X.509 trust facade), which
+hard-depends on `chrono`. `deny.toml` allows `chrono` only through `wrappers = ["tsp-ltv"]`, so no
+other crate can pull it in, and our own code stays on `time`. `cargo tree -i chrono --target all`
+must show `tsp-ltv` as the only parent. The bergshamra crates are built with
+`default-features = false, features = ["aws-lc"]`: their signing and verification run on aws-lc-rs
+(through `kryptering`), and the RustCrypto provider is not compiled. They bring RustCrypto encoding
+crates (`der`, `spki`, `pkcs8`, `x509-cert` 0.2) for certificate parsing only.
 
 ### 2.1 Conditions on the Rust choice
 
@@ -1251,7 +1260,7 @@ These are designed in from the start so later modules don't require rewrites:
 | D1 | Path-based vs host-based tenants by default (PRD Q1) | **Decided 2026-11-25:** path-based default, host mapping optional (§12) | ✓ |
 | D2 | Opaque vs JWT access tokens by default | **Decided 2026-11-25:** JWT (RFC 9068) by default; opaque per client | ✓ |
 | D3 | Admin console stack | **Decided 2026-11-25:** React + Vite static SPA embedded in the binary (best component ecosystem and contributor pool; dogfoods the API). Login pages remain server-rendered. Rust/WebAssembly frameworks (Leptos, Dioxus) were considered and rejected for now: young component ecosystems and a small contributor pool | ✓ |
-| D4 | SAML stack: pure-Rust XML-DSig (saml-rs/bergshamra) vs alternatives | Evaluate against a signature-wrapping attack corpus; experimental flag until it passes | before M5 |
+| D4 | SAML stack: pure-Rust XML-DSig (saml-rs/bergshamra) vs alternatives | **Spike verdict 2026-11-26 (06-01):** `bergshamra-dsig` 0.12.0 on the aws-lc provider only + `uppsala` 0.12.1 as the single XML parser + our own narrow SAML SP layer. The spike (`crates/anvil-web/tests/saml_dsig_spike.rs`) signs a minimal SAML assertion (enveloped exc-c14n, RSA-SHA256 and ECDSA-P256-SHA256, `Reference URI="#_a1"`) under keys generated at test time and verifies it with `DsigContext::new(keys).with_trusted_keys_only(true).with_strict_verification(true).with_require_reference_digests(true).with_skip_time_checks(true)` and `verify::verify_all_document_with_source` on one `uppsala::Parser::new().with_forbid_dtd(true)` document; the reference resolves to the Assertion node, a one-character change fails, and a key embedded in `KeyInfo` is never trusted. Costs: the scoped `chrono` exception (§2, wrapper `tsp-ltv`). SAML stays behind a runtime experimental flag through 1.0 (Q3) until the Phase 7 external review and a real-IdP interop checklist; the attack-corpus gate is 06-09. Verified locally on Linux; macOS targets are verified by the release-build workflow at the 1.0 gate (06-26) | spike ✓; corpus 06-09 |
 | D5 | Permissions engine: embedded tuple store vs integrating OpenFGA/SpiceDB | Decide at the 3.0 addendum | 3.0 |
 | D6 | Embedded HA without Postgres (replicated SQLite) | Not planned; revisit on user demand | post-1.0 |
 | D7 | sqlx minimum supported Rust version vs our toolchain policy | **Resolved 2026-11-25:** sqlx 0.9.1 requires Rust ≥ 1.94; pin current stable (1.100.0) in `rust-toolchain.toml` | ✓ |
