@@ -6,15 +6,15 @@ current_phase: 05
 current_phase_name: release 0 4 operate it
 current_plan: 33
 status: executing
-stopped_at: Completed 06-07-PLAN.md
-last_updated: "2026-11-26T10:35:06.571Z"
+stopped_at: Completed 06-16-PLAN.md
+last_updated: "2026-11-26T10:54:55.269Z"
 last_activity: 2026-11-26
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 162
-  completed_plans: 144
-  percent: 89
+  completed_plans: 145
+  percent: 90
 ---
 
 # Project State
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 **Status:** Ready to execute
 **Last Activity:** 2026-11-26
 **Last Activity Description:** 05-28 phase gate complete (632-pair security map, 0.4 plaintext scan, anvilid 0.4.0, 0.4 migrations pinned, every workflow incl. load and deploy green on f80dcb4)
-**Progress:** [█████████░] 89%
+**Progress:** [█████████░] 90%
 
 Phase 5 has 33 plans (05-01 through 05-33). Every plan except 05-29 (release v0.4.0 after owner sign-off) has a
 SUMMARY. Current Plan counts plans in execution order: 05-29 is the 33rd and last. Phase 4 still has one open plan, 04-33 (manual real-provider checklist, then tag v0.3.0); it must be
@@ -201,6 +201,7 @@ done before 05-29 tags v0.4.0.
 | Phase 06 P09 | 55min | 3 tasks | 12 files |
 | Phase 06 P11 | 55min | 1 tasks | 7 files |
 | Phase 06 P07 | 35min | 2 tasks | 14 files |
+| Phase 06 P16 | 25min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -469,6 +470,7 @@ Recent decisions affecting current work:
 - [Phase 06]: Keys admin API: settings scope family, system-tenant rotation needs admin:write; KeyView is an allow-list without key material
 - [Phase 06]: 06-07: SQLite org_domain.connection_id has no FK; same-org checked by the writes and cleared by an AFTER DELETE trigger on connection (Postgres may use ON DELETE SET NULL (connection_id))
 - [Phase 06]: 06-07: tenant-level role queries filter role_assignment.org_id IS NULL; OrgRepo::delete also removes the org:{id} branding scope
+- [Phase 06]: 06-16: console Signing keys page offers only the tenant's enabled algs; immediate activation off by default
 
 ### Pending Todos
 
@@ -481,6 +483,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-26T10:35:06.568Z
-Stopped at: Completed 06-07-PLAN.md
+Last session: 2026-11-26T10:54:55.264Z
+Stopped at: Completed 06-16-PLAN.md
 Resume file: None
