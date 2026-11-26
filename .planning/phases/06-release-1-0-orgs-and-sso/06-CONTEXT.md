@@ -67,3 +67,29 @@ Roadmap success criteria:
 
 ---
 *Phase: 06-release-1-0-orgs-and-sso*
+
+## Decisions after research (orchestrator defaults, 2026-11-26 — owner may override)
+
+- **Q1 org admin access:** org sub-routes of the admin API also accept the tenant's own tokens carrying a bounded
+  `org:admin` scope plus a matching `org_id`; an org admin can never act outside their org (negative tests). "Tenant-
+  restricted admins" = system roles with a tenant list (`admin_tenants` claim) — include only if it fits without a second
+  authorization path; otherwise defer to Phase 7 and say so.
+- **Q2 SAML library (D4):** option A — `bergshamra-dsig` on aws-lc + `uppsala` as the only XML parser + our own narrow
+  SAML layer. The `chrono` ban gets ONE narrow `deny.toml` exception scoped to `tsp-ltv` (wrapper = that crate only), with a
+  comment explaining why; flag this exception explicitly in the phase summary for the owner. Mandatory mitigations: strict
+  profile pre-check before any library call, pinned signature location, `forbid_dtd`, no reference resolution outside the
+  document, claims read only from the verified node, attack corpus in CI.
+- **Q3 experimental flag:** SAML stays behind a runtime operator flag (off by default) through 1.0, even if the corpus
+  passes, until the Phase 7 external review and a real-IdP interop checklist.
+- **Q4 IdP-initiated SSO:** refused in 1.0.
+- **Q5 org role model:** hybrid on one assignment table (tenant roles assignable per org + org-owned roles).
+- **Q6/Q7 SSO enforcement (conservative default):** verified-domain routing is on once an org verifies a domain, but
+  password lockout is OPT-IN — `allow_local_password` defaults to **true**; an org admin must explicitly turn it off to force
+  SSO for that domain. Document the trade-off. (Researcher recommended default false; owner can flip.)
+- **Q8:** Phase 6 work starts on main now; the v0.3.0 (04-33) and v0.4.0 (05-29) tags remain owner-gated and land before
+  the 1.0 gate.
+- The researcher's 16 self-resolved items stand (claim names `org_id`/`org_slug`/`org_roles`/`org_permissions`,
+  `organization` authorize parameter, switching = new authorization request, invitations, no orgs in the system tenant,
+  opaque-token/introspection role claims done here, resource URI matching stays exact, passkey picker narrowing as a small
+  plan, unsigned AuthnRequests, DNS record format/crate, migration split, signing-keys API + console page, config YAML
+  prune must exclude org-owned objects).
