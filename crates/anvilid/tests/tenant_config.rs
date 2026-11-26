@@ -549,3 +549,232 @@ async fn invalid_documents_are_reported_by_path() {
             .is_none()
     );
 }
+
+/// Org-owned objects (ORG-02, Pitfall 8): an org with an org-owned role named `editor` (the same
+/// name as the tenant role of [`configure`]), an org connection `acme-sso` with an identity link,
+/// and a member holding the org role. Written through storage as the organization services do.
+async fn seed_org(
+    a: &Instance,
+    tenant: &Tenant,
+) -> (
+    anvil_core::model::OrgId,
+    anvil_core::model::UserId,
+    anvil_core::model::RoleId,
+    anvil_core::model::ConnectionId,
+) {
+    use anvil_core::model::{
+        ConnectionId, IdentityLinkId, NewConnection, NewIdentityLink, NewMembership,
+        NewOrganization, NewRole, NewUser, OrgId, RoleId, StandardClaims, UserId, UserStatus,
+    };
+    use anvil_core::ports::Clock as _;
+    let now = SystemClock.now();
+    let org = a
+        .storage
+        .organizations()
+        .create(
+            tenant.id,
+            &NewOrganization {
+                id: OrgId::new_v7(),
+                slug: "acme".into(),
+                display_name: "Acme".into(),
+                mfa_policy: None,
+                settings: Default::default(),
+                metadata: json!({}),
+                created_at: now,
+            },
+        )
+        .await
+        .expect("org");
+    let role = a
+        .storage
+        .roles()
+        .create(
+            tenant.id,
+            &NewRole {
+                id: RoleId::new_v7(),
+                org_id: Some(org.id),
+                name: "editor".into(),
+                description: "Org-owned".into(),
+                permissions: vec!["org:members:read".into()],
+                created_at: now,
+            },
+        )
+        .await
+        .expect("org role");
+    let connection = a
+        .storage
+        .connections()
+        .create(
+            tenant.id,
+            &NewConnection {
+                id: ConnectionId::new_v7(),
+                org_id: Some(org.id),
+                slug: "acme-sso".into(),
+                display_name: "Acme SSO".into(),
+                enabled: true,
+                config: serde_json::from_value(
+                    json!({"type": "social", "provider": "google", "client_id": "acme-client"}),
+                )
+                .expect("social config"),
+                secret_enc: None,
+                trust_email_verified: false,
+                created_at: now,
+            },
+        )
+        .await
+        .expect("org connection");
+    let user = a
+        .storage
+        .users()
+        .create(
+            tenant.id,
+            &NewUser {
+                id: UserId::new_v7(),
+                email: "member@acme.example.test".into(),
+                email_verified: true,
+                username: None,
+                claims: StandardClaims::default(),
+                status: UserStatus::Active,
+                created_at: now,
+            },
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("user");
+    assert_eq!(
+        a.storage
+            .organizations()
+            .add_member(
+                tenant.id,
+                &NewMembership {
+                    org_id: org.id,
+                    user_id: user.id,
+                    role_ids: vec![role.id],
+                    created_at: now,
+                },
+            )
+            .await
+            .expect("membership"),
+        anvil_core::ports::AddMemberOutcome::Added
+    );
+    a.storage
+        .connections()
+        .create_link(
+            tenant.id,
+            &NewIdentityLink {
+                id: IdentityLinkId::new_v7(),
+                user_id: user.id,
+                connection_id: connection.id,
+                subject: "acme-user-1".into(),
+                email_at_link: None,
+                metadata: serde_json::Map::new(),
+                created_at: now,
+            },
+        )
+        .await
+        .expect("identity link");
+    (org.id, user.id, role.id, connection.id)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tenant_config_prune_keeps_org_objects() {
+    let a = Instance::new().await;
+    configure(&a).await;
+    let tenant = a.tenant("default").await;
+    let (org, user, role, connection) = seed_org(&a, &tenant).await;
+
+    // The export never contains the org's objects.
+    let out = a.run(&["tenant", "export", "default", "-o", "doc.yaml"], &[]);
+    assert!(out.status.success(), "{}", text(&out));
+    let raw = std::fs::read_to_string(a.path("doc.yaml")).expect("read yaml");
+    assert!(!raw.contains("acme-sso"), "{raw}");
+    assert!(!raw.contains("Org-owned"), "{raw}");
+
+    // A document without any role or connection, applied with --prune, deletes the tenant's
+    // role `editor` and connection `google` only.
+    let mut doc = yaml(&a.path("doc.yaml"));
+    doc["roles"] = json!([]);
+    doc["connections"] = json!([]);
+    write_yaml(&a.path("doc.yaml"), &doc);
+    let out = a.run(
+        &["tenant", "apply", "-f", "doc.yaml", "--yes", "--prune"],
+        &[],
+    );
+    assert!(out.status.success(), "{}", text(&out));
+    let shown = text(&out);
+    assert!(shown.contains("- role editor (prune only)"), "{shown}");
+    assert!(
+        shown.contains("- connection google (prune only)"),
+        "{shown}"
+    );
+    assert!(!shown.contains("acme-sso"), "{shown}");
+    assert!(shown.contains("2 deleted"), "{shown}");
+    assert!(
+        a.storage
+            .roles()
+            .get_by_name(tenant.id, "editor")
+            .await
+            .unwrap()
+            .is_none(),
+        "tenant role pruned"
+    );
+    assert!(
+        a.storage
+            .connections()
+            .get_by_slug(tenant.id, "google")
+            .await
+            .unwrap()
+            .is_none(),
+        "tenant connection pruned"
+    );
+
+    // The org role, connection, identity link, membership and org assignment are intact.
+    let org_roles = a
+        .storage
+        .roles()
+        .list_org_roles(tenant.id, org)
+        .await
+        .unwrap();
+    assert_eq!(org_roles.iter().map(|r| r.id).collect::<Vec<_>>(), [role]);
+    let org_conns = a
+        .storage
+        .connections()
+        .list_for_org(tenant.id, org)
+        .await
+        .unwrap();
+    assert_eq!(
+        org_conns.iter().map(|c| c.id).collect::<Vec<_>>(),
+        [connection]
+    );
+    assert!(
+        a.storage
+            .connections()
+            .has_links(tenant.id, connection)
+            .await
+            .unwrap()
+    );
+    assert!(
+        a.storage
+            .organizations()
+            .is_member(tenant.id, org, user)
+            .await
+            .unwrap()
+    );
+    let held = a
+        .storage
+        .roles()
+        .roles_for_user_in_org(tenant.id, user, org)
+        .await
+        .unwrap();
+    assert!(held.iter().any(|r| r.id == role), "{held:?}");
+
+    // Re-applying the same document is a no-op (the org objects never show up as deletes).
+    let out = a.run(
+        &["tenant", "apply", "-f", "doc.yaml", "--yes", "--prune"],
+        &[],
+    );
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(!text(&out).contains("(prune only)"), "{}", text(&out));
+}

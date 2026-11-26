@@ -16,6 +16,11 @@
 //!   secret (`None`) keeps the current one. Secret field diffs carry no values.
 //! - Dynamic and CIMD clients are runtime state, not configuration: [`plan_excluding`] drops
 //!   them from both sides.
+//! - Organization-owned connections and roles (`org_id = Some`) are runtime state of their
+//!   organization, not tenant configuration: [`StoredConfig`] exposes only tenant-level ones to
+//!   the export, the plan's current side and therefore the prune candidates, so an apply with
+//!   prune never deletes them (nor, through them, identity links, org memberships or org role
+//!   assignments, which the document never covers).
 //!
 //! [`ConfigService`] exports a tenant ([`StoredConfig::document`]) and applies a document:
 //!
@@ -61,7 +66,7 @@ use crate::model::{
     ApplicationType, AttributeDefinition, AuditAction, AuditActor, AuditDetails, AuditOutcome,
     Branding, BrandingScope, BrandingSection, CimdPolicy, Client, ClientSection, ClientSource,
     ConfigChange, ConfigKind, ConfigObjectKind, ConfigPlan, Connection, ConnectionSection,
-    DcrPolicy, EmailKind, EmailTemplate, EmailTemplateSection, FieldDiff, PageRequest,
+    DcrPolicy, EmailKind, EmailTemplate, EmailTemplateSection, FieldDiff, OrgId, PageRequest,
     RequestContext, Role, RoleId, RoleSection, RoleUpdate, SYSTEM_TENANT_SLUG, Scope, SecretInput,
     SmtpSection, SmtpSettings, SmtpTls, TENANT_CONFIG_VERSION, Tenant, TenantConfigDocument,
     TenantId, TenantSection, TenantSettings, WebhookEndpoint, WebhookEndpointUpdate,
@@ -78,8 +83,8 @@ use crate::service::branding::{
 };
 use crate::service::client::{
     ClientInput, ClientOptions, ClientOptionsPatch, ClientPatch, ClientService, RedirectValidator,
-    check_admin_scopes, uses_secret, validate_client, validate_client_id, validate_client_options,
-    validate_client_phase4, validate_client_secret,
+    check_admin_scopes, check_org_policy, uses_secret, validate_client, validate_client_id,
+    validate_client_options, validate_client_phase4, validate_client_secret,
 };
 use crate::service::connection::{
     ConnectionPatch, ConnectionService, NewConnectionInput, validate_config,
@@ -675,6 +680,7 @@ fn validate_client_section(
         );
     }
     issues.check(p, check_admin_scopes(system, &input.scopes));
+    issues.check(p, check_org_policy(system, options.organization));
     issues.check(p, validate_client_options(&input, &options, settings));
     if let Err(e) = validate_client_phase4(&input, &options, v.redirect) {
         uri_error(
@@ -984,6 +990,34 @@ fn is_system(tenant: &Tenant) -> bool {
     tenant.slug == SYSTEM_TENANT_SLUG
 }
 
+/// Whether an object owned by `org_id` belongs to the document: tenant-level objects only.
+/// The one filter for org-owned connections and roles (export, plan and prune).
+fn is_document_managed(org_id: Option<OrgId>) -> bool {
+    org_id.is_none()
+}
+
+impl StoredConfig {
+    /// The tenant-level connections (organization connections are never part of the document).
+    pub fn tenant_connections(&self) -> impl Iterator<Item = &Connection> {
+        self.connections
+            .iter()
+            .filter(|c| is_document_managed(c.org_id))
+    }
+
+    /// The tenant-level roles (org-owned roles are never part of the document).
+    pub fn tenant_roles(&self) -> impl Iterator<Item = &Role> {
+        self.roles.iter().filter(|r| is_document_managed(r.org_id))
+    }
+
+    /// The stored organization connection with `slug`, if any (slugs are unique per tenant
+    /// across tenant and organization connections).
+    fn org_connection(&self, slug: &str) -> Option<&Connection> {
+        self.connections
+            .iter()
+            .find(|c| !is_document_managed(c.org_id) && c.slug == slug)
+    }
+}
+
 /// Whether a client belongs in the document: static clients only, and never the system tenant's
 /// console client (owned by bootstrap reconciliation).
 fn is_exported_client(tenant: &Tenant, c: &Client) -> bool {
@@ -1051,8 +1085,7 @@ impl StoredConfig {
             .collect();
         clients.sort_by(|a, b| a.client_id.cmp(&b.client_id));
         let mut connections: Vec<ConnectionSection> = self
-            .connections
-            .iter()
+            .tenant_connections()
             .map(|c| ConnectionSection {
                 slug: c.slug.clone(),
                 display_name: c.display_name.clone(),
@@ -1074,8 +1107,7 @@ impl StoredConfig {
             .collect();
         branding.sort_by(|a, b| a.client_id.cmp(&b.client_id));
         let mut roles: Vec<RoleSection> = self
-            .roles
-            .iter()
+            .tenant_roles()
             .map(|r| RoleSection {
                 name: r.name.clone(),
                 description: r.description.clone(),
@@ -1220,7 +1252,15 @@ fn check_against_stored(
     }
     for (i, c) in desired.connections.iter().enumerate() {
         let p = format!("connections[{i}]");
-        let stored = cur.connections.iter().find(|s| s.slug == c.slug);
+        if cur.org_connection(&c.slug).is_some() {
+            issues.push(
+                format!("{p}.slug"),
+                "is used by an organization connection; organization connections are not part \
+                 of the document",
+            );
+            continue;
+        }
+        let stored = cur.tenant_connections().find(|s| s.slug == c.slug);
         if let Some(s) = stored
             && s.kind() != c.config.kind()
         {
@@ -1509,8 +1549,7 @@ impl ConfigService {
                 .and_then(|c| c.secret_hash.as_ref())
                 .is_some_and(|h| ct_eq(&secret_hash(presented), &h.0)),
             ConfigObjectKind::Connection => cur
-                .connections
-                .iter()
+                .tenant_connections()
                 .find(|c| c.slug == r.key)
                 .and_then(|c| self.connections.open_secret(c).ok().flatten())
                 .is_some_and(|s| ct_eq(s.expose_secret().as_bytes(), presented.as_bytes())),
@@ -1591,7 +1630,7 @@ impl ConfigService {
             return Ok(());
         }
         let desired_role = |name: &str| desired.roles.iter().find(|r| r.name == name);
-        let stored_role = |name: &str| cur.roles.iter().find(|r| r.name == name);
+        let stored_role = |name: &str| cur.tenant_roles().find(|r| r.name == name);
         for c in of_kind(&plan.creates, ConfigObjectKind::Role)
             .chain(of_kind(&plan.updates, ConfigObjectKind::Role))
         {
@@ -1610,8 +1649,7 @@ impl ConfigService {
             }
         }
         let losing: Vec<RoleId> = cur
-            .roles
-            .iter()
+            .tenant_roles()
             .filter(|r| r.permissions.iter().any(|p| p == ADMIN_WRITE))
             .filter(|r| match desired_role(&r.name) {
                 Some(d) => !d.permissions.iter().any(|p| p == ADMIN_WRITE),
@@ -1818,7 +1856,7 @@ impl ConfigService {
         // 4. Connections.
         let stored_conn = |slug: &str| {
             current
-                .and_then(|cur| cur.connections.iter().find(|c| c.slug == slug))
+                .and_then(|cur| cur.tenant_connections().find(|c| c.slug == slug))
                 .map(|c| c.id)
                 .ok_or_else(|| missing("connection", slug))
         };
@@ -2890,5 +2928,96 @@ mod tests {
             .map(|i| i.path)
             .collect();
         assert_eq!(got, ["connections[0].secret"]);
+    }
+
+    fn org_owned(s: &mut StoredConfig) {
+        let org = Some(OrgId::new_v7());
+        let mut org_role = s.roles[0].clone();
+        org_role.id = RoleId::new_v7();
+        org_role.org_id = org;
+        org_role.name = "org-admin".into();
+        s.roles.push(org_role);
+        s.connections.push(Connection {
+            id: crate::model::ConnectionId::new_v7(),
+            tenant_id: s.tenant.id,
+            org_id: org,
+            slug: "acme-sso".into(),
+            display_name: "Acme SSO".into(),
+            enabled: true,
+            config: serde_json::from_value(
+                json!({"type": "social", "provider": "google", "client_id": "abc"}),
+            )
+            .unwrap_or_else(|e| panic!("connection config: {e}")),
+            secret_enc: None,
+            trust_email_verified: false,
+            created_at: at(),
+            updated_at: at(),
+        });
+    }
+
+    #[test]
+    fn org_owned_objects_are_neither_exported_nor_pruned() {
+        let mut s = stored(stored_tenant("acme"), vec![]);
+        let before = s.document();
+        org_owned(&mut s);
+        let d = s.document();
+        assert_eq!(d, before, "org-owned objects never appear in the document");
+        assert!(d.connections.is_empty());
+        assert_eq!(d.roles.len(), 1);
+        // A document without them plans no delete, even for a prune.
+        let mut empty = d.clone();
+        empty.roles.clear();
+        let p = plan(&s.document(), &empty, &never_equal);
+        let deletes: Vec<&str> = p.deletes.iter().map(|c| c.key.as_str()).collect();
+        assert_eq!(deletes, ["viewer"]);
+    }
+
+    #[test]
+    fn a_document_connection_cannot_take_an_org_connection_slug() {
+        let kek = Kek::generate();
+        let mut s = stored(stored_tenant("acme"), vec![]);
+        org_owned(&mut s);
+        let mut d = s.document();
+        d.connections.push(
+            serde_json::from_value(json!({
+                "slug": "acme-sso", "display_name": "Mine",
+                "config": {"type": "social", "provider": "google", "client_id": "abc"},
+                "secret": {"value": "s3cret"},
+            }))
+            .unwrap_or_else(|e| panic!("connection fixture: {e}")),
+        );
+        let got: Vec<String> = check_against_stored(Some(&s), &d, false, false, &kek)
+            .into_iter()
+            .map(|i| i.path)
+            .collect();
+        assert_eq!(got, ["connections[0].slug"]);
+    }
+
+    #[test]
+    fn system_clients_refuse_org_admin_and_org_policy() {
+        let mut d = doc();
+        d.tenant.slug = SYSTEM_TENANT_SLUG.into();
+        d.clients.truncate(1);
+        d.clients[0]
+            .scopes
+            .push(crate::service::admin_scope::ORG_ADMIN_SCOPE.into());
+        d.clients[0].organization = crate::model::OrgClientPolicy::Required;
+        let got = paths(validate_document(&d, &validators()));
+        assert!(got.contains(&"clients[0].scopes".to_owned()), "{got:?}");
+        assert!(
+            got.contains(&"clients[0].organization".to_owned()),
+            "{got:?}"
+        );
+        // The same client is valid in an application tenant.
+        let mut app = doc();
+        app.clients.truncate(1);
+        app.clients[0]
+            .scopes
+            .push(crate::service::admin_scope::ORG_ADMIN_SCOPE.into());
+        app.clients[0].organization = crate::model::OrgClientPolicy::Required;
+        assert_eq!(
+            paths(validate_document(&app, &validators())),
+            Vec::<String>::new()
+        );
     }
 }
