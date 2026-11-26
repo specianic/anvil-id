@@ -155,10 +155,25 @@ impl AdminRecoveryService {
         if reset_mfa {
             let users = self.storage.users();
             for cred in users.list_credentials(system.id, user.id).await? {
-                if matches!(cred.kind, CredentialKind::Totp | CredentialKind::Webauthn)
-                    && users.delete_credential(system.id, user.id, cred.id).await?
-                {
+                let action = match cred.kind {
+                    CredentialKind::Totp => AuditAction::TotpRemoved,
+                    CredentialKind::Webauthn => AuditAction::PasskeyRemoved,
+                    CredentialKind::Password => continue,
+                };
+                if users.delete_credential(system.id, user.id, cred.id).await? {
                     mfa_removed += 1;
+                    // Same event as an administrator's removal, with the system actor.
+                    self.audit()
+                        .record(
+                            system.id,
+                            AuditActor::system(),
+                            action,
+                            Some(cred.id.to_string()),
+                            AuditOutcome::Success,
+                            &RequestContext::system(),
+                            AuditDetails::credential(cred.kind),
+                        )
+                        .await?;
                 }
             }
         }

@@ -570,6 +570,22 @@ fn admin_recover_reset_mfa_removes_totp_and_passkeys_only_when_asked() {
         "{}",
         fields(&events[1])
     );
+    // Each removed factor is audited like an administrator's removal, by the system actor.
+    for action in [AuditAction::TotpRemoved, AuditAction::PasskeyRemoved] {
+        let removed = rt
+            .block_on(install.storage.audit().query(
+                install.system.id,
+                &AuditQuery {
+                    action: Some(action),
+                    limit: 10,
+                    ..AuditQuery::default()
+                },
+            ))
+            .expect("audit")
+            .items;
+        assert_eq!(removed.len(), 1, "{action:?}");
+        assert_eq!(removed[0].actor.kind, ActorKind::System);
+    }
 }
 
 #[test]

@@ -124,7 +124,8 @@ anvilid admin recover --email admin@example.com --reset-mfa
   channel. Setting the new password signs the account out of every session.
 - Assigns the `administrator` role to the account if it does not hold it.
 - `--reset-mfa` also removes the account's TOTP authenticator (with its recovery codes) and its
-  passkeys. Without it, second factors are left as they are.
+  passkeys, each audited as `totp_removed` / `passkey_removed` with the system actor. Without
+  it, second factors are left as they are.
 - Audited as `admin_recovery_issued` in the system tenant, with the system actor. The URL is never
   logged or audited.
 
