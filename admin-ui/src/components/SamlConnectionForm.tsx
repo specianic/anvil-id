@@ -280,22 +280,24 @@ function CopyValue({ label, value, testId }: { label: string; value: string; tes
   return (
     <div className="space-y-1">
       <dt className="text-sm font-medium">{label}</dt>
-      <dd className="flex flex-wrap items-center gap-2">
-        <code className="bg-muted rounded px-2 py-1 text-sm break-all" data-testid={testId}>
-          {value}
-        </code>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={() => void copy()}
-          aria-label={`Copy ${label.toLowerCase()}`}
-          data-testid={`copy-${testId}`}
-        >
-          Copy
-        </Button>
+      <dd className="space-y-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <code className="bg-muted rounded px-2 py-1 text-sm break-all" data-testid={testId}>
+            {value}
+          </code>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => void copy()}
+            aria-label={`Copy ${label.toLowerCase()}`}
+            data-testid={`copy-${testId}`}
+          >
+            Copy
+          </Button>
+        </div>
+        <StatusMessage message={status} />
       </dd>
-      <StatusMessage message={status} />
     </div>
   );
 }
