@@ -4,17 +4,17 @@ milestone: v0.1
 milestone_name: milestone
 current_phase: 04
 current_phase_name: release 0 3 real world logins
-current_plan: Not started
-status: planning
-stopped_at: Completed 04-37-PLAN.md
-last_updated: "2026-11-26T00:22:20.846Z"
-last_activity: 2026-11-25
+current_plan: 37
+status: executing
+stopped_at: Completed 04-32-PLAN.md
+last_updated: "2026-11-26T00:56:49.480Z"
+last_activity: 2026-11-26
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 102
-  completed_plans: 100
-  percent: 98
+  completed_plans: 101
+  percent: 99
 ---
 
 # Project State
@@ -24,21 +24,22 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-25)
 
 **Core value:** A standards-correct, secure OIDC provider that anyone can run in two minutes.
-**Current focus:** Phase 3: Release 0.2 "Secure by default" (M2) — complete (v0.2.0 released), awaiting verification
+**Current focus:** Phase 4: Release 0.3 "Real-world logins" (M3) — gate passed (04-32); next the manual provider checklist and the v0.3.0 tag (04-33)
 
 ## Current Position
 
 **Current Phase:** 04
 **Current Phase Name:** release 0 3 real world logins
 **Total Phases:** 7
-**Current Plan:** Not started
-**Total Plans in Phase:** 34
-**Status:** Ready to plan
-**Last Activity:** 2026-11-25
-**Last Activity Description:** Phase 3 complete, transitioned to Phase 04
-**Progress:** [██████████] 98%
+**Current Plan:** 37
+**Total Plans in Phase:** 37
+**Status:** Ready to execute
+**Last Activity:** 2026-11-26
+**Last Activity Description:** 04-32 phase gate complete (430-pair security map, anvilid 0.3.0, 0.3 migrations pinned, every workflow green on 9f88363)
+**Progress:** [██████████] 99%
 
-Phase 3 plans 03-01 through 03-34 are all complete (34/34 summaries); v0.2.0 is published. 03-34 closed the verification gap (base64). Next: Phase 3 re-verification, then Phase 4.
+Phase 4 has 37 plans (04-01 through 04-37). Every plan except 04-33 (manual real-provider checklist, then tag
+v0.3.0) has a SUMMARY. Current Plan counts plans in execution order: 04-33 is the 37th and last.
 
 ## Performance Metrics
 
@@ -155,6 +156,7 @@ Phase 3 plans 03-01 through 03-34 are all complete (34/34 summaries); v0.2.0 is 
 | Phase 04 P35 | 75min | 2 tasks | 16 files |
 | Phase 04 P36 | 95min | 3 tasks | 16 files |
 | Phase 04 P37 | 45min | 3 tasks | 14 files |
+| Phase 04 P32 | 55min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -353,6 +355,8 @@ Recent decisions affecting current work:
 - [Phase 04]: 04-37: Upstream binding cookie cleared only when the callback proved state + binding (CallbackResult.binding_proved)
 - [Phase 04]: 04-37: Tenant cookie suffix is hex16(sha256(tenant UUID bytes)); no transition read of old names, everyone signs in again after upgrade
 - [Phase 04]: 04-37: Generic OIDC falls back to UserInfo when the ID token has no email; UserInfo sub must equal the ID token sub
+- [Phase 04]: 04-32: AUTH-07 stays unticked until the owner's manual real-provider checklist (04-33); the other 10 Phase 4 requirements are ticked at the gate
+- [Phase 04]: 04-32: fuzz runs only on schedule/dispatch/PR, so the gate dispatches it on the release commit; a stale authorize_parse target was fixed that way
 
 ### Pending Todos
 
@@ -365,6 +369,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-26T00:22:20.843Z
-Stopped at: Completed 04-37-PLAN.md
+Last session: 2026-11-26T00:56:49.478Z
+Stopped at: Completed 04-32-PLAN.md
 Resume file: None

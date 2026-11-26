@@ -64,3 +64,24 @@ Gap-closure plans 04-34..04-37 run before the gate. 04-32 now depends on them (w
 - (found by 04-27 CI follow-up) Generic OIDC connections to spec-following providers (email only in UserInfo, OIDC Core 5.4) fail with `email_missing` unless the admin enables fetch_userinfo. Fix in 04-37: fall back to UserInfo when the ID token has no email (or default fetch_userinfo on for generic OIDC), with a test. RESOLVED by 04-37.
 - (found by 04-27 CI follow-up) Cookie names are derived from the first 12 hex chars of the tenant UUIDv7, which is just its millisecond timestamp: two tenants created in the same millisecond share session/flow/binding cookie names. Fix in 04-37: derive the suffix from the whole id (e.g. a short hash), keep it stable, test two tenants with the same timestamp prefix. RESOLVED by 04-37.
 - Streamed oversized bodies without Content-Length on form pages and the admin API answer 400 (still refused before the handler), while /token and /logout answer 413 (04-36). Cosmetic; unify in the shared rejection mapping later.
+
+## Gate check (04-32, 2026-11-26)
+
+Every gate-list item has a disposition:
+
+- Resolved by 04-34: logo purge and client-branding cleanup; Postgres token-family purge; logout-token `iss` per RP session
+  (and `admin_issuer_of` delegates to `canonical_issuer`); atomic unlink guard with the verified-email rule.
+- Resolved by 04-35: independent `email_otp` / `magic_link` toggles with the `login_code` template check.
+- Resolved by 04-36: back-channel wake on every revocation path; upstream buttons on the lock, CAPTCHA and passkey-failure
+  pages; console client card; body-limit regression test (413 above 64 KiB, 400 KiB only for logo uploads).
+- Resolved by 04-37: `require_verified_email` for upstream accounts; binding cookie cleared only on a state match; 303 to
+  `/ui/account/linked`; UserInfo email fallback; cookie names from the whole tenant id; docs.
+- Resolved earlier: the themes README / ARCHITECTURE docs pass (04-31, incl. the `prompt=create` verification note) and
+  the Apple suite (04-26).
+- Resolved by 04-32: STATE.md Current Position (numeric Current Plan / Total Plans in Phase again).
+- Moved to Phase 5 (documented as 0.3 known limitations in ARCHITECTURE): remembered consent covering resources; in-flow
+  passkey enrolment under MFA `required`.
+- Cosmetic, noted: streamed oversized bodies without Content-Length answer 400 on form pages and the admin API (413 on
+  /token and /logout); still refused before any handler.
+
+Nothing is left open for the gate.

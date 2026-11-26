@@ -30,11 +30,11 @@ Source of truth for wording and detail: [docs/PRD.md](../docs/PRD.md) §8–9. I
 - [x] **OIDC-09**: A client can call UserInfo and receive scope-based claims [0.1]
 - [x] **OIDC-10**: Resource servers can introspect (RFC 7662) and clients can revoke (RFC 7009) tokens [0.2]
 - [x] **OIDC-11**: Tokens can be signed with RS256, ES256 or Ed25519 [0.2]
-- [ ] **OIDC-12**: RPs can log users out via RP-initiated logout and receive back-channel logout notifications [0.3]
+- [x] **OIDC-12**: RPs can log users out via RP-initiated logout and receive back-channel logout notifications [0.3]
 - [x] **OIDC-13**: Users see a consent screen (skippable for first-party clients), consent is remembered and revocable [0.2]
-- [ ] **OIDC-14**: Authorization requests honor prompt (none/login/consent/select_account/create), max_age, login_hint, acr_values [0.3]
+- [x] **OIDC-14**: Authorization requests honor prompt (none/login/consent/select_account/create), max_age, login_hint, acr_values [0.3]
 - [x] **OIDC-15**: Access tokens are RFC 9068 JWTs by default or opaque per client, audience-restricted [0.2]
-- [ ] **OIDC-16**: Clients can request audience-bound tokens with resource indicators (RFC 8707) [0.3]
+- [x] **OIDC-16**: Clients can request audience-bound tokens with resource indicators (RFC 8707) [0.3]
 - [ ] **OIDC-17**: Clients can register dynamically (RFC 7591/7592) under an admin policy: disabled / allow-listed / open [0.4]
 - [ ] **OIDC-18**: Clients can use pushed authorization requests (RFC 9126) [1.0]
 - [ ] **OIDC-23**: The OpenID conformance suite passes in CI for Basic OP, Config OP, Form Post, RP-Initiated Logout and Back-Channel Logout; certification filed [1.0]
@@ -48,21 +48,21 @@ Source of truth for wording and detail: [docs/PRD.md](../docs/PRD.md) §8–9. I
 - [x] **AUTH-03**: User can recover their account by email without revealing whether an account exists [0.1]
 - [x] **AUTH-04**: User can register and log in with passkeys, including usernameless; clone detection via signature counter [0.2]
 - [x] **AUTH-05**: User can enroll TOTP with recovery codes and use it as a second factor [0.2]
-- [ ] **AUTH-06**: User can log in with email OTP or magic link [0.3]
-- [ ] **AUTH-07**: User can log in with Google, Apple, Microsoft, GitHub or any generic OIDC/OAuth2 provider [0.3]
-- [ ] **AUTH-08**: Admin can set MFA policy (off/optional/required) per tenant, org or client; clients can request step-up via acr_values [0.3]
+- [x] **AUTH-06**: User can log in with email OTP or magic link [0.3]
+- [ ] **AUTH-07**: User can log in with Google, Apple, Microsoft, GitHub or any generic OIDC/OAuth2 provider [0.3] (automated evidence green at the 04-32 gate; pending the manual real-provider checklist in 04-33)
+- [x] **AUTH-08**: Admin can set MFA policy (off/optional/required) per tenant, org or client; clients can request step-up via acr_values [0.3]
 - [x] **AUTH-09**: Brute-force attempts are throttled per account and per IP with progressive delays; CAPTCHA (Turnstile/hCaptcha) can be enabled [0.2]
 - [x] **AUTH-10**: User can list and revoke their sessions; idle and absolute timeouts apply; admins can revoke sessions [0.2]
-- [ ] **AUTH-11**: Upstream identities link to existing accounts only on verified email or explicit confirmation [0.3]
-- [ ] **AUTH-13**: User can manage profile, email (re-verified), password, passkeys, MFA, sessions and connected apps from an account page [0.3]
+- [x] **AUTH-11**: Upstream identities link to existing accounts only on verified email or explicit confirmation [0.3]
+- [x] **AUTH-13**: User can manage profile, email (re-verified), password, passkeys, MFA, sessions and connected apps from an account page [0.3]
 - [ ] **AUTH-14**: Admin can define custom user attributes per tenant with JSON Schema, controlling validation, editability and claims [0.4]
 
 ### Login UI and branding
 
 - [x] **UI-01**: Login, registration, recovery, consent, MFA and account pages are served by the binary with no external assets [0.1]
 - [x] **UI-02**: Login pages meet WCAG 2.2 AA, are responsive, and the password flow works without JavaScript [0.2]
-- [ ] **UI-03**: Admin can theme pages (logo, colors, fonts, radius, custom CSS) live from the console, with per-tenant/org/client overrides [0.3]
-- [ ] **UI-04**: Pages are translated, with language chosen from ui_locales or the browser [0.3]
+- [x] **UI-03**: Admin can theme pages (logo, colors, fonts, radius, custom CSS) live from the console, with per-tenant/org/client overrides [0.3]
+- [x] **UI-04**: Pages are translated, with language chosen from ui_locales or the browser [0.3]
 - [ ] **UI-05**: SPAs and native apps can drive flows through a versioned headless API that returns server-driven form descriptions [1.0]
 - [x] **UI-07**: Admin can edit email templates per tenant and configure SMTP with a test send [0.2]
 
@@ -108,7 +108,7 @@ Source of truth for wording and detail: [docs/PRD.md](../docs/PRD.md) §8–9. I
 
 - [x] **SEC-01**: Defaults follow RFC 9700 and OAuth 2.1
 - [x] **SEC-02**: Signing keys are generated at first start, encrypted at rest with a KEK, and rotated on schedule with overlap
-- [ ] **SEC-03**: All secrets are stored hashed; TOTP seeds and upstream IdP secrets are encrypted
+- [x] **SEC-03**: All secrets are stored hashed; TOTP seeds and upstream IdP secrets are encrypted
 - [x] **SEC-04**: Browser endpoints have CSRF protection, hardened cookies and a strict CSP
 - [x] **SEC-05**: Authentication and token endpoints are rate limited by default
 - [x] **SEC-06**: Release builds contain no test-only behavior
@@ -185,11 +185,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | OIDC-09 | Phase 2 | Complete |
 | OIDC-10 | Phase 3 | Complete |
 | OIDC-11 | Phase 3 | Complete |
-| OIDC-12 | Phase 4 | Pending |
+| OIDC-12 | Phase 4 | Complete |
 | OIDC-13 | Phase 3 | Complete |
-| OIDC-14 | Phase 4 (subset in Phase 2, see note) | Pending |
+| OIDC-14 | Phase 4 (subset in Phase 2, see note) | Complete |
 | OIDC-15 | Phase 3 | Complete |
-| OIDC-16 | Phase 4 | Pending |
+| OIDC-16 | Phase 4 | Complete |
 | OIDC-17 | Phase 5 | Pending |
 | OIDC-18 | Phase 7 | Pending |
 | OIDC-23 | Phase 7 | Pending |
@@ -200,18 +200,18 @@ Which phases cover which requirements. Updated during roadmap creation.
 | AUTH-03 | Phase 2 | Complete |
 | AUTH-04 | Phase 3 | Complete |
 | AUTH-05 | Phase 3 | Complete |
-| AUTH-06 | Phase 4 | Pending |
-| AUTH-07 | Phase 4 | Pending |
-| AUTH-08 | Phase 4 | Pending |
+| AUTH-06 | Phase 4 | Complete |
+| AUTH-07 | Phase 4 | Pending (manual provider checklist, 04-33) |
+| AUTH-08 | Phase 4 | Complete |
 | AUTH-09 | Phase 3 | Complete |
 | AUTH-10 | Phase 3 | Complete |
-| AUTH-11 | Phase 4 | Pending |
-| AUTH-13 | Phase 4 | Pending |
+| AUTH-11 | Phase 4 | Complete |
+| AUTH-13 | Phase 4 | Complete |
 | AUTH-14 | Phase 5 | Pending |
 | UI-01 | Phase 2 | Complete |
 | UI-02 | Phase 3 | Complete |
-| UI-03 | Phase 4 | Pending |
-| UI-04 | Phase 4 | Pending |
+| UI-03 | Phase 4 | Complete |
+| UI-04 | Phase 4 | Complete |
 | UI-05 | Phase 7 | Pending |
 | UI-07 | Phase 3 | Complete |
 | ORG-01 | Phase 5 | Pending |
@@ -242,7 +242,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | OPS-09 | Phase 5 | Pending |
 | SEC-01 | Phase 2 | Complete |
 | SEC-02 | Phase 3 | Complete |
-| SEC-03 | Phase 4 | Pending |
+| SEC-03 | Phase 4 | Complete |
 | SEC-04 | Phase 2 | Complete |
 | SEC-05 | Phase 3 | Complete |
 | SEC-06 | Phase 2 | Complete |
@@ -279,4 +279,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 ---
 *Requirements defined: 2026-11-25*
-*Last updated: 2026-11-25 after roadmap creation*
+*Last updated: 2026-11-26 at the Phase 4 gate (04-32)*
