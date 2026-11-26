@@ -1,20 +1,12 @@
 import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { useAuth } from "@/auth/AuthProvider";
+import { TenantSwitcher } from "@/components/TenantSwitcher";
 import { Button } from "@/components/ui/button";
-import { lastTenant, useOptionalTenant } from "@/lib/tenant";
+import { TENANT_PAGES, lastTenant, useOptionalTenant } from "@/lib/tenant";
 
 // Tenant-scoped pages; the tenant comes from the route (or the last used one on the tenant list pages).
-const NAV = [
-  { to: "/t/$tenant/users", label: "Users" },
-  { to: "/t/$tenant/clients", label: "Clients" },
-  { to: "/t/$tenant/connections", label: "Connections" },
-  { to: "/t/$tenant/sessions", label: "Sessions" },
-  { to: "/t/$tenant/audit", label: "Audit log" },
-  { to: "/t/$tenant/email", label: "Email" },
-  { to: "/t/$tenant/branding", label: "Branding" },
-  { to: "/t/$tenant/settings", label: "Login settings" },
-] as const;
+const NAV = TENANT_PAGES;
 
 const focusRing = "focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none";
 
@@ -32,10 +24,19 @@ export function AppShell({ children }: { children: ReactNode }) {
         Skip to content
       </a>
       <header className="border-b">
-        <div className="mx-auto flex max-w-6xl items-center gap-6 px-4 py-3">
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-6 gap-y-2 px-4 pt-3">
           <span className="font-semibold">AnvilID</span>
+          <TenantSwitcher />
+          <div className="ml-auto flex items-center gap-3">
+            <span className="text-muted-foreground text-sm">{who}</span>
+            <Button variant="outline" size="sm" onClick={() => void signOut()}>
+              Sign out
+            </Button>
+          </div>
+        </div>
+        <div className="mx-auto max-w-6xl px-4 py-2">
           <nav aria-label="Main">
-            <ul className="flex gap-1">
+            <ul className="flex flex-wrap gap-1">
               {NAV.map((item) => (
                 <li key={item.to}>
                   <Link
@@ -50,12 +51,6 @@ export function AppShell({ children }: { children: ReactNode }) {
               ))}
             </ul>
           </nav>
-          <div className="ml-auto flex items-center gap-3">
-            <span className="text-muted-foreground text-sm">{who}</span>
-            <Button variant="outline" size="sm" onClick={() => void signOut()}>
-              Sign out
-            </Button>
-          </div>
         </div>
       </header>
       <main id="main" tabIndex={-1} className="mx-auto max-w-6xl px-4 py-6 focus:outline-none">

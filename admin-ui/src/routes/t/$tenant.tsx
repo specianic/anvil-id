@@ -1,7 +1,7 @@
 // Layout of every tenant-scoped console page (/console/t/$tenant/...). It checks that the tenant
 // exists (GET /tenants/{slug}) before the pages load, shows a not-found panel otherwise, and
 // remembers the tenant as the last used one for /console/.
-import { Outlet, createFileRoute } from "@tanstack/react-router";
+import { Link, Outlet, createFileRoute } from "@tanstack/react-router";
 import { Fragment, useEffect } from "react";
 import { ApiError } from "@/api/client";
 import { ProblemAlert } from "@/components/ProblemAlert";
@@ -17,6 +17,9 @@ function TenantNotFound({ slug }: { slug: string }) {
       <p className="text-muted-foreground text-sm">
         There is no tenant <code>{slug}</code>. It may have been deleted.
       </p>
+      <Link to="/tenants" className="text-sm underline underline-offset-4">
+        All tenants
+      </Link>
     </section>
   );
 }

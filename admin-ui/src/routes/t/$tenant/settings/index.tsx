@@ -2,11 +2,19 @@
 // registration through upstream connections and the default page language. Saved with a
 // field-wise PATCH of the tenant: only changed fields are sent.
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Link, createFileRoute } from "@tanstack/react-router";
+import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { type FormEvent, useState } from "react";
 import { ApiError, api, unwrap } from "@/api/client";
-import { tenantQueryKey, useDiscovery, useTenant, useTenantView } from "@/lib/tenant";
+import {
+  UNDELETABLE_TENANTS,
+  forgetTenant,
+  tenantQueryKey,
+  useDiscovery,
+  useTenant,
+  useTenantView,
+} from "@/lib/tenant";
 import type { components } from "@/api/schema";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ProblemAlert } from "@/components/ProblemAlert";
 import { CheckboxField, type FieldErrors, SelectField, StatusMessage } from "@/components/form";
 import { Button } from "@/components/ui/button";
@@ -292,6 +300,64 @@ function SettingsForm({ tenant }: { tenant: TenantView }) {
   );
 }
 
+/** Deleting the tenant removes all its data. `system` and `default` cannot be deleted (the API answers 403). */
+function DeleteTenant({ tenant }: { tenant: TenantView }) {
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const [confirm, setConfirm] = useState(false);
+  const remove = useMutation({
+    mutationFn: async () => {
+      await api.DELETE("/api/admin/v1/tenants/{slug}", { params: { path: { slug: tenant.slug } } });
+    },
+    onSuccess: async () => {
+      setConfirm(false);
+      forgetTenant(tenant.slug);
+      await navigate({ to: "/tenants" });
+      queryClient.removeQueries({ queryKey: tenantQueryKey(tenant.slug) });
+      await queryClient.invalidateQueries({ queryKey: ["tenants"] });
+    },
+  });
+
+  if (UNDELETABLE_TENANTS.includes(tenant.slug)) {
+    return (
+      <p className="text-muted-foreground text-sm" data-testid="tenant-undeletable">
+        The <code>{tenant.slug}</code> tenant is part of the installation and cannot be deleted.
+      </p>
+    );
+  }
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>
+          <h2>Delete tenant</h2>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-muted-foreground text-sm">
+          Deletes <code>{tenant.slug}</code> with all its users, clients, connections, sessions and keys. Relying
+          parties of this tenant stop working.
+        </p>
+        <Button variant="destructive" onClick={() => setConfirm(true)} data-testid="delete-tenant">
+          Delete tenant
+        </Button>
+      </CardContent>
+      <ConfirmDialog
+        open={confirm}
+        title="Delete this tenant?"
+        description={<p>{`The tenant ${tenant.slug} and all its data are removed. This cannot be undone.`}</p>}
+        confirmLabel="Delete tenant"
+        onConfirm={() => remove.mutate()}
+        onCancel={() => {
+          setConfirm(false);
+          remove.reset();
+        }}
+        pending={remove.isPending}
+        error={remove.error}
+      />
+    </Card>
+  );
+}
+
 function LoginSettingsPage() {
   const tenant = useTenant();
   const query = useTenantView(tenant);
@@ -310,7 +376,10 @@ function LoginSettingsPage() {
         <ProblemAlert error={query.error} />
       ) : (
         // The form keeps local edits; it is keyed by tenant so another tenant starts fresh.
-        <SettingsForm key={query.data.id} tenant={query.data} />
+        <>
+          <SettingsForm key={query.data.id} tenant={query.data} />
+          <DeleteTenant tenant={query.data} />
+        </>
       )}
     </section>
   );

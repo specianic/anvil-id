@@ -26,6 +26,8 @@ import { Route as EmailSmtpRouteImport } from './routes/email/smtp'
 import { Route as SessionsIndexRouteImport } from './routes/sessions/index'
 import { Route as SettingsIndexRouteImport } from './routes/settings/index'
 import { Route as TTenantRouteImport } from './routes/t/$tenant'
+import { Route as TenantsIndexRouteImport } from './routes/tenants/index'
+import { Route as TenantsNewRouteImport } from './routes/tenants/new'
 import { Route as UsersIndexRouteImport } from './routes/users/index'
 import { Route as UsersUserIdRouteImport } from './routes/users/$userId'
 import { Route as TTenantIndexRouteImport } from './routes/t/$tenant/index'
@@ -129,6 +131,16 @@ const SettingsIndexRoute = SettingsIndexRouteImport.update({
 const TTenantRoute = TTenantRouteImport.update({
   id: '/t/$tenant',
   path: '/t/$tenant',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TenantsIndexRoute = TenantsIndexRouteImport.update({
+  id: '/tenants/',
+  path: '/tenants/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TenantsNewRoute = TenantsNewRouteImport.update({
+  id: '/tenants/new',
+  path: '/tenants/new',
   getParentRoute: () => rootRouteImport,
 } as any)
 const UsersIndexRoute = UsersIndexRouteImport.update({
@@ -239,6 +251,7 @@ export interface FileRoutesByFullPath {
   '/email/$kind': typeof EmailKindRoute
   '/email/smtp': typeof EmailSmtpRoute
   '/t/$tenant': typeof TTenantRouteWithChildren
+  '/tenants/new': typeof TenantsNewRoute
   '/users/$userId': typeof UsersUserIdRoute
   '/audit/': typeof AuditIndexRoute
   '/branding/': typeof BrandingIndexRoute
@@ -247,6 +260,7 @@ export interface FileRoutesByFullPath {
   '/email/': typeof EmailIndexRoute
   '/sessions/': typeof SessionsIndexRoute
   '/settings/': typeof SettingsIndexRoute
+  '/tenants/': typeof TenantsIndexRoute
   '/users/': typeof UsersIndexRoute
   '/t/$tenant/': typeof TTenantIndexRoute
   '/t/$tenant/branding/$clientId': typeof TTenantBrandingClientIdRoute
@@ -276,6 +290,7 @@ export interface FileRoutesByTo {
   '/connections/new': typeof ConnectionsNewRoute
   '/email/$kind': typeof EmailKindRoute
   '/email/smtp': typeof EmailSmtpRoute
+  '/tenants/new': typeof TenantsNewRoute
   '/users/$userId': typeof UsersUserIdRoute
   '/audit': typeof AuditIndexRoute
   '/branding': typeof BrandingIndexRoute
@@ -284,6 +299,7 @@ export interface FileRoutesByTo {
   '/email': typeof EmailIndexRoute
   '/sessions': typeof SessionsIndexRoute
   '/settings': typeof SettingsIndexRoute
+  '/tenants': typeof TenantsIndexRoute
   '/users': typeof UsersIndexRoute
   '/t/$tenant': typeof TTenantIndexRoute
   '/t/$tenant/branding/$clientId': typeof TTenantBrandingClientIdRoute
@@ -315,6 +331,7 @@ export interface FileRoutesById {
   '/email/$kind': typeof EmailKindRoute
   '/email/smtp': typeof EmailSmtpRoute
   '/t/$tenant': typeof TTenantRouteWithChildren
+  '/tenants/new': typeof TenantsNewRoute
   '/users/$userId': typeof UsersUserIdRoute
   '/audit/': typeof AuditIndexRoute
   '/branding/': typeof BrandingIndexRoute
@@ -323,6 +340,7 @@ export interface FileRoutesById {
   '/email/': typeof EmailIndexRoute
   '/sessions/': typeof SessionsIndexRoute
   '/settings/': typeof SettingsIndexRoute
+  '/tenants/': typeof TenantsIndexRoute
   '/users/': typeof UsersIndexRoute
   '/t/$tenant/': typeof TTenantIndexRoute
   '/t/$tenant/branding/$clientId': typeof TTenantBrandingClientIdRoute
@@ -355,6 +373,7 @@ export interface FileRouteTypes {
     | '/email/$kind'
     | '/email/smtp'
     | '/t/$tenant'
+    | '/tenants/new'
     | '/users/$userId'
     | '/audit/'
     | '/branding/'
@@ -363,6 +382,7 @@ export interface FileRouteTypes {
     | '/email/'
     | '/sessions/'
     | '/settings/'
+    | '/tenants/'
     | '/users/'
     | '/t/$tenant/'
     | '/t/$tenant/branding/$clientId'
@@ -392,6 +412,7 @@ export interface FileRouteTypes {
     | '/connections/new'
     | '/email/$kind'
     | '/email/smtp'
+    | '/tenants/new'
     | '/users/$userId'
     | '/audit'
     | '/branding'
@@ -400,6 +421,7 @@ export interface FileRouteTypes {
     | '/email'
     | '/sessions'
     | '/settings'
+    | '/tenants'
     | '/users'
     | '/t/$tenant'
     | '/t/$tenant/branding/$clientId'
@@ -430,6 +452,7 @@ export interface FileRouteTypes {
     | '/email/$kind'
     | '/email/smtp'
     | '/t/$tenant'
+    | '/tenants/new'
     | '/users/$userId'
     | '/audit/'
     | '/branding/'
@@ -438,6 +461,7 @@ export interface FileRouteTypes {
     | '/email/'
     | '/sessions/'
     | '/settings/'
+    | '/tenants/'
     | '/users/'
     | '/t/$tenant/'
     | '/t/$tenant/branding/$clientId'
@@ -469,6 +493,7 @@ export interface RootRouteChildren {
   EmailKindRoute: typeof EmailKindRoute
   EmailSmtpRoute: typeof EmailSmtpRoute
   TTenantRoute: typeof TTenantRouteWithChildren
+  TenantsNewRoute: typeof TenantsNewRoute
   UsersUserIdRoute: typeof UsersUserIdRoute
   AuditIndexRoute: typeof AuditIndexRoute
   BrandingIndexRoute: typeof BrandingIndexRoute
@@ -477,6 +502,7 @@ export interface RootRouteChildren {
   EmailIndexRoute: typeof EmailIndexRoute
   SessionsIndexRoute: typeof SessionsIndexRoute
   SettingsIndexRoute: typeof SettingsIndexRoute
+  TenantsIndexRoute: typeof TenantsIndexRoute
   UsersIndexRoute: typeof UsersIndexRoute
 }
 
@@ -599,6 +625,20 @@ declare module '@tanstack/react-router' {
       path: '/t/$tenant'
       fullPath: '/t/$tenant'
       preLoaderRoute: typeof TTenantRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/tenants/': {
+      id: '/tenants/'
+      path: '/tenants'
+      fullPath: '/tenants/'
+      preLoaderRoute: typeof TenantsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/tenants/new': {
+      id: '/tenants/new'
+      path: '/tenants/new'
+      fullPath: '/tenants/new'
+      preLoaderRoute: typeof TenantsNewRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/users/': {
@@ -791,6 +831,7 @@ const rootRouteChildren: RootRouteChildren = {
   EmailKindRoute: EmailKindRoute,
   EmailSmtpRoute: EmailSmtpRoute,
   TTenantRoute: TTenantRouteWithChildren,
+  TenantsNewRoute: TenantsNewRoute,
   UsersUserIdRoute: UsersUserIdRoute,
   AuditIndexRoute: AuditIndexRoute,
   BrandingIndexRoute: BrandingIndexRoute,
@@ -799,6 +840,7 @@ const rootRouteChildren: RootRouteChildren = {
   EmailIndexRoute: EmailIndexRoute,
   SessionsIndexRoute: SessionsIndexRoute,
   SettingsIndexRoute: SettingsIndexRoute,
+  TenantsIndexRoute: TenantsIndexRoute,
   UsersIndexRoute: UsersIndexRoute,
 }
 export const routeTree = rootRouteImport

@@ -4,12 +4,15 @@ import { useQuery } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
 import { api, unwrap } from "@/api/client";
 
-/** The tenant opened when nothing was used before in this browser tab (and the target of pre-0.4 links). */
-export const FALLBACK_TENANT = "default";
+/**
+ * The installation's default tenant: opened when no tenant was used before in this browser tab,
+ * target of pre-0.4 links, and served at the public URL itself (no /t/{slug} prefix needed).
+ */
+export const DEFAULT_TENANT = "default";
 /** The installation's own tenant: its users are the console admins. It cannot be deleted. */
 export const SYSTEM_TENANT = "system";
 /** Tenants the API refuses to delete (403). */
-export const UNDELETABLE_TENANTS: readonly string[] = [SYSTEM_TENANT, FALLBACK_TENANT];
+export const UNDELETABLE_TENANTS: readonly string[] = [SYSTEM_TENANT, DEFAULT_TENANT];
 
 /** Client-side mirror of the API's slug rule: 2-63 characters of a-z, 0-9 and '-'. The API decides. */
 export const SLUG_PATTERN = /^[a-z0-9-]{2,63}$/;
@@ -34,7 +37,7 @@ export function lastTenant(): string {
   } catch {
     // Storage unavailable (privacy mode): fall back.
   }
-  return FALLBACK_TENANT;
+  return DEFAULT_TENANT;
 }
 
 export function rememberTenant(slug: string): void {
@@ -54,8 +57,13 @@ export function forgetTenant(slug: string): void {
   }
 }
 
-/** The path-based discovery document of a tenant (served by this installation, same origin). */
+/**
+ * The discovery document of a tenant on this installation (same origin). The default tenant is
+ * served at the public URL itself (issuer = public URL, TenantBase::Root); every other tenant
+ * under /t/{slug} (issuer = public URL + /t/{slug}).
+ */
 export function discoveryPath(slug: string): string {
+  if (slug === DEFAULT_TENANT) return "/.well-known/openid-configuration";
   return `/t/${encodeURIComponent(slug)}/.well-known/openid-configuration`;
 }
 
@@ -117,3 +125,17 @@ export function useTenantView(slug: string) {
       unwrap(await api.GET("/api/admin/v1/tenants/{slug}", { params: { path: { slug } }, signal })),
   });
 }
+
+/** The tenant-scoped console sections (main navigation; the switcher keeps the section). */
+export const TENANT_PAGES = [
+  { to: "/t/$tenant/users", label: "Users" },
+  { to: "/t/$tenant/clients", label: "Clients" },
+  { to: "/t/$tenant/connections", label: "Connections" },
+  { to: "/t/$tenant/sessions", label: "Sessions" },
+  { to: "/t/$tenant/audit", label: "Audit log" },
+  { to: "/t/$tenant/email", label: "Email" },
+  { to: "/t/$tenant/branding", label: "Branding" },
+  { to: "/t/$tenant/settings", label: "Login settings" },
+] as const;
+
+export type TenantPage = (typeof TENANT_PAGES)[number]["to"];

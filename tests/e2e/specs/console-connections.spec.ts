@@ -1,11 +1,11 @@
-// AUTH-07, ADM-04: managing an upstream connection in the admin console (/console/connections).
+// AUTH-07, ADM-04: managing an upstream connection in the admin console (/console/t/default/connections).
 // An admin of the system tenant creates a Google connection with a client secret, sees the secret
 // as "Configured" and the redirect URI to register at the provider, edits the display name,
 // rotates the secret and deletes the connection. The secret is write-only: it never appears on a
 // console page nor in any admin API response the console receives. Every console page visited
 // passes the axe WCAG 2.2 AA audit (console spec precedent: console.spec.ts).
 //
-// The console manages the default tenant, so the connection briefly exists there; it is deleted
+// The connection is created in the default tenant (/console/t/default/...), so it briefly exists there; it is deleted
 // at the end of the test (and in afterAll if the test fails half way). No provider is contacted:
 // a connection is only configuration until someone signs in with it.
 //
@@ -72,7 +72,7 @@ test('admin console: create, edit, rotate and delete a connection', async ({ pag
   await test.step('sign in and open Connections', async () => {
     await consoleLogin(page, admin);
     await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Connections' }).click();
-    await expect(page).toHaveURL((url) => url.pathname === '/console/connections');
+    await expect(page).toHaveURL((url) => url.pathname === '/console/t/default/connections');
     await expect(page.getByRole('heading', { level: 1, name: 'Connections' })).toBeVisible();
     await expect(page.getByRole('table')).toHaveAttribute('aria-busy', 'false');
     await expectNoA11yViolations(page);
@@ -97,7 +97,7 @@ test('admin console: create, edit, rotate and delete a connection', async ({ pag
   });
 
   await test.step('the connection page shows the redirect URI and a configured secret', async () => {
-    await expect(page).toHaveURL((url) => url.pathname.startsWith('/console/connections/') && !url.pathname.endsWith('/new'));
+    await expect(page).toHaveURL((url) => url.pathname.startsWith('/console/t/default/connections/') && !url.pathname.endsWith('/new'));
     await expect(page.getByRole('heading', { level: 1, name: displayName })).toBeVisible();
     await expect(page.getByTestId('connection-redirect-uri')).toHaveText(
       `${anvilUrl()}/ui/login/upstream/${slug}/callback`,
@@ -136,7 +136,7 @@ test('admin console: create, edit, rotate and delete a connection', async ({ pag
 
   await test.step('the list shows the renamed connection with a configured secret', async () => {
     await page.getByRole('link', { name: '← Connections' }).click();
-    await expect(page).toHaveURL((url) => url.pathname === '/console/connections');
+    await expect(page).toHaveURL((url) => url.pathname === '/console/t/default/connections');
     const row = page.getByRole('row').filter({ has: page.getByRole('link', { name: renamed }) });
     await expect(row).toBeVisible();
     await expect(row).toContainText(slug);
@@ -152,7 +152,7 @@ test('admin console: create, edit, rotate and delete a connection', async ({ pag
     await expect(dialog).toBeVisible();
     await expectNoA11yViolations(page);
     await dialog.getByRole('button', { name: 'Delete connection' }).click();
-    await expect(page).toHaveURL((url) => url.pathname === '/console/connections');
+    await expect(page).toHaveURL((url) => url.pathname === '/console/t/default/connections');
     await expect(page.getByRole('table')).toHaveAttribute('aria-busy', 'false');
     await expect(page.getByRole('link', { name: renamed })).toHaveCount(0);
     expect((await listConnections(tok, 'default')).some((c) => c.slug === slug)).toBe(false);

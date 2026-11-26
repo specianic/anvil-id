@@ -141,7 +141,7 @@ test('admin console: users, sessions, audit, clients, email and SMTP', async ({ 
   });
 
   await test.step('tenant-wide sessions page', async () => {
-    await page.goto(consoleUrl('sessions'));
+    await page.goto(consoleUrl('t/default/sessions'));
     await expect(page.getByRole('heading', { level: 1, name: 'Sessions' })).toBeVisible();
     await expect(page.getByRole('table')).toHaveAttribute('aria-busy', 'false');
     await expect(page.getByRole('link', { name: userId })).toHaveCount(0);
@@ -150,7 +150,7 @@ test('admin console: users, sessions, audit, clients, email and SMTP', async ({ 
 
   const clientName = `e2e opaque ${randomPassword().slice(3, 11)}`;
   await test.step('create an opaque client and find it in the list', async () => {
-    await page.goto(consoleUrl('clients'));
+    await page.goto(consoleUrl('t/default/clients'));
     await page.getByRole('link', { name: 'New client' }).click();
     await expect(page.getByRole('heading', { level: 1, name: 'New client' })).toBeVisible();
     await expectNoA11yViolations(page);
@@ -181,7 +181,7 @@ test('admin console: users, sessions, audit, clients, email and SMTP', async ({ 
 
   await test.step("the sample RP's client card shows its logout, resource and MFA settings", async () => {
     // The sample RP registers no logout URIs, resources or MFA policy: the card shows the defaults.
-    await page.goto(consoleUrl('clients'));
+    await page.goto(consoleUrl('t/default/clients'));
     const row = page.getByRole('row').filter({ hasText: 'e2e console sample RP' }).first();
     await findInPagedTable(page, row);
     await row.getByRole('link').click();
@@ -235,7 +235,7 @@ test('admin console: users, sessions, audit, clients, email and SMTP', async ({ 
   });
 
   await test.step('SMTP settings and a test send delivered to Mailpit', async () => {
-    await page.goto(consoleUrl('email/smtp'));
+    await page.goto(consoleUrl('t/default/email/smtp'));
     await expect(page.getByRole('heading', { level: 1, name: 'SMTP settings' })).toBeVisible();
     await expect(page.getByTestId('smtp-source')).toBeVisible();
     await expectNoA11yViolations(page);
