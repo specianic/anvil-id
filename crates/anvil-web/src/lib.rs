@@ -56,7 +56,6 @@ pub fn router(state: AppState) -> Router {
         .merge(ui::routes())
         .merge(theme::routes())
         .merge(admin::routes())
-        .merge(health::routes())
         .route("/assets/{*path}", get(assets::handler))
         .fallback(not_found)
         .with_state(state.clone());
@@ -77,6 +76,8 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         // Installation-wide, outside tenant resolution: `/t/{slug}/console/` is not the console.
         .merge(console::routes())
+        // Probes never depend on tenant lookups and are never rate limited.
+        .merge(health::routes().with_state(state.clone()))
         .fallback_service(tenant_routed)
         .layer(axum::middleware::map_response_with_state(
             headers,

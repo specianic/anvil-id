@@ -15,10 +15,18 @@
 //! reach even inside a blocked range; an explicit list, even an empty one, replaces the
 //! development-mode loopback default) and `outbound_ca_file` (extra PEM root certificates for
 //! outbound TLS, merged with the built-in roots).
+//!
+//! Phase 5 keys (0.4): `redis_url` (secret; shared rate-limit backend, not supported until
+//! 05-16), `rate_limit_redis_failure` (`closed` | `local`), `metrics_listen` (separate
+//! Prometheus listener), `metrics_on_main_port`, `otel_endpoint` / `otel_service_name` (OTLP/HTTP
+//! traces; incoming `traceparent` headers are honoured only from `trusted_proxies`),
+//! `shutdown_drain` (readiness turns 503 on SIGTERM, then the node waits this long before it stops
+//! accepting) and `database_max_connections` (Postgres pool size; SQLite ignores it).
 
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anvil_cache::limiter::{LimiterConfig, RateQuota};
 use anvil_core::model::PublicUrl;
@@ -53,6 +61,14 @@ pub const MAX_KEY_ROTATION_DAYS: u32 = 3650;
 pub const DEFAULT_AUDIT_RETENTION_DAYS: u32 = 365;
 /// Longest accepted audit retention (100 years).
 pub const MAX_AUDIT_RETENTION_DAYS: u32 = 36_500;
+/// Default Postgres pool size.
+pub const DEFAULT_DATABASE_MAX_CONNECTIONS: u32 = 10;
+/// Largest accepted Postgres pool size.
+pub const MAX_DATABASE_MAX_CONNECTIONS: u32 = 1000;
+/// Default `service.name` of exported traces.
+pub const DEFAULT_OTEL_SERVICE_NAME: &str = "anvilid";
+/// Longest accepted shutdown drain delay.
+pub const MAX_SHUTDOWN_DRAIN: Duration = Duration::from_secs(3600);
 
 /// Every configuration key, in `config show` order.
 pub const KEYS: &[&str] = &[
@@ -85,10 +101,18 @@ pub const KEYS: &[&str] = &[
     "audit_retention_days",
     "outbound_allow_cidrs",
     "outbound_ca_file",
+    "redis_url",
+    "rate_limit_redis_failure",
+    "metrics_listen",
+    "metrics_on_main_port",
+    "otel_endpoint",
+    "otel_service_name",
+    "shutdown_drain",
+    "database_max_connections",
 ];
 
 /// Keys whose value is a secret as a whole.
-const SECRET_KEYS: &[&str] = &["kek", "smtp_url"];
+const SECRET_KEYS: &[&str] = &["kek", "smtp_url", "redis_url"];
 
 /// Configuration flags shared by every subcommand. Every field is optional so that figment, not
 /// clap, applies defaults and precedence.
@@ -240,6 +264,109 @@ pub struct CliOverrides {
     #[arg(long, value_name = "PATH")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outbound_ca_file: Option<PathBuf>,
+
+    /// When the shared rate-limit backend (redis_url, env or file only) is unreachable:
+    /// `closed` rejects login requests, `local` falls back to the per-node limiter
+    /// [default: closed].
+    #[arg(long, value_name = "MODE")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rate_limit_redis_failure: Option<String>,
+
+    /// Socket address of a separate listener serving only Prometheus `/metrics`
+    /// [default: off].
+    #[arg(long, value_name = "ADDR")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metrics_listen: Option<String>,
+
+    /// Also serve `/metrics` on the main listener (never rate limited or tenant-resolved).
+    #[arg(long)]
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub metrics_on_main_port: bool,
+
+    /// OTLP/HTTP (protobuf) traces endpoint base URL, e.g. http://collector:4318
+    /// [default: off].
+    #[arg(long, value_name = "URL")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub otel_endpoint: Option<String>,
+
+    /// `service.name` of exported traces [default: anvilid].
+    #[arg(long, value_name = "NAME")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub otel_service_name: Option<String>,
+
+    /// On SIGTERM, how long readiness reports 503 before the server stops accepting: `10s`,
+    /// `500ms`, `1m` or plain seconds [default: 0s].
+    #[arg(long, value_name = "DURATION")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shutdown_drain: Option<String>,
+
+    /// Postgres connection pool size, 1 to 1000 (SQLite ignores it) [default: 10].
+    #[arg(long, value_name = "N")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub database_max_connections: Option<u32>,
+}
+
+/// A duration given as a string (`10s`, `500ms`, `1m`, `2h`, `10`) or as a number of seconds
+/// (TOML integer, or an environment value figment parsed as a number).
+#[derive(Clone, Debug, Deserialize)]
+#[serde(untagged)]
+pub enum DurationValue {
+    Secs(u64),
+    Text(String),
+}
+
+impl DurationValue {
+    /// The duration, or `None` when the text is not a duration.
+    pub fn parse(&self) -> Option<Duration> {
+        match self {
+            Self::Secs(n) => Some(Duration::from_secs(*n)),
+            Self::Text(t) => parse_duration(t),
+        }
+    }
+
+    fn display(&self) -> String {
+        match self {
+            Self::Secs(n) => format!("{n}s"),
+            Self::Text(t) => t.trim().to_owned(),
+        }
+    }
+}
+
+/// Parses `<n>ms`, `<n>s`, `<n>m`, `<n>h` or a plain number of seconds.
+pub fn parse_duration(text: &str) -> Option<Duration> {
+    let t = text.trim();
+    let split = t.find(|c: char| !c.is_ascii_digit()).unwrap_or(t.len());
+    let (digits, unit) = t.split_at(split);
+    if digits.is_empty() {
+        return None;
+    }
+    let n: u64 = digits.parse().ok()?;
+    match unit.trim() {
+        "" | "s" => Some(Duration::from_secs(n)),
+        "ms" => Some(Duration::from_millis(n)),
+        "m" => n.checked_mul(60).map(Duration::from_secs),
+        "h" => n.checked_mul(3600).map(Duration::from_secs),
+        _ => None,
+    }
+}
+
+/// What the rate limiter does when the shared backend (`redis_url`) is unreachable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RedisFailure {
+    /// Login (auth-class) requests are rejected; other classes fall back to the node limiter.
+    Closed,
+    /// Every class falls back to the per-node limiter.
+    Local,
+}
+
+/// A URL that may carry credentials: `Debug` never shows the userinfo.
+#[derive(Clone, PartialEq, Eq)]
+pub struct CredentialUrl(pub url::Url);
+
+impl fmt::Debug for CredentialUrl {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&redact_userinfo(self.0.as_str()))
+    }
 }
 
 /// A list given either as one comma-separated string (environment, CLI) or as a TOML array.
@@ -302,6 +429,14 @@ pub struct RawConfig {
     /// `None` = mode default (loopback in dev mode, none otherwise).
     pub outbound_allow_cidrs: Option<ListValue>,
     pub outbound_ca_file: Option<PathBuf>,
+    pub redis_url: Option<String>,
+    pub rate_limit_redis_failure: String,
+    pub metrics_listen: Option<String>,
+    pub metrics_on_main_port: bool,
+    pub otel_endpoint: Option<String>,
+    pub otel_service_name: String,
+    pub shutdown_drain: DurationValue,
+    pub database_max_connections: u32,
 }
 
 impl fmt::Debug for RawConfig {
@@ -344,6 +479,14 @@ impl Default for RawConfig {
             audit_retention_days: DEFAULT_AUDIT_RETENTION_DAYS,
             outbound_allow_cidrs: None,
             outbound_ca_file: None,
+            redis_url: None,
+            rate_limit_redis_failure: "closed".to_owned(),
+            metrics_listen: None,
+            metrics_on_main_port: false,
+            otel_endpoint: None,
+            otel_service_name: DEFAULT_OTEL_SERVICE_NAME.to_owned(),
+            shutdown_drain: DurationValue::Secs(0),
+            database_max_connections: DEFAULT_DATABASE_MAX_CONNECTIONS,
         }
     }
 }
@@ -651,6 +794,23 @@ pub struct Config {
     pub outbound_allow_cidrs: Option<Vec<IpNet>>,
     /// Extra outbound root certificates (validated PEM bundle).
     pub outbound_ca_pem: Option<Vec<u8>>,
+    /// Shared rate-limit backend (`redis://` or `rediss://`); `None` = in-process limiter.
+    pub redis_url: Option<SecretString>,
+    /// Behaviour when the shared backend is unreachable.
+    #[allow(dead_code, reason = "read by the shared limiter (05-16)")]
+    pub redis_failure: RedisFailure,
+    /// Separate Prometheus listener.
+    pub metrics_listen: Option<SocketAddr>,
+    /// `/metrics` on the main listener too.
+    pub metrics_on_main_port: bool,
+    /// OTLP/HTTP traces endpoint base URL; `None` installs no OpenTelemetry layer.
+    pub otel_endpoint: Option<CredentialUrl>,
+    /// `service.name` of exported traces.
+    pub otel_service_name: String,
+    /// Readiness-503 period between SIGTERM and the graceful shutdown.
+    pub shutdown_drain: Duration,
+    /// Postgres pool size (SQLite ignores it).
+    pub database_max_connections: u32,
     /// Non-fatal findings, logged as warnings on start.
     pub warnings: Vec<String>,
 }
@@ -831,6 +991,106 @@ impl Config {
             .map(read_outbound_ca)
             .transpose()?;
 
+        let redis_url = raw
+            .redis_url
+            .filter(|u| !u.trim().is_empty())
+            .map(|u| {
+                // Never echo the value: it may hold a password.
+                let ok = url::Url::parse(u.trim())
+                    .is_ok_and(|p| matches!(p.scheme(), "redis" | "rediss") && p.has_host());
+                if ok {
+                    Ok(SecretString::from(u.trim().to_owned()))
+                } else {
+                    Err(field_error(
+                        "redis_url",
+                        "must be a redis:// or rediss:// URL with a host",
+                    ))
+                }
+            })
+            .transpose()?;
+        let redis_failure = match raw
+            .rate_limit_redis_failure
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "closed" => RedisFailure::Closed,
+            "local" => RedisFailure::Local,
+            _ => {
+                return Err(field_error(
+                    "rate_limit_redis_failure",
+                    "must be `closed` or `local`",
+                ));
+            }
+        };
+        let metrics_listen = raw
+            .metrics_listen
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(|v| {
+                v.parse::<SocketAddr>().map_err(|_| {
+                    field_error(
+                        "metrics_listen",
+                        "must be a socket address such as 0.0.0.0:9464",
+                    )
+                })
+            })
+            .transpose()?;
+        if metrics_listen == Some(listen) {
+            return Err(field_error(
+                "metrics_listen",
+                "must differ from listen (use metrics_on_main_port to serve /metrics there)",
+            ));
+        }
+        if raw.metrics_on_main_port {
+            warnings.push(
+                "metrics_on_main_port is set: /metrics is reachable on the main listener; restrict                  it at the reverse proxy if the listener is public"
+                    .to_owned(),
+            );
+        }
+        let otel_endpoint = raw
+            .otel_endpoint
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(|v| match url::Url::parse(v) {
+                Ok(u) if matches!(u.scheme(), "http" | "https") && u.has_host() => {
+                    Ok(CredentialUrl(u))
+                }
+                _ => Err(field_error(
+                    "otel_endpoint",
+                    "must be an absolute http:// or https:// URL",
+                )),
+            })
+            .transpose()?;
+        let otel_service_name = raw.otel_service_name.trim().to_owned();
+        if otel_service_name.is_empty()
+            || otel_service_name.len() > 255
+            || otel_service_name.chars().any(char::is_control)
+        {
+            return Err(field_error(
+                "otel_service_name",
+                "must be 1 to 255 printable characters",
+            ));
+        }
+        let shutdown_drain = raw
+            .shutdown_drain
+            .parse()
+            .filter(|d| *d <= MAX_SHUTDOWN_DRAIN)
+            .ok_or_else(|| {
+                field_error(
+                    "shutdown_drain",
+                    "must be a duration such as 10s, 500ms or 1m, at most 1h",
+                )
+            })?;
+        if !(1..=MAX_DATABASE_MAX_CONNECTIONS).contains(&raw.database_max_connections) {
+            return Err(field_error(
+                "database_max_connections",
+                format!("must be between 1 and {MAX_DATABASE_MAX_CONNECTIONS}"),
+            ));
+        }
+
         Ok(Self {
             kek_file: raw
                 .kek_file
@@ -855,6 +1115,14 @@ impl Config {
             audit_retention,
             outbound_allow_cidrs,
             outbound_ca_pem,
+            redis_url,
+            redis_failure,
+            metrics_listen,
+            metrics_on_main_port: raw.metrics_on_main_port,
+            otel_endpoint,
+            otel_service_name,
+            shutdown_drain,
+            database_max_connections: raw.database_max_connections,
             warnings,
         })
     }
@@ -890,6 +1158,27 @@ pub fn redact_url(raw: &str) -> String {
         url.query_pairs_mut().clear().extend_pairs(pairs);
     }
     url.to_string().replace("%2A%2A%2A", "***")
+}
+
+/// [`redact_url`] that also hides a user name (Redis and OTLP URLs may carry a token there).
+pub fn redact_userinfo(raw: &str) -> String {
+    let redacted = redact_url(raw);
+    let Ok(mut url) = url::Url::parse(&redacted) else {
+        return redacted;
+    };
+    if url.username().is_empty() {
+        return redacted;
+    }
+    if url.set_username("***").is_err() {
+        return "***".to_owned();
+    }
+    url.to_string().replace("%2A%2A%2A", "***")
+}
+
+fn opt_str(v: Option<&String>) -> String {
+    v.map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map_or_else(|| "<unset>".to_owned(), str::to_owned)
 }
 
 fn opt_path(p: Option<&PathBuf>) -> String {
@@ -994,6 +1283,20 @@ pub fn show(layers: &Layers, raw: &RawConfig) -> String {
                 .to_owned(),
             },
             "outbound_ca_file" => opt_path(raw.outbound_ca_file.as_ref()),
+            "redis_url" => match raw.redis_url.as_deref().map(str::trim) {
+                Some(u) if !u.is_empty() => redact_userinfo(u),
+                _ => "<unset>".to_owned(),
+            },
+            "rate_limit_redis_failure" => raw.rate_limit_redis_failure.clone(),
+            "metrics_listen" => opt_str(raw.metrics_listen.as_ref()),
+            "metrics_on_main_port" => raw.metrics_on_main_port.to_string(),
+            "otel_endpoint" => match raw.otel_endpoint.as_deref().map(str::trim) {
+                Some(u) if !u.is_empty() => redact_userinfo(u),
+                _ => "<unset>".to_owned(),
+            },
+            "otel_service_name" => raw.otel_service_name.clone(),
+            "shutdown_drain" => raw.shutdown_drain.display(),
+            "database_max_connections" => raw.database_max_connections.to_string(),
             _ => continue,
         };
         out.push_str(&format!("{key} = {value} ({})\n", layers.source(key)));

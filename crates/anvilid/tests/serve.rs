@@ -30,14 +30,24 @@ impl Drop for Server {
 }
 
 impl Server {
-    /// Sends SIGTERM and waits for the exit status.
-    fn terminate(&mut self) -> ExitStatus {
+    /// Sends SIGTERM without waiting.
+    fn send_term(&self) {
         let status = Command::new("kill")
             .arg("-TERM")
             .arg(self.child.id().to_string())
             .status()
             .expect("run kill");
         assert!(status.success(), "kill -TERM failed");
+    }
+
+    /// Sends SIGTERM and waits for the exit status.
+    fn terminate(&mut self) -> ExitStatus {
+        self.send_term();
+        self.wait_exit()
+    }
+
+    /// Waits (at most 20 s) for the process to exit.
+    fn wait_exit(&mut self) -> ExitStatus {
         let deadline = Instant::now() + Duration::from_secs(20);
         loop {
             if let Some(status) = self.child.try_wait().expect("try_wait") {
@@ -225,6 +235,59 @@ fn sigterm_shuts_down_gracefully_with_exit_code_zero() {
     let status = server.terminate();
     let stderr = server.stderr();
     assert!(status.success(), "exit status {status}: {stderr}");
+    assert!(stderr.contains("shut down cleanly"), "{stderr}");
+}
+
+#[test]
+fn sigterm_turns_readiness_503_serves_during_the_drain_then_exits_zero() {
+    const DRAIN: Duration = Duration::from_secs(2);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let port = free_port();
+    let mut server = Server {
+        child: spawn(dir.path(), None, port, &["--shutdown-drain", "2s"]),
+        port,
+    };
+    wait_ready(&mut server, healthy);
+    for path in ["/readyz", "/health/ready"] {
+        let (status, _) = http_get(port, path).expect("ready");
+        assert!(status.contains(" 200 "), "{path}: {status}");
+    }
+
+    let signalled = Instant::now();
+    server.send_term();
+    // Readiness flips at once (well within the drain delay).
+    loop {
+        let (status, body) = http_get(port, "/readyz").expect("readyz during drain");
+        if status.contains(" 503 ") {
+            assert_eq!(body, "draining");
+            break;
+        }
+        assert!(
+            signalled.elapsed() < DRAIN / 2,
+            "readiness did not turn 503 promptly: {status}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let (status, _) = http_get(port, "/health/ready").expect("health/ready during drain");
+    assert!(status.contains(" 503 "), "{status}");
+    // New connections are still served while draining: liveness and real endpoints.
+    let (status, _) = http_get(port, "/healthz").expect("healthz during drain");
+    assert!(status.contains(" 200 "), "{status}");
+    assert_discovery(port);
+    assert!(
+        signalled.elapsed() < DRAIN,
+        "the checks above ran past the drain"
+    );
+
+    let status = server.wait_exit();
+    let elapsed = signalled.elapsed();
+    let stderr = server.stderr();
+    assert!(status.success(), "exit status {status}: {stderr}");
+    assert!(
+        elapsed >= DRAIN,
+        "exited after {elapsed:?}, before the drain"
+    );
+    assert!(stderr.contains("draining before shutdown"), "{stderr}");
     assert!(stderr.contains("shut down cleanly"), "{stderr}");
 }
 

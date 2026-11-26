@@ -6,12 +6,15 @@
 //!   when several nodes share one Postgres database, at most one of them runs a given job at a
 //!   time. Each process has a random node id. Intervals have a small random start delay
 //!   (jitter) so nodes started together do not race for every lease.
-//! - **The outbox worker** runs continuously on every node (rows are claimed individually). It
-//!   always runs: tenants with their own SMTP settings get mail even when the installation SMTP
-//!   (`smtp_url`) is not configured.
-//! - **The back-channel logout worker** ([`spawn_logout_worker`]) runs continuously on every node.
-//!   No job lease is needed: each delivery row is leased when claimed, so nodes never deliver the
-//!   same row twice. Logouts wake it immediately; otherwise it polls.
+//! - **Continuous workers** implement [`BackgroundWorker`] and are started by
+//!   [`spawn_workers`], the one way a long-running worker is spawned:
+//!   - the outbox worker runs on every node (rows are claimed individually). It always runs:
+//!     tenants with their own SMTP settings get mail even when the installation SMTP
+//!     (`smtp_url`) is not configured;
+//!   - the back-channel logout worker runs on every node. No job lease is needed: each delivery
+//!     row is leased when claimed, so nodes never deliver the same row twice. Logouts wake it
+//!     immediately; otherwise it polls. Startup hands it over in `Started::workers`, where later
+//!     workers (webhook deliveries) are added too.
 //!
 //! Everything stops when the shutdown channel flips.
 //!
@@ -77,6 +80,49 @@ pub struct JobsConfig {
     pub rotation: RotationPolicy,
     /// `None` keeps audit events forever (no retention job).
     pub audit_retention: Option<time::Duration>,
+}
+
+/// A future a worker runs on (boxed, owned).
+pub type BoxFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
+
+/// A continuously running worker. `run` consumes the worker and returns a future that finishes
+/// once `stop` resolves (after the current batch). Workers log their own failures.
+pub trait BackgroundWorker: Send {
+    /// Short stable name, used in logs.
+    fn name(&self) -> &'static str;
+    fn run(self: Box<Self>, stop: BoxFuture) -> BoxFuture;
+}
+
+impl BackgroundWorker for LogoutDeliveryWorker {
+    fn name(&self) -> &'static str {
+        "backchannel_logout"
+    }
+
+    fn run(self: Box<Self>, stop: BoxFuture) -> BoxFuture {
+        Box::pin(LogoutDeliveryWorker::run(*self, stop))
+    }
+}
+
+impl BackgroundWorker for OutboxWorker {
+    fn name(&self) -> &'static str {
+        "outbox"
+    }
+
+    fn run(self: Box<Self>, stop: BoxFuture) -> BoxFuture {
+        Box::pin(OutboxWorker::run(*self, stop))
+    }
+}
+
+/// Spawns every worker into `jobs`; each stops when the shutdown channel flips.
+pub fn spawn_workers(
+    jobs: &mut JoinSet<()>,
+    workers: Vec<Box<dyn BackgroundWorker>>,
+    shutdown: &watch::Receiver<bool>,
+) {
+    for worker in workers {
+        tracing::info!(worker = worker.name(), "background worker started");
+        jobs.spawn(worker.run(Box::pin(stopped(shutdown.clone()))));
+    }
 }
 
 /// A periodic job. `run` logs its own failures (a failed run is retried at the next interval).
@@ -344,18 +390,6 @@ pub fn spawn(
         from: cfg.smtp_from.clone(),
         kek: Arc::clone(kek),
     };
-    tracing::info!("outbox worker started");
-    jobs.spawn(worker.run(stopped(shutdown.clone())));
+    spawn_workers(&mut jobs, vec![Box::new(worker)], shutdown);
     Ok(jobs)
-}
-
-/// Spawns the back-channel logout delivery worker into `jobs`; it stops when the shutdown
-/// channel flips.
-pub fn spawn_logout_worker(
-    jobs: &mut JoinSet<()>,
-    worker: LogoutDeliveryWorker,
-    shutdown: &watch::Receiver<bool>,
-) {
-    tracing::info!("back-channel logout worker started");
-    jobs.spawn(worker.run(stopped(shutdown.clone())));
 }

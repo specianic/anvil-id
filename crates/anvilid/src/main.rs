@@ -4,6 +4,7 @@ mod config;
 mod datadir;
 mod jobs;
 mod keys;
+mod limiter;
 mod server;
 mod startup;
 mod storage;
@@ -212,6 +213,7 @@ async fn migrate(cfg: &Config) -> anyhow::Result<()> {
         storage::Migrations::Run {
             allow_destructive: cfg.allow_destructive_migrations,
         },
+        cfg.database_max_connections,
     )
     .await?;
     println!("migrations applied");
@@ -277,10 +279,22 @@ async fn serve(cfg: &Config) -> anyhow::Result<()> {
         &started.kek,
         &stop_rx,
     )?;
-    jobs::spawn_logout_worker(&mut jobs, started.logout_worker, &stop_rx);
+    jobs::spawn_workers(&mut jobs, started.workers, &stop_rx);
     let signal_tx = Arc::clone(&stop_tx);
+    let state = started.state.clone();
+    let drain = cfg.shutdown_drain;
     tokio::spawn(async move {
         shutdown_signal().await;
+        // Readiness turns 503 first so load balancers stop routing here; requests keep being
+        // served during the drain, then the graceful shutdown starts.
+        state.set_ready(false);
+        if !drain.is_zero() {
+            tracing::info!(
+                drain_ms = u64::try_from(drain.as_millis()).unwrap_or(u64::MAX),
+                "readiness is 503; draining before shutdown"
+            );
+            tokio::time::sleep(drain).await;
+        }
         let _ = signal_tx.send(true);
     });
 

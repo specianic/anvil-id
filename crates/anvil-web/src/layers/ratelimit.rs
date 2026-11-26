@@ -17,7 +17,7 @@
 //!
 //! | Request | Class |
 //! | ------- | ----- |
-//! | `/health/*`, `/healthz`, `/assets/*` (any method) | never limited |
+//! | `/health/*`, `/healthz`, `/readyz`, `/metrics`, `/assets/*` (any method) | never limited |
 //! | `/token`, `/introspect`, `/revoke` (any method) | `Token` |
 //! | `/api/admin` and below (any method) | `Admin` |
 //! | `POST` to `/ui/login`, `/ui/registration`, `/ui/recovery`, `/setup` and below | `Auth` |
@@ -43,7 +43,7 @@ use crate::state::AppState;
 use crate::tenant::ResolvedTenant;
 
 /// Paths (and everything below them) that are never rate limited.
-const EXEMPT: &[&str] = &["/health", "/healthz", "/assets"];
+const EXEMPT: &[&str] = &["/health", "/healthz", "/readyz", "/metrics", "/assets"];
 /// Token-class paths (any method).
 const TOKEN: &[&str] = &["/token", "/introspect", "/revoke"];
 /// Admin-class paths (any method).
@@ -189,7 +189,8 @@ pub(crate) async fn layer(State(state): State<AppState>, req: Request, next: Nex
     };
     match state.limiter().check(class, &LimitKey::Ip(ip.0)).await {
         Decision::Deny { retry_after } => {
-            tracing::info!(ip = %ip.0, ?class, "rate limited");
+            // No client IP in operational logs (the audit log keeps it where it is recorded).
+            tracing::info!(?class, "rate limited");
             too_many_requests(
                 &state,
                 parts.extensions.get::<ResolvedTenant>(),
@@ -309,6 +310,8 @@ mod tests {
             (&get, "/health/live", None),
             (&get, "/health/ready", None),
             (&get, "/healthz", None),
+            (&get, "/readyz", None),
+            (&get, "/metrics", None),
             (&get, "/assets/anvil.css", None),
             (&post, "/token", Some(RouteClass::Token)),
             (&get, "/token", Some(RouteClass::Token)),

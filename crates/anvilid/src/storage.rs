@@ -11,9 +11,6 @@ use anvil_storage_sqlite::{
 };
 use anyhow::{Context, bail};
 
-/// Maximum Postgres pool size.
-const POSTGRES_MAX_CONNECTIONS: u32 = 10;
-
 /// Backend selected by the database URL scheme.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Backend {
@@ -64,9 +61,14 @@ fn refuse_destructive(list: &[impl std::fmt::Display]) -> anyhow::Error {
 
 /// Opens the backend selected by the URL scheme and, unless `migrations` is `Skip`, applies its
 /// migrations. Pending destructive migrations are refused unless `allow_destructive` is set.
+/// `max_connections` sizes the Postgres pool (`database_max_connections`); SQLite ignores it.
 ///
 /// Only the backend kind is logged; the URL may hold credentials.
-pub async fn open_storage(url: &str, migrations: Migrations) -> anyhow::Result<Arc<dyn Storage>> {
+pub async fn open_storage(
+    url: &str,
+    migrations: Migrations,
+    max_connections: u32,
+) -> anyhow::Result<Arc<dyn Storage>> {
     let backend = Backend::from_url(url)?;
     tracing::info!(backend = backend.name(), "opening storage");
     let storage: Arc<dyn Storage> = match backend {
@@ -89,7 +91,7 @@ pub async fn open_storage(url: &str, migrations: Migrations) -> anyhow::Result<A
             Arc::new(s)
         }
         Backend::Postgres => {
-            let s = PostgresStorage::connect(url, POSTGRES_MAX_CONNECTIONS)
+            let s = PostgresStorage::connect(url, max_connections)
                 .await
                 .context("failed to connect to postgres")?;
             if let Migrations::Run { allow_destructive } = migrations {
@@ -101,6 +103,7 @@ pub async fn open_storage(url: &str, migrations: Migrations) -> anyhow::Result<A
                     Err(e) => return Err(e).context("failed to migrate postgres database"),
                 }
             }
+            tracing::info!(max_connections, "postgres pool configured");
             Arc::new(s)
         }
     };

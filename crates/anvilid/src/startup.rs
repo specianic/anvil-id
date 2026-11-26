@@ -20,6 +20,8 @@ use secrecy::{ExposeSecret, SecretString};
 
 use crate::config::{Config, LogFormat};
 use crate::datadir::{self, KekOrigin, OnMissing, ServeLock};
+use crate::jobs::BackgroundWorker;
+use crate::limiter;
 use crate::storage::{self, Backend};
 
 /// Everything `serve` runs on after startup.
@@ -32,9 +34,12 @@ pub struct Started {
     pub kek: Arc<Kek>,
     /// Held for the server's lifetime (SQLite only).
     pub lock: Option<ServeLock>,
-    /// The back-channel logout delivery worker, wired to the application's wake signal
-    /// (`AppState::logout_wake`) and outbound client. Spawned on every node by the jobs.
-    pub logout_worker: LogoutDeliveryWorker,
+    /// The application state behind `app` (readiness is cleared on it at shutdown).
+    pub state: AppState,
+    /// Continuous workers spawned on every node by `jobs::spawn_workers`: the back-channel
+    /// logout worker (wired to `AppState::logout_wake` and the state's outbound client), and
+    /// later workers pushed here.
+    pub workers: Vec<Box<dyn BackgroundWorker>>,
 }
 
 /// Data directory, serve lock and KEK, in that order: the lock is taken before a KEK could be
@@ -86,7 +91,8 @@ pub async fn open_for_cli(cfg: &Config) -> anyhow::Result<(Arc<dyn Storage>, Kek
         OnMissing::RefuseNotInstalled,
     )?;
     // No migrations and no serve.lock: this runs next to a running server (Pitfall P10).
-    let storage = storage::open_storage(url, storage::Migrations::Skip).await?;
+    let storage =
+        storage::open_storage(url, storage::Migrations::Skip, cfg.database_max_connections).await?;
     Ok((storage, kek))
 }
 
@@ -137,8 +143,11 @@ pub async fn start(cfg: &Config) -> anyhow::Result<Started> {
     let backend = Backend::from_url(url)?;
     let (lock, kek) = prepare_data_dir(cfg, backend)?;
     let kek = Arc::new(kek);
-    let storage = storage::open_storage(url, cfg.migrations()).await?;
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+    // The one limiter construction site; an unsupported backend fails before the database opens.
+    let limiter = limiter::build_limiter(cfg, Arc::clone(&clock), &kek).await?;
+    let storage =
+        storage::open_storage(url, cfg.migrations(), cfg.database_max_connections).await?;
     let hasher: Arc<dyn PasswordHasher> = Arc::new(Argon2Pool::new(
         Argon2Pool::owasp_params(),
         argon2_permits(),
@@ -205,7 +214,8 @@ pub async fn start(cfg: &Config) -> anyhow::Result<Started> {
         kek: Arc::clone(&kek),
     };
     let public_url = app_config.public_url.clone();
-    let state = AppState::new(app_config, deps).context("failed to build the application")?;
+    let state = AppState::new_with_limiter(app_config, deps, limiter)
+        .context("failed to build the application")?;
     // Logouts wake the worker through the state's Notify; deliveries go through the state's
     // outbound client (no second client).
     let logout_worker = LogoutDeliveryWorker::new(
@@ -216,14 +226,16 @@ pub async fn start(cfg: &Config) -> anyhow::Result<Started> {
         state.outbound_arc(),
         state.logout_wake(),
     );
-    let app = anvil_web::router(state);
+    let workers: Vec<Box<dyn BackgroundWorker>> = vec![Box::new(logout_worker)];
+    let app = anvil_web::router(state.clone());
     Ok(Started {
         app,
         storage,
         clock,
         kek,
         lock,
-        logout_worker,
+        state,
+        workers,
     })
 }
 

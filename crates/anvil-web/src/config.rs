@@ -1,6 +1,7 @@
 //! Configuration of the HTTP application built by [`crate::app`].
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anvil_cache::limiter::LimiterConfig;
 use anvil_core::model::PublicUrl;
@@ -40,7 +41,14 @@ pub struct AppConfig {
     /// Whether the installation SMTP transport (`smtp_url`) is configured. Tenants without SMTP
     /// settings of their own can enable email sign-in (codes, magic links) only when it is.
     pub installation_smtp: bool,
+    /// How long an unknown `Host` header is remembered as unknown (negative cache in
+    /// [`crate::state::AppState`], used by 05-18). Default [`DEFAULT_UNKNOWN_HOST_TTL`]; a plain
+    /// field so tests can inject a short TTL.
+    pub unknown_host_ttl: Duration,
 }
+
+/// Default lifetime of a negative "unknown host" cache entry.
+pub const DEFAULT_UNKNOWN_HOST_TTL: Duration = Duration::from_secs(5);
 
 impl AppConfig {
     /// A configuration with the default password policy and no theme override.
@@ -60,6 +68,7 @@ impl AppConfig {
             captcha_endpoints: CaptchaEndpoints::default(),
             outbound,
             installation_smtp: false,
+            unknown_host_ttl: DEFAULT_UNKNOWN_HOST_TTL,
         }
     }
 
