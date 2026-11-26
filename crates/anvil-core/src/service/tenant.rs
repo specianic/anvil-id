@@ -260,7 +260,7 @@ fn host_list_issues(field: &'static str, hosts: &[String], out: &mut Vec<(&'stat
 /// - the system tenant keeps both policies `disabled` (`system` = the tenant is `system`);
 /// - allow-list hosts are host names or IP literals (no scheme, port, path or wildcard), at most
 ///   [`MAX_REGISTRATION_LIST_LEN`], no duplicates; CIMD `allow_listed` needs at least one host;
-/// - `dcr.allowed_scopes` are scope tokens, never admin API scopes (`admin:*`);
+/// - `dcr.allowed_scopes` are scope tokens, never admin API scopes (`admin`, `admin:*`);
 /// - `dcr.allowed_resources` are RFC 8707 resource indicators (absolute URI, no fragment or
 ///   query);
 /// - `dcr.max_clients` is at most [`MAX_DCR_MAX_CLIENTS`];
@@ -301,7 +301,7 @@ pub fn registration_settings_issues(
         for s in &dcr.allowed_scopes {
             if s.is_empty() || s.contains(' ') || crate::model::Scope::parse(s).is_err() {
                 out.push(("dcr.allowed_scopes", format!("invalid scope token {s:?}")));
-            } else if s.starts_with("admin:") {
+            } else if crate::service::admin_scope::is_reserved_admin_token(s) {
                 out.push((
                     "dcr.allowed_scopes",
                     format!("{s:?}: admin API scopes can never be registered dynamically"),
@@ -1376,6 +1376,13 @@ mod tests {
             (
                 DcrSettings {
                     allowed_scopes: vec!["admin:read".into()],
+                    ..DcrSettings::default()
+                },
+                "dcr.allowed_scopes",
+            ),
+            (
+                DcrSettings {
+                    allowed_scopes: vec!["admin".into()],
                     ..DcrSettings::default()
                 },
                 "dcr.allowed_scopes",

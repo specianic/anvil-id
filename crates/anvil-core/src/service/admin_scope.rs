@@ -97,6 +97,14 @@ pub fn is_admin_scope(token: &str) -> bool {
     ALL_ADMIN_SCOPES.contains(&token)
 }
 
+/// Whether `token` lies in the namespace reserved for the admin API: `admin` itself or anything
+/// starting with `admin:`. Covers every [`ALL_ADMIN_SCOPES`] entry and any admin scope added
+/// later. Clients outside the system tenant (static, DCR, CIMD) never carry such a token, and DCR
+/// settings never allow one.
+pub fn is_reserved_admin_token(token: &str) -> bool {
+    token == "admin" || token.starts_with("admin:")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,5 +192,18 @@ mod tests {
         assert!(is_admin_scope("admin:audit:read"));
         assert!(is_admin_scope("admin:settings:write"));
         assert!(!is_admin_scope("openid"));
+    }
+
+    #[test]
+    fn reserved_admin_tokens() {
+        for t in ["admin", "admin:read", "admin:anything", "admin:"] {
+            assert!(is_reserved_admin_token(t), "{t}");
+        }
+        for t in ALL_ADMIN_SCOPES {
+            assert!(is_reserved_admin_token(t), "{t}");
+        }
+        for t in ["openid", "administrator", "xadmin:read", "Admin:read", ""] {
+            assert!(!is_reserved_admin_token(t), "{t}");
+        }
     }
 }

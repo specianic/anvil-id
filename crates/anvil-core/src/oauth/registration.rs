@@ -48,7 +48,7 @@ use crate::model::{
 };
 use crate::oauth::redirect::{MAX_REDIRECT_URI_LEN, validate_redirect_uri};
 use crate::oauth::resource::parse_resources;
-use crate::service::admin_scope::is_admin_scope;
+use crate::service::admin_scope::is_reserved_admin_token;
 use crate::service::client::{
     ClientInput, ClientOptions, MAX_REDIRECT_URIS, validate_client, validate_client_phase4,
 };
@@ -258,10 +258,6 @@ fn check_https_uri(key: &str, value: &str) -> Result<(), CoreError> {
     Ok(())
 }
 
-fn is_forbidden_scope(token: &str) -> bool {
-    token == "admin" || token.starts_with("admin:") || is_admin_scope(token)
-}
-
 /// Maps a `ClientService` validation error to its RFC 7591 error.
 fn map_client_error(e: CoreError) -> CoreError {
     match e {
@@ -399,7 +395,7 @@ pub fn validate(
         Some(raw) => {
             Scope::parse(raw).map_err(|_| meta("scope is not a valid scope string"))?;
             let tokens = dedup(raw.split(' ').map(str::to_owned).collect());
-            if tokens.iter().any(|t| is_forbidden_scope(t)) {
+            if tokens.iter().any(|t| is_reserved_admin_token(t)) {
                 return Err(meta("admin scopes cannot be registered"));
             }
             if tokens.iter().any(|t| !settings.allowed_scopes.contains(t)) {
@@ -413,7 +409,9 @@ pub fn validate(
             settings
                 .allowed_scopes
                 .iter()
-                .filter(|t| !is_forbidden_scope(t) && Scope::parse(t).is_ok() && !t.contains(' '))
+                .filter(|t| {
+                    !is_reserved_admin_token(t) && Scope::parse(t).is_ok() && !t.contains(' ')
+                })
                 .cloned()
                 .collect(),
         ),

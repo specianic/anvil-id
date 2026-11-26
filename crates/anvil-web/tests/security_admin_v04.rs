@@ -15,7 +15,7 @@ use axum::http::Method;
 use secrecy::SecretString;
 use serde_json::{Value, json};
 use support::{TestApp, json as body_json};
-use token_support::{acme, seed_user};
+use token_support::{ClockNow as _, acme, seed_user};
 use webhook_support::{dev_app, dev_worker, hook_url, sink, verified_by};
 
 /// An installed production-mode app without rate limiting (the tables send many requests).
@@ -749,4 +749,208 @@ async fn system_tenant_registration_policies_forced_disabled() {
     )
     .await;
     assert_eq!(resp.status, 404, "{}", resp.text());
+}
+
+/// Audit events of `tenant` with `action`.
+async fn audit_count(app: &TestApp, tenant: &str, action: anvil_core::model::AuditAction) -> usize {
+    let id = app
+        .storage()
+        .tenants()
+        .get_by_slug(tenant)
+        .await
+        .unwrap()
+        .unwrap()
+        .id;
+    app.storage()
+        .audit()
+        .query(
+            id,
+            &anvil_core::model::AuditQuery {
+                limit: 500,
+                ..anvil_core::model::AuditQuery::default()
+            },
+        )
+        .await
+        .unwrap()
+        .items
+        .iter()
+        .filter(|e| e.action == action)
+        .count()
+}
+
+fn web_client(scopes: &[&str]) -> Value {
+    json!({
+        "name": "Web app",
+        "client_type": "confidential",
+        "auth_method": "client_secret_basic",
+        "redirect_uris": ["https://rp.example/cb"],
+        "grant_types": ["authorization_code"],
+        "scopes": scopes,
+    })
+}
+
+#[tokio::test]
+async fn static_client_admin_scope_refused_outside_system_tenant() {
+    use anvil_core::model::AuditAction;
+    let app = TestApp::new().await;
+    let token = admin_token(&app, "admin:write").await;
+    let base = format!("{API}/tenants/default/clients");
+    let created_before = audit_count(&app, "default", AuditAction::ClientCreated).await;
+
+    for scopes in [
+        vec!["openid", "admin:read"],
+        vec!["openid", "admin"],
+        vec!["admin:custom"],
+    ] {
+        let resp = call(
+            &app,
+            Method::POST,
+            &base,
+            Some(&token),
+            Some(web_client(&scopes)),
+        )
+        .await;
+        assert_field_error(&resp, "scopes");
+    }
+    let tenant = app.default.as_ref().unwrap().tenant.id;
+    let page = app
+        .storage()
+        .clients()
+        .list(tenant, anvil_core::model::PageRequest::default())
+        .await
+        .unwrap();
+    assert!(page.items.is_empty(), "nothing stored");
+    assert_eq!(
+        audit_count(&app, "default", AuditAction::ClientCreated).await,
+        created_before
+    );
+
+    // An existing client cannot be updated to an admin scope.
+    let resp = call(
+        &app,
+        Method::POST,
+        &base,
+        Some(&token),
+        Some(web_client(&["openid"])),
+    )
+    .await;
+    assert_eq!(resp.status, 201, "{}", resp.text());
+    let client_id = body_json(&resp)["client_id"].as_str().unwrap().to_owned();
+    let updated_before = audit_count(&app, "default", AuditAction::ClientUpdated).await;
+    let resp = call(
+        &app,
+        Method::PATCH,
+        &format!("{base}/{client_id}"),
+        Some(&token),
+        Some(json!({"scopes": ["openid", "admin:clients:write"]})),
+    )
+    .await;
+    assert_field_error(&resp, "scopes");
+    let stored = app
+        .storage()
+        .clients()
+        .get(tenant, &client_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.scopes, vec!["openid"]);
+    assert_eq!(
+        audit_count(&app, "default", AuditAction::ClientUpdated).await,
+        updated_before
+    );
+}
+
+#[tokio::test]
+async fn system_tenant_static_client_may_hold_admin_scopes() {
+    let app = TestApp::new().await;
+    let token = admin_token(&app, "admin:write").await;
+    let resp = call(
+        &app,
+        Method::POST,
+        &format!("{API}/tenants/system/clients"),
+        Some(&token),
+        Some(web_client(&["openid", "admin:read"])),
+    )
+    .await;
+    assert_eq!(resp.status, 201, "{}", resp.text());
+    assert_eq!(body_json(&resp)["scopes"], json!(["openid", "admin:read"]));
+}
+
+#[tokio::test]
+async fn legacy_admin_scope_client_stays_editable() {
+    use anvil_core::model::{
+        ApplicationType, ClientAuthMethod, ClientId, ClientSource, ClientType, ConsentMode,
+        GrantType, NewClient, SecretHash, TokenFormat,
+    };
+    let app = TestApp::new().await;
+    let token = admin_token(&app, "admin:write").await;
+    let tenant = app.default.as_ref().unwrap().tenant.id;
+    // A client stored before the rule (written through storage, as an older version could).
+    app.storage()
+        .clients()
+        .create(
+            tenant,
+            &NewClient {
+                id: ClientId::new_v7(),
+                client_id: "legacy".to_owned(),
+                name: "legacy".to_owned(),
+                client_type: ClientType::Confidential,
+                application_type: ApplicationType::Web,
+                auth_method: ClientAuthMethod::ClientSecretBasic,
+                secret_hash: Some(SecretHash(secret_hash("a legacy client secret value 0123"))),
+                jwks: None,
+                redirect_uris: vec!["https://rp.example/cb".to_owned()],
+                grant_types: vec![GrantType::AuthorizationCode],
+                scopes: vec!["openid".to_owned(), "admin:read".to_owned()],
+                require_pkce: true,
+                created_at: app.clock_now(),
+                token_format: TokenFormat::Jwt,
+                consent_mode: ConsentMode::Required,
+                id_token_signed_response_alg: None,
+                can_introspect: false,
+                post_logout_redirect_uris: vec![],
+                backchannel_logout_uri: None,
+                backchannel_logout_session_required: false,
+                allowed_resources: vec![],
+                mfa_policy: None,
+                metadata_expires_at: None,
+                registration_access_token_hash: None,
+                registration_source: ClientSource::Static,
+            },
+        )
+        .await
+        .unwrap();
+    let path = format!("{API}/tenants/default/clients/legacy");
+
+    // Other fields stay editable.
+    let resp = call(
+        &app,
+        Method::PATCH,
+        &path,
+        Some(&token),
+        Some(json!({"name": "renamed"})),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    // The scope can be dropped ...
+    let resp = call(
+        &app,
+        Method::PATCH,
+        &path,
+        Some(&token),
+        Some(json!({"scopes": ["openid"]})),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_eq!(body_json(&resp)["scopes"], json!(["openid"]));
+    // ... but not re-added.
+    let resp = call(
+        &app,
+        Method::PATCH,
+        &path,
+        Some(&token),
+        Some(json!({"scopes": ["openid", "admin:read"]})),
+    )
+    .await;
+    assert_field_error(&resp, "scopes");
 }

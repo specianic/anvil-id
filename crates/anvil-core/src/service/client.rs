@@ -26,10 +26,12 @@ use crate::error::CoreError;
 use crate::model::{
     ApplicationType, AuditAction, AuditActor, AuditDetails, AuditOutcome, Client, ClientAuthMethod,
     ClientId, ClientType, ClientUpdate, ConsentMode, GrantType, MfaPolicy, NewClient, Page,
-    PageRequest, RequestContext, Scope, SecretHash, Tenant, TenantId, TenantSettings, TokenFormat,
+    PageRequest, RequestContext, SYSTEM_TENANT_SLUG, Scope, SecretHash, Tenant, TenantId,
+    TenantSettings, TokenFormat,
 };
 use crate::oauth::resource::parse_resources;
 use crate::ports::{Storage, StorageError};
+use crate::service::admin_scope::is_reserved_admin_token;
 use crate::service::audit::AuditService;
 use crate::service::tenant::{MAX_DISPLAY_NAME_LEN, admin_page};
 
@@ -126,6 +128,24 @@ fn invalid(field: &'static str, message: impl Into<String>) -> CoreError {
         field,
         message: message.into(),
     }
+}
+
+/// Refuses admin API scope tokens (`admin`, `admin:*`) on clients outside the system tenant.
+///
+/// The admin API accepts only system-tenant tokens, so such a scope would never grant admin
+/// access; it is refused at the source, as DCR and CIMD already do. `system_tenant`: whether the
+/// client belongs to the system tenant.
+pub fn check_admin_scopes(system_tenant: bool, scopes: &[String]) -> Result<(), CoreError> {
+    if system_tenant {
+        return Ok(());
+    }
+    if scopes.iter().any(|s| is_reserved_admin_token(s.trim())) {
+        return Err(invalid(
+            "scopes",
+            "admin API scopes are reserved for clients of the system tenant",
+        ));
+    }
+    Ok(())
 }
 
 /// Whether the auth method authenticates with a shared secret.
@@ -572,6 +592,7 @@ impl ClientService {
         ctx: &RequestContext,
     ) -> Result<CreatedClient, CoreError> {
         validate_client(&input, self.redirect_validator)?;
+        check_admin_scopes(tenant.slug == SYSTEM_TENANT_SLUG, &input.scopes)?;
         validate_client_options(&input, &options, &tenant.settings)?;
         validate_client_phase4(&input, &options, self.redirect_validator)?;
         let allowed_resources = parse_resources(&options.allowed_resources)?;
@@ -776,6 +797,11 @@ impl ClientService {
             jwks_uri: None,
         };
         validate_client(&merged, self.redirect_validator)?;
+        // Only a patch that sets the scopes is checked, so clients stored before this rule stay
+        // editable until their scopes change.
+        if let Some(scopes) = &patch.scopes {
+            check_admin_scopes(tenant.slug == SYSTEM_TENANT_SLUG, scopes)?;
+        }
         let mut merged_options = options_of(&current);
         if let Some(f) = options.token_format {
             merged_options.token_format = f;

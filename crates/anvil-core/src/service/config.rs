@@ -78,7 +78,7 @@ use crate::service::branding::{
 };
 use crate::service::client::{
     ClientInput, ClientOptions, ClientOptionsPatch, ClientPatch, ClientService, RedirectValidator,
-    uses_secret, validate_client, validate_client_id, validate_client_options,
+    check_admin_scopes, uses_secret, validate_client, validate_client_id, validate_client_options,
     validate_client_phase4, validate_client_secret,
 };
 use crate::service::connection::{
@@ -673,6 +673,7 @@ fn validate_client_section(
             e,
         );
     }
+    issues.check(p, check_admin_scopes(system, &input.scopes));
     issues.check(p, validate_client_options(&input, &options, settings));
     if let Err(e) = validate_client_phase4(&input, &options, v.redirect) {
         uri_error(

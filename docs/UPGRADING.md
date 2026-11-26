@@ -234,7 +234,17 @@ the `system` tenant**. New installations get the same role from the setup page.
 - **Logs.** Each request writes one access line (target `anvil_web::access`) with the route
   template, tenant, status, latency and request id. Client IP addresses are no longer logged by the
   rate limiter. Parsers of the 0.3 request log lines need updating.
-- **Discovery** is unchanged by default. `registration_endpoint` and
+- **Admin scopes on ordinary clients are refused.** Static clients outside the `system` tenant can
+  no longer be created with, or updated to, an `admin` or `admin:*` scope (`422` on `scopes`, also
+  in config plan/apply). Such scopes never granted admin access: the admin API accepts only
+  tokens of the `system` tenant. Existing clients keep them until their scopes are next changed,
+  so other fields stay editable; remove them with
+  `PATCH /api/admin/v1/tenants/{slug}/clients/{client_id}` and a `scopes` list without them. A
+  config document exported from such a tenant lists the scope and is refused until you remove it.
+- **Config documents over HTTP** may be up to 1 MiB (plan and apply only); every other route keeps
+  the 64 KiB body limit.
+- **Discovery** is unchanged by default. Path tenants are also served at the OpenID Connect
+  path-insertion URL `/.well-known/openid-configuration/t/{slug}`. `registration_endpoint` and
   `client_id_metadata_document_supported` appear only for tenants that enable dynamic registration
   or client metadata documents.
 - **Admin API:** new resources `roles`, `attributes`, `webhooks`, `initial-access-tokens` and

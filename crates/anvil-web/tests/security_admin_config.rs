@@ -590,3 +590,70 @@ async fn system_document_keeps_registration_disabled_and_the_console_client_out(
             .is_some()
     );
 }
+
+#[tokio::test]
+async fn config_apply_refuses_admin_scope_on_non_system_client() {
+    let app = TestApp::new().await;
+    let tenant = default_tenant(&app);
+    let token = admin_token(&app, "admin:write").await;
+    let mut doc = with_secrets(export(&app, &token, "default").await);
+    doc["clients"][0]["scopes"] = json!(["openid", "admin:write"]);
+    let before = events(&app, tenant).await.len();
+    for op in ["plan", "apply"] {
+        let resp = post(
+            &app,
+            Some(&token),
+            &format!("{API}/tenants/default/config/{op}"),
+            &doc,
+        )
+        .await;
+        let body = assert_problem(&resp, 422);
+        let fields: Vec<&str> = body["errors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["field"].as_str().unwrap())
+            .collect();
+        assert!(fields.contains(&"clients[0].scopes"), "{body}");
+    }
+    assert_eq!(events(&app, tenant).await.len(), before);
+    let storage = app.storage();
+    assert!(
+        storage
+            .clients()
+            .get(tenant, "billing-web")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(storage.connections().list(tenant).await.unwrap().is_empty());
+
+    // An existing client cannot be updated to the scope either.
+    doc["clients"][0]["scopes"] = json!(["openid"]);
+    let resp = post(
+        &app,
+        Some(&token),
+        &format!("{API}/tenants/default/config/apply"),
+        &doc,
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    doc["clients"][0]["scopes"] = json!(["openid", "admin:write"]);
+    let before = events(&app, tenant).await.len();
+    let resp = post(
+        &app,
+        Some(&token),
+        &format!("{API}/tenants/default/config/apply"),
+        &doc,
+    )
+    .await;
+    assert_problem(&resp, 422);
+    assert_eq!(events(&app, tenant).await.len(), before);
+    let stored = storage
+        .clients()
+        .get(tenant, "billing-web")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.scopes, vec!["openid"]);
+}
