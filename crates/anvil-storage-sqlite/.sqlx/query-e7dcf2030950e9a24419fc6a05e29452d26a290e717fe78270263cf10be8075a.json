@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT role_id AS \"role_id!: uuid::Uuid\", user_id AS \"user_id!: uuid::Uuid\",\n                      org_id AS \"org_id!: uuid::Uuid\"\n                 FROM role_assignment\n                WHERE tenant_id = ?1 AND org_id = ?2 AND user_id = ?3\n                ORDER BY role_id",
+  "describe": {
+    "columns": [
+      {
+        "name": "role_id!: uuid::Uuid",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "role_assignment",
+            "name": "role_id"
+          }
+        }
+      },
+      {
+        "name": "user_id!: uuid::Uuid",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "role_assignment",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "name": "org_id!: uuid::Uuid",
+        "ordinal": 2,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "role_assignment",
+            "name": "org_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "e7dcf2030950e9a24419fc6a05e29452d26a290e717fe78270263cf10be8075a"
+}

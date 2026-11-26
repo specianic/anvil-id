@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT EXISTS(SELECT 1 FROM identity_link\n                              WHERE tenant_id = ?1 AND connection_id = ?2)\n                      AS \"linked!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "linked!: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "37a17cde3434a41ad030c1802ecf47b40f9516f216484ce590f8c372fde75e0c"
+}

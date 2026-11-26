@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO token_family\n             (id, tenant_id, client_id, user_id, scope, auth_time, acr, amr, session_id,\n              claims, created_at, absolute_expires_at, revoked_at, revoked_reason, resource,\n              org_id)\n         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL, NULL, ?13, ?14)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 14
+    },
+    "nullable": []
+  },
+  "hash": "3fccb69d489dc9333c2915bedba606caaf9ad5328e94cb723d21f20790d65477"
+}

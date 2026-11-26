@@ -46,15 +46,6 @@ impl TryFrom<BrandingRow> for Branding {
     }
 }
 
-/// TRANSITIONAL(06-07): organization branding (`org:{uuid}` scope keys) arrives with the
-/// 1.0 schema and its org cascade; refused until 06-07, never stored as an orphan scope.
-fn refuse_org_scope(scope_key: &str) -> Result<(), StorageError> {
-    if scope_key.starts_with("org:") {
-        return Err(StorageError::Unsupported("organization branding (06-07)"));
-    }
-    Ok(())
-}
-
 #[async_trait::async_trait]
 impl BrandingRepo for SqliteBranding {
     async fn get(
@@ -87,7 +78,6 @@ impl BrandingRepo for SqliteBranding {
         update: &BrandingUpdate,
         now: OffsetDateTime,
     ) -> Result<Branding, StorageError> {
-        refuse_org_scope(scope_key)?;
         let tokens = to_json(&update.tokens, "branding.tokens")?;
         let now_ms = odt_to_ms(now);
         let keep_logo = matches!(update.logo, LogoChange::Keep);
@@ -195,7 +185,6 @@ impl BrandingRepo for SqliteBranding {
         draft: &BrandingDraft,
         now: OffsetDateTime,
     ) -> Result<(), StorageError> {
-        refuse_org_scope(scope_key)?;
         let tokens = to_json(&draft.tokens, "branding.draft_tokens")?;
         let hash = draft.preview_token_hash.as_bytes().as_slice();
         let expires_ms = odt_to_ms(draft.preview_expires_at);
@@ -258,22 +247,5 @@ impl BrandingRepo for SqliteBranding {
             ))
         })
         .transpose()
-    }
-}
-
-#[cfg(test)]
-mod transitional_tests {
-    use super::*;
-    use anvil_core::model::{BrandingScope, OrgId};
-
-    #[test]
-    fn org_branding_scope_is_refused() {
-        let key = BrandingScope::Org(OrgId::new_v7()).scope_key();
-        assert!(matches!(
-            refuse_org_scope(&key),
-            Err(StorageError::Unsupported(_))
-        ));
-        assert!(refuse_org_scope("").is_ok());
-        assert!(refuse_org_scope("client:app").is_ok());
     }
 }

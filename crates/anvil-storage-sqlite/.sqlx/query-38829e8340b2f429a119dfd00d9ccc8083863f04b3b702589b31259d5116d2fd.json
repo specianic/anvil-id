@@ -1,0 +1,122 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT o.id AS \"id!: uuid::Uuid\", o.tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      o.slug AS \"slug!\", o.display_name AS \"display_name!\",\n                      o.mfa_policy AS \"mfa_policy?\", o.settings AS \"settings!\",\n                      o.metadata AS \"metadata!\", o.created_at AS \"created_at!\",\n                      o.updated_at AS \"updated_at!\"\n                 FROM org_membership m\n                 JOIN organization o ON o.tenant_id = m.tenant_id AND o.id = m.org_id\n                WHERE m.tenant_id = ?1 AND m.user_id = ?2\n                ORDER BY o.slug",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: uuid::Uuid",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "organization",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "tenant_id!: uuid::Uuid",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "organization",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "name": "slug!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "organization",
+            "name": "slug"
+          }
+        }
+      },
+      {
+        "name": "display_name!",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "organization",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "name": "mfa_policy?",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "organization",
+            "name": "mfa_policy"
+          }
+        }
+      },
+      {
+        "name": "settings!",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "organization",
+            "name": "settings"
+          }
+        }
+      },
+      {
+        "name": "metadata!",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "organization",
+            "name": "metadata"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "organization",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "updated_at!",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "organization",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "38829e8340b2f429a119dfd00d9ccc8083863f04b3b702589b31259d5116d2fd"
+}

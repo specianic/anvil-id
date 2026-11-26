@@ -1,0 +1,170 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id AS \"id!: uuid::Uuid\", tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      org_id AS \"org_id!: uuid::Uuid\", domain AS \"domain!\", token AS \"token!\",\n                      status AS \"status!\", connection_id AS \"connection_id?: uuid::Uuid\",\n                      routing AS \"routing!: bool\",\n                      allow_local_password AS \"allow_local_password!: bool\",\n                      verified_at AS \"verified_at?\", last_checked_at AS \"last_checked_at?\",\n                      failing_since AS \"failing_since?\", created_at AS \"created_at!\"\n                 FROM org_domain WHERE tenant_id = ?1 AND org_id = ?2\n                ORDER BY domain, id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: uuid::Uuid",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "tenant_id!: uuid::Uuid",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "name": "org_id!: uuid::Uuid",
+        "ordinal": 2,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "org_id"
+          }
+        }
+      },
+      {
+        "name": "domain!",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "domain"
+          }
+        }
+      },
+      {
+        "name": "token!",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "token"
+          }
+        }
+      },
+      {
+        "name": "status!",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "name": "connection_id?: uuid::Uuid",
+        "ordinal": 6,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "connection_id"
+          }
+        }
+      },
+      {
+        "name": "routing!: bool",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "routing"
+          }
+        }
+      },
+      {
+        "name": "allow_local_password!: bool",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "allow_local_password"
+          }
+        }
+      },
+      {
+        "name": "verified_at?",
+        "ordinal": 9,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "verified_at"
+          }
+        }
+      },
+      {
+        "name": "last_checked_at?",
+        "ordinal": 10,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "last_checked_at"
+          }
+        }
+      },
+      {
+        "name": "failing_since?",
+        "ordinal": 11,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "failing_since"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 12,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "374a32176e3670cf66915b8e71fb66cf67b65c9b35948bb116084c63ed7cf3b6"
+}

@@ -1,0 +1,302 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT d.id AS \"d_id!: uuid::Uuid\", d.tenant_id AS \"d_tenant_id!: uuid::Uuid\",\n                      d.org_id AS \"d_org_id!: uuid::Uuid\", d.domain AS \"d_domain!\",\n                      d.token AS \"d_token!\", d.status AS \"d_status!\",\n                      d.connection_id AS \"d_connection_id?: uuid::Uuid\",\n                      d.routing AS \"d_routing!: bool\",\n                      d.allow_local_password AS \"d_allow_local_password!: bool\",\n                      d.verified_at AS \"d_verified_at?\",\n                      d.last_checked_at AS \"d_last_checked_at?\",\n                      d.failing_since AS \"d_failing_since?\", d.created_at AS \"d_created_at!\",\n                      c.id AS \"c_id!: uuid::Uuid\", c.tenant_id AS \"c_tenant_id!: uuid::Uuid\",\n                      c.slug AS \"c_slug!\", c.display_name AS \"c_display_name!\",\n                      c.enabled AS \"c_enabled!: bool\", c.config AS \"c_config!\",\n                      c.secret_enc AS \"c_secret_enc?\",\n                      c.trust_email_verified AS \"c_trust_email_verified!: bool\",\n                      c.created_at AS \"c_created_at!\", c.updated_at AS \"c_updated_at!\",\n                      c.org_id AS \"c_org_id?: uuid::Uuid\"\n                 FROM org_domain d\n                 JOIN connection c ON c.tenant_id = d.tenant_id AND c.id = d.connection_id\n                                  AND c.org_id = d.org_id\n                WHERE d.tenant_id = ?1 AND d.domain = ?2 AND d.verified_at IS NOT NULL\n                  AND d.routing = 1 AND c.enabled = 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "d_id!: uuid::Uuid",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "d_tenant_id!: uuid::Uuid",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "name": "d_org_id!: uuid::Uuid",
+        "ordinal": 2,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "org_id"
+          }
+        }
+      },
+      {
+        "name": "d_domain!",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "domain"
+          }
+        }
+      },
+      {
+        "name": "d_token!",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "token"
+          }
+        }
+      },
+      {
+        "name": "d_status!",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "name": "d_connection_id?: uuid::Uuid",
+        "ordinal": 6,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "connection_id"
+          }
+        }
+      },
+      {
+        "name": "d_routing!: bool",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "routing"
+          }
+        }
+      },
+      {
+        "name": "d_allow_local_password!: bool",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "allow_local_password"
+          }
+        }
+      },
+      {
+        "name": "d_verified_at?",
+        "ordinal": 9,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "verified_at"
+          }
+        }
+      },
+      {
+        "name": "d_last_checked_at?",
+        "ordinal": 10,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "last_checked_at"
+          }
+        }
+      },
+      {
+        "name": "d_failing_since?",
+        "ordinal": 11,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "failing_since"
+          }
+        }
+      },
+      {
+        "name": "d_created_at!",
+        "ordinal": 12,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "c_id!: uuid::Uuid",
+        "ordinal": 13,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "connection",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "c_tenant_id!: uuid::Uuid",
+        "ordinal": 14,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "connection",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "name": "c_slug!",
+        "ordinal": 15,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "connection",
+            "name": "slug"
+          }
+        }
+      },
+      {
+        "name": "c_display_name!",
+        "ordinal": 16,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "connection",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "name": "c_enabled!: bool",
+        "ordinal": 17,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "connection",
+            "name": "enabled"
+          }
+        }
+      },
+      {
+        "name": "c_config!",
+        "ordinal": 18,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "connection",
+            "name": "config"
+          }
+        }
+      },
+      {
+        "name": "c_secret_enc?",
+        "ordinal": 19,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "connection",
+            "name": "secret_enc"
+          }
+        }
+      },
+      {
+        "name": "c_trust_email_verified!: bool",
+        "ordinal": 20,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "connection",
+            "name": "trust_email_verified"
+          }
+        }
+      },
+      {
+        "name": "c_created_at!",
+        "ordinal": 21,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "connection",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "c_updated_at!",
+        "ordinal": 22,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "connection",
+            "name": "updated_at"
+          }
+        }
+      },
+      {
+        "name": "c_org_id?: uuid::Uuid",
+        "ordinal": 23,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "connection",
+            "name": "org_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "86387b7e68867c44cfa967a0063fcfc0e127b7b2d0dca7153af4c02d79a80737"
+}

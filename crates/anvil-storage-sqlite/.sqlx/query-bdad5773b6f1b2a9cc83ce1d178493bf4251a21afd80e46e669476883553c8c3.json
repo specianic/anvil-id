@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM role_assignment\n              WHERE tenant_id = ?1 AND role_id = ?2 AND user_id = ?3 AND org_id IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "bdad5773b6f1b2a9cc83ce1d178493bf4251a21afd80e46e669476883553c8c3"
+}

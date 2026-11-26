@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO org_domain\n                 (id, tenant_id, org_id, domain, token, status, connection_id, routing,\n                  allow_local_password, verified_at, last_checked_at, failing_since, created_at)\n             SELECT ?1, o.tenant_id, o.id, ?4, ?5, ?10, ?6, ?7, ?8, NULL, NULL, NULL, ?9\n               FROM organization o\n              WHERE o.tenant_id = ?2 AND o.id = ?3\n                AND (?6 IS NULL OR EXISTS (SELECT 1 FROM connection c\n                                            WHERE c.tenant_id = ?2 AND c.id = ?6\n                                              AND c.org_id = ?3))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 10
+    },
+    "nullable": []
+  },
+  "hash": "b63dd469724791a65c917d3a8de45f64e6aed62f08cb48ffd4357c7786f55a54"
+}

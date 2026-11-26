@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM org_membership WHERE tenant_id = ?1 AND org_id = ?2 AND user_id = ?3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "e8a5734c092125d9d1727f2cc445980de540f7c1f98ab4c707c41847f220e169"
+}

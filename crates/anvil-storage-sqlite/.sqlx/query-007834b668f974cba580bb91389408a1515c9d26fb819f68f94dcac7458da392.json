@@ -1,0 +1,350 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE client\n                  SET name = COALESCE(?3, name),\n                      redirect_uris = COALESCE(?4, redirect_uris),\n                      grant_types = COALESCE(?5, grant_types),\n                      scopes = COALESCE(?6, scopes),\n                      require_pkce = COALESCE(?7, require_pkce),\n                      jwks = CASE WHEN ?8 THEN ?9 ELSE jwks END,\n                      updated_at = ?10,\n                      token_format = COALESCE(?11, token_format),\n                      consent_mode = COALESCE(?12, consent_mode),\n                      id_token_signed_response_alg =\n                        CASE WHEN ?13 THEN ?14 ELSE id_token_signed_response_alg END,\n                      can_introspect = COALESCE(?15, can_introspect),\n                      post_logout_redirect_uris = COALESCE(?16, post_logout_redirect_uris),\n                      backchannel_logout_uri =\n                        CASE WHEN ?17 THEN ?18 ELSE backchannel_logout_uri END,\n                      backchannel_logout_session_required =\n                        COALESCE(?19, backchannel_logout_session_required),\n                      allowed_resources = COALESCE(?20, allowed_resources),\n                      mfa_policy = CASE WHEN ?21 THEN ?22 ELSE mfa_policy END,\n                      metadata_expires_at =\n                        CASE WHEN ?23 THEN ?24 ELSE metadata_expires_at END,\n                      registration_access_token_hash =\n                        CASE WHEN ?25 THEN ?26 ELSE registration_access_token_hash END,\n                      organization = COALESCE(?27, organization)\n                WHERE tenant_id = ?1 AND client_id = ?2\n            RETURNING id AS \"id!: uuid::Uuid\", tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      client_id AS \"client_id!\", name AS \"name!\", client_type AS \"client_type!\",\n                      application_type AS \"application_type!\", auth_method AS \"auth_method!\",\n                      secret_hash AS \"secret_hash?\", jwks AS \"jwks?\",\n                      redirect_uris AS \"redirect_uris!\", grant_types AS \"grant_types!\",\n                      scopes AS \"scopes!\", require_pkce AS \"require_pkce!: bool\",\n                      token_format AS \"token_format!\", consent_mode AS \"consent_mode!\",\n                      id_token_signed_response_alg AS \"id_token_signed_response_alg?\",\n                      can_introspect AS \"can_introspect!: bool\",\n                      created_at AS \"created_at!\", updated_at AS \"updated_at!\",\n                      post_logout_redirect_uris AS \"post_logout_redirect_uris!\",\n                      backchannel_logout_uri AS \"backchannel_logout_uri?\",\n                      backchannel_logout_session_required\n                        AS \"backchannel_logout_session_required!: bool\",\n                      allowed_resources AS \"allowed_resources!\",\n                      mfa_policy AS \"mfa_policy?\",\n                      registration_source AS \"registration_source!\",\n                      metadata_expires_at AS \"metadata_expires_at?\",\n                      registration_access_token_hash AS \"registration_access_token_hash?\",\n                      organization AS \"organization!\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: uuid::Uuid",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "tenant_id!: uuid::Uuid",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "name": "client_id!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "client_id"
+          }
+        }
+      },
+      {
+        "name": "name!",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "client_type!",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "client_type"
+          }
+        }
+      },
+      {
+        "name": "application_type!",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "application_type"
+          }
+        }
+      },
+      {
+        "name": "auth_method!",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "auth_method"
+          }
+        }
+      },
+      {
+        "name": "secret_hash?",
+        "ordinal": 7,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "secret_hash"
+          }
+        }
+      },
+      {
+        "name": "jwks?",
+        "ordinal": 8,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "jwks"
+          }
+        }
+      },
+      {
+        "name": "redirect_uris!",
+        "ordinal": 9,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "redirect_uris"
+          }
+        }
+      },
+      {
+        "name": "grant_types!",
+        "ordinal": 10,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "grant_types"
+          }
+        }
+      },
+      {
+        "name": "scopes!",
+        "ordinal": 11,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "scopes"
+          }
+        }
+      },
+      {
+        "name": "require_pkce!: bool",
+        "ordinal": 12,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "require_pkce"
+          }
+        }
+      },
+      {
+        "name": "token_format!",
+        "ordinal": 13,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "token_format"
+          }
+        }
+      },
+      {
+        "name": "consent_mode!",
+        "ordinal": 14,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "consent_mode"
+          }
+        }
+      },
+      {
+        "name": "id_token_signed_response_alg?",
+        "ordinal": 15,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "id_token_signed_response_alg"
+          }
+        }
+      },
+      {
+        "name": "can_introspect!: bool",
+        "ordinal": 16,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "can_introspect"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 17,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "updated_at!",
+        "ordinal": 18,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "updated_at"
+          }
+        }
+      },
+      {
+        "name": "post_logout_redirect_uris!",
+        "ordinal": 19,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "post_logout_redirect_uris"
+          }
+        }
+      },
+      {
+        "name": "backchannel_logout_uri?",
+        "ordinal": 20,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "backchannel_logout_uri"
+          }
+        }
+      },
+      {
+        "name": "backchannel_logout_session_required!: bool",
+        "ordinal": 21,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "backchannel_logout_session_required"
+          }
+        }
+      },
+      {
+        "name": "allowed_resources!",
+        "ordinal": 22,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "allowed_resources"
+          }
+        }
+      },
+      {
+        "name": "mfa_policy?",
+        "ordinal": 23,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "mfa_policy"
+          }
+        }
+      },
+      {
+        "name": "registration_source!",
+        "ordinal": 24,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "registration_source"
+          }
+        }
+      },
+      {
+        "name": "metadata_expires_at?",
+        "ordinal": 25,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "metadata_expires_at"
+          }
+        }
+      },
+      {
+        "name": "registration_access_token_hash?",
+        "ordinal": 26,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "registration_access_token_hash"
+          }
+        }
+      },
+      {
+        "name": "organization!",
+        "ordinal": 27,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "organization"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 27
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "007834b668f974cba580bb91389408a1515c9d26fb819f68f94dcac7458da392"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM organization WHERE tenant_id = ?1 AND id = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "7ce5168cf1bc72573fcd3314a2f8a4e8bf4a0fe4cc15138b11ff07170afcc9f4"
+}

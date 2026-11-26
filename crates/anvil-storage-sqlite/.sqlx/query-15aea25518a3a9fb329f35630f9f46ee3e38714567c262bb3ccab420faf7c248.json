@@ -1,0 +1,170 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id AS \"id!: uuid::Uuid\", tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      org_id AS \"org_id!: uuid::Uuid\", email AS \"email!\", roles AS \"roles!\",\n                      token_hash AS \"token_hash!\", invited_by_kind AS \"invited_by_kind!\",\n                      invited_by_id AS \"invited_by_id?\", created_at AS \"created_at!\",\n                      expires_at AS \"expires_at!\", accepted_at AS \"accepted_at?\",\n                      accepted_user_id AS \"accepted_user_id?: uuid::Uuid\",\n                      revoked_at AS \"revoked_at?\"\n                 FROM org_invitation\n                WHERE tenant_id = ?1 AND org_id = ?2\n                  AND (?3 OR (accepted_at IS NULL AND revoked_at IS NULL))\n                ORDER BY created_at DESC, id DESC",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: uuid::Uuid",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "org_invitation",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "tenant_id!: uuid::Uuid",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "org_invitation",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "name": "org_id!: uuid::Uuid",
+        "ordinal": 2,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "org_invitation",
+            "name": "org_id"
+          }
+        }
+      },
+      {
+        "name": "email!",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "org_invitation",
+            "name": "email"
+          }
+        }
+      },
+      {
+        "name": "roles!",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "org_invitation",
+            "name": "roles"
+          }
+        }
+      },
+      {
+        "name": "token_hash!",
+        "ordinal": 5,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "org_invitation",
+            "name": "token_hash"
+          }
+        }
+      },
+      {
+        "name": "invited_by_kind!",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "org_invitation",
+            "name": "invited_by_kind"
+          }
+        }
+      },
+      {
+        "name": "invited_by_id?",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "org_invitation",
+            "name": "invited_by_id"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "org_invitation",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "expires_at!",
+        "ordinal": 9,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "org_invitation",
+            "name": "expires_at"
+          }
+        }
+      },
+      {
+        "name": "accepted_at?",
+        "ordinal": 10,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "org_invitation",
+            "name": "accepted_at"
+          }
+        }
+      },
+      {
+        "name": "accepted_user_id?: uuid::Uuid",
+        "ordinal": 11,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "org_invitation",
+            "name": "accepted_user_id"
+          }
+        }
+      },
+      {
+        "name": "revoked_at?",
+        "ordinal": 12,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "org_invitation",
+            "name": "revoked_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "15aea25518a3a9fb329f35630f9f46ee3e38714567c262bb3ccab420faf7c248"
+}

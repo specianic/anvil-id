@@ -2,36 +2,22 @@
 //!
 //! `config` is the tagged `ConnectionConfig` JSON; the client secret only ever lives KEK-sealed in
 //! `secret_enc`. Identity links reference user and connection through composite
-//! `(tenant_id, …)` foreign keys, so a link can never cross tenants.
+//! `(tenant_id, …)` foreign keys, so a link can never cross tenants. An org connection
+//! (`org_id` set) references its org through the composite `(tenant_id, org_id)` foreign key and
+//! goes with it.
 
 use anvil_core::model::{
     Connection, ConnectionConfig, ConnectionId, ConnectionUpdate, IdentityLink, IdentityLinkId,
     NewConnection, NewEmail, NewIdentityLink, NewMembership, NewSelfServiceToken, NewUser, OrgId,
     TenantId, User, UserId,
 };
-use anvil_core::ports::{ConnectionRepo, DeleteLinkOutcome, StorageError};
+use anvil_core::ports::{AddMemberOutcome, ConnectionRepo, DeleteLinkOutcome, StorageError};
 
-/// TRANSITIONAL(06-07): organization connections and SAML configs need the 1.0 schema
-/// (`connection.org_id`, `saml` in the kind CHECK). Until 06-07 migrates it they are refused,
-/// never silently stored without their org or kind.
-fn refuse_unmigrated(
-    org_id: Option<anvil_core::model::OrgId>,
-    config: Option<&ConnectionConfig>,
-) -> Result<(), StorageError> {
-    if org_id.is_some() {
-        return Err(StorageError::Unsupported(
-            "organization connections (06-07)",
-        ));
-    }
-    if matches!(config, Some(ConnectionConfig::Saml(_))) {
-        return Err(StorageError::Unsupported("saml connections (06-07)"));
-    }
-    Ok(())
-}
 use sqlx::{SqliteConnection, SqlitePool};
 use time::OffsetDateTime;
 
 use crate::convert::{from_json, map_err, ms_to_odt, odt_to_ms, opt_ms_to_odt, to_json};
+use crate::organizations::{insert_membership_on, map_fk_err};
 use crate::outbox::insert_email;
 use crate::users::{insert_self_service_token, insert_user};
 
@@ -41,17 +27,18 @@ pub(crate) struct SqliteConnections {
     pub(crate) reader: SqlitePool,
 }
 
-struct ConnectionRow {
-    id: uuid::Uuid,
-    tenant_id: uuid::Uuid,
-    slug: String,
-    display_name: String,
-    enabled: bool,
-    config: String,
-    secret_enc: Option<Vec<u8>>,
-    trust_email_verified: bool,
-    created_at: i64,
-    updated_at: i64,
+pub(crate) struct ConnectionRow {
+    pub(crate) id: uuid::Uuid,
+    pub(crate) tenant_id: uuid::Uuid,
+    pub(crate) slug: String,
+    pub(crate) display_name: String,
+    pub(crate) enabled: bool,
+    pub(crate) config: String,
+    pub(crate) secret_enc: Option<Vec<u8>>,
+    pub(crate) trust_email_verified: bool,
+    pub(crate) created_at: i64,
+    pub(crate) updated_at: i64,
+    pub(crate) org_id: Option<uuid::Uuid>,
 }
 
 impl TryFrom<ConnectionRow> for Connection {
@@ -69,7 +56,7 @@ impl TryFrom<ConnectionRow> for Connection {
             trust_email_verified: r.trust_email_verified,
             created_at: ms_to_odt(r.created_at)?,
             updated_at: ms_to_odt(r.updated_at)?,
-            org_id: None,
+            org_id: r.org_id.map(OrgId),
         })
     }
 }
@@ -155,15 +142,15 @@ impl ConnectionRepo for SqliteConnections {
         tenant: TenantId,
         connection: &NewConnection,
     ) -> Result<Connection, StorageError> {
-        refuse_unmigrated(connection.org_id, Some(&connection.config))?;
         let kind = connection.config.kind().as_str();
+        let org_id = connection.org_id.map(|o| o.0);
         let config = to_json(&connection.config, "connection.config")?;
         let created_at = odt_to_ms(connection.created_at);
         sqlx::query!(
             "INSERT INTO connection
                  (id, tenant_id, slug, display_name, kind, enabled, config, secret_enc,
-                  trust_email_verified, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
+                  trust_email_verified, created_at, updated_at, org_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, ?11)",
             connection.id.0,
             tenant.0,
             connection.slug,
@@ -174,10 +161,13 @@ impl ConnectionRepo for SqliteConnections {
             connection.secret_enc,
             connection.trust_email_verified,
             created_at,
+            org_id,
         )
         .execute(&self.writer)
         .await
-        .map_err(map_err)?;
+        .map_err(map_fk_err(
+            "connection references an org outside the tenant",
+        ))?;
         Ok(Connection {
             id: connection.id,
             tenant_id: tenant,
@@ -189,7 +179,7 @@ impl ConnectionRepo for SqliteConnections {
             trust_email_verified: connection.trust_email_verified,
             created_at: connection.created_at,
             updated_at: connection.created_at,
-            org_id: None,
+            org_id: connection.org_id,
         })
     }
 
@@ -205,7 +195,8 @@ impl ConnectionRepo for SqliteConnections {
                       enabled AS "enabled!: bool", config AS "config!",
                       secret_enc AS "secret_enc?",
                       trust_email_verified AS "trust_email_verified!: bool",
-                      created_at AS "created_at!", updated_at AS "updated_at!"
+                      created_at AS "created_at!", updated_at AS "updated_at!",
+                      org_id AS "org_id?: uuid::Uuid"
                  FROM connection WHERE tenant_id = ?1 AND id = ?2"#,
             tenant.0,
             id.0,
@@ -229,7 +220,8 @@ impl ConnectionRepo for SqliteConnections {
                       enabled AS "enabled!: bool", config AS "config!",
                       secret_enc AS "secret_enc?",
                       trust_email_verified AS "trust_email_verified!: bool",
-                      created_at AS "created_at!", updated_at AS "updated_at!"
+                      created_at AS "created_at!", updated_at AS "updated_at!",
+                      org_id AS "org_id?: uuid::Uuid"
                  FROM connection WHERE tenant_id = ?1 AND slug = ?2"#,
             tenant.0,
             slug,
@@ -249,7 +241,8 @@ impl ConnectionRepo for SqliteConnections {
                       enabled AS "enabled!: bool", config AS "config!",
                       secret_enc AS "secret_enc?",
                       trust_email_verified AS "trust_email_verified!: bool",
-                      created_at AS "created_at!", updated_at AS "updated_at!"
+                      created_at AS "created_at!", updated_at AS "updated_at!",
+                      org_id AS "org_id?: uuid::Uuid"
                  FROM connection WHERE tenant_id = ?1 ORDER BY slug"#,
             tenant.0,
         )
@@ -268,7 +261,6 @@ impl ConnectionRepo for SqliteConnections {
         update: &ConnectionUpdate,
         now: OffsetDateTime,
     ) -> Result<Option<Connection>, StorageError> {
-        refuse_unmigrated(None, update.config.as_ref())?;
         let kind = update.config.as_ref().map(|c| c.kind().as_str());
         let config = update
             .config
@@ -291,7 +283,8 @@ impl ConnectionRepo for SqliteConnections {
                       enabled AS "enabled!: bool", config AS "config!",
                       secret_enc AS "secret_enc?",
                       trust_email_verified AS "trust_email_verified!: bool",
-                      created_at AS "created_at!", updated_at AS "updated_at!""#,
+                      created_at AS "created_at!", updated_at AS "updated_at!",
+                      org_id AS "org_id?: uuid::Uuid""#,
             tenant.0,
             id.0,
             update.display_name,
@@ -345,22 +338,45 @@ impl ConnectionRepo for SqliteConnections {
 
     async fn list_for_org(
         &self,
-        _tenant: TenantId,
-        _org: OrgId,
+        tenant: TenantId,
+        org: OrgId,
     ) -> Result<Vec<Connection>, StorageError> {
-        // TRANSITIONAL(06-07): needs `connection.org_id` (1.0 schema).
-        Err(StorageError::Unsupported(
-            "organization connections (06-07)",
-        ))
+        sqlx::query_as!(
+            ConnectionRow,
+            r#"SELECT id AS "id!: uuid::Uuid", tenant_id AS "tenant_id!: uuid::Uuid",
+                      slug AS "slug!", display_name AS "display_name!",
+                      enabled AS "enabled!: bool", config AS "config!",
+                      secret_enc AS "secret_enc?",
+                      trust_email_verified AS "trust_email_verified!: bool",
+                      created_at AS "created_at!", updated_at AS "updated_at!",
+                      org_id AS "org_id?: uuid::Uuid"
+                 FROM connection WHERE tenant_id = ?1 AND org_id = ?2 ORDER BY slug"#,
+            tenant.0,
+            org.0,
+        )
+        .fetch_all(&self.reader)
+        .await
+        .map_err(map_err)?
+        .into_iter()
+        .map(Connection::try_from)
+        .collect()
     }
 
     async fn has_links(
         &self,
-        _tenant: TenantId,
-        _connection: ConnectionId,
+        tenant: TenantId,
+        connection: ConnectionId,
     ) -> Result<bool, StorageError> {
-        // TRANSITIONAL(06-07): implemented with the 1.0 connection queries.
-        Err(StorageError::Unsupported("connection has_links (06-07)"))
+        sqlx::query_scalar!(
+            r#"SELECT EXISTS(SELECT 1 FROM identity_link
+                              WHERE tenant_id = ?1 AND connection_id = ?2)
+                      AS "linked!: bool""#,
+            tenant.0,
+            connection.0,
+        )
+        .fetch_one(&self.reader)
+        .await
+        .map_err(map_err)
     }
 
     async fn find_link(
@@ -507,17 +523,24 @@ impl ConnectionRepo for SqliteConnections {
         email: Option<&NewEmail>,
         membership: Option<&NewMembership>,
     ) -> Result<User, StorageError> {
-        // TRANSITIONAL(06-07): org memberships need the 1.0 schema; JIT provisioning into an org
-        // is refused (nothing written) until 06-07 migrates it. `None` keeps the 0.4 behaviour.
-        if membership.is_some() {
-            return Err(StorageError::Unsupported(
-                "organization membership on sign-up (06-07)",
-            ));
-        }
         let mut tx = self.writer.begin().await.map_err(map_err)?;
-        // Any error drops `tx` uncommitted: none of the user, link, token or email is stored.
+        // Any error drops `tx` uncommitted: none of the user, link, token, email or membership
+        // is stored.
         let created = insert_user(&mut tx, tenant, user).await?;
         insert_link(&mut tx, tenant, link).await?;
+        if let Some(membership) = membership {
+            if membership.user_id != user.id {
+                return Err(StorageError::Conflict(
+                    "membership is not for the user being created".to_owned(),
+                ));
+            }
+            if insert_membership_on(&mut tx, tenant, membership).await? != AddMemberOutcome::Added {
+                return Err(StorageError::Conflict(
+                    "membership references an unknown org or a role that cannot be assigned in it"
+                        .to_owned(),
+                ));
+            }
+        }
         if let Some(token) = token {
             insert_self_service_token(&mut tx, tenant, token).await?;
         }
@@ -526,32 +549,5 @@ impl ConnectionRepo for SqliteConnections {
         }
         tx.commit().await.map_err(map_err)?;
         Ok(created)
-    }
-}
-
-#[cfg(test)]
-mod transitional_tests {
-    use super::*;
-
-    #[test]
-    fn org_and_saml_connections_are_refused() {
-        let org = Some(anvil_core::model::OrgId::new_v7());
-        assert!(matches!(
-            refuse_unmigrated(org, None),
-            Err(StorageError::Unsupported(_))
-        ));
-        let saml = ConnectionConfig::Saml(anvil_core::model::SamlConfig {
-            idp_entity_id: "e".into(),
-            sso_url: "https://idp.example.test/sso".into(),
-            signing_certs: vec![],
-            name_id_format: Default::default(),
-            attributes: Default::default(),
-            metadata_url: None,
-        });
-        assert!(matches!(
-            refuse_unmigrated(None, Some(&saml)),
-            Err(StorageError::Unsupported(_))
-        ));
-        assert!(refuse_unmigrated(None, None).is_ok());
     }
 }

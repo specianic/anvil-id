@@ -1,0 +1,218 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE authorization_code\n                  SET consumed_at = ?3\n                WHERE tenant_id = ?1 AND code_hash = ?2\n                  AND consumed_at IS NULL AND expires_at > ?3\n            RETURNING code_hash       AS \"code_hash!: Vec<u8>\",\n                      tenant_id       AS \"tenant_id!: uuid::Uuid\",\n                      client_id       AS \"client_id!\",\n                      user_id         AS \"user_id!: uuid::Uuid\",\n                      session_id      AS \"session_id!: uuid::Uuid\",\n                      redirect_uri    AS \"redirect_uri!\",\n                      scope           AS \"scope!\",\n                      nonce           AS \"nonce?\",\n                      code_challenge  AS \"code_challenge?\",\n                      auth_time       AS \"auth_time!\",\n                      acr             AS \"acr!\",\n                      amr             AS \"amr!\",\n                      token_family_id AS \"token_family_id!: uuid::Uuid\",\n                      expires_at      AS \"expires_at!\",\n                      created_at      AS \"created_at!\",\n                      resource        AS \"resource!\",\n                      org_id          AS \"org_id?: uuid::Uuid\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "code_hash!: Vec<u8>",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "authorization_code",
+            "name": "code_hash"
+          }
+        }
+      },
+      {
+        "name": "tenant_id!: uuid::Uuid",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "authorization_code",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "name": "client_id!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "authorization_code",
+            "name": "client_id"
+          }
+        }
+      },
+      {
+        "name": "user_id!: uuid::Uuid",
+        "ordinal": 3,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "authorization_code",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "name": "session_id!: uuid::Uuid",
+        "ordinal": 4,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "authorization_code",
+            "name": "session_id"
+          }
+        }
+      },
+      {
+        "name": "redirect_uri!",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "authorization_code",
+            "name": "redirect_uri"
+          }
+        }
+      },
+      {
+        "name": "scope!",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "authorization_code",
+            "name": "scope"
+          }
+        }
+      },
+      {
+        "name": "nonce?",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "authorization_code",
+            "name": "nonce"
+          }
+        }
+      },
+      {
+        "name": "code_challenge?",
+        "ordinal": 8,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "authorization_code",
+            "name": "code_challenge"
+          }
+        }
+      },
+      {
+        "name": "auth_time!",
+        "ordinal": 9,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "authorization_code",
+            "name": "auth_time"
+          }
+        }
+      },
+      {
+        "name": "acr!",
+        "ordinal": 10,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "authorization_code",
+            "name": "acr"
+          }
+        }
+      },
+      {
+        "name": "amr!",
+        "ordinal": 11,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "authorization_code",
+            "name": "amr"
+          }
+        }
+      },
+      {
+        "name": "token_family_id!: uuid::Uuid",
+        "ordinal": 12,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "authorization_code",
+            "name": "token_family_id"
+          }
+        }
+      },
+      {
+        "name": "expires_at!",
+        "ordinal": 13,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "authorization_code",
+            "name": "expires_at"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 14,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "authorization_code",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "resource!",
+        "ordinal": 15,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "authorization_code",
+            "name": "resource"
+          }
+        }
+      },
+      {
+        "name": "org_id?: uuid::Uuid",
+        "ordinal": 16,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "authorization_code",
+            "name": "org_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "87aeb03de297eebe8c12b1c7d20c7bd1c32727ce58cdff1fd74cb33260d80534"
+}

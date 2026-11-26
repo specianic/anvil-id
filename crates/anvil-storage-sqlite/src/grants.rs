@@ -4,8 +4,8 @@
 use anvil_core::model::{
     AccessTokenRecord, AuthRequestId, AuthorizationCode, AuthorizationRequest, CodeHash,
     ConsentGrant, NewAccessToken, NewAuthorizationCode, NewAuthorizationRequest, NewConsent,
-    NewRefreshToken, NewTokenFamily, RefreshToken, ReplayKind, RevokeReason, SecretHash, SessionId,
-    TenantId, TokenFamily, TokenFamilyId, UserId,
+    NewRefreshToken, NewTokenFamily, OrgId, RefreshToken, ReplayKind, RevokeReason, SecretHash,
+    SessionId, TenantId, TokenFamily, TokenFamilyId, UserId,
 };
 use anvil_core::ports::{ConsumeOutcome, GrantRepo, JtiOutcome, RotateOutcome, StorageError};
 use sqlx::{SqliteConnection, SqlitePool};
@@ -40,6 +40,7 @@ struct FamilyRow {
     revoked_at: Option<i64>,
     revoked_reason: Option<String>,
     resource: String,
+    org_id: Option<uuid::Uuid>,
 }
 
 impl TryFrom<FamilyRow> for TokenFamily {
@@ -66,7 +67,7 @@ impl TryFrom<FamilyRow> for TokenFamily {
                 .map(|s| parse_enum(s, RevokeReason::parse, "revoked_reason"))
                 .transpose()?,
             resource: from_json(&r.resource, "token_family.resource")?,
-            org_id: None,
+            org_id: r.org_id.map(OrgId),
         })
     }
 }
@@ -85,7 +86,7 @@ async fn family_on(
                   session_id AS "session_id?: uuid::Uuid", claims AS "claims?",
                   created_at AS "created_at!", absolute_expires_at AS "absolute_expires_at!",
                   revoked_at AS "revoked_at?", revoked_reason AS "revoked_reason?",
-                  resource AS "resource!"
+                  resource AS "resource!", org_id AS "org_id?: uuid::Uuid"
              FROM token_family WHERE tenant_id = ?1 AND id = ?2"#,
         tenant.0,
         id,
@@ -131,23 +132,12 @@ async fn revoke_family_on(
     Ok(row.exists)
 }
 
-/// TRANSITIONAL(06-07): org-bound codes and token families need the 1.0 columns
-/// (`authorization_code.org_id`, `token_family.org_id`); refused until 06-07 adds them, never
-/// stored without their org.
-fn refuse_org_grant(org_id: Option<anvil_core::model::OrgId>) -> Result<(), StorageError> {
-    if org_id.is_some() {
-        return Err(StorageError::Unsupported("org-bound grants (06-07)"));
-    }
-    Ok(())
-}
-
 /// Inserts a token family on `conn`. `Conflict` on a duplicate id.
 async fn insert_family(
     conn: &mut SqliteConnection,
     tenant: TenantId,
     family: &NewTokenFamily,
 ) -> Result<(), StorageError> {
-    refuse_org_grant(family.org_id)?;
     let amr = to_json(&family.amr, "token_family.amr")?;
     let resource = to_json(&family.resource, "token_family.resource")?;
     let claims = family
@@ -160,11 +150,13 @@ async fn insert_family(
     let auth_time = opt_odt_to_ms(family.auth_time);
     let created_at = odt_to_ms(family.created_at);
     let absolute = odt_to_ms(family.absolute_expires_at);
+    let org_id = family.org_id.map(|o| o.0);
     sqlx::query!(
         "INSERT INTO token_family
              (id, tenant_id, client_id, user_id, scope, auth_time, acr, amr, session_id,
-              claims, created_at, absolute_expires_at, revoked_at, revoked_reason, resource)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL, NULL, ?13)",
+              claims, created_at, absolute_expires_at, revoked_at, revoked_reason, resource,
+              org_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL, NULL, ?13, ?14)",
         family.id.0,
         tenant.0,
         family.client_id,
@@ -178,6 +170,7 @@ async fn insert_family(
         created_at,
         absolute,
         resource,
+        org_id,
     )
     .execute(conn)
     .await
@@ -296,7 +289,6 @@ impl GrantRepo for SqliteGrants {
         code: &NewAuthorizationCode,
         family: &NewTokenFamily,
     ) -> Result<(), StorageError> {
-        refuse_org_grant(code.org_id)?;
         if code.token_family_id != family.id {
             return Err(StorageError::Conflict(
                 "authorization code token_family_id does not match the family".to_owned(),
@@ -308,6 +300,7 @@ impl GrantRepo for SqliteGrants {
         let code_expires_at = odt_to_ms(code.expires_at);
         let code_created_at = odt_to_ms(code.created_at);
         let code_resource = to_json(&code.resource, "authorization_code.resource")?;
+        let code_org = code.org_id.map(|o| o.0);
 
         let mut tx = self.writer.begin().await.map_err(map_err)?;
         // Any error drops `tx` uncommitted: neither the family nor the code is stored.
@@ -316,9 +309,9 @@ impl GrantRepo for SqliteGrants {
             "INSERT INTO authorization_code
                  (code_hash, tenant_id, client_id, user_id, session_id, redirect_uri, scope, nonce,
                   code_challenge, auth_time, acr, amr, token_family_id, expires_at, consumed_at,
-                  created_at, resource)
+                  created_at, resource, org_id)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, NULL, ?15,
-                     ?16)",
+                     ?16, ?17)",
             code_hash,
             tenant.0,
             code.client_id,
@@ -335,6 +328,7 @@ impl GrantRepo for SqliteGrants {
             code_expires_at,
             code_created_at,
             code_resource,
+            code_org,
         )
         .execute(&mut *tx)
         .await
@@ -382,7 +376,8 @@ impl GrantRepo for SqliteGrants {
                       token_family_id AS "token_family_id!: uuid::Uuid",
                       expires_at      AS "expires_at!",
                       created_at      AS "created_at!",
-                      resource        AS "resource!""#,
+                      resource        AS "resource!",
+                      org_id          AS "org_id?: uuid::Uuid""#,
             tenant.0,
             hash,
             now_ms,
@@ -409,7 +404,7 @@ impl GrantRepo for SqliteGrants {
                 expires_at: ms_to_odt(r.expires_at)?,
                 created_at: ms_to_odt(r.created_at)?,
                 resource: from_json(&r.resource, "authorization_code.resource")?,
-                org_id: None,
+                org_id: r.org_id.map(OrgId),
             }));
         }
 
@@ -591,12 +586,6 @@ impl GrantRepo for SqliteGrants {
         expires_at: OffsetDateTime,
         now: OffsetDateTime,
     ) -> Result<JtiOutcome, StorageError> {
-        // TRANSITIONAL(06-07): `saml_assertion_id` is not in the replay_guard kind CHECK yet.
-        if kind == ReplayKind::SamlAssertionId {
-            return Err(StorageError::Unsupported(
-                "saml assertion replay guard (06-07)",
-            ));
-        }
         let kind = kind.as_str();
         let value = hash.as_bytes().as_slice();
         let expires_ms = odt_to_ms(expires_at);
@@ -764,19 +753,5 @@ impl GrantRepo for SqliteGrants {
         now: OffsetDateTime,
     ) -> Result<bool, StorageError> {
         consent::revoke(&self.writer, tenant, user, client_id, now).await
-    }
-}
-
-#[cfg(test)]
-mod transitional_tests {
-    use super::*;
-
-    #[test]
-    fn org_bound_grants_are_refused() {
-        assert!(matches!(
-            refuse_org_grant(Some(anvil_core::model::OrgId::new_v7())),
-            Err(StorageError::Unsupported(_))
-        ));
-        assert!(refuse_org_grant(None).is_ok());
     }
 }

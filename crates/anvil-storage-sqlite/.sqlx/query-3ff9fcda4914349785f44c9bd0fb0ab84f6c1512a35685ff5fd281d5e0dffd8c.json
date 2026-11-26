@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT EXISTS(SELECT 1 FROM role_assignment\n                          WHERE tenant_id = ?1 AND role_id = ?2 AND user_id = ?3\n                            AND org_id = ?4)\n                  AS \"held!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "held!: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "3ff9fcda4914349785f44c9bd0fb0ab84f6c1512a35685ff5fd281d5e0dffd8c"
+}

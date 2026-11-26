@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT domain AS \"domain!\" FROM org_domain\n                WHERE tenant_id = ?1 AND org_id = ?2 AND verified_at IS NOT NULL\n                ORDER BY domain",
+  "describe": {
+    "columns": [
+      {
+        "name": "domain!",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "domain"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "cace994e820b4ba8c66e0700fec87586f552c7a51076fd7894de8ccc657110f1"
+}

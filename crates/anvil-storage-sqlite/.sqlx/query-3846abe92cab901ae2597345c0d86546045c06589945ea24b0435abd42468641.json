@@ -1,0 +1,122 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE organization\n                  SET slug = COALESCE(?3, slug),\n                      display_name = COALESCE(?4, display_name),\n                      mfa_policy = CASE WHEN ?5 THEN ?6 ELSE mfa_policy END,\n                      settings = COALESCE(?7, settings),\n                      metadata = COALESCE(?8, metadata),\n                      updated_at = ?9\n                WHERE tenant_id = ?1 AND id = ?2\n            RETURNING id AS \"id!: uuid::Uuid\", tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      slug AS \"slug!\", display_name AS \"display_name!\",\n                      mfa_policy AS \"mfa_policy?\", settings AS \"settings!\",\n                      metadata AS \"metadata!\", created_at AS \"created_at!\",\n                      updated_at AS \"updated_at!\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: uuid::Uuid",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "organization",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "tenant_id!: uuid::Uuid",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "organization",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "name": "slug!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "organization",
+            "name": "slug"
+          }
+        }
+      },
+      {
+        "name": "display_name!",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "organization",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "name": "mfa_policy?",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "organization",
+            "name": "mfa_policy"
+          }
+        }
+      },
+      {
+        "name": "settings!",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "organization",
+            "name": "settings"
+          }
+        }
+      },
+      {
+        "name": "metadata!",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "organization",
+            "name": "metadata"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "organization",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "updated_at!",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "organization",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 9
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "3846abe92cab901ae2597345c0d86546045c06589945ea24b0435abd42468641"
+}

@@ -12,7 +12,10 @@
 //! the RP session in its transaction. `AuditRepo::append` enqueues the event's webhook
 //! deliveries in its transaction (`webhooks::enqueue_for_event`); `SetupRepo::install` creates
 //! the system tenant's administrator role and `complete_setup` assigns it, each in its
-//! transaction.
+//! transaction. The organization intents (`OrgRepo::delete`, `remove_member`, `add_member`, both
+//! invitation accepts, `ConnectionRepo::create_user_with_link` with a membership) are writer
+//! transactions too; deleting an org or a membership revokes the org-bound token families in the
+//! same transaction.
 
 mod attributes;
 mod audit;
@@ -30,9 +33,8 @@ mod keys;
 mod logout;
 mod mail_settings;
 pub mod migrate;
+mod organizations;
 mod outbox;
-// TRANSITIONAL(06-07): OrgRepo refusals until the 1.0 schema lands.
-mod pending;
 mod registration;
 mod roles;
 mod sessions;
@@ -64,8 +66,8 @@ use crate::jobs::SqliteJobs;
 use crate::keys::SqliteKeys;
 use crate::logout::SqliteLogout;
 use crate::mail_settings::SqliteMailSettings;
+use crate::organizations::SqliteOrgs;
 use crate::outbox::SqliteOutbox;
-use crate::pending::PendingOrgs;
 use crate::registration::SqliteRegistration;
 use crate::roles::SqliteRoles;
 use crate::sessions::SqliteSessions;
@@ -105,7 +107,7 @@ pub struct SqliteStorage {
     attributes: SqliteAttributes,
     webhooks: SqliteWebhooks,
     registration: SqliteRegistration,
-    organizations: PendingOrgs,
+    organizations: SqliteOrgs,
 }
 
 fn is_memory_url(url: &str) -> bool {
@@ -221,7 +223,10 @@ impl SqliteStorage {
                 writer: writer.clone(),
                 reader: reader.clone(),
             },
-            organizations: PendingOrgs,
+            organizations: SqliteOrgs {
+                writer: writer.clone(),
+                reader: reader.clone(),
+            },
             setup: SqliteSetup {
                 writer: writer.clone(),
                 reader,

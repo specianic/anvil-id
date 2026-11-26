@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO org_membership (tenant_id, org_id, user_id, created_at)\n         SELECT o.tenant_id, o.id, u.id, ?4\n           FROM organization o JOIN user u ON u.tenant_id = o.tenant_id\n          WHERE o.tenant_id = ?1 AND o.id = ?2 AND u.id = ?3\n         ON CONFLICT (tenant_id, org_id, user_id) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "6da8466f8944aab61c959ca366020ffddedc2d29cfb5cfa49905a09a1d3ffe38"
+}

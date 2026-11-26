@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT count(DISTINCT u.id) AS \"count!: i64\"\n                 FROM user u\n                 JOIN role_assignment a ON a.tenant_id = u.tenant_id AND a.user_id = u.id\n                                        AND a.org_id = ?2\n                 JOIN role r ON r.tenant_id = a.tenant_id AND r.id = a.role_id\n                WHERE u.tenant_id = ?1 AND u.status = 'active'\n                  AND EXISTS (SELECT 1 FROM json_each(r.permissions) p WHERE p.value = ?3)",
+  "describe": {
+    "columns": [
+      {
+        "name": "count!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "2c669502f00aff24c19ba7136cc0e6c933a678fab1ee51ea57e036b18604dd52"
+}

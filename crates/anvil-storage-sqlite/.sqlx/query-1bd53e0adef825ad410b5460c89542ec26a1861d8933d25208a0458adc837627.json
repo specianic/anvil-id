@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE org_invitation SET accepted_at = ?4, accepted_user_id = ?3\n          WHERE tenant_id = ?1 AND id = ?2\n            AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "1bd53e0adef825ad410b5460c89542ec26a1861d8933d25208a0458adc837627"
+}

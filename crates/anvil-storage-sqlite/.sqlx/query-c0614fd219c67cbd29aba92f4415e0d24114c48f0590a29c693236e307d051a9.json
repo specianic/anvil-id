@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT EXISTS(SELECT 1 FROM org_domain d\n                               JOIN connection c ON c.tenant_id = d.tenant_id\n                                                AND c.id = d.connection_id\n                                                AND c.org_id = d.org_id\n                              WHERE d.tenant_id = ?1 AND d.verified_at IS NOT NULL\n                                AND d.routing = 1 AND c.enabled = 1)\n                      AS \"routing!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "routing!: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "c0614fd219c67cbd29aba92f4415e0d24114c48f0590a29c693236e307d051a9"
+}

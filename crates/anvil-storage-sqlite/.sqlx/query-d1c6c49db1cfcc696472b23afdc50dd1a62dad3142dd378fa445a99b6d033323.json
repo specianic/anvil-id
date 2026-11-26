@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO org_invitation\n                 (id, tenant_id, org_id, email, roles, token_hash, invited_by_kind,\n                  invited_by_id, created_at, expires_at, accepted_at, accepted_user_id,\n                  revoked_at)\n             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, NULL, NULL)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 10
+    },
+    "nullable": []
+  },
+  "hash": "d1c6c49db1cfcc696472b23afdc50dd1a62dad3142dd378fa445a99b6d033323"
+}

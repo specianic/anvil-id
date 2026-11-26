@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE org_domain\n                SET status = ?4, verified_at = NULL, failing_since = NULL, last_checked_at = ?3\n              WHERE tenant_id = ?1 AND id = ?2 AND verified_at IS NOT NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "0c2f0150b0d529e07a49cb7acdca77e4a7bd0d797d50b4e7e1157d07671bc37c"
+}

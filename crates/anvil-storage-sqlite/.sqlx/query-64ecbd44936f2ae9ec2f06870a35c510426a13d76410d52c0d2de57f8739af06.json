@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT EXISTS(SELECT 1 FROM org_membership\n                          WHERE tenant_id = ?1 AND org_id = ?2 AND user_id = ?3)\n                  AS \"member!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "member!: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "64ecbd44936f2ae9ec2f06870a35c510426a13d76410d52c0d2de57f8739af06"
+}
