@@ -20,7 +20,7 @@ mod ui_helpers;
 mod upstream_flow;
 mod upstream_support;
 
-use anvil_core::model::{AuditAction, IdentityLink};
+use anvil_core::model::{AuditAction, IdentityLink, RegistrationMode};
 use serde_json::json;
 use support::TestResponse;
 use ui_helpers::*;
@@ -295,4 +295,114 @@ async fn org_connection_start_by_slug_works() {
         redirect.ends_with(&format!("/ui/login/upstream/{ORG_SLUG}/callback")),
         "{redirect}"
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Just-in-time creation under closed tenant registration (06-28)
+// ---------------------------------------------------------------------------------------------
+
+/// The upstream sign-in failed generically with `no_account`: no user, no session, no membership.
+async fn assert_refused_no_account(u: &Upstream, resp: &TestResponse, email: &str) {
+    assert_eq!(resp.status, 400, "{}", resp.text());
+    let html = resp.html();
+    assert!(
+        message_keys(&html).contains(&"upstream.failed".to_owned()),
+        "{html}"
+    );
+    assert!(user(&u.app, email).await.is_none(), "no user created");
+    assert!(session(&u.app).await.is_none(), "no session");
+    assert!(audit(&u.app, AuditAction::OrgMemberAdded).await.is_empty());
+    assert!(audit(&u.app, AuditAction::UserRegistered).await.is_empty());
+    assert_eq!(failure_reasons(&u.app).await, vec!["no_account"]);
+}
+
+#[tokio::test]
+async fn org_jit_allowed_under_closed_registration() {
+    // Registration disabled with `upstream_registration` unset, and explicitly off.
+    for upstream_registration in [None, Some(false)] {
+        let u = setup(true).await;
+        tenant_settings(&u.app, |s| {
+            s.registration = RegistrationMode::Disabled;
+            s.upstream_registration = upstream_registration;
+        })
+        .await;
+        let org = create_org(&u.app, "acme", &[]).await;
+        verify_domain(&u.app, &org, DOMAIN).await;
+        add_org_connection(&u.app, &u.mock, &org, ORG_SLUG, true).await;
+
+        let resp = sign_in_at(
+            &u,
+            ORG_SLUG,
+            json!({ "email": JANE, "email_verified": true }),
+        )
+        .await;
+        signed_in(&resp);
+        let jane = user(&u.app, JANE)
+            .await
+            .unwrap_or_else(|| panic!("user created ({upstream_registration:?})"));
+        assert!(jane.email_verified);
+        assert!(is_member(&u.app, &org, &jane).await);
+        assert_eq!(session(&u.app).await.expect("session").user_id, jane.id);
+        assert_eq!(audit(&u.app, AuditAction::UserRegistered).await.len(), 1);
+        assert_eq!(audit(&u.app, AuditAction::OrgMemberAdded).await.len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn org_jit_refused_for_email_outside_org_domains_under_closed_registration() {
+    let u = setup(true).await;
+    tenant_settings(&u.app, |s| s.registration = RegistrationMode::Disabled).await;
+    let org = create_org(&u.app, "acme", &[]).await;
+    verify_domain(&u.app, &org, DOMAIN).await;
+    // A pending claim does not count either.
+    claim_domain(&u.app, &org, "pending.example", false).await;
+    add_org_connection(&u.app, &u.mock, &org, ORG_SLUG, true).await;
+
+    for email in ["jane@elsewhere.example", "jane@pending.example"] {
+        u.app.clear_cookies();
+        let resp = sign_in_at(
+            &u,
+            ORG_SLUG,
+            json!({ "email": email, "email_verified": true }),
+        )
+        .await;
+        assert_eq!(resp.status, 400, "{email}: {}", resp.text());
+        assert!(user(&u.app, email).await.is_none(), "{email}: no user");
+    }
+    // On the verified domain but not verified by the IdP: untrusted, so the tenant rule applies.
+    u.app.clear_cookies();
+    let resp = sign_in_at(
+        &u,
+        ORG_SLUG,
+        json!({ "email": JANE, "email_verified": false }),
+    )
+    .await;
+    assert_eq!(resp.status, 400, "{}", resp.text());
+    assert!(user(&u.app, JANE).await.is_none());
+    assert!(session(&u.app).await.is_none());
+    assert!(audit(&u.app, AuditAction::OrgMemberAdded).await.is_empty());
+    assert!(audit(&u.app, AuditAction::UserRegistered).await.is_empty());
+    assert_eq!(
+        failure_reasons(&u.app).await,
+        vec!["no_account", "no_account", "no_account"]
+    );
+}
+
+#[tokio::test]
+async fn tenant_connection_jit_still_follows_upstream_registration() {
+    let u = setup(true).await;
+    tenant_settings(&u.app, |s| s.registration = RegistrationMode::Disabled).await;
+    // Even an address on an org's verified domain: a tenant-level connection gets no org trust.
+    let org = create_org(&u.app, "acme", &[]).await;
+    verify_domain(&u.app, &org, DOMAIN).await;
+    let resp = sign_in(&u, json!({ "email": JANE, "email_verified": true })).await;
+    assert_refused_no_account(&u, &resp, JANE).await;
+
+    // `upstream_registration` still opens it for tenant connections.
+    tenant_settings(&u.app, |s| s.upstream_registration = Some(true)).await;
+    u.app.clear_cookies();
+    let resp = sign_in(&u, json!({ "email": JANE, "email_verified": true })).await;
+    signed_in(&resp);
+    let jane = user(&u.app, JANE).await.expect("user created");
+    assert!(!is_member(&u.app, &org, &jane).await, "no org membership");
 }

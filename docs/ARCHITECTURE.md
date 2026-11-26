@@ -373,7 +373,8 @@ assignments and the user's org-bound families), `accept_invitation` and
 `accept_invitation_with_new_user` (outcome order Invalid, EmailMismatch, AlreadyMember or Conflict;
 one conditional update decides concurrent accepts), `mark_verified` (the partial unique index
 turns a second org into `Conflict`), `record_check` and `unverify` (re-check streak), plus the
-reads `routed_domain` (verified, routing on, enabled connection of the same org), `tenant_has_routing`,
+reads `routed_domain` (verified, routing on, enabled connection of the same org),
+`routing_connections` (those connections for the whole tenant; the core decides which can route),
 `verified_domains_of_org` and the installation-wide `due_for_recheck`. `RoleRepo` gains
 `list_org_roles`, `assign_in_org` (the user must be a member; the role a tenant role or this org's),
 `unassign_in_org`, `roles_for_user_in_org`, `org_assignments` and `org_holders_of_permission`; its
@@ -834,8 +835,10 @@ Behind the operator flag `saml_experimental` (off: every route 404, every `SamlS
   `true`; SAML: the verified domain alone). Org A's IdP can never auto-link or add a membership on
   org B's domain. Just-in-time users get the link, the membership and the org's existing default
   roles in one transaction (`create_user_with_link` with a membership); an existing linked
-  non-member becomes a member. JIT follows the tenant's `upstream_registration` (an open decision
-  for org connections; see `docs/ORGANIZATIONS.md`).
+  non-member becomes a member. JIT is decided by `upstream::linking::jit_allowed`: an org connection
+  whose email is trusted for the org (one of its verified domains) creates accounts whatever the
+  tenant's registration setting; tenant connections, and org connections asserting any other
+  address, follow `upstream_registration` (unset = registration mode `open`).
 - **Domain verification.** `policy::home_realm::normalize_domain` (lowercase, A-labels, no public
   suffix, IP, wildcard, single label, URL parts or reserved names), a 128-bit token, the record
   `_anvilid-challenge.{domain}.` TXT `anvilid-domain-verification={token}`, checked by the one
@@ -843,8 +846,12 @@ Behind the operator flag `saml_experimental` (off: every route 404, every `SamlS
   cache, 2 s × 2 attempts, 5 s overall); every failure is the same `pending` answer. The partial
   unique index gives a domain to one org per tenant. The daily `domain_recheck` job (§14) keeps a
   failure streak and unverifies after 7 days.
-- **Identifier-first sign-in.** A tenant with a routable domain (`OrgRepo::tenant_has_routing`)
-  starts the login flow at `EmailFirst` instead of the combined form. The email is routed by its
+- **Identifier-first sign-in.** A tenant with a routable connection (`OrgRepo::routing_connections`
+  filtered by `FlowService::idp_routable`: enabled, org-owned, OIDC, or SAML only with the flag on;
+  the same rule as routing) starts the login flow at `EmailFirst` instead of the combined form. The
+  brute-force lock and CAPTCHA pages answered before the flow runs render the same initial form
+  (`FlowService::initial_login_form`), and the email-first form also answers from the password
+  step (the email is routed again). The email is routed by its
   domain only (`OrgRepo::routed_domain`: verified, routing on, enabled connection of the same org;
   SAML only with the flag on): `allow_local_password = false` → straight to the IdP
   (`service::flow::start_idp`, SAML or OIDC with the page's flow binding); `true` (default) →
@@ -1413,9 +1420,8 @@ home-realm discovery (ORG-4); organization admins on the management API; the sig
 and console pages for organizations, org SSO and keys (ADM-2). The 0.4 → 1.0 upgrade is tested on
 both backends (`tests/upgrade.rs`). User docs: `docs/ORGANIZATIONS.md`, `docs/SAML.md`,
 `docs/UPGRADING.md`. Open items: **tenant-restricted system admins deferred to Phase 7**; **SAML
-experimental until the Phase 7 external review and interop checklist** (D4); org JIT under closed
-tenant registration (follows `upstream_registration` for now); invitation return-to after
-sign-in; the remaining M5 scope (certification, external review, PAR, headless flow API, user
+experimental until the Phase 7 external review and interop checklist** (D4); invitation return-to
+after sign-in; the remaining M5 scope (certification, external review, PAR, headless flow API, user
 import/export) belongs to Phase 7.
 
 ### Beyond 1.0

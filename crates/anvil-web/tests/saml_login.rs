@@ -21,7 +21,8 @@ use anvil_cache::limiter::RateQuota;
 use anvil_core::error::CoreError;
 use anvil_core::model::{
     AuditAction, ClientAuthMethod, Connection, ConnectionConfig, ConnectionId, ConsentMode,
-    MfaPolicy, NameIdFormat, NewConnection, OrgId, Organization, SamlAttributeMapping, SamlConfig,
+    MfaPolicy, NameIdFormat, NewConnection, OrgId, Organization, RegistrationMode,
+    SamlAttributeMapping, SamlConfig,
 };
 use anvil_core::model::{FlowId, RequestContext};
 use anvil_core::ports::{Clock as _, JtiOutcome};
@@ -1036,6 +1037,43 @@ async fn saml_foreign_domain_email_is_untrusted() {
     assert!(links(&s.app, &victim).await.is_empty(), "never auto-linked");
     assert!(session(&s.app).await.is_none());
     assert!(!is_member(&s.app, &s.org, &victim).await);
+}
+
+#[tokio::test]
+async fn saml_org_jit_allowed_under_closed_registration() {
+    let s = setup().await;
+    tenant_settings(&s.app, |t| t.registration = RegistrationMode::Disabled).await;
+    // The asserted email is on the org's verified domain: created and made a member although the
+    // tenant's registration is closed (`upstream_registration` unset).
+    let resp = sign_in(&s).await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert!(
+        message_keys(&resp.html()).contains(&"login.signed_in".to_owned()),
+        "{}",
+        resp.text()
+    );
+    let u = user(&s.app, EMAIL).await.expect("user created");
+    assert!(u.email_verified);
+    assert!(is_member(&s.app, &s.org, &u).await);
+    assert_eq!(session(&s.app).await.expect("session").user_id, u.id);
+
+    // An address outside the org's verified domains follows the closed tenant rule: refused,
+    // nobody created.
+    const OUTSIDER: &str = "mallory@elsewhere.example";
+    s.app.clear_cookies();
+    let resp = sign_in_with(&s, |_, mut o| {
+        o.name_id = "00u-mallory-1".into();
+        o.attributes = vec![("mail".into(), None, vec![OUTSIDER.into()])];
+        o
+    })
+    .await;
+    assert_eq!(resp.status, 400, "{}", resp.text());
+    assert!(user(&s.app, OUTSIDER).await.is_none());
+    assert!(session(&s.app).await.is_none());
+    assert_eq!(
+        upstream_flow::failure_reasons(&s.app).await,
+        vec!["no_account"]
+    );
 }
 
 // ---------------------------------------------------------------------------------------------

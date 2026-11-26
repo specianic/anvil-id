@@ -311,12 +311,18 @@ validation and linking rules as tenant connections (0.3), and differ in four way
 - **Read-only at tenant level.** The tenant's connection list shows organization connections with
   their organization, but changing them there answers `409`; use the organization routes.
 
-**Just-in-time sign-up and tenant registration (current behaviour).** Org JIT follows the tenant's
-`upstream_registration` setting, which, when unset, follows the registration mode: only `open`
-allows it. A tenant with `invite_only` or `disabled` registration therefore refuses first sign-ins
-through organization connections unless you set `upstream_registration: true`. Whether JIT through
-an organization's own connection should be allowed regardless of tenant registration is an open
-decision for 1.0; until it is made, set `upstream_registration` explicitly on B2B tenants.
+**Just-in-time sign-up and tenant registration.** A first sign-in through an organization's own
+connection (OIDC or SAML) creates the account just in time **whatever the tenant's registration
+setting**, as long as the asserted email is trusted for that organization: it is on one of the
+organization's verified domains (and, for OIDC, the IdP says `email_verified: true`). An admin
+configured the connection and verified the domain, so a B2B tenant with `invite_only` or `disabled`
+registration still onboards the organization's own people through their IdP. An organization
+connection that asserts any other address (another domain, a pending domain, or an address its IdP
+did not verify) gets no such exception: it follows the tenant's `upstream_registration` like a
+tenant-level connection does. Tenant-level connections keep following `upstream_registration`,
+which, when unset, follows the registration mode (only `open` allows it). A refused first sign-in
+shows the generic "sign-in failed" page and is audited `upstream_login_failed` with reason
+`no_account`; no user is created.
 
 ## Domain verification
 
@@ -375,8 +381,9 @@ curl -sX PATCH "$ANVIL/api/admin/v1/tenants/acme/organizations/globex/domains/$D
 ```
 
 **Sign-in page.** A tenant without any routed domain keeps the combined sign-in form, unchanged.
-Once a domain of the tenant is verified and routed to an enabled connection, the sign-in page asks
-for the **email first**:
+Once a domain of the tenant is verified and routed to a connection that can route (enabled, owned
+by the organization, OIDC, or SAML only while the operator flag `saml_experimental` is on: the
+same rule routing uses), the sign-in page asks for the **email first**:
 
 - An address on a routed domain whose organization turned passwords off goes straight to the
   organization's IdP.
@@ -387,6 +394,9 @@ for the **email first**:
   exist. Subdomains of a routed domain are not routed.
 - Passkey sign-in and the tenant's social buttons stay on the email page. A `login_hint` that is
   an email skips the email page and is routed at once.
+- The brute-force lock page and the CAPTCHA page show the same email-first form (with the address
+  filled in), and the answer is the same whether or not the account exists. When the address
+  needs a CAPTCHA, the password step after the email page carries it.
 - Everything works without JavaScript.
 
 ### Guards against locking an organization out
@@ -420,7 +430,8 @@ and it is what an admin, or a user locked out by a broken IdP, can still use. Or
 want IdP-only access should also remove members' passkeys or block accounts at offboarding.
 
 SAML routes are honoured only while the operator flag `saml_experimental` is on; with the flag
-off, an address on a domain routed to a SAML connection gets the normal password step.
+off, an address on a domain routed to a SAML connection gets the normal password step, and a
+tenant whose only routes point at SAML connections keeps the combined sign-in form.
 
 ## Recovering from lockouts
 
@@ -452,17 +463,11 @@ organization in their details.
 - **SAML 2.0 is experimental** and off by default ([SAML.md](SAML.md)).
 - **Invitations** do not return the user to the invitation after sign-in, and do not sign in a user
   who registered through one ([Invitations](#invitations)).
-- **Org JIT under closed tenant registration** follows `upstream_registration` (see
-  [Enterprise OIDC connections](#enterprise-oidc-connections)); the final rule is still open.
 - **Organization admins use the API.** The admin console is for system administrators; there is no
   organization-admin console or self-service SSO setup portal in 1.0.
 - **Tenant-restricted system administrators** (system roles limited to a list of tenants) are
   deferred to Phase 7.
 - The admin API has no per-user membership list and no email filter on the user list; the console
   works around both with several requests.
-- On the brute-force lock and CAPTCHA page, a routed tenant still shows the combined sign-in form
-  (no enumeration impact).
-- The email-first page is shown when the tenant has a routed domain, even when that domain's only
-  connection is SAML and the SAML flag is off; every address then goes to the password step.
 - Tenant YAML documents do not contain organizations or anything they own
   ([CONFIG-YAML.md](CONFIG-YAML.md#organizations-are-not-part-of-the-document)).

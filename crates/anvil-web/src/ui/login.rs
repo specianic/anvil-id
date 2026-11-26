@@ -27,9 +27,13 @@
 //!
 //! # Identifier-first sign-in (ORG-04)
 //!
-//! A tenant with a verified, routed domain starts at the email-first page (`login_identify.html`,
-//! form `login-identify`, passkey and upstream buttons included); every other tenant keeps the
-//! combined form. The email is routed by its domain only (`FlowService::identify`): an org IdP
+//! A tenant with a verified, routed domain whose connection can route (enabled, org-owned, OIDC,
+//! or SAML only while `saml_experimental` is on: the same rule as routing) starts at the
+//! email-first page (`login_identify.html`, form `login-identify`, passkey and upstream buttons
+//! included); every other tenant keeps the combined form. The brute-force lock and CAPTCHA pages
+//! answered before the flow runs follow the same decision (`FlowService::initial_login_form`); the
+//! password step reached from the email page carries the CAPTCHA widget while the address's
+//! brute-force tier asks for one. The email is routed by its domain only (`FlowService::identify`): an org IdP
 //! (303 to the IdP through the same start as its own route, with the binding cookie), the
 //! single-sign-on choice (form `login-sso-choice`) or the password step (`login.html` with the
 //! email in a hidden field, shown read-only with a "change" button). `login_hint` and

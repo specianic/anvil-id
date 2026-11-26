@@ -32,8 +32,10 @@
 //!   `auto_link`: link (`identity_linked`, mode `auto`) and sign in;
 //! - other email match: continue in a fresh login flow holding a [`PendingLink`]; signing in to
 //!   an existing account there links it ([`confirm_link`], mode `confirmed`);
-//! - no match: just-in-time registration when `upstream_registration` allows it (email verified
-//!   only for a verified and trusted upstream email; Apple names from the first-login user JSON).
+//! - no match: just-in-time registration when [`jit_allowed`]: always for an org connection whose
+//!   email is trusted for the org (one of its verified domains), otherwise when
+//!   `upstream_registration` allows it (unset = registration mode `open`); email verified only for
+//!   a verified and trusted upstream email; Apple names from the first-login user JSON.
 //!   An account created with an unverified email gets a verification email in the same storage
 //!   transaction, like local registration.
 //!
@@ -68,7 +70,9 @@
 //!   needs the Phase 4 confirmation, so org A's IdP cannot take over an account on a domain
 //!   verified by org B;
 //! - just-in-time registration creates the user, the identity link and the org membership with
-//!   the org's default roles (those that still exist) in one storage transaction;
+//!   the org's default roles (those that still exist) in one storage transaction. It is allowed
+//!   for a trusted email whatever the tenant's registration setting ([`jit_allowed`]); an email
+//!   outside the org's verified domains follows `upstream_registration`;
 //! - a user who signs in through the org connection (existing link, auto-link or a confirmed
 //!   link) and is not yet a member becomes one (JIT membership).
 //!
@@ -112,8 +116,8 @@ use crate::flow::upstream::{
 use crate::model::{
     ActorKind, AuditAction, AuditActor, AuditDetails, AuditOutcome, AuthRequestId, BrowserSession,
     Connection, ConnectionConfig, ConnectionKind, Flow, FlowId, FlowKind, IdentityLinkId,
-    NewIdentityLink, NewMembership, NewUser, Organization, RegistrationMode, RoleId,
-    SelfServiceKind, StandardClaims, TenantId, User, UserId, UserStatus, normalize_email,
+    NewIdentityLink, NewMembership, NewUser, Organization, RoleId, SelfServiceKind, StandardClaims,
+    TenantId, User, UserId, UserStatus, normalize_email,
 };
 use crate::ports::{
     AddMemberOutcome, ApiProfile, Clock, CodeExchange, ProviderMetadata, Storage, StorageError,
@@ -124,7 +128,8 @@ use crate::upstream::claims::{
     normalise_oidc, validate_id_token,
 };
 use crate::upstream::linking::{
-    EmailMatch, LinkDecision, LinkInputs, RefuseReason, enterprise_email_trust, link_decision,
+    EmailMatch, LinkDecision, LinkInputs, RefuseReason, enterprise_email_trust, jit_allowed,
+    link_decision,
 };
 use crate::upstream::providers::{
     Protocol, ResolvedProvider, apple_client_secret_claims, authorization_url, resolve,
@@ -1243,6 +1248,8 @@ impl UpstreamService<'_> {
             identity.email_verified =
                 enterprise_email_trust(identity.email.as_deref(), &domains, upstream_verified);
         }
+        // For an org connection `email_verified` is now exactly the org-domain trust.
+        let org_trusted_email = org.is_some() && identity.email_verified;
         let link = storage
             .connections()
             .find_link(tenant, conn.id, &identity.subject)
@@ -1272,9 +1279,7 @@ impl UpstreamService<'_> {
             }),
             auto_link_enabled: settings.auto_link,
             connection_kind: conn.kind(),
-            registration_allowed: settings
-                .upstream_registration
-                .unwrap_or(settings.registration == RegistrationMode::Open),
+            registration_allowed: jit_allowed(settings, org_trusted_email),
         });
         let mut just_created = false;
         let user: User = match decision {

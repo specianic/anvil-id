@@ -346,7 +346,7 @@ async fn combined_form_unchanged_without_routing() {
 }
 
 #[tokio::test]
-async fn email_first_page_when_tenant_has_routing() {
+async fn email_first_page_when_tenant_has_a_routable_domain() {
     let h = fixture().await;
     route(&h.u.app, &h.claim, &h.conn, true).await;
     let page = login_page(&h.u.app).await;

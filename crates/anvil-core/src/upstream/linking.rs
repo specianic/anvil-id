@@ -10,7 +10,7 @@
 //! - Any other email match needs confirmation by signing in to the existing account
 //!   ([`LinkDecision::PendingLink`]); the candidate account is revealed only when the upstream
 //!   email is verified and trusted (no account enumeration through unverified addresses).
-//! - No match: just-in-time registration when allowed, else refuse.
+//! - No match: just-in-time registration when allowed ([`jit_allowed`]), else refuse.
 //!
 //! Enterprise connections (owned by an organization, ORG-03) decide the upstream email's trust
 //! with [`enterprise_email_trust`] before [`link_decision`]: only an address on one of the org's
@@ -20,7 +20,26 @@
 //! Pure: no I/O.
 
 use super::claims::UpstreamIdentity;
-use crate::model::{ConnectionKind, IdentityLink, UserId, normalize_email};
+use crate::model::{
+    ConnectionKind, IdentityLink, RegistrationMode, TenantSettings, UserId, normalize_email,
+};
+
+/// Whether an upstream login without a linked or matching account may create one just in time.
+///
+/// - An organization-owned connection whose asserted email is trusted for that org
+///   (`org_trusted_email`: the [`enterprise_email_trust`] result, i.e. on one of the org's
+///   **verified** domains) may create accounts whatever the tenant's registration setting: a
+///   tenant or org admin explicitly configured the connection and verified the domain. A closed
+///   B2B tenant therefore still onboards the org's own people through their IdP.
+/// - Every other case (tenant-level connections, and org connections asserting an email outside
+///   the org's verified domains) follows the tenant setting `upstream_registration`, which
+///   defaults to "registration mode is `open`" when unset.
+pub fn jit_allowed(settings: &TenantSettings, org_trusted_email: bool) -> bool {
+    org_trusted_email
+        || settings
+            .upstream_registration
+            .unwrap_or(settings.registration == RegistrationMode::Open)
+}
 
 /// Whether the email asserted by an organization's IdP is trusted (research Pattern 9):
 ///
@@ -74,7 +93,7 @@ pub struct LinkInputs<'a> {
     /// Tenant setting `auto_link`.
     pub auto_link_enabled: bool,
     pub connection_kind: ConnectionKind,
-    /// Tenant setting `upstream_registration` (just-in-time account creation).
+    /// Just-in-time account creation is allowed for this login (see [`jit_allowed`]).
     pub registration_allowed: bool,
 }
 
@@ -490,5 +509,67 @@ mod tests {
                 prop_assert!(auto);
             }
         }
+    }
+
+    fn settings(
+        registration: RegistrationMode,
+        upstream_registration: Option<bool>,
+    ) -> TenantSettings {
+        TenantSettings {
+            registration,
+            upstream_registration,
+            ..TenantSettings::default()
+        }
+    }
+
+    const MODES: [RegistrationMode; 3] = [
+        RegistrationMode::Open,
+        RegistrationMode::InviteOnly,
+        RegistrationMode::Disabled,
+    ];
+    const UPSTREAM: [Option<bool>; 3] = [None, Some(true), Some(false)];
+
+    /// The tenant rule: `upstream_registration`, unset = registration mode `open`.
+    fn tenant_rule(mode: RegistrationMode, upstream: Option<bool>) -> bool {
+        match upstream {
+            Some(v) => v,
+            None => mode == RegistrationMode::Open,
+        }
+    }
+
+    #[test]
+    fn jit_allowed_for_org_trusted_email_whatever_the_tenant_setting() {
+        for mode in MODES {
+            for upstream in UPSTREAM {
+                assert!(
+                    jit_allowed(&settings(mode, upstream), true),
+                    "{mode:?} / {upstream:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn jit_follows_the_tenant_rule_without_an_org_trusted_email() {
+        // Tenant connections and org connections asserting an email outside the org's verified
+        // domains both pass `false`.
+        for mode in MODES {
+            for upstream in UPSTREAM {
+                assert_eq!(
+                    jit_allowed(&settings(mode, upstream), false),
+                    tenant_rule(mode, upstream),
+                    "{mode:?} / {upstream:?}"
+                );
+            }
+        }
+        assert!(!jit_allowed(
+            &settings(RegistrationMode::Disabled, None),
+            false
+        ));
+        assert!(!jit_allowed(
+            &settings(RegistrationMode::Open, Some(false)),
+            false
+        ));
+        assert!(jit_allowed(&settings(RegistrationMode::Open, None), false));
     }
 }

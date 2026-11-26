@@ -402,7 +402,9 @@ unknown claims should allow them before you turn on organizations for their clie
 
 - Create organizations and set the `organization` policy of the clients that serve business
   customers ([ORGANIZATIONS.md](ORGANIZATIONS.md)).
-- On B2B tenants with closed registration, decide on `upstream_registration` before adding
-  organization connections (org just-in-time sign-up follows it).
+- Organization connections create accounts just in time for addresses on the organization's
+  verified domains even when the tenant's registration is closed. Other addresses, and
+  tenant-level connections, follow `upstream_registration`
+  ([ORGANIZATIONS.md](ORGANIZATIONS.md#enterprise-oidc-connections)).
 - Behind a firewall that blocks outbound DNS, set `domain_verification_resolvers`.
 - Subscribe to the `organization.*` webhook events ([WEBHOOKS.md](WEBHOOKS.md)).
