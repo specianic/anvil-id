@@ -335,7 +335,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 4. Release 0.3 "Real-world logins" | 36/37 | In Progress|  |
 | 5. Release 0.4 "Operate it" | 32/33 | In Progress|  |
 | 6. Release 1.0 (Organizations and SSO) | 26/31 | In Progress|  |
-| 7. Release 1.0 (Certification and release) | 0/27 | Planned | - |
+| 7. Release 1.0 (Certification and release) | 5/27 | In Progress|  |
 
 ---
 *Roadmap created: 2026-11-25*

@@ -6,14 +6,14 @@ current_phase: 05
 current_phase_name: release 0 4 operate it
 current_plan: 33
 status: verifying
-stopped_at: Completed 06-26-PLAN.md (Phase 6 gate green on 9c40f61)
-last_updated: "2026-11-26T16:28:12.923Z"
+stopped_at: Completed 07-04-PLAN.md
+last_updated: "2026-11-26T16:54:50.716Z"
 last_activity: 2026-11-26
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 193
-  completed_plans: 163
+  completed_plans: 168
   percent: 84
 ---
 
@@ -220,6 +220,7 @@ done before 05-29 tags v0.4.0.
 | Phase 06 P28 | 80min | 2 tasks | 17 files |
 | Phase 06 P31 | 1h30m | 2 tasks | 15 files |
 | Phase 06 P26 | 160min | 3 tasks | 53 files |
+| Phase 07 P04 | 70 min | 2 tasks | 22 files |
 
 ## Accumulated Context
 
@@ -514,6 +515,7 @@ Recent decisions affecting current work:
 - [Phase 06]: 06-26: pre-0.4 console redirect pages removed (0.5 became 1.0); just doc denies broken and private rustdoc intra-doc links in just ci and ci.yml
 - [Phase 06]: 06-26: Q8 tags v0.3.0/v0.4.0 absent; gate pushed under orchestrator authorization, no tag created; v1.0.0-beta.1 (06-27) blocked on both tags
 - [Phase 06]: 06-26: tenant connections page org-name paging deferred to Phase 7 (needs org name on the connection view)
+- [Phase 07]: 07-04: api_flows serves a JSON 404 catch-all below /api/flows/v1 (outside ui Fetch-Metadata); users import/export run(cfg,args) fail with TRANSITIONAL(07-14/07-15)
 
 ### Pending Todos
 
@@ -527,6 +529,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-26T16:28:06.744Z
-Stopped at: Completed 06-26-PLAN.md (Phase 6 gate green on 9c40f61)
+Last session: 2026-11-26T16:54:50.713Z
+Stopped at: Completed 07-04-PLAN.md
 Resume file: None
