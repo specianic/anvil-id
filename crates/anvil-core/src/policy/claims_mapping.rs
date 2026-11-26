@@ -109,11 +109,14 @@ pub fn is_reserved_claim(claim: &str) -> bool {
         .any(|r| r.eq_ignore_ascii_case(claim))
 }
 
-fn rule_applies(rule: &ClaimRule, granted: &Scope, target: TokenTarget) -> bool {
+/// Whether `rule` emits into `target` under the `granted` scope. Shared with
+/// [`super::org_claims`] so both mappings gate rules the same way.
+pub(crate) fn rule_applies(rule: &ClaimRule, granted: &Scope, target: TokenTarget) -> bool {
     rule.tokens.contains(&target) && rule.scope.as_deref().is_none_or(|s| granted.contains(s))
 }
 
-fn sorted_unique(values: &[String]) -> Option<Value> {
+/// De-duplicated, sorted JSON array; `None` for an empty set (the claim is then omitted).
+pub(crate) fn sorted_unique(values: &[String]) -> Option<Value> {
     let set: BTreeSet<&str> = values.iter().map(String::as_str).collect();
     if set.is_empty() {
         return None;

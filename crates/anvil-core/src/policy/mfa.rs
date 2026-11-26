@@ -1,5 +1,5 @@
-//! MFA policy evaluation: effective policy across tenant and client (strictest wins) and the
-//! step-up decision for `acr_values` (AUTH-08). Pure functions.
+//! MFA policy evaluation: effective policy across tenant, organization and client (strictest
+//! wins) and the step-up decision for `acr_values` (AUTH-08). Pure functions.
 //!
 //! Specs: OpenID Connect Core 1.0 §3.1.2.1 (`acr_values`, voluntary), §5.5.1.1 (`acr` as an
 //! essential claim); OpenID Connect Unmet Authentication Requirements 1.0
@@ -7,11 +7,24 @@
 
 use crate::model::{ACR_MFA, ACR_PWD, AMR_MFA, MfaPolicy};
 
-/// The policy in force for a sign-in: the strictest of the tenant's and the client's
-/// (`required` > `optional` > `off`). A client without its own policy inherits the tenant's.
-/// Phase 6 adds the organization's policy as a third input to the same maximum.
+/// The policy in force for a sign-in without an active organization: see
+/// [`effective_policy_for`].
 pub fn effective_policy(tenant: MfaPolicy, client: Option<MfaPolicy>) -> MfaPolicy {
-    client.map_or(tenant, |c| tenant.max(c))
+    effective_policy_for(tenant, None, client)
+}
+
+/// The policy in force for a sign-in: the strictest of the tenant's, the active
+/// organization's and the client's (`required` > `optional` > `off`). An org or client without
+/// its own policy adds nothing, so the result is never weaker than the tenant's.
+pub fn effective_policy_for(
+    tenant: MfaPolicy,
+    org: Option<MfaPolicy>,
+    client: Option<MfaPolicy>,
+) -> MfaPolicy {
+    [org, client]
+        .into_iter()
+        .flatten()
+        .fold(tenant, MfaPolicy::max)
 }
 
 /// How strongly the RP asked for a multi-factor sign-in.
@@ -132,6 +145,66 @@ mod tests {
             for c in POLICIES {
                 assert!(effective_policy(t, Some(c)) >= t);
                 assert!(effective_policy(t, Some(c)) >= c);
+            }
+        }
+    }
+
+    #[test]
+    fn effective_policy_with_org_examples() {
+        use MfaPolicy::{Off, Optional, Required};
+        assert_eq!(
+            effective_policy_for(Optional, Some(Required), None),
+            Required
+        );
+        assert_eq!(
+            effective_policy_for(Required, Some(Off), Some(Off)),
+            Required
+        );
+        assert_eq!(effective_policy_for(Off, Some(Optional), None), Optional);
+        assert_eq!(effective_policy_for(Off, None, Some(Optional)), Optional);
+        assert_eq!(effective_policy_for(Off, None, None), Off);
+    }
+
+    #[test]
+    fn effective_policy_with_org_exhaustive() {
+        let optional = [
+            None,
+            Some(MfaPolicy::Off),
+            Some(MfaPolicy::Optional),
+            Some(MfaPolicy::Required),
+        ];
+        let mut cases = 0;
+        for t in POLICIES {
+            for o in optional {
+                for c in optional {
+                    let got = effective_policy_for(t, o, c);
+                    let expected = [Some(t), o, c].into_iter().flatten().max().unwrap();
+                    assert_eq!(got, expected, "{t:?} {o:?} {c:?}");
+                    assert!(got >= t, "never weaker than the tenant");
+                    assert!(o.is_none_or(|o| got >= o), "never weaker than the org");
+                    assert!(c.is_none_or(|c| got >= c), "never weaker than the client");
+                    assert!(
+                        got == t || Some(got) == o || Some(got) == c,
+                        "one of the inputs"
+                    );
+                    cases += 1;
+                }
+            }
+        }
+        assert_eq!(cases, 3 * 4 * 4);
+    }
+
+    #[test]
+    fn effective_policy_delegates_without_org() {
+        let optional = [
+            None,
+            Some(MfaPolicy::Off),
+            Some(MfaPolicy::Optional),
+            Some(MfaPolicy::Required),
+        ];
+        for t in POLICIES {
+            for c in optional {
+                assert_eq!(effective_policy(t, c), effective_policy_for(t, None, c));
             }
         }
     }
