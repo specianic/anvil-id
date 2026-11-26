@@ -253,7 +253,7 @@ Plans:
 - [ ] 06-02-PLAN.md — Foundation A: org/SAML model, org_id fields, errors, audit actions + webhook events, reserved org claims, compile fixes, TRANSITIONAL converters, OpenAPI (wave 1)
 - [ ] 06-03-PLAN.md — E2E infra: mock SAML IdP (xml-crypto) and a suite-wide mock DNS with an HTTP control channel, self-tests (wave 1)
 - [ ] 06-04-PLAN.md — Foundation B: ports (OrgRepo, DomainTxtLookup, SamlXml), shims, AppDeps/AppConfig + operator keys, module/route skeletons, contract suite (wave 2)
-- [ ] 06-05-PLAN.md — Pure core: domain rules + routing, TXT record format, active-org resolution + org claims + org:admin bounding, org MFA, SAML request/validation (TDD) (wave 2)
+- [x] 06-05-PLAN.md — Pure core: domain rules + routing, TXT record format, active-org resolution + org claims + org:admin bounding, org MFA, SAML request/validation (TDD) (wave 2)
 - [ ] 06-06-PLAN.md — Carry-over: passkey picker narrowed to the step user at the second factor (wave 2)
 - [ ] 06-07-PLAN.md — SQLite 0008 additive + 0009 no-transaction rebuild, org repos, 0.4 -> 1.0 upgrade with row counts (wave 3)
 - [ ] 06-08-PLAN.md — Postgres 0007, org repos, 0.4 -> 1.0 upgrade (wave 3)

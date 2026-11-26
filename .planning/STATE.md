@@ -6,15 +6,15 @@ current_phase: 05
 current_phase_name: release 0 4 operate it
 current_plan: 33
 status: executing
-stopped_at: Completed 06-02-PLAN.md
-last_updated: "2026-11-26T09:33:34.215Z"
+stopped_at: Completed 06-05-PLAN.md
+last_updated: "2026-11-26T09:47:56.052Z"
 last_activity: 2026-11-26
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 162
-  completed_plans: 136
-  percent: 83
+  completed_plans: 137
+  percent: 85
 ---
 
 # Project State
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 **Status:** Ready to execute
 **Last Activity:** 2026-11-26
 **Last Activity Description:** 05-28 phase gate complete (632-pair security map, 0.4 plaintext scan, anvilid 0.4.0, 0.4 migrations pinned, every workflow incl. load and deploy green on f80dcb4)
-**Progress:** [████████░░] 83%
+**Progress:** [█████████░] 85%
 
 Phase 5 has 33 plans (05-01 through 05-33). Every plan except 05-29 (release v0.4.0 after owner sign-off) has a
 SUMMARY. Current Plan counts plans in execution order: 05-29 is the 33rd and last. Phase 4 still has one open plan, 04-33 (manual real-provider checklist, then tag v0.3.0); it must be
@@ -193,6 +193,7 @@ done before 05-29 tags v0.4.0.
 | Phase 06 P03 | 25min | 2 tasks | 7 files |
 | Phase 06 P01 | 75min | 2 tasks | 8 files |
 | Phase 06 P02 | 60min | 4 tasks | 80 files |
+| Phase 06 P05 | 20min | 3 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -450,6 +451,7 @@ Recent decisions affecting current work:
 - [Phase 06]: D4 spike passed: bergshamra-dsig 0.12.0 on aws-lc + uppsala; chrono allowed only via wrapper tsp-ltv (owner review pending)
 - [Phase 06]: 06-02: org claim mapping rules may keep their own reserved names (org_roles/org_permissions); every other rule may not
 - [Phase 06]: 06-02: validate_org_slug uses the tenant slug rule (2-63 chars)
+- [Phase 06]: 06-05: SamlAssertionData.has_conditions added so missing Conditions has its own SAML reason code; 06-09 must set it
 
 ### Pending Todos
 
@@ -462,6 +464,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-26T09:33:34.212Z
-Stopped at: Completed 06-02-PLAN.md
+Last session: 2026-11-26T09:47:56.049Z
+Stopped at: Completed 06-05-PLAN.md
 Resume file: None
