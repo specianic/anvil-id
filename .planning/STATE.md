@@ -6,15 +6,15 @@ current_phase: 05
 current_phase_name: release 0 4 operate it
 current_plan: 33
 status: executing
-stopped_at: Completed 06-20-PLAN.md
-last_updated: "2026-11-26T12:08:33.471Z"
+stopped_at: Completed 06-17-PLAN.md
+last_updated: "2026-11-26T12:13:28.966Z"
 last_activity: 2026-11-26
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 162
-  completed_plans: 153
-  percent: 94
+  completed_plans: 154
+  percent: 95
 ---
 
 # Project State
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 **Status:** Ready to execute
 **Last Activity:** 2026-11-26
 **Last Activity Description:** 05-28 phase gate complete (632-pair security map, 0.4 plaintext scan, anvilid 0.4.0, 0.4 migrations pinned, every workflow incl. load and deploy green on f80dcb4)
-**Progress:** [█████████░] 94%
+**Progress:** [██████████] 95%
 
 Phase 5 has 33 plans (05-01 through 05-33). Every plan except 05-29 (release v0.4.0 after owner sign-off) has a
 SUMMARY. Current Plan counts plans in execution order: 05-29 is the 33rd and last. Phase 4 still has one open plan, 04-33 (manual real-provider checklist, then tag v0.3.0); it must be
@@ -210,6 +210,7 @@ done before 05-29 tags v0.4.0.
 | Phase 06 P19 | 50min | 2 tasks | 8 files |
 | Phase 06 P18 | 75min | 2 tasks | 8 files |
 | Phase 06 P20 | 50min | 2 tasks | 17 files |
+| Phase 06 P17 | 80min | 3 tasks | 18 files |
 
 ## Accumulated Context
 
@@ -490,6 +491,8 @@ Recent decisions affecting current work:
 - [Phase 06]: 06-18: SAML ACS 256 KiB limit is a branch of the single body-limit middleware (admin/branding.rs)
 - [Phase 06]: 06-20: invitation pages use a browser-bound CSRF (nonce cookie + KEK-derived HMAC over the token); acceptance audits org_invitation_accepted + org_member_added; registration via invite does not sign in
 - [Phase 06]: 06-20: domain re-check is a leased daily job (cutoff 23 h); 7-day failure streak -> pending + org_domain_unverified webhook
+- [Phase 06]: 06-17: org connections are OIDC or SAML, changed only under the org (tenant level 409); SAML create/change/metadata import need saml_experimental (disable/delete always work)
+- [Phase 06]: 06-17: routing needs a verified domain + enabled same-org connection; allow_local_password=false also needs has_links (409); routing=false + allow_local_password=true is the recovery path
 
 ### Pending Todos
 
@@ -502,6 +505,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-26T12:08:33.468Z
-Stopped at: Completed 06-20-PLAN.md
+Last session: 2026-11-26T12:13:28.963Z
+Stopped at: Completed 06-17-PLAN.md
 Resume file: None
