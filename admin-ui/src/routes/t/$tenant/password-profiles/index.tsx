@@ -2,7 +2,7 @@
 // Firebase password hashes reference by id. The signer key is a write-only secret: it is sent once
 // on create and the API never returns it, so the console never shows it.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { createFileRoute } from "@tanstack/react-router";
+import { Link, createFileRoute } from "@tanstack/react-router";
 import { type FormEvent, useState } from "react";
 import { ApiError, api, unwrap } from "@/api/client";
 import type { components } from "@/api/schema";
@@ -224,7 +224,11 @@ function PasswordProfilesPage() {
         </Button>
       </div>
       <p className="text-muted-foreground text-sm">
-        Firebase scrypt parameters for imported users. A user's Firebase hash is replaced by an Argon2id hash at their first sign-in; a profile can be deleted once no
+        Firebase scrypt parameters for{" "}
+        <Link to="/t/$tenant/users/import" params={{ tenant }} className="underline underline-offset-4">
+          imported users
+        </Link>
+        . A user's Firebase hash is replaced by an Argon2id hash at their first sign-in; a profile can be deleted once no
         imported hash references it.
       </p>
       <StatusMessage message={status} />

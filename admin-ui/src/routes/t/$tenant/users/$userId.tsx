@@ -22,6 +22,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { EXPORT_SCOPE_HINT, saveBlob, useCanExportUsers } from "@/lib/export";
 import { formatDateTime } from "@/lib/format";
 
 type SessionView = components["schemas"]["SessionView"];
@@ -753,6 +754,65 @@ function Tabs({ active, onSelect }: { active: TabId; onSelect: (tab: TabId) => v
   );
 }
 
+/**
+ * "Export" (the user's record) and "GDPR export" (the data-subject bundle) downloads. Disabled with
+ * an explanation when the token lacks admin:users:export / admin:write. Never password hashes.
+ */
+function UserExport({ userId }: { userId: string }) {
+  const tenant = useTenant();
+  const canExport = useCanExportUsers();
+  const [status, setStatus] = useState<string | null>(null);
+  const download = useMutation({
+    mutationFn: async (profile: "user" | "gdpr") => {
+      const blob = unwrap(
+        await api.GET("/api/admin/v1/tenants/{slug}/users/{user_id}/export", {
+          params: { path: { slug: tenant, user_id: userId }, query: profile === "gdpr" ? { profile: "gdpr" } : {} },
+          parseAs: "blob",
+        }),
+      );
+      const filename = profile === "gdpr" ? `user-${userId}.gdpr.json` : `user-${userId}.json`;
+      saveBlob(new Blob([blob], { type: "application/json" }), filename);
+      return filename;
+    },
+    onMutate: () => setStatus(null),
+    onSuccess: (filename) => setStatus(`Downloaded ${filename}.`),
+  });
+  const hintId = `user-export-hint-${userId}`;
+  return (
+    <div className="space-y-2" data-testid="user-export">
+      <div className="flex flex-wrap gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => download.mutate("user")}
+          disabled={!canExport || download.isPending}
+          aria-describedby={canExport ? undefined : hintId}
+          data-testid="export-user"
+        >
+          Export
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => download.mutate("gdpr")}
+          disabled={!canExport || download.isPending}
+          aria-describedby={canExport ? undefined : hintId}
+          data-testid="export-user-gdpr"
+        >
+          GDPR export
+        </Button>
+      </div>
+      {!canExport && (
+        <p id={hintId} className="text-muted-foreground text-xs" data-testid="export-scope-missing">
+          {EXPORT_SCOPE_HINT}
+        </p>
+      )}
+      {download.error ? <ProblemAlert error={download.error} /> : null}
+      <StatusMessage message={status} />
+    </div>
+  );
+}
+
 function UserPage() {
   const tenant = useTenant();
   const { userId } = Route.useParams();
@@ -778,9 +838,12 @@ function UserPage() {
       >
         ← Users
       </Link>
-      <h1 id="user-heading" className="text-xl font-semibold break-all">
-        {query.data?.email ?? "User"}
-      </h1>
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <h1 id="user-heading" className="text-xl font-semibold break-all">
+          {query.data?.email ?? "User"}
+        </h1>
+        {query.isSuccess ? <UserExport userId={userId} /> : null}
+      </div>
       {query.isPending ? (
         <div role="status" aria-label="Loading user" className="space-y-2">
           <Skeleton className="h-6 w-1/2" />
