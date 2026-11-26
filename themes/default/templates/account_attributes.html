@@ -1,0 +1,68 @@
+{#- Account attributes page (plan 05-19, AUTH-14). Variables (besides page/account_base/account_nav):
+      csrf_token, messages [{level, key, text}], action, editable (any field has an input),
+      fields [{name, label, description, kind (select|input|checkbox|readonly), input_type,
+               value, checked, options [{value, selected}], min_length, max_length, min, max,
+               step, required, error}]
+    Labels and descriptions come from the tenant's attribute schemas (not translated).
+    Selectors: form attributes-form; inputs attr-{name} (name attr.{name}); read-only values
+    attr-{name}-value; field errors attr-{name}-error; submit button attributes-form-submit;
+    empty state attributes-none. -#}
+{% extends "account_base.html" %}
+{% block account %}
+<div class="anvil-form-messages" id="account-messages" aria-live="polite">
+{% for m in messages %}
+<p class="anvil-message anvil-message-{{ m.level }}" id="account-msg-{{ loop.index }}" data-message-key="{{ m.key }}"{% if m.level == "error" %} role="alert"{% endif %}>{{ m.text }}</p>
+{% endfor %}
+</div>
+<section class="anvil-account-section" id="attributes" aria-labelledby="attributes-heading">
+<h2 id="attributes-heading">{{ t("attributes.heading") }}</h2>
+{% if not fields %}
+<p class="anvil-muted" id="attributes-none">{{ t("attributes.none") }}</p>
+{% else %}
+<form id="attributes-form" method="post" action="{{ action }}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+{% for f in fields %}
+{% set fid = "attr-" ~ f.name %}
+{% set described = [] %}
+{% if f.description %}{% set described = described + [fid ~ "-help"] %}{% endif %}
+{% if f.error %}{% set described = described + [fid ~ "-error"] %}{% endif %}
+<div class="anvil-field">
+{% if f.kind == "checkbox" %}
+<label for="{{ fid }}"><input id="{{ fid }}" name="attr.{{ f.name }}" type="checkbox" value="true"{% if f.checked %} checked{% endif %}{% if described %} aria-describedby="{{ described | join(" ") }}"{% endif %}{% if f.error %} aria-invalid="true"{% endif %}> {{ f.label }}</label>
+{% elif f.kind == "readonly" %}
+<span class="anvil-label" id="{{ fid }}-label">{{ f.label }}</span>
+<p id="{{ fid }}-value" aria-labelledby="{{ fid }}-label"><code>{{ f.value }}</code></p>
+<p class="anvil-muted" id="{{ fid }}-readonly">{{ t("attributes.read_only") }}</p>
+{% else %}
+<label for="{{ fid }}">{{ f.label }}{% if not f.required %} <span class="anvil-optional">{{ t("form.optional") }}</span>{% endif %}</label>
+{% if f.kind == "select" %}
+<select id="{{ fid }}" name="attr.{{ f.name }}"{% if f.required %} required{% endif %}{% if described %} aria-describedby="{{ described | join(" ") }}"{% endif %}{% if f.error %} aria-invalid="true"{% endif %}>
+<option value=""{% if not f.value %} selected{% endif %}>{{ t("attributes.not_set") }}</option>
+{% for o in f.options %}
+<option value="{{ o.value }}"{% if o.selected %} selected{% endif %}>{{ o.value }}</option>
+{% endfor %}
+</select>
+{% else %}
+<input id="{{ fid }}" name="attr.{{ f.name }}" type="{{ f.input_type }}" value="{{ f.value }}"
+{%- if f.input_type == "number" %} inputmode="decimal"{% endif %}
+{%- if f.step %} step="{{ f.step }}"{% endif %}
+{%- if f.min is not none %} min="{{ f.min }}"{% endif %}
+{%- if f.max is not none %} max="{{ f.max }}"{% endif %}
+{%- if f.min_length is not none %} minlength="{{ f.min_length }}"{% endif %}
+{%- if f.max_length is not none %} maxlength="{{ f.max_length }}"{% endif %}
+{%- if f.required %} required{% endif %}
+{%- if described %} aria-describedby="{{ described | join(" ") }}"{% endif %}
+{%- if f.error %} aria-invalid="true"{% endif %} spellcheck="false">
+{% endif %}
+{% endif %}
+{% if f.description %}<p class="anvil-muted" id="{{ fid }}-help">{{ f.description }}</p>{% endif %}
+{% if f.error %}<p class="anvil-message anvil-message-error" id="{{ fid }}-error">{{ t("attributes.field_invalid") }}</p>{% endif %}
+</div>
+{% endfor %}
+{% if editable %}
+<button type="submit" id="attributes-form-submit">{{ t("attributes.save") }}</button>
+{% endif %}
+</form>
+{% endif %}
+</section>
+{% endblock %}
