@@ -7,13 +7,13 @@ current_phase_name: release 0 3 real world logins
 current_plan: 37
 status: executing
 stopped_at: "04-33 Task 1 checkpoint: awaiting owner real-provider checklist (approved / waive) before tagging v0.3.0 from 9c2bdd2"
-last_updated: "2026-11-26T01:07:27.852Z"
+last_updated: "2026-11-26T02:36:12.717Z"
 last_activity: 2026-11-26
 progress:
   total_phases: 7
   completed_phases: 3
-  total_plans: 102
-  completed_plans: 101
+  total_plans: 131
+  completed_plans: 102
   percent: 99
 ---
 
@@ -157,6 +157,7 @@ v0.3.0) has a SUMMARY. Current Plan counts plans in execution order: 04-33 is th
 | Phase 04 P36 | 95min | 3 tasks | 16 files |
 | Phase 04 P37 | 45min | 3 tasks | 14 files |
 | Phase 04 P32 | 55min | 2 tasks | 8 files |
+| Phase 05 P03 | 80min | 2 tasks | 31 files |
 
 ## Accumulated Context
 
@@ -357,6 +358,8 @@ Recent decisions affecting current work:
 - [Phase 04]: 04-37: Generic OIDC falls back to UserInfo when the ID token has no email; UserInfo sub must equal the ID token sub
 - [Phase 04]: 04-32: AUTH-07 stays unticked until the owner's manual real-provider checklist (04-33); the other 10 Phase 4 requirements are ticked at the gate
 - [Phase 04]: 04-32: fuzz runs only on schedule/dispatch/PR, so the gate dispatches it on the release commit; a stale authorize_parse target was fixed that way
+- [Phase 05]: 05-03: one body-limit rejection check (ui::rejection_is_too_large) -> 413 on pages (rejected_form), JSON form endpoints (rejection_status) and admin JSON (AdminError::PayloadTooLarge)
+- [Phase 05]: 05-03: load harness provisions through the real setup page + admin API; load.yml dispatch-only until 05-26; median-of-3 by p99 decides perf
 
 ### Pending Todos
 
@@ -369,6 +372,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-26T01:07:27.850Z
-Stopped at: 04-33 Task 1 checkpoint: awaiting owner real-provider checklist (approved / waive) before tagging v0.3.0 from 9c2bdd2
+Last session: 2026-11-26T02:36:12.714Z
+Stopped at: 04-33 Task 1 checkpoint: awaiting owner real-provider checklist (approved / waive) before tagging v0.3.0 from 9c2bdd2 (Phase 5 wave 1 in progress; 05-03 complete)
 Resume file: .planning/phases/04-release-0-3-real-world-logins/04-33-PLAN.md
