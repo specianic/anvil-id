@@ -315,6 +315,8 @@ fn view(
     let (kind, client_id) = match scope {
         BrandingScope::Tenant => ("tenant", None),
         BrandingScope::Client(id) => ("client", Some(id.clone())),
+        // No route reaches an org scope before 06-17 adds org branding to the API.
+        BrandingScope::Org(_) => ("org", None),
     };
     match b {
         None => BrandingView {

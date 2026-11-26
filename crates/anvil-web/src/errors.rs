@@ -340,6 +340,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn feature_disabled_maps_through_the_single_table() {
+        let err = CoreError::FeatureDisabled("saml");
+        let resp = problem_json(&err);
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let body = body_json(resp).await;
+        assert_eq!(body["type"], "urn:anvilid:problem:feature_disabled");
+        assert_eq!(body["status"], 403);
+        assert!(body["detail"].as_str().unwrap_or_default().contains("saml"));
+        let resp = oauth_json(&err);
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        assert_eq!(body_json(resp).await["error"], "feature_disabled");
+        assert_eq!(error_key(&err), "server_error");
+    }
+
+    #[tokio::test]
     async fn every_oauth_response_is_no_store() {
         for err in [
             CoreError::InvalidRequest("x".into()),

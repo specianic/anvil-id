@@ -80,6 +80,18 @@ pub enum WebhookEventType {
     SessionRevoked,
     #[serde(rename = "session.logged_out")]
     SessionLoggedOut,
+    #[serde(rename = "organization.created")]
+    OrganizationCreated,
+    #[serde(rename = "organization.deleted")]
+    OrganizationDeleted,
+    #[serde(rename = "organization.member_added")]
+    OrganizationMemberAdded,
+    #[serde(rename = "organization.member_removed")]
+    OrganizationMemberRemoved,
+    #[serde(rename = "organization.domain_verified")]
+    OrganizationDomainVerified,
+    #[serde(rename = "organization.domain_unverified")]
+    OrganizationDomainUnverified,
     #[serde(rename = "test")]
     Test,
 }
@@ -109,6 +121,12 @@ event_map!(
     SessionCreated,
     SessionRevoked,
     SessionLoggedOut,
+    OrganizationCreated,
+    OrganizationDeleted,
+    OrganizationMemberAdded,
+    OrganizationMemberRemoved,
+    OrganizationDomainVerified,
+    OrganizationDomainUnverified,
     Test,
 );
 

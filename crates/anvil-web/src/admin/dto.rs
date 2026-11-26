@@ -2,6 +2,7 @@
 //! domain types. anvil-core stays free of OpenAPI concerns, so every type that appears in the
 //! spec is defined here; the enums mirror the domain enums one to one.
 
+use anvil_core::error::CoreError;
 use anvil_core::model::{
     ActorKind as CoreActorKind, Address as CoreAddress, AppleConfig as CoreAppleConfig,
     ApplicationType as CoreApplicationType, AuditAction as CoreAuditAction, AuditEvent,
@@ -218,6 +219,24 @@ wire_enum!(
         InitialAccessTokenRevoked,
         TenantConfigApplied,
         AdminRecoveryIssued,
+        OrganizationCreated,
+        OrganizationUpdated,
+        OrganizationDeleted,
+        OrgMemberAdded,
+        OrgMemberRemoved,
+        OrgRoleAssigned,
+        OrgRoleUnassigned,
+        OrgInvitationCreated,
+        OrgInvitationRevoked,
+        OrgInvitationAccepted,
+        OrgDomainCreated,
+        OrgDomainVerified,
+        OrgDomainVerificationFailed,
+        OrgDomainUnverified,
+        OrgDomainUpdated,
+        OrgDomainDeleted,
+        SamlLoginSucceeded,
+        SamlLoginFailed,
     }
 );
 wire_enum!(
@@ -231,6 +250,7 @@ wire_enum!(
         LoginCode,
         EmailChange,
         EmailChanged,
+        OrgInvitation,
     }
 );
 wire_enum!(
@@ -248,7 +268,7 @@ wire_enum!(
 );
 wire_enum!(
     /// Kind of an upstream connection (derived from its config).
-    ConnectionKind => CoreConnectionKind { Google, Apple, Microsoft, Github, Oidc, Oauth2 }
+    ConnectionKind => CoreConnectionKind { Google, Apple, Microsoft, Github, Oidc, Oauth2, Saml }
 );
 
 /// RFC 3339 timestamp. The domain only holds times inside years 0..=9999, which always format.
@@ -1081,6 +1101,7 @@ impl CreateClient {
             backchannel_logout_session_required: self.backchannel_logout_session_required,
             allowed_resources: self.allowed_resources.clone(),
             mfa_policy: self.mfa_policy.map(Into::into),
+            organization: anvil_core::model::OrgClientPolicy::Off,
         };
         (self.into(), options)
     }
@@ -1164,6 +1185,7 @@ impl UpdateClient {
             backchannel_logout_session_required: self.backchannel_logout_session_required,
             allowed_resources: self.allowed_resources,
             mfa_policy: self.mfa_policy.map(|m| m.map(Into::into)),
+            organization: None,
         };
         let patch = ClientPatch {
             name: self.name,
@@ -1934,9 +1956,18 @@ impl From<ConnectionConfig> for CoreConnectionConfig {
     }
 }
 
-impl From<CoreConnectionConfig> for ConnectionConfig {
-    fn from(c: CoreConnectionConfig) -> Self {
-        match c {
+impl TryFrom<CoreConnectionConfig> for ConnectionConfig {
+    type Error = CoreError;
+
+    fn try_from(c: CoreConnectionConfig) -> Result<Self, CoreError> {
+        Ok(match c {
+            // TRANSITIONAL(06-17): storage refuses SAML connections until 06-07/06-08, and the
+            // SAML connection view arrives with 06-17; reaching this is an internal error.
+            CoreConnectionConfig::Saml(_) => {
+                return Err(CoreError::Internal(
+                    "saml connection view arrives in 06-17".into(),
+                ));
+            }
             CoreConnectionConfig::Social(s) => Self::Social(SocialConnectionConfig {
                 provider: s.provider.into(),
                 client_id: s.client_id,
@@ -1971,7 +2002,7 @@ impl From<CoreConnectionConfig> for ConnectionConfig {
                     name: o.mapping.name,
                 },
             }),
-        }
+        })
     }
 }
 
@@ -1999,20 +2030,20 @@ pub struct ConnectionView {
 
 impl ConnectionView {
     /// The view of `c`; `issuer` is the tenant's issuer (the callback lives below it).
-    pub fn new(c: Connection, issuer: &str) -> Self {
-        Self {
+    pub fn new(c: Connection, issuer: &str) -> Result<Self, CoreError> {
+        Ok(Self {
             id: c.id.0,
             redirect_uri: format!("{issuer}/ui/login/upstream/{}/callback", c.slug),
             kind: c.kind().into(),
             slug: c.slug,
             display_name: c.display_name,
             enabled: c.enabled,
-            config: c.config.into(),
+            config: c.config.try_into()?,
             trust_email_verified: c.trust_email_verified,
             secret_configured: c.secret_enc.is_some(),
             created_at: ts(c.created_at),
             updated_at: ts(c.updated_at),
-        }
+        })
     }
 }
 

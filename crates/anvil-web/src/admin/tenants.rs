@@ -303,6 +303,8 @@ impl From<TokenClaimMapping> for ClaimMappingSettings {
         Self {
             roles: c.roles.map(Into::into),
             permissions: c.permissions.map(Into::into),
+            // The org mappings are not on the wire yet (06-09): they keep their defaults.
+            ..ClaimMappingSettings::default()
         }
     }
 }
@@ -331,6 +333,9 @@ impl TokenClaimMappingPatch {
                 None => current.permissions.clone(),
                 Some(p) => p.map(Into::into),
             },
+            // Not on the wire yet (06-09): a patch keeps the stored org mappings.
+            org_roles: current.org_roles.clone(),
+            org_permissions: current.org_permissions.clone(),
         }
     }
 }

@@ -65,7 +65,11 @@ fn connection_id(raw: &str) -> AdminResult<ConnectionId> {
         .map_err(|_| CoreError::NotFound.into())
 }
 
-fn view(state: &AppState, tenant: &Tenant, c: anvil_core::model::Connection) -> ConnectionView {
+fn view(
+    state: &AppState,
+    tenant: &Tenant,
+    c: anvil_core::model::Connection,
+) -> Result<ConnectionView, CoreError> {
     ConnectionView::new(c, &state.admin_issuer_of(tenant))
 }
 
@@ -101,7 +105,7 @@ pub(crate) async fn list_connections(
         .await?
         .into_iter()
         .map(|c| view(&state, &tenant, c))
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(json(StatusCode::OK, &ConnectionList { items }))
 }
 
@@ -143,7 +147,7 @@ pub(crate) async fn create_connection(
         "/api/admin/v1/tenants/{}/connections/{}",
         tenant.slug, conn.id
     );
-    Ok(created(&location, &view(&state, &tenant, conn)))
+    Ok(created(&location, &view(&state, &tenant, conn)?))
 }
 
 /// Get an upstream connection (never includes the secret).
@@ -179,7 +183,7 @@ pub(crate) async fn get_connection(
         .admin_connections()
         .get(tenant.id, connection_id(&id)?)
         .await?;
-    Ok(json(StatusCode::OK, &view(&state, &tenant, conn)))
+    Ok(json(StatusCode::OK, &view(&state, &tenant, conn)?))
 }
 
 /// Update an upstream connection. Absent fields stay unchanged; the slug is immutable and a new
@@ -225,7 +229,7 @@ pub(crate) async fn update_connection(
             &ctx,
         )
         .await?;
-    Ok(json(StatusCode::OK, &view(&state, &tenant, conn)))
+    Ok(json(StatusCode::OK, &view(&state, &tenant, conn)?))
 }
 
 /// Delete an upstream connection and every identity link made through it.
@@ -310,5 +314,5 @@ pub(crate) async fn put_connection_secret(
             &ctx,
         )
         .await?;
-    Ok(json(StatusCode::OK, &view(&state, &tenant, conn)))
+    Ok(json(StatusCode::OK, &view(&state, &tenant, conn)?))
 }
