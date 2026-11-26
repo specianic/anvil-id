@@ -17,19 +17,18 @@
 //! until the second factor succeeds (the flow service creates it). The form is bound to the
 //! login flow (flow cookie + CSRF token, checked by the flow service).
 //!
-//! Attempts are throttled per user through the one limiter ([`guard_attempt`] /
-//! [`record_attempt`], key [`LimitKey::User`]). The flow service only learns the user from the
-//! stored flow state, which handlers cannot read, so the password step hands the page a
-//! `factor_token`: the user id sealed with the KEK (purpose [`FACTOR_TOKEN_PURPOSE`]) and bound
-//! to the tenant and flow as AAD. It names the limiter key before the code is checked; it grants
+//! Attempts are throttled per user through the one limiter, driven by [`super::flow_driver`]
+//! (`Throttle::SecondFactor`, limiter key `LimitKey::User`). The flow service only learns the
+//! user from the stored flow state, which handlers cannot read, so the password step hands the
+//! page a `factor_token`: the user id sealed with the KEK (purpose [`FACTOR_TOKEN_PURPOSE`]) and
+//! bound to the tenant and flow as AAD. It names the limiter key before the code is checked; it grants
 //! nothing by itself (the flow service still decides from the flow state). A missing or
 //! tampered token restarts the sign-in. A lock answers 429 with `Retry-After`.
 
-use anvil_cache::limiter::{Decision, LimitKey};
 use anvil_core::flow::engine::FlowInput;
 use anvil_core::flow::form::FormDescription;
 use anvil_core::model::{FlowId, TenantId, UserId};
-use anvil_core::service::flow::{AuthAttempt, FlowOutcome};
+use anvil_core::service::flow::AuthAttempt;
 use anvil_jose::Kek;
 use anvil_jose::encoding::{b64url, b64url_decode};
 use axum::Router;
@@ -40,12 +39,11 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum_extra::extract::cookie::CookieJar;
 
+use super::flow_driver::{self, DriveOutcome, FlowBinding, Throttle};
 use super::login::{
-    Extras, UiForm, UiQuery, csrf_page, locked_page, outcome_response_with, rejected_form,
-    restart_login, submit_flow,
+    Extras, UiForm, UiQuery, csrf_page, drive_response, locked_page, rejected_form, restart_login,
 };
 use crate::i18n::{Locale, RequestLocale};
-use crate::layers::ratelimit::{Surface, guard_attempt, record_attempt, too_many_requests};
 use crate::request_context::AuditContext;
 use crate::state::AppState;
 use crate::tenant::ResolvedTenant;
@@ -123,14 +121,6 @@ async fn submit(
     else {
         return restart_login(&state, &tenant, &loc).await;
     };
-    let key = LimitKey::User {
-        tenant: tenant_id,
-        user,
-    };
-    if let Decision::Deny { retry_after } = guard_attempt(&state, &key, &key, false).await {
-        return too_many_requests(&state, Some(&tenant), Surface::Browser, retry_after);
-    }
-
     let present = |v: &Option<String>| v.clone().filter(|s| !s.trim().is_empty());
     let input = match present(&form.recovery_code) {
         Some(code) => FlowInput::RecoveryCode { code },
@@ -138,46 +128,24 @@ async fn submit(
             code: form.code.clone().unwrap_or_default(),
         },
     };
-    let result = match submit_flow(&state, &tenant, &loc, &ctx, &jar, flow_id, csrf, input).await {
-        Ok(r) => r,
-        Err(resp) => return *resp,
-    };
-    match result.attempt {
-        Some(AuthAttempt::SecondFactorFailed { user }) => {
-            let key = LimitKey::User {
-                tenant: tenant_id,
-                user,
+    let binding = FlowBinding::Cookie { jar: &jar, csrf };
+    let throttle = Throttle::SecondFactor { user };
+    match flow_driver::submit(&state, &tenant, &ctx, flow_id, binding, throttle, input).await {
+        // A lock after a failed code keeps the token of the user the flow counted.
+        DriveOutcome::Locked {
+            form,
+            retry_after,
+            attempt: Some(AuthAttempt::SecondFactorFailed { user }),
+        } => locked_second_factor(&state, &tenant, &loc, form, flow_id, user, retry_after),
+        outcome => {
+            let token = seal_factor_token(state.kek(), tenant_id, flow_id, user).ok();
+            let extras = Extras {
+                factor_token: token.clone(),
+                ..Extras::default()
             };
-            record_attempt(&state, tenant_id, &ctx, std::slice::from_ref(&key), false).await;
-            if let (Decision::Deny { retry_after }, FlowOutcome::Render(form)) = (
-                guard_attempt(&state, &key, &key, false).await,
-                &result.outcome,
-            ) {
-                return locked_second_factor(
-                    &state,
-                    &tenant,
-                    &loc,
-                    form.clone(),
-                    flow_id,
-                    user,
-                    retry_after,
-                );
-            }
+            drive_response(&state, &tenant, &loc, outcome, &extras, token)
         }
-        Some(AuthAttempt::SecondFactorSucceeded { user }) => {
-            let key = LimitKey::User {
-                tenant: tenant_id,
-                user,
-            };
-            record_attempt(&state, tenant_id, &ctx, &[key], true).await;
-        }
-        _ => {}
     }
-    let extras = Extras {
-        factor_token: seal_factor_token(state.kek(), tenant_id, flow_id, user).ok(),
-        ..Extras::default()
-    };
-    outcome_response_with(&state, &tenant, &loc, result.outcome, &extras)
 }
 
 /// The second-factor form answering a lock (429, `Retry-After`), still carrying its token.

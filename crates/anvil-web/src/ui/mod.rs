@@ -13,6 +13,7 @@ mod account_security;
 mod account_sessions;
 mod consent;
 mod email_code;
+mod flow_driver;
 mod format;
 mod login;
 mod logout;

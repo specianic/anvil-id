@@ -72,24 +72,23 @@
 //! user's own passkeys signs in the same way (or upgrades the step-up session). The passkey
 //! routes are bound to the flow (cookie + `csrf_token`) like every flow form.
 //!
-//! Brute-force protection goes through the one limiter ([`guard_attempt`] / [`record_attempt`]):
-//! a password POST is keyed by (identifier, client IP) and by identifier, a passkey assertion by
-//! client IP, a second factor by user. Order of a password POST: binding fields present →
-//! brute-force gate (a lock answers 429 with `Retry-After` and an in-page "try again in N
-//! seconds"; when the identifier tier asks for a CAPTCHA and the tenant has one, the CAPTCHA is
-//! verified server-side here, before the password is looked at) → flow service (Argon2, dummy
-//! hash for unknown identifiers) → record the attempt. Nothing sleeps. Unknown identifiers go
+//! Brute-force protection goes through the one limiter, driven by [`super::flow_driver`] (the
+//! single place that gates, records and decides locks for every renderer): a password POST is
+//! keyed by (identifier, client IP) and by identifier, a passkey assertion by client IP, a second
+//! factor by user. Order of a password POST: binding fields present → brute-force gate (a lock
+//! answers 429 with `Retry-After` and an in-page "try again in N seconds"; when the identifier
+//! tier asks for a CAPTCHA and the tenant has one, the CAPTCHA is verified server-side by the
+//! driver, before the password is looked at) → flow service (Argon2, dummy hash for unknown
+//! identifiers) → record the attempt. Nothing sleeps. Unknown identifiers go
 //! through exactly the same steps as known ones.
 //!
 //! The login page allows `script-src 'self'` and `connect-src 'self'` (webauthn.js and its
 //! options request); a page that shows the CAPTCHA widget sends the provider's CSP instead
 //! ([`captcha_csp`]).
 
-use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anvil_cache::limiter::Decision;
 use anvil_core::error::CoreError;
 use anvil_core::flow::email_code::{EMAIL_CODE_FORM_ID, LINK_INVALID, OTHER_BROWSER};
 use anvil_core::flow::engine::FlowInput;
@@ -101,17 +100,15 @@ use anvil_core::flow::login::{
     SSO_CHOICE_FORM_ID, UPSTREAM_LINK_FORM_ID,
 };
 use anvil_core::model::{
-    ActorKind, AuditAction, AuditActor, AuditDetails, AuditOutcome, AuthRequestId, BrowserSession,
-    CaptchaSettings, FlowId, FlowKind, RegistrationMode, RequestContext, SessionId, UserId,
-    normalize_email,
+    AuthRequestId, BrowserSession, CaptchaSettings, FlowId, FlowKind, RegistrationMode,
+    RequestContext, UserId, normalize_email,
 };
 use anvil_core::policy::return_to::{ReturnTarget, parse_return_target};
 use anvil_core::ports::RelyingParty;
 use anvil_core::service::account::{SettingsBinding, TotpEnrolment};
-use anvil_core::service::audit::AuditService;
 use anvil_core::service::flow::{
-    AuthAttempt, Continue, FlowContext, FlowOutcome, FlowService, IdentifyOutcome, IdpStart,
-    LoginStart, StartedFlow, SubmitResult, bind_form, email_code_enabled, start_idp,
+    AuthAttempt, Continue, FlowContext, FlowOutcome, FlowService, IdpStart, LoginStart,
+    StartedFlow, start_idp,
 };
 use anvil_core::service::saml::SamlService;
 use anvil_core::service::session::SessionService;
@@ -128,15 +125,17 @@ use secrecy::{ExposeSecret as _, SecretString};
 use serde::{Deserialize, Serialize};
 
 use super::account_security::{ACCOUNT_CSP, grouped};
-use super::mfa::seal_factor_token;
-use crate::adapters::captcha::{
-    CaptchaError, CaptchaVerifier, DEFAULT_TIMEOUT, captcha_csp, open_secret,
+use super::flow_driver::{
+    self, CaptchaAnswer, DriveOutcome, DriveRejection, FlowBinding, Identified, InFlowPasskey,
+    LoginMethod, PasskeyStep, Throttle, login_methods,
 };
+use super::mfa::seal_factor_token;
+use crate::adapters::captcha::captcha_csp;
 use crate::adapters::passkey::{WebauthnPasskeys, relying_party};
 use crate::client_ip::ClientIp;
 use crate::errors::{core_error_page_in, error_page_in};
 use crate::i18n::{Locale, RequestLocale, carry_ui_locales, locale_for_request};
-use crate::layers::ratelimit::{attempt_keys, guard_attempt, record_attempt};
+use crate::layers::ratelimit::{Surface, too_many_requests};
 use crate::render::{PageContext, PageLinks};
 use crate::request_context::AuditContext;
 use crate::state::AppState;
@@ -211,21 +210,14 @@ async fn show(
         Ok(s) => s,
         Err(e) => return core_error_page_in(&state, Some(&tenant), &loc, &e),
     };
-    let base = ui_base(&tenant);
-    let rp = tenant_relying_party(&tenant);
-    // Starting a flow records nothing (no session, no audit event), so no request context.
-    let ctx = RequestContext::default();
-    let cx = FlowContext {
-        tenant: &tenant.tenant,
-        issuer: &tenant.issuer,
-        ui_base: &base,
-        rp: &rp,
-        ctx: &ctx,
-    };
-    let mut started = match state
-        .ui_flow_service()
-        .start_login(&cx, request, current.as_ref(), q.return_target())
-        .await
+    let mut started = match flow_driver::start_login(
+        &state,
+        &tenant,
+        request,
+        current.as_ref(),
+        q.return_target(),
+    )
+    .await
     {
         Ok(LoginStart::Form(s)) => s,
         Ok(LoginStart::Idp { started, idp }) => {
@@ -240,11 +232,12 @@ async fn show(
                     .cookies()
                     .flow_cookie(&tenant.tenant, started.cookie_token.expose_secret()),
             );
+            // Starting at the IdP records nothing yet, so no request context.
             return idp_redirect(
                 &state,
                 &tenant,
                 &loc,
-                &cx,
+                &RequestContext::default(),
                 &binding,
                 &idp,
                 current.as_ref(),
@@ -356,97 +349,113 @@ async fn submit(
         return csrf_page(&state, Some(&tenant), &loc);
     };
     let identifier = form.identifier.clone().unwrap_or_default();
-    let posted = Posted {
-        flow_id,
-        csrf,
+    let throttle = Throttle::Password {
         identifier: &identifier,
+        ip,
+        captcha: CaptchaAnswer {
+            turnstile: form.turnstile_response.as_deref(),
+            hcaptcha: form.hcaptcha_response.as_deref(),
+        },
     };
-    let (strict, loose) = attempt_keys(tenant.tenant.id, &identifier, ip);
-    let captcha = tenant.tenant.settings.captcha.as_ref();
-
-    match guard_attempt(&state, &strict, &loose, captcha.is_some()).await {
-        Decision::Deny { retry_after } => {
-            return match posted_login_form(&state, &tenant, &posted).await {
-                Ok(form) => {
-                    let extras = Extras {
-                        upstream: identify_buttons(&state, &tenant, &loc, &form).await,
-                        ..Extras::default()
-                    };
-                    locked_page_with(&state, &tenant, &loc, form, retry_after, extras)
-                }
-                Err(e) => core_error_page_in(&state, Some(&tenant), &loc, &e),
-            };
-        }
-        Decision::RequireCaptcha => {
-            if let Some(settings) = captcha
-                && let Err(key) = verify_captcha(&state, &tenant, &ctx, settings, &form, ip).await
-            {
-                return match posted_login_form(&state, &tenant, &posted).await {
-                    Ok(mut form) => {
-                        form.messages = vec![FormMessage::error(key)];
-                        // The widget goes with the password form only: the email-first form
-                        // (routed tenants) is not gated, and the password step after it carries
-                        // the widget (`password_step_captcha`).
-                        let extras = Extras {
-                            captcha: (form.id == "login").then_some(settings),
-                            upstream: identify_buttons(&state, &tenant, &loc, &form).await,
-                            ..Extras::default()
-                        };
-                        render_tenant_form_with(
-                            &state,
-                            &tenant,
-                            &loc,
-                            &form,
-                            None,
-                            StatusCode::BAD_REQUEST,
-                            CookieJar::new(),
-                            &extras,
-                        )
-                    }
-                    Err(e) => core_error_page_in(&state, Some(&tenant), &loc, &e),
-                };
-            }
-        }
-        Decision::Allow => {}
-    }
-
     let input = FlowInput::Login {
         identifier: identifier.clone(),
         password: form.password.clone().unwrap_or_default(),
     };
-    let result = match submit_flow(&state, &tenant, &loc, &ctx, &jar, flow_id, csrf, input).await {
-        Ok(r) => r,
-        Err(resp) => return *resp,
-    };
-    let keys = [strict.clone(), loose.clone()];
-    let mut extras = Extras::default();
-    match result.attempt {
-        Some(AuthAttempt::PasswordFailed { .. }) => {
-            record_attempt(&state, tenant.tenant.id, &ctx, &keys, false).await;
-            match guard_attempt(&state, &strict, &loose, captcha.is_some()).await {
-                Decision::Deny { retry_after } => {
-                    if let FlowOutcome::Render(form) = result.outcome {
-                        let extras = Extras {
-                            upstream: identify_buttons(&state, &tenant, &loc, &form).await,
-                            ..Extras::default()
-                        };
-                        return locked_page_with(&state, &tenant, &loc, form, retry_after, extras);
-                    }
-                }
-                Decision::RequireCaptcha => extras.captcha = captcha,
-                Decision::Allow => {}
+    let binding = FlowBinding::Cookie { jar: &jar, csrf };
+    let outcome =
+        flow_driver::submit(&state, &tenant, &ctx, flow_id, binding, throttle, input).await;
+    match outcome {
+        DriveOutcome::Flow {
+            outcome,
+            attempt,
+            captcha,
+        } => {
+            let mut extras = Extras {
+                captcha: tenant.tenant.settings.captcha.as_ref().filter(|_| captcha),
+                ..Extras::default()
+            };
+            if let Some(AuthAttempt::PasswordSucceeded { user, .. }) = attempt {
+                extras.factor_token = factor_token(&state, &tenant, flow_id, user);
             }
+            if let FlowOutcome::Render(form) = &outcome {
+                extras.upstream = identify_buttons(&state, &tenant, &loc, form).await;
+            }
+            outcome_response_with(&state, &tenant, &loc, outcome, &extras)
         }
-        Some(AuthAttempt::PasswordSucceeded { user, .. }) => {
-            record_attempt(&state, tenant.tenant.id, &ctx, &keys, true).await;
-            extras.factor_token = factor_token(&state, &tenant, flow_id, user);
+        other => sign_in_gate_page(&state, &tenant, &loc, other).await,
+    }
+}
+
+/// The page of a sign-in submission the brute-force gate answered (lock, CAPTCHA demand) or the
+/// driver refused, shared by the password and passkey sign-in. The sign-in form keeps its
+/// upstream buttons, so a locked or CAPTCHA-gated user still sees the other ways to sign in.
+async fn sign_in_gate_page(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    loc: &Locale,
+    outcome: DriveOutcome,
+) -> Response {
+    match outcome {
+        DriveOutcome::Flow { outcome, .. } => {
+            let mut extras = Extras::default();
+            if let FlowOutcome::Render(form) = &outcome {
+                extras.upstream = identify_buttons(state, tenant, loc, form).await;
+            }
+            outcome_response_with(state, tenant, loc, outcome, &extras)
         }
-        _ => {}
+        DriveOutcome::Locked {
+            form, retry_after, ..
+        } => {
+            let extras = Extras {
+                upstream: identify_buttons(state, tenant, loc, &form).await,
+                ..Extras::default()
+            };
+            locked_page_with(state, tenant, loc, form, retry_after, extras)
+        }
+        DriveOutcome::CaptchaRejected { form } => {
+            // The widget goes with the password form only: the email-first form (routed
+            // tenants) is not gated, and the password step after it carries the widget
+            // (`flow_driver::identify`).
+            let extras = Extras {
+                captcha: tenant
+                    .tenant
+                    .settings
+                    .captcha
+                    .as_ref()
+                    .filter(|_| form.id == "login"),
+                upstream: identify_buttons(state, tenant, loc, &form).await,
+                ..Extras::default()
+            };
+            render_tenant_form_with(
+                state,
+                tenant,
+                loc,
+                &form,
+                None,
+                StatusCode::BAD_REQUEST,
+                CookieJar::new(),
+                &extras,
+            )
+        }
+        DriveOutcome::Throttled { retry_after } => {
+            too_many_requests(state, Some(tenant), Surface::Browser, retry_after)
+        }
+        DriveOutcome::Rejected(r) => rejection_page(state, tenant, loc, r),
     }
-    if let FlowOutcome::Render(form) = &result.outcome {
-        extras.upstream = identify_buttons(&state, &tenant, &loc, form).await;
+}
+
+/// The page of a refused step: the `csrf` page (403) for a binding failure, the error page
+/// otherwise.
+pub(super) fn rejection_page(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    loc: &Locale,
+    rejection: DriveRejection,
+) -> Response {
+    match rejection {
+        DriveRejection::Binding => csrf_page(state, Some(tenant), loc),
+        DriveRejection::Failed(e) => core_error_page_in(state, Some(tenant), loc, &e),
     }
-    outcome_response_with(&state, &tenant, &loc, result.outcome, &extras)
 }
 
 /// `POST /ui/login/identify?flow=`: the email-first page (`identifier`) or the single-sign-on
@@ -481,36 +490,22 @@ async fn identify(
         Some("change") => IdentifyInput::Change,
         _ => IdentifyInput::Email(form.identifier.clone().unwrap_or_default()),
     };
-    let cookie = jar
-        .get(&state.cookies().flow_name(&tenant.tenant))
-        .map(|c| c.value().to_owned());
-    let base = ui_base(&tenant);
-    let rp = tenant_relying_party(&tenant);
-    let cx = FlowContext {
-        tenant: &tenant.tenant,
-        issuer: &tenant.issuer,
-        ui_base: &base,
-        rp: &rp,
-        ctx: &ctx,
-    };
-    let result = state
-        .ui_flow_service()
-        .identify(&cx, flow_id, cookie.as_deref(), csrf, input)
-        .await;
-    match result {
-        Ok(IdentifyOutcome::Done(outcome)) => {
+    let binding = FlowBinding::Cookie { jar: &jar, csrf };
+    match flow_driver::identify(&state, &tenant, &ctx, flow_id, &binding, input, ip).await {
+        Ok(Identified::Done { outcome, captcha }) => {
             let mut extras = Extras::default();
             if let FlowOutcome::Render(f) = outcome.as_ref() {
                 extras.upstream = identify_buttons(&state, &tenant, &loc, f).await;
-                extras.captcha = password_step_captcha(&state, &tenant, f, ip).await;
+                extras.captcha = tenant.tenant.settings.captcha.as_ref().filter(|_| captcha);
             }
             outcome_response_with(&state, &tenant, &loc, *outcome, &extras)
         }
-        Ok(IdentifyOutcome::StartIdp(idp)) => {
+        Ok(Identified::StartIdp(idp)) => {
             let current = match current_browser_session(&state, &tenant, &jar).await {
                 Ok(s) => s,
                 Err(e) => return core_error_page_in(&state, Some(&tenant), &loc, &e),
             };
+            let cookie = binding.flow_token(&state, &tenant);
             let binding = SettingsBinding {
                 flow_id,
                 cookie_token: cookie.as_deref(),
@@ -520,7 +515,7 @@ async fn identify(
                 &state,
                 &tenant,
                 &loc,
-                &cx,
+                &ctx,
                 &binding,
                 &idp,
                 current.as_ref(),
@@ -528,37 +523,12 @@ async fn identify(
             )
             .await
         }
-        Err(CoreError::Forbidden) => csrf_page(&state, Some(&tenant), &loc),
-        Err(CoreError::InvalidRequest(_)) => restart_login(&state, &tenant, &loc).await,
-        Err(e) => core_error_page_in(&state, Some(&tenant), &loc, &e),
+        Err(DriveRejection::Binding) => csrf_page(&state, Some(&tenant), &loc),
+        Err(DriveRejection::Failed(CoreError::InvalidRequest(_))) => {
+            restart_login(&state, &tenant, &loc).await
+        }
+        Err(DriveRejection::Failed(e)) => core_error_page_in(&state, Some(&tenant), &loc, &e),
     }
-}
-
-/// The tenant's CAPTCHA when `form` is the password step and the brute-force gate of its email
-/// asks for one (the same keys and decision as the password POST, read only: nothing is
-/// recorded). The decision depends on the attempts made with the address, never on whether an
-/// account exists.
-async fn password_step_captcha<'a>(
-    state: &AppState,
-    tenant: &'a ResolvedTenant,
-    form: &FormDescription,
-    ip: IpAddr,
-) -> Option<&'a CaptchaSettings> {
-    let captcha = tenant.tenant.settings.captcha.as_ref()?;
-    if form.id != "login" {
-        return None;
-    }
-    let identifier = form
-        .fields
-        .iter()
-        .find(|f| f.name == "identifier")
-        .and_then(|f| f.value.as_deref())?;
-    let (strict, loose) = attempt_keys(tenant.tenant.id, identifier, ip);
-    matches!(
-        guard_attempt(state, &strict, &loose, true).await,
-        Decision::RequireCaptcha
-    )
-    .then_some(captcha)
 }
 
 /// Starts the sign-in at the org IdP home-realm discovery chose (`start_idp`: the same starts as
@@ -572,12 +542,21 @@ async fn idp_redirect(
     state: &AppState,
     tenant: &ResolvedTenant,
     loc: &Locale,
-    cx: &FlowContext<'_>,
+    ctx: &RequestContext,
     binding: &SettingsBinding<'_>,
     idp: &IdpStart,
     current: Option<&BrowserSession>,
     jar: CookieJar,
 ) -> Response {
+    let base = ui_base(tenant);
+    let rp = tenant_relying_party(tenant);
+    let cx = &FlowContext {
+        tenant: &tenant.tenant,
+        issuer: &tenant.issuer,
+        ui_base: &base,
+        rp: &rp,
+        ctx,
+    };
     let flows = state.ui_flow_service();
     let accounts = state.ui_account_service();
     let xml = state.saml_xml();
@@ -641,45 +620,6 @@ async fn identify_buttons(
     super::upstream::upstream_buttons(state, tenant, loc, form).await
 }
 
-/// The binding fields of a password POST, for pages rendered without running the flow (lock,
-/// CAPTCHA). The CSRF token is the submitted one; the flow service checks it on the next POST.
-struct Posted<'a> {
-    flow_id: FlowId,
-    csrf: &'a str,
-    identifier: &'a str,
-}
-
-/// The form a new sign-in of this tenant starts with (`FlowService::initial_login_form`: the
-/// email-first form in a tenant with a routable domain, the combined form otherwise), bound to the
-/// posted flow, with the identifier echoed. Used when the brute-force gate (lock or CAPTCHA
-/// demand) answers before the flow runs, so the response is the same whether or not the account
-/// exists; the web layer never decides email-first itself.
-async fn posted_login_form(
-    state: &AppState,
-    tenant: &ResolvedTenant,
-    posted: &Posted<'_>,
-) -> Result<FormDescription, CoreError> {
-    let base = ui_base(tenant);
-    let rp = Err(CoreError::Internal("not used".into()));
-    let ctx = RequestContext::default();
-    let cx = FlowContext {
-        tenant: &tenant.tenant,
-        issuer: &tenant.issuer,
-        ui_base: &base,
-        rp: &rp,
-        ctx: &ctx,
-    };
-    let form = state.ui_flow_service().initial_login_form(&cx).await?;
-    let mut form = bind_form(form, &cx, posted.flow_id, posted.csrf);
-    let echoed = posted.identifier.trim();
-    if let Some(field) = form.fields.iter_mut().find(|f| f.name == "identifier")
-        && !echoed.is_empty()
-    {
-        field.value = Some(echoed.to_owned());
-    }
-    Ok(form)
-}
-
 /// Message key of a locked sign-in or second factor.
 pub(super) const TOO_MANY_ATTEMPTS: &str = "login.too_many_attempts";
 
@@ -741,74 +681,6 @@ fn locked_page_with(
     resp
 }
 
-/// CAPTCHA message keys.
-const CAPTCHA_REQUIRED: &str = "login.captcha_required";
-const CAPTCHA_FAILED: &str = "login.captcha_failed";
-
-/// Verifies the CAPTCHA response of a password POST server-side (fail closed). `Err` carries the
-/// message key: no response submitted, or a response the provider did not accept (or could not
-/// be checked). A submitted response that fails is audited as `captcha_failed`.
-async fn verify_captcha(
-    state: &AppState,
-    tenant: &ResolvedTenant,
-    ctx: &RequestContext,
-    settings: &CaptchaSettings,
-    form: &UiForm,
-    ip: IpAddr,
-) -> Result<(), &'static str> {
-    let token = match settings.provider {
-        anvil_core::model::CaptchaProvider::Turnstile => form.turnstile_response.as_deref(),
-        anvil_core::model::CaptchaProvider::Hcaptcha => form.hcaptcha_response.as_deref(),
-    }
-    .unwrap_or_default();
-    if token.trim().is_empty() {
-        return Err(CAPTCHA_REQUIRED);
-    }
-    let result = match (
-        open_secret(state.kek(), tenant.tenant.id, settings),
-        CaptchaVerifier::new(
-            state.outbound_arc(),
-            state.config().captcha_endpoints.clone(),
-            DEFAULT_TIMEOUT,
-        ),
-    ) {
-        (Ok(secret), Ok(verifier)) => verifier.verify(settings, &secret, token, Some(ip)).await,
-        (Err(e), _) | (_, Err(e)) => Err(e),
-    };
-    match result {
-        Ok(()) => Ok(()),
-        Err(e) => {
-            if let CaptchaError::Config(msg) = &e {
-                tracing::error!(error = %msg, "CAPTCHA configuration error; rejecting");
-            }
-            let audit = AuditService {
-                storage: state.storage_arc(),
-                clock: state.clock_arc(),
-            };
-            let reason = match e {
-                CaptchaError::MissingToken | CaptchaError::Rejected => "rejected",
-                CaptchaError::Unavailable(_) => "unavailable",
-                CaptchaError::Config(_) => "configuration",
-            };
-            if let Err(e) = audit
-                .record(
-                    tenant.tenant.id,
-                    AuditActor::anonymous(ActorKind::User),
-                    AuditAction::CaptchaFailed,
-                    None,
-                    AuditOutcome::Failure,
-                    ctx,
-                    AuditDetails::reason(reason),
-                )
-                .await
-            {
-                tracing::error!(error = %e, "recording the captcha_failed audit event failed");
-            }
-            Err(CAPTCHA_FAILED)
-        }
-    }
-}
-
 /// The second-factor binding token for `user` in `flow` (see [`super::mfa`]); `None` (logged)
 /// if sealing fails, in which case the second-factor POST restarts the sign-in.
 pub(super) fn factor_token(
@@ -846,23 +718,8 @@ async fn passkey_options(
     let (Some(flow_id), Some(csrf)) = (q.flow_id(), form.csrf_token.as_deref()) else {
         return json_error(StatusCode::FORBIDDEN, "csrf");
     };
-    let cookie = jar
-        .get(&state.cookies().flow_name(&tenant.tenant))
-        .map(|c| c.value().to_owned());
-    let base = ui_base(&tenant);
-    let rp = tenant_relying_party(&tenant);
-    // Creating a challenge records nothing, so no request context.
-    let ctx = RequestContext::default();
-    let cx = FlowContext {
-        tenant: &tenant.tenant,
-        issuer: &tenant.issuer,
-        ui_base: &base,
-        rp: &rp,
-        ctx: &ctx,
-    };
-    match state
-        .ui_flow_service()
-        .passkey_options(&cx, flow_id, cookie.as_deref(), csrf)
+    let binding = FlowBinding::Cookie { jar: &jar, csrf };
+    match flow_driver::passkey_options(&state, &tenant, flow_id, &binding, PasskeyStep::SignIn)
         .await
     {
         Ok(options) => no_store(
@@ -873,11 +730,11 @@ async fn passkey_options(
             )
                 .into_response(),
         ),
-        Err(CoreError::Forbidden) => json_error(StatusCode::FORBIDDEN, "csrf"),
-        Err(CoreError::InvalidRequest(_)) => {
+        Err(DriveRejection::Binding) => json_error(StatusCode::FORBIDDEN, "csrf"),
+        Err(DriveRejection::Failed(CoreError::InvalidRequest(_))) => {
             json_error(StatusCode::BAD_REQUEST, "login.passkey_failed")
         }
-        Err(e) => {
+        Err(DriveRejection::Failed(e)) => {
             tracing::error!(error = %e, "creating passkey request options failed");
             json_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error")
         }
@@ -908,91 +765,33 @@ async fn passkey_submit(
     let (Some(flow_id), Some(csrf)) = (q.flow_id(), form.csrf_token.as_deref()) else {
         return csrf_page(&state, Some(&tenant), &loc);
     };
-    let key = anvil_cache::limiter::LimitKey::Ip(ip);
-    if let Decision::Deny { retry_after } = guard_attempt(&state, &key, &key, false).await {
-        let posted = Posted {
-            flow_id,
-            csrf,
-            identifier: "",
-        };
-        return match posted_login_form(&state, &tenant, &posted).await {
-            Ok(form) => {
-                let extras = Extras {
-                    upstream: identify_buttons(&state, &tenant, &loc, &form).await,
-                    ..Extras::default()
-                };
-                locked_page_with(&state, &tenant, &loc, form, retry_after, extras)
-            }
-            Err(e) => core_error_page_in(&state, Some(&tenant), &loc, &e),
-        };
-    }
     let input = FlowInput::PasskeyAssertion {
         response_json: form.response.clone().unwrap_or_default(),
     };
-    let result = match submit_flow(&state, &tenant, &loc, &ctx, &jar, flow_id, csrf, input).await {
-        Ok(r) => r,
-        Err(resp) => return *resp,
-    };
-    match result.attempt {
-        Some(AuthAttempt::PasskeyFailed) => {
-            record_attempt(
-                &state,
-                tenant.tenant.id,
-                &ctx,
-                std::slice::from_ref(&key),
-                false,
-            )
-            .await;
-            if let (Decision::Deny { retry_after }, FlowOutcome::Render(form)) = (
-                guard_attempt(&state, &key, &key, false).await,
-                &result.outcome,
-            ) {
-                let extras = Extras {
-                    upstream: identify_buttons(&state, &tenant, &loc, form).await,
-                    ..Extras::default()
-                };
-                return locked_page_with(&state, &tenant, &loc, form.clone(), retry_after, extras);
-            }
-        }
-        Some(AuthAttempt::PasskeySucceeded { .. }) => {
-            record_attempt(
-                &state,
-                tenant.tenant.id,
-                &ctx,
-                std::slice::from_ref(&key),
-                true,
-            )
-            .await;
-        }
-        _ => {}
-    }
-    let mut extras = Extras::default();
-    if let FlowOutcome::Render(form) = &result.outcome {
-        extras.upstream = identify_buttons(&state, &tenant, &loc, form).await;
-    }
-    outcome_response_with(&state, &tenant, &loc, result.outcome, &extras)
+    let binding = FlowBinding::Cookie { jar: &jar, csrf };
+    let outcome = flow_driver::submit(
+        &state,
+        &tenant,
+        &ctx,
+        flow_id,
+        binding,
+        Throttle::Passkey { ip },
+        input,
+    )
+    .await;
+    sign_in_gate_page(&state, &tenant, &loc, outcome).await
 }
 
 // ---------------------------------------------------------------------------------------------
 // In-flow passkeys: enrolment (MFA policy `required`) and the second-factor step
 // ---------------------------------------------------------------------------------------------
 
-/// Which in-flow passkey ceremony a route runs.
-#[derive(Clone, Copy)]
-enum FlowPasskey {
-    /// Registration at the enrolment step (MFA policy `required`, no second factor yet).
-    Enrolment,
-    /// Assertion of one of the step user's passkeys at the second-factor step.
-    SecondFactor,
-}
-
-impl FlowPasskey {
-    /// The message key of a refused ceremony (also the JSON error of a refused options request).
-    fn failed_key(self) -> &'static str {
-        match self {
-            Self::Enrolment => PASSKEY_ENROLMENT_FAILED,
-            Self::SecondFactor => SECOND_FACTOR_PASSKEY_FAILED,
-        }
+/// The message key of a refused in-flow passkey ceremony (also the JSON error of a refused
+/// options request).
+fn passkey_failed_key(step: InFlowPasskey) -> &'static str {
+    match step {
+        InFlowPasskey::Enrolment => PASSKEY_ENROLMENT_FAILED,
+        InFlowPasskey::SecondFactor => SECOND_FACTOR_PASSKEY_FAILED,
     }
 }
 
@@ -1007,7 +806,7 @@ async fn passkey_enrolment_start(
     Query(q): Query<UiQuery>,
     form: Result<Form<UiForm>, FormRejection>,
 ) -> Response {
-    flow_passkey_options(&state, &tenant, &jar, &q, form, FlowPasskey::Enrolment).await
+    flow_passkey_options(&state, &tenant, &jar, &q, form, InFlowPasskey::Enrolment).await
 }
 
 /// `POST /ui/login/second-factor/passkey/start?flow=`: discoverable request options for
@@ -1022,7 +821,7 @@ async fn passkey_second_factor_start(
     Query(q): Query<UiQuery>,
     form: Result<Form<UiForm>, FormRejection>,
 ) -> Response {
-    flow_passkey_options(&state, &tenant, &jar, &q, form, FlowPasskey::SecondFactor).await
+    flow_passkey_options(&state, &tenant, &jar, &q, form, InFlowPasskey::SecondFactor).await
 }
 
 async fn flow_passkey_options(
@@ -1031,7 +830,7 @@ async fn flow_passkey_options(
     jar: &CookieJar,
     q: &UiQuery,
     form: Result<Form<UiForm>, FormRejection>,
-    which: FlowPasskey,
+    which: InFlowPasskey,
 ) -> Response {
     let json_error = |status: StatusCode, key: &str| {
         no_store((status, axum::Json(serde_json::json!({ "error": key }))).into_response())
@@ -1043,34 +842,12 @@ async fn flow_passkey_options(
     let (Some(flow_id), Some(csrf)) = (q.flow_id(), form.csrf_token.as_deref()) else {
         return json_error(StatusCode::FORBIDDEN, "csrf");
     };
-    let cookie = jar
-        .get(&state.cookies().flow_name(&tenant.tenant))
-        .map(|c| c.value().to_owned());
-    let base = ui_base(tenant);
-    let rp = tenant_relying_party(tenant);
-    // Creating a challenge records nothing, so no request context.
-    let ctx = RequestContext::default();
-    let cx = FlowContext {
-        tenant: &tenant.tenant,
-        issuer: &tenant.issuer,
-        ui_base: &base,
-        rp: &rp,
-        ctx: &ctx,
+    let binding = FlowBinding::Cookie { jar, csrf };
+    let step = match which {
+        InFlowPasskey::Enrolment => PasskeyStep::Enrolment,
+        InFlowPasskey::SecondFactor => PasskeyStep::SecondFactor,
     };
-    let service = state.ui_flow_service();
-    let result = match which {
-        FlowPasskey::Enrolment => {
-            service
-                .passkey_enrolment_options(&cx, flow_id, cookie.as_deref(), csrf)
-                .await
-        }
-        FlowPasskey::SecondFactor => {
-            service
-                .passkey_second_factor_options(&cx, flow_id, cookie.as_deref(), csrf)
-                .await
-        }
-    };
-    match result {
+    match flow_driver::passkey_options(state, tenant, flow_id, &binding, step).await {
         Ok(options) => no_store(
             (
                 StatusCode::OK,
@@ -1079,11 +856,11 @@ async fn flow_passkey_options(
             )
                 .into_response(),
         ),
-        Err(CoreError::Forbidden) => json_error(StatusCode::FORBIDDEN, "csrf"),
-        Err(CoreError::InvalidRequest(_)) => {
-            json_error(StatusCode::BAD_REQUEST, which.failed_key())
+        Err(DriveRejection::Binding) => json_error(StatusCode::FORBIDDEN, "csrf"),
+        Err(DriveRejection::Failed(CoreError::InvalidRequest(_))) => {
+            json_error(StatusCode::BAD_REQUEST, passkey_failed_key(which))
         }
-        Err(e) => {
+        Err(DriveRejection::Failed(e)) => {
             tracing::error!(error = %e, "creating in-flow passkey options failed");
             json_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error")
         }
@@ -1112,7 +889,7 @@ async fn passkey_enrolment_finish(
         &jar,
         &q,
         form,
-        FlowPasskey::Enrolment,
+        InFlowPasskey::Enrolment,
     )
     .await
 }
@@ -1139,7 +916,7 @@ async fn passkey_second_factor_finish(
         &jar,
         &q,
         form,
-        FlowPasskey::SecondFactor,
+        InFlowPasskey::SecondFactor,
     )
     .await
 }
@@ -1156,7 +933,7 @@ async fn flow_passkey_finish(
     jar: &CookieJar,
     q: &UiQuery,
     form: Result<Form<UiForm>, FormRejection>,
-    which: FlowPasskey,
+    which: InFlowPasskey,
 ) -> Response {
     let form = match form {
         Ok(Form(form)) => form,
@@ -1165,48 +942,15 @@ async fn flow_passkey_finish(
     let (Some(flow_id), Some(csrf)) = (q.flow_id(), form.csrf_token.as_deref()) else {
         return csrf_page(state, Some(tenant), loc);
     };
-    let cookie = jar
-        .get(&state.cookies().flow_name(&tenant.tenant))
-        .map(|c| c.value().to_owned());
-    let session = match current_session(state, tenant, jar).await {
-        Ok(s) => s,
-        Err(e) => return core_error_page_in(state, Some(tenant), loc, &e),
-    };
-    let base = ui_base(tenant);
-    let rp = tenant_relying_party(tenant);
-    let cx = FlowContext {
-        tenant: &tenant.tenant,
-        issuer: &tenant.issuer,
-        ui_base: &base,
-        rp: &rp,
-        ctx,
-    };
+    let binding = FlowBinding::Cookie { jar, csrf };
     let response = form.response.as_deref().unwrap_or_default();
-    let service = state.ui_flow_service();
-    let result = match which {
-        FlowPasskey::Enrolment => {
-            service
-                .passkey_enrolment_finish(&cx, flow_id, cookie.as_deref(), csrf, response, session)
-                .await
-        }
-        FlowPasskey::SecondFactor => {
-            service
-                .passkey_second_factor_finish(
-                    &cx,
-                    flow_id,
-                    cookie.as_deref(),
-                    csrf,
-                    response,
-                    session,
-                )
-                .await
-        }
-    };
-    let result = match result {
-        Ok(r) => r,
-        Err(CoreError::Forbidden) => return csrf_page(state, Some(tenant), loc),
-        Err(e) => return core_error_page_in(state, Some(tenant), loc, &e),
-    };
+    let result =
+        match flow_driver::passkey_finish(state, tenant, ctx, flow_id, &binding, which, response)
+            .await
+        {
+            Ok(r) => r,
+            Err(r) => return rejection_page(state, tenant, loc, r),
+        };
     let extras = Extras {
         factor_token: form.factor_token.clone().filter(|t| !t.is_empty()),
         ..Extras::default()
@@ -1571,6 +1315,24 @@ pub(super) fn render_tenant_form_with(
     let mut page = PageContext::for_tenant(state, tenant, loc, title);
     page.links = links_for(tenant, loc, &form.id, request);
     let base = ui_base(tenant);
+    // The sign-in choices come from the one list of methods (`flow_driver::login_methods`).
+    let methods = login_methods(form, tenant, &extras.upstream);
+    let has = |m: &LoginMethod| methods.contains(m);
+    let upstream: Vec<super::upstream::UpstreamButton> = methods
+        .iter()
+        .filter_map(|m| match m {
+            LoginMethod::Upstream { slug, name } => {
+                extras.upstream.iter().find(|b| &b.slug == slug).map(|b| {
+                    super::upstream::UpstreamButton {
+                        slug: slug.clone(),
+                        name: name.clone(),
+                        action: b.action.clone(),
+                    }
+                })
+            }
+            _ => None,
+        })
+        .collect();
     let mut form = form.clone();
     state.renderer().localize_form(loc, &mut form);
     let mut passkey = None;
@@ -1592,7 +1354,7 @@ pub(super) fn render_tenant_form_with(
             ));
         }
         ("login" | UPSTREAM_LINK_FORM_ID | IDENTIFY_FORM_ID, Some(flow)) => {
-            if tenant_relying_party(tenant).is_ok() {
+            if has(&LoginMethod::Passkey) {
                 passkey = Some(PasskeyView {
                     options_url: format!("{base}/login/passkey/options?flow={flow}"),
                     action: carry_ui_locales(&format!("{base}/login/passkey?flow={flow}"), loc),
@@ -1640,8 +1402,7 @@ pub(super) fn render_tenant_form_with(
         }
         _ => {}
     }
-    if form.id == "login"
-        && email_code_enabled(&tenant.tenant)
+    if (has(&LoginMethod::EmailCode) || has(&LoginMethod::MagicLink))
         && let Some(flow) = flow_of(&form)
     {
         email_code = Some(EmailCodeView {
@@ -1683,7 +1444,7 @@ pub(super) fn render_tenant_form_with(
         enroll => qr_svg.is_some(),
         qr_svg => qr_svg,
         secret_groups => secret_groups,
-        upstream => Value::from(Serde(&extras.upstream)),
+        upstream => Value::from(Serde(&upstream)),
         email_code => Value::from(Serde(&email_code)),
         resend_action => resend_action,
     };
@@ -1841,22 +1602,7 @@ pub(super) async fn start_page(
     request: Option<AuthRequestId>,
     token: Option<String>,
 ) -> Response {
-    let base = ui_base(tenant);
-    let rp = tenant_relying_party(tenant);
-    // Starting a flow records nothing (no session, no audit event), so no request context.
-    let ctx = RequestContext::default();
-    let cx = FlowContext {
-        tenant: &tenant.tenant,
-        issuer: &tenant.issuer,
-        ui_base: &base,
-        rp: &rp,
-        ctx: &ctx,
-    };
-    match state
-        .ui_flow_service()
-        .start(&cx, kind, request, token)
-        .await
-    {
+    match flow_driver::start(state, tenant, kind, request, token).await {
         Ok(started) => started_response(state, tenant, loc, &started, request, StatusCode::OK),
         Err(e) => core_error_page_in(state, Some(tenant), loc, &e),
     }
@@ -1869,21 +1615,7 @@ pub(super) async fn restart_login(
     tenant: &ResolvedTenant,
     loc: &Locale,
 ) -> Response {
-    let base = ui_base(tenant);
-    let rp = tenant_relying_party(tenant);
-    let ctx = RequestContext::default();
-    let cx = FlowContext {
-        tenant: &tenant.tenant,
-        issuer: &tenant.issuer,
-        ui_base: &base,
-        rp: &rp,
-        ctx: &ctx,
-    };
-    match state
-        .ui_flow_service()
-        .start(&cx, FlowKind::Login, None, None)
-        .await
-    {
+    match flow_driver::start(state, tenant, FlowKind::Login, None, None).await {
         Ok(mut started) => {
             started
                 .form
@@ -1893,17 +1625,6 @@ pub(super) async fn restart_login(
         }
         Err(e) => core_error_page_in(state, Some(tenant), loc, &e),
     }
-}
-
-/// The caller's current session id (from the session cookie), if any.
-async fn current_session(
-    state: &AppState,
-    tenant: &ResolvedTenant,
-    jar: &CookieJar,
-) -> Result<Option<SessionId>, CoreError> {
-    Ok(current_browser_session(state, tenant, jar)
-        .await?
-        .map(|s| s.id))
 }
 
 /// The caller's active session (from the session cookie), if any.
@@ -1926,8 +1647,9 @@ pub(super) fn tenant_relying_party(tenant: &ResolvedTenant) -> Result<RelyingPar
     relying_party(&tenant.tenant, &tenant.issuer)
 }
 
-/// `POST` of a self-service page: binds the submission to its flow, runs it and maps the
-/// outcome to a response.
+/// `POST` of a self-service page that is not an authentication attempt (registration,
+/// recovery, verification): binds the submission to its flow, runs it through the driver and
+/// maps the outcome to a response.
 #[expect(
     clippy::too_many_arguments,
     reason = "threads the request's locale, context and binding"
@@ -1945,50 +1667,44 @@ pub(super) async fn submit_page(
     let (Some(flow_id), Some(csrf)) = (query.flow_id(), form.csrf_token.as_deref()) else {
         return csrf_page(state, Some(tenant), loc);
     };
-    match submit_flow(state, tenant, loc, ctx, jar, flow_id, csrf, input).await {
-        Ok(result) => outcome_response(state, tenant, loc, result.outcome),
-        Err(resp) => *resp,
-    }
+    let binding = FlowBinding::Cookie { jar, csrf };
+    let outcome =
+        flow_driver::submit(state, tenant, ctx, flow_id, binding, Throttle::None, input).await;
+    drive_response(state, tenant, loc, outcome, &Extras::default(), None)
 }
 
-/// Runs a bound submission through the flow service. `Err` is the finished error response
-/// (`csrf` page for a binding failure, the error page otherwise).
-#[expect(
-    clippy::too_many_arguments,
-    reason = "threads the request's locale, context and binding"
-)]
-pub(super) async fn submit_flow(
+/// Encodes a [`DriveOutcome`] of a page that shows no sign-in extras of its own beyond
+/// `extras` (the factor token of the email-code and second-factor pages). `locked_token` is the
+/// factor token a locked form keeps.
+pub(super) fn drive_response(
     state: &AppState,
     tenant: &ResolvedTenant,
     loc: &Locale,
-    ctx: &RequestContext,
-    jar: &CookieJar,
-    flow_id: FlowId,
-    csrf: &str,
-    input: FlowInput,
-) -> Result<SubmitResult, Box<Response>> {
-    let cookie_name = state.cookies().flow_name(&tenant.tenant);
-    let cookie = jar.get(&cookie_name).map(|c| c.value().to_owned());
-    let session = current_session(state, tenant, jar)
-        .await
-        .map_err(|e| Box::new(core_error_page_in(state, Some(tenant), loc, &e)))?;
-    let base = ui_base(tenant);
-    let rp = tenant_relying_party(tenant);
-    let cx = FlowContext {
-        tenant: &tenant.tenant,
-        issuer: &tenant.issuer,
-        ui_base: &base,
-        rp: &rp,
-        ctx,
-    };
-    match state
-        .ui_flow_service()
-        .submit(&cx, flow_id, cookie.as_deref(), csrf, input, session)
-        .await
-    {
-        Ok(result) => Ok(result),
-        Err(CoreError::Forbidden) => Err(Box::new(csrf_page(state, Some(tenant), loc))),
-        Err(e) => Err(Box::new(core_error_page_in(state, Some(tenant), loc, &e))),
+    outcome: DriveOutcome,
+    extras: &Extras<'_>,
+    locked_token: Option<String>,
+) -> Response {
+    match outcome {
+        DriveOutcome::Flow { outcome, .. } => {
+            outcome_response_with(state, tenant, loc, outcome, extras)
+        }
+        DriveOutcome::Locked {
+            form, retry_after, ..
+        } => locked_page(state, tenant, loc, form, retry_after, locked_token),
+        DriveOutcome::Throttled { retry_after } => {
+            too_many_requests(state, Some(tenant), Surface::Browser, retry_after)
+        }
+        DriveOutcome::CaptchaRejected { form } => render_tenant_form_with(
+            state,
+            tenant,
+            loc,
+            &form,
+            None,
+            StatusCode::BAD_REQUEST,
+            CookieJar::new(),
+            &Extras::default(),
+        ),
+        DriveOutcome::Rejected(r) => rejection_page(state, tenant, loc, r),
     }
 }
 
@@ -2050,17 +1766,8 @@ pub(super) fn signed_in_response(
     }
 }
 
-/// Maps a flow outcome of a tenant self-service page to a response.
-fn outcome_response(
-    state: &AppState,
-    tenant: &ResolvedTenant,
-    loc: &Locale,
-    outcome: FlowOutcome,
-) -> Response {
-    outcome_response_with(state, tenant, loc, outcome, &Extras::default())
-}
-
-/// [`outcome_response`] with sign-in page extras for a rendered form.
+/// Maps a flow outcome of a tenant self-service page to a response, with sign-in page extras
+/// for a rendered form.
 pub(super) fn outcome_response_with(
     state: &AppState,
     tenant: &ResolvedTenant,

@@ -18,7 +18,7 @@
 //!
 //! # Limiter
 //!
-//! Through the one limiter ([`guard_attempt`] / [`record_attempt`]); the route-class layer limits
+//! Through the one limiter, driven by [`super::flow_driver`]; the route-class layer limits
 //! every POST here per IP (auth class). A send is counted against the address: the strict tier
 //! keyed by (address, IP) locks progressively, the loose tier keyed by the address alone (from any
 //! IP) escalates to a delay and never locks. Code attempts are counted per user
@@ -36,14 +36,11 @@
 //! client opens the link, sent with the page's own POST) proves the browser. Without it the answer
 //! is "open the link in the browser where you started, or type the code" and nothing is consumed.
 
-use anvil_cache::limiter::{Decision, LimitKey};
 use anvil_core::error::CoreError;
 use anvil_core::flow::email_code::{EMAIL_CODE_FORM_ID, OTHER_BROWSER, link_csrf};
 use anvil_core::flow::engine::FlowInput;
 use anvil_core::model::{FlowId, TenantId, UserId, normalize_email};
-use anvil_core::service::flow::{
-    AuthAttempt, EmailLinkOutcome, FlowContext, FlowOutcome, email_code_enabled,
-};
+use anvil_core::service::flow::{AuthAttempt, EmailLinkOutcome, FlowOutcome, email_code_enabled};
 use anvil_jose::Kek;
 use anvil_jose::encoding::{b64url, b64url_decode};
 use axum::Router;
@@ -54,17 +51,16 @@ use axum::response::Response;
 use axum::routing::{get, post};
 use axum_extra::extract::cookie::CookieJar;
 
+use super::flow_driver::{self, DriveOutcome, FlowBinding, Throttle};
 use super::login::{
-    Extras, UiForm, UiQuery, bad_form, csrf_page, current_browser_session, factor_token,
-    locked_page, message_page, outcome_response_with, rejected_form, restart_login,
-    started_response_with, submit_flow, tenant_relying_party, ui_base,
+    Extras, UiForm, UiQuery, bad_form, csrf_page, drive_response, factor_token, message_page,
+    outcome_response_with, rejected_form, rejection_page, restart_login, started_response_with,
+    ui_base,
 };
 use crate::client_ip::ClientIp;
 use crate::errors::{core_error_page_in, error_page_in};
 use crate::i18n::{Locale, RequestLocale, carry_ui_locales};
-use crate::layers::ratelimit::{
-    Surface, guard_attempt, identifier_hash, record_attempt, too_many_requests,
-};
+use crate::layers::ratelimit::identifier_hash;
 use crate::render::PageContext;
 use crate::request_context::AuditContext;
 use crate::state::AppState;
@@ -181,42 +177,28 @@ async fn request(
             None => return restart_login(&state, &tenant, &loc).await,
         },
     };
-    let keys = ident.map(|ident| {
-        [
-            LimitKey::IdentIp {
-                tenant: tenant_id,
-                ident,
-                ip,
-            },
-            LimitKey::Identifier {
-                tenant: tenant_id,
-                ident,
-            },
-        ]
-    });
-    if let Some([strict, loose]) = &keys
-        && let Decision::Deny { retry_after } = guard_attempt(&state, strict, loose, false).await
-    {
-        return too_many_requests(&state, Some(&tenant), Surface::Browser, retry_after);
-    }
     let input = FlowInput::EmailCodeRequest { email: posted };
-    let result = match submit_flow(&state, &tenant, &loc, &ctx, &jar, flow_id, csrf, input).await {
-        Ok(r) => r,
-        Err(resp) => return *resp,
-    };
+    let binding = FlowBinding::Cookie { jar: &jar, csrf };
+    let throttle = Throttle::EmailCodeSend { ident, ip };
+    let outcome =
+        flow_driver::submit(&state, &tenant, &ctx, flow_id, binding, throttle, input).await;
     let mut token = form.factor_token.clone();
-    if let (Some(AuthAttempt::EmailCodeSent { subject }), Some(keys), Some(ident)) =
-        (result.attempt, &keys, ident)
+    if let (
+        DriveOutcome::Flow {
+            attempt: Some(AuthAttempt::EmailCodeSent { subject }),
+            ..
+        },
+        Some(ident),
+    ) = (&outcome, ident)
     {
-        // Every send counts against the address (it never "succeeds" for the limiter).
-        record_attempt(&state, tenant_id, &ctx, keys, false).await;
-        token = seal_email_token(state.kek(), tenant_id, flow_id, subject, &ident);
+        // The send was counted against the address by the driver; the new token names it.
+        token = seal_email_token(state.kek(), tenant_id, flow_id, *subject, &ident);
     }
     let extras = Extras {
         factor_token: token,
         ..Extras::default()
     };
-    outcome_response_with(&state, &tenant, &loc, result.outcome, &extras)
+    drive_response(&state, &tenant, &loc, outcome, &extras, None)
 }
 
 /// `POST /ui/login/email-code/verify?flow=`: the code from the email (module docs). 404 unless
@@ -246,57 +228,31 @@ async fn verify(
     else {
         return restart_login(&state, &tenant, &loc).await;
     };
-    let key = LimitKey::User {
-        tenant: tenant_id,
-        user: subject,
-    };
-    if let Decision::Deny { retry_after } = guard_attempt(&state, &key, &key, false).await {
-        return too_many_requests(&state, Some(&tenant), Surface::Browser, retry_after);
-    }
     let input = FlowInput::EmailCode {
         code: form.code.clone().unwrap_or_default(),
     };
-    let result = match submit_flow(&state, &tenant, &loc, &ctx, &jar, flow_id, csrf, input).await {
-        Ok(r) => r,
-        Err(resp) => return *resp,
-    };
-    match result.attempt {
-        Some(AuthAttempt::EmailCodeFailed { .. }) => {
-            record_attempt(&state, tenant_id, &ctx, std::slice::from_ref(&key), false).await;
-            if let (Decision::Deny { retry_after }, FlowOutcome::Render(form)) = (
-                guard_attempt(&state, &key, &key, false).await,
-                &result.outcome,
-            ) {
-                return locked_page(
-                    &state,
-                    &tenant,
-                    &loc,
-                    form.clone(),
-                    retry_after,
-                    Some(posted_token),
-                );
-            }
-        }
-        Some(AuthAttempt::EmailCodeSucceeded { .. }) => {
-            record_attempt(&state, tenant_id, &ctx, std::slice::from_ref(&key), true).await;
-        }
-        _ => {}
-    }
+    let binding = FlowBinding::Cookie { jar: &jar, csrf };
+    let throttle = Throttle::EmailCode { subject };
+    let outcome =
+        flow_driver::submit(&state, &tenant, &ctx, flow_id, binding, throttle, input).await;
     // The email page keeps its token; a second-factor or enrolment page that follows a right
     // code gets the second-factor token of the user (the subject of a right code).
-    let next_form_id = match &result.outcome {
-        FlowOutcome::Render(f) | FlowOutcome::Enroll { form: f, .. } => Some(f.id.as_str()),
+    let next_form_id = match &outcome {
+        DriveOutcome::Flow {
+            outcome: FlowOutcome::Render(f) | FlowOutcome::Enroll { form: f, .. },
+            ..
+        } => Some(f.id.as_str()),
         _ => None,
     };
     let token = match next_form_id {
         Some(id) if id != EMAIL_CODE_FORM_ID => factor_token(&state, &tenant, flow_id, subject),
-        _ => Some(posted_token),
+        _ => Some(posted_token.clone()),
     };
     let extras = Extras {
         factor_token: token,
         ..Extras::default()
     };
-    outcome_response_with(&state, &tenant, &loc, result.outcome, &extras)
+    drive_response(&state, &tenant, &loc, outcome, &extras, Some(posted_token))
 }
 
 /// `Cache-Control: no-store` and `Referrer-Policy: no-referrer` (the page URL carries the token).
@@ -380,31 +336,12 @@ async fn link_submit(
     if token.is_empty() || token.len() > 128 {
         return bad_form(&state, &tenant, &loc);
     }
-    let cookie = jar
-        .get(&state.cookies().flow_name(&tenant.tenant))
-        .map(|c| c.value().to_owned());
-    let session = match current_browser_session(&state, &tenant, &jar).await {
-        Ok(s) => s.map(|s| s.id),
-        Err(e) => return core_error_page_in(&state, Some(&tenant), &loc, &e),
-    };
-    let base = ui_base(&tenant);
-    let rp = tenant_relying_party(&tenant);
-    let cx = FlowContext {
-        tenant: &tenant.tenant,
-        issuer: &tenant.issuer,
-        ui_base: &base,
-        rp: &rp,
-        ctx: &ctx,
-    };
-    let outcome = match state
-        .ui_flow_service()
-        .email_link(&cx, flow_id, cookie.as_deref(), csrf, &token, session)
-        .await
-    {
-        Ok(o) => o,
-        Err(CoreError::Forbidden) => return csrf_page(&state, Some(&tenant), &loc),
-        Err(e) => return core_error_page_in(&state, Some(&tenant), &loc, &e),
-    };
+    let binding = FlowBinding::Cookie { jar: &jar, csrf };
+    let outcome =
+        match flow_driver::email_link(&state, &tenant, &ctx, flow_id, &binding, &token).await {
+            Ok(o) => o,
+            Err(r) => return rejection_page(&state, &tenant, &loc, r),
+        };
     match outcome {
         EmailLinkOutcome::Done(outcome) => {
             outcome_response_with(&state, &tenant, &loc, outcome, &Extras::default())
