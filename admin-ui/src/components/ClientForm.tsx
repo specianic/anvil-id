@@ -486,22 +486,3 @@ export function ClientForm({ mode, initial, submitLabel, pending, error, onSubmi
     </form>
   );
 }
-
-/** A secret shown exactly once (after creation or rotation). */
-export function SecretOnce({ clientId, secret }: { clientId: string; secret: string }) {
-  return (
-    <div role="status" className="space-y-2 rounded-md border p-4 text-sm">
-      <p className="font-medium">Copy the client secret now. It is not shown again.</p>
-      <dl className="grid grid-cols-3 gap-2">
-        <dt className="text-muted-foreground">Client ID</dt>
-        <dd className="col-span-2 break-all">
-          <code data-testid="created-client-id">{clientId}</code>
-        </dd>
-        <dt className="text-muted-foreground">Client secret</dt>
-        <dd className="col-span-2 break-all">
-          <code data-testid="created-client-secret">{secret}</code>
-        </dd>
-      </dl>
-    </div>
-  );
-}

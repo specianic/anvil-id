@@ -1,9 +1,9 @@
 // ADM-04, AUTH-10, UI-07: the admin console (/console/, embedded in the tested release binary) end
 // to end. An admin of the system tenant signs in with authorization code + PKCE as anvil-console,
 // reviews users, revokes a user's session (the relying party's next refresh fails), finds the
-// session_revoked event in the audit log, creates an opaque client, edits an email template
-// (line-numbered validation error, customized badge, reset), sends an SMTP test email to Mailpit and
-// signs out. Every console page passes the axe audit, and nothing violates the console's CSP
+// session_revoked event in the audit log, creates an opaque client (its secret shown once, then
+// rotated), edits an email template (line-numbered validation error, customized badge, reset),
+// sends an SMTP test email to Mailpit and signs out. Every console page passes the axe audit, and nothing violates the console's CSP
 // (script-src 'self'; style-src 'self').
 //
 // Env: ANVIL_URL, MAILPIT_URL, SETUP_URL, E2E_STATE_FILE (see tests/e2e/run.sh).
@@ -22,6 +22,7 @@ import {
   type AdminAccount,
 } from '../lib/anvil';
 import { consoleLogin, consoleUrl, findInPagedTable, startSampleRp, type SampleRp } from '../lib/console';
+import { takeOneTimeSecret } from '../lib/console-v04';
 import { latestMessageTo } from '../lib/mailpit';
 
 let rp: SampleRp | undefined;
@@ -170,6 +171,11 @@ test('admin console: users, sessions, audit, clients, email and SMTP', async ({ 
     const clientId = ((await page.getByTestId('created-client-id').textContent()) ?? '').trim();
     expect(clientId).not.toBe('');
     await expectNoA11yViolations(page);
+    // The secret is shown once: after "I have stored it" it is gone from the page, the client id
+    // stays.
+    await takeOneTimeSecret(page, 'created-client-secret', false);
+    await expect(page.getByTestId('created-client-secret-gone')).toBeVisible();
+    await expect(page.getByTestId('created-client-id')).toHaveText(clientId);
 
     await page.getByRole('link', { name: 'Back to clients' }).click();
     const link = page.getByRole('link', { name: clientId });
@@ -178,6 +184,13 @@ test('admin console: users, sessions, audit, clients, email and SMTP', async ({ 
     await expect(page.getByRole('heading', { level: 1, name: clientName })).toBeVisible();
     await expect(page.getByLabel('Access token format')).toHaveValue('opaque');
     await expectNoA11yViolations(page);
+
+    // Rotating the secret shows the new one once, with the same dismissal.
+    await page.getByRole('button', { name: 'Rotate secret' }).click();
+    await page.getByRole('alertdialog').getByRole('button', { name: 'Rotate secret' }).click();
+    await expect(page.getByTestId('rotated-client-secret')).not.toBeEmpty();
+    await expectNoA11yViolations(page);
+    await takeOneTimeSecret(page, 'rotated-client-secret', false);
   });
 
   await test.step("the sample RP's client card shows its logout, resource and MFA settings", async () => {

@@ -3,10 +3,11 @@ import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { type ReactNode, useState } from "react";
 import { type ClientView, api, unwrap } from "@/api/client";
 import { useTenant } from "@/lib/tenant";
-import { ClientForm, type ClientFormValues, SecretOnce, updateBody, valuesFromClient } from "@/components/ClientForm";
+import { ClientForm, type ClientFormValues, updateBody, valuesFromClient } from "@/components/ClientForm";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ProblemAlert } from "@/components/ProblemAlert";
 import { StatusMessage } from "@/components/form";
+import { OneTimeSecret } from "@/components/WebhookForm";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -166,13 +167,18 @@ function DangerZone({ client }: { client: ClientView }) {
   const [confirm, setConfirm] = useState<"rotate" | "delete" | null>(null);
   const hasSecret = client.auth_method === "client_secret_basic" || client.auth_method === "client_secret_post";
 
+  // The rotated secret lives only in component state; the cached mutation result has none.
+  const [secret, setSecret] = useState<string | null>(null);
   const rotate = useMutation({
-    mutationFn: async () =>
-      unwrap(
+    mutationFn: async () => {
+      const rotated = unwrap(
         await api.POST("/api/admin/v1/tenants/{slug}/clients/{client_id}/secret", {
           params: { path: { slug: tenant, client_id: client.client_id } },
         }),
-      ),
+      );
+      setSecret(rotated.client_secret);
+      return { client_id: rotated.client_id };
+    },
     onSuccess: () => setConfirm(null),
   });
 
@@ -199,7 +205,15 @@ function DangerZone({ client }: { client: ClientView }) {
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        {rotate.data && <SecretOnce clientId={rotate.data.client_id} secret={rotate.data.client_secret} />}
+        {secret && (
+          <OneTimeSecret
+            title="Copy the new client secret now. It is not shown again."
+            label="Client secret"
+            value={secret}
+            testId="rotated-client-secret"
+            onDone={() => setSecret(null)}
+          />
+        )}
         <div className="flex flex-wrap gap-2">
           {hasSecret && (
             <Button variant="outline" onClick={() => setConfirm("rotate")}>
