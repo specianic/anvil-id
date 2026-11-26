@@ -8,12 +8,13 @@
 //!
 //! ```json
 //! {"type": "user.created", "timestamp": "2026-11-26T10:00:00Z",
-//!  "data": {"tenant": "acme", "user_id": "...", "actor": {"kind": "admin", "id": "..."}}}
+//!  "data": {"tenant": "<tenant id (UUID)>", "user_id": "...",
+//!           "actor": {"kind": "admin", "id": "..."}}}
 //! ```
 //!
-//! `data` holds the tenant slug, the subject ids that apply (`user_id`, `session_id`,
-//! `client_id`) and the actor. Never an email address, name, IP address, user agent or any
-//! other audit detail. Ids are copied only when they look like identifiers (bounded, no `@`, no
+//! `data` holds the tenant id (the tenant's `id` in the admin API; not the slug), the subject
+//! ids that apply (`user_id`, `session_id`, `client_id`) and the actor. Never an email address,
+//! name, IP address, user agent or any other audit detail. Ids are copied only when they look like identifiers (bounded, no `@`, no
 //! whitespace), so a mis-built audit event cannot smuggle personal data into a payload.
 
 use serde_json::{Map, Value, json};
@@ -160,15 +161,15 @@ fn payload(event_type: WebhookEventType, at: OffsetDateTime, data: Map<String, V
     .to_string()
 }
 
-/// The webhook event for an audit event of the tenant `tenant_slug`, or `None` when the action
-/// is not a lifecycle event or did not succeed.
-pub fn webhook_event(tenant_slug: &str, e: &NewAuditEvent) -> Option<WebhookEvent> {
+/// The webhook event for an audit event of the tenant `tenant_id` (its id, not its slug), or
+/// `None` when the action is not a lifecycle event or did not succeed.
+pub fn webhook_event(tenant_id: &str, e: &NewAuditEvent) -> Option<WebhookEvent> {
     if e.outcome != AuditOutcome::Success {
         return None;
     }
     let (event_type, subject) = classify(e.action)?;
     let mut data = Map::new();
-    data.insert("tenant".into(), tenant_slug.into());
+    data.insert("tenant".into(), tenant_id.into());
     if let Some(target) = e.target.as_deref().and_then(safe_id) {
         let key = match subject {
             Subject::User => "user_id",
@@ -201,10 +202,10 @@ pub fn webhook_event(tenant_slug: &str, e: &NewAuditEvent) -> Option<WebhookEven
     })
 }
 
-/// The `test` event sent by the console's "send test event" action.
-pub fn test_event(tenant_slug: &str, at: OffsetDateTime) -> WebhookEvent {
+/// The `test` event sent by the console's "send test event" action for the tenant `tenant_id`.
+pub fn test_event(tenant_id: &str, at: OffsetDateTime) -> WebhookEvent {
     let mut data = Map::new();
-    data.insert("tenant".into(), tenant_slug.into());
+    data.insert("tenant".into(), tenant_id.into());
     data.insert("actor".into(), actor_json(&AuditActor::system()));
     WebhookEvent {
         event_type: WebhookEventType::Test,

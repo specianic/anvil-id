@@ -16,8 +16,8 @@
 //! development-mode loopback default) and `outbound_ca_file` (extra PEM root certificates for
 //! outbound TLS, merged with the built-in roots).
 //!
-//! Phase 5 keys (0.4): `redis_url` (secret; shared rate-limit backend, not supported until
-//! 05-16), `rate_limit_redis_failure` (`closed` | `local`), `metrics_listen` (separate
+//! Phase 5 keys (0.4): `redis_url` (secret; shared rate-limit backend, see
+//! `limiter::build_limiter`), `rate_limit_redis_failure` (`closed` | `local`), `metrics_listen` (separate
 //! Prometheus listener), `metrics_on_main_port`, `otel_endpoint` / `otel_service_name` (OTLP/HTTP
 //! traces; incoming `traceparent` headers are honoured only from `trusted_proxies`),
 //! `shutdown_drain` (readiness turns 503 on SIGTERM, then the node waits this long before it stops
@@ -797,7 +797,6 @@ pub struct Config {
     /// Shared rate-limit backend (`redis://` or `rediss://`); `None` = in-process limiter.
     pub redis_url: Option<SecretString>,
     /// Behaviour when the shared backend is unreachable.
-    #[allow(dead_code, reason = "read by the shared limiter (05-16)")]
     pub redis_failure: RedisFailure,
     /// Separate Prometheus listener.
     pub metrics_listen: Option<SocketAddr>,

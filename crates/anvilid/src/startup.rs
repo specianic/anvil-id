@@ -218,18 +218,7 @@ pub async fn start(cfg: &Config, observability: Observability) -> anyhow::Result
     app_config.rate_limits = cfg.rate_limits.clone();
     app_config.metrics = observability.metrics.filter(|_| cfg.metrics_on_main_port);
     app_config.trace_context = observability.trace_context;
-    // Outbound (SSRF guard): an explicit allow-list replaces the dev-mode loopback default;
-    // plain http (to allow-listed destinations only) follows development mode, including
-    // `insecure_http` setups.
-    if let Some(cidrs) = &cfg.outbound_allow_cidrs {
-        app_config.outbound.allow_cidrs = cidrs.clone();
-    }
-    app_config.outbound.extra_ca_pem = cfg.outbound_ca_pem.clone();
-    app_config.outbound.allow_http = app_config.dev_mode();
-    let outbound = Arc::new(
-        OutboundClient::new(&app_config.outbound)
-            .context("failed to build the outbound HTTP client")?,
-    );
+    let outbound = outbound_client(cfg, &mut app_config)?;
     let deps = AppDeps {
         storage: Arc::clone(&storage),
         clock: Arc::clone(&clock),
@@ -272,6 +261,28 @@ pub async fn start(cfg: &Config, observability: Observability) -> anyhow::Result
     })
 }
 
+/// The SSRF-guarded outbound client from the installation config: the one place that turns
+/// `outbound_*` settings into an [`OutboundClient`] (`serve` and the `tenant` CLI both call it).
+///
+/// `app_config.insecure_http` must already be set: `dev_mode()` reads it. An explicit
+/// `outbound_allow_cidrs` list (even an empty one) replaces the dev-mode loopback default; plain
+/// http (to allow-listed destinations only) follows development mode, including
+/// `insecure_http` setups. The resulting policy is left in `app_config.outbound`.
+pub(crate) fn outbound_client(
+    cfg: &Config,
+    app_config: &mut AppConfig,
+) -> anyhow::Result<Arc<OutboundClient>> {
+    if let Some(cidrs) = &cfg.outbound_allow_cidrs {
+        app_config.outbound.allow_cidrs = cidrs.clone();
+    }
+    app_config.outbound.extra_ca_pem = cfg.outbound_ca_pem.clone();
+    app_config.outbound.allow_http = app_config.dev_mode();
+    Ok(Arc::new(
+        OutboundClient::new(&app_config.outbound)
+            .context("failed to build the outbound HTTP client")?,
+    ))
+}
+
 /// The one deliberate place a setup token is logged: the operator needs it to create the first
 /// administrator. With JSON logs it is also printed as a plain line on stdout, so scripts can
 /// grep `Setup URL:` from either stream.
@@ -280,5 +291,57 @@ fn announce_setup_url(url: &SecretString, format: LogFormat) {
     tracing::info!("Setup URL: {}", url.expose_secret());
     if format == LogFormat::Json {
         println!("Setup URL: {}", url.expose_secret());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{CliOverrides, Layers};
+    use figment::value::{Dict, Value};
+
+    fn config(env: &[(&str, &str)]) -> Config {
+        let env: Dict = env
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), Value::from((*v).to_owned())))
+            .collect();
+        let layers = Layers::new(&CliOverrides::default(), env, None).expect("layers");
+        Config::resolve(layers.raw().expect("raw")).expect("config")
+    }
+
+    fn app_config(cfg: &Config) -> AppConfig {
+        let mut app_config = AppConfig::new(cfg.public_url.clone());
+        app_config.insecure_http = cfg.insecure_http;
+        app_config
+    }
+
+    #[test]
+    fn outbound_client_in_dev_mode_uses_the_explicit_allow_list_and_plain_http() {
+        let cfg = config(&[
+            ("public_url", "http://localhost:8080"),
+            ("outbound_allow_cidrs", "10.1.0.0/16"),
+        ]);
+        let mut app = app_config(&cfg);
+        assert!(app.dev_mode());
+        let client = outbound_client(&cfg, &mut app);
+        assert!(client.is_ok());
+        assert_eq!(
+            app.outbound.allow_cidrs,
+            vec!["10.1.0.0/16".parse::<ipnet::IpNet>().expect("cidr")],
+            "an explicit list replaces the loopback default"
+        );
+        assert!(app.outbound.allow_http);
+    }
+
+    #[test]
+    fn outbound_client_in_production_keeps_https_only_and_no_allow_list() {
+        let cfg = config(&[("public_url", "https://id.example.com")]);
+        let mut app = app_config(&cfg);
+        assert!(!app.dev_mode());
+        let client = outbound_client(&cfg, &mut app);
+        assert!(client.is_ok());
+        assert!(app.outbound.allow_cidrs.is_empty());
+        assert!(!app.outbound.allow_http);
+        assert!(app.outbound.extra_ca_pem.is_none());
     }
 }

@@ -221,16 +221,14 @@ impl AppState {
     }
 
     /// Negative cache of `Host` headers that matched no tenant (bounded to
-    /// [`UNKNOWN_HOSTS_CAPACITY`] entries, TTL [`AppConfig::unknown_host_ttl`]). Owned by 05-18
-    /// (tenant resolution by host); unused until it lands.
-    #[allow(dead_code, reason = "pre-declared for 05-18")]
+    /// [`UNKNOWN_HOSTS_CAPACITY`] entries, TTL [`AppConfig::unknown_host_ttl`]), used by tenant
+    /// resolution by host (`crate::tenant`).
     pub(crate) fn unknown_hosts(&self) -> &moka::sync::Cache<String, ()> {
         &self.0.unknown_hosts
     }
 
     /// Permits bounding concurrent Client ID Metadata Document fetches
-    /// ([`CIMD_FETCH_PERMITS`]). Owned by 05-15 (CIMD fetcher); unused until it lands.
-    #[allow(dead_code, reason = "pre-declared for 05-15")]
+    /// ([`CIMD_FETCH_PERMITS`]), used by the CIMD fetcher (`adapters::cimd`).
     pub(crate) fn cimd_fetch_permits(&self) -> Arc<Semaphore> {
         Arc::clone(&self.0.cimd_fetch_permits)
     }

@@ -33,7 +33,6 @@ use anvil_core::service::role::RoleService;
 use anvil_core::service::tenant::TenantService;
 use anvil_core::service::webhook::WebhookService;
 use anvil_web::adapters::attribute_schema::JsonSchemaCheck;
-use anvil_web::adapters::outbound::OutboundClient;
 use anvil_web::config::AppConfig;
 use anyhow::{Context, bail};
 use secrecy::ExposeSecret as _;
@@ -94,16 +93,9 @@ async fn service(cfg: &Config) -> anyhow::Result<ConfigService> {
     let clock: Arc<dyn anvil_core::ports::Clock> = Arc::new(SystemClock);
     // The webhook URL policy of the server: the same outbound settings as `serve`.
     let mut app_config = AppConfig::new(cfg.public_url.clone());
+    // `insecure_http` first: `outbound_client` reads development mode from it.
     app_config.insecure_http = cfg.insecure_http;
-    if let Some(cidrs) = &cfg.outbound_allow_cidrs {
-        app_config.outbound.allow_cidrs = cidrs.clone();
-    }
-    app_config.outbound.extra_ca_pem = cfg.outbound_ca_pem.clone();
-    app_config.outbound.allow_http = app_config.dev_mode();
-    let outbound = Arc::new(
-        OutboundClient::new(&app_config.outbound)
-            .context("failed to build the outbound HTTP client")?,
-    );
+    let outbound = startup::outbound_client(cfg, &mut app_config)?;
     Ok(ConfigService {
         tenants: TenantService {
             storage: Arc::clone(&storage),
