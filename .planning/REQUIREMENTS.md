@@ -69,15 +69,15 @@ Source of truth for wording and detail: [docs/PRD.md](../docs/PRD.md) §8–9. I
 ### Tenants, organizations and roles
 
 - [x] **ORG-01**: Operator can run multiple isolated tenants, each with its own issuer (path-based by default, host-based optional) [0.1 data model, 0.4 UI]
-- [ ] **ORG-02**: Tenant admin can create organizations with membership, invitations, org-scoped roles, org claim in tokens and an org switcher [1.0]
-- [ ] **ORG-03**: Organization admin can configure enterprise SSO connections (SAML 2.0 SP, OIDC RP) with JIT provisioning [1.0]
-- [ ] **ORG-04**: Users are routed to their organization's IdP by email domain; domains are verified by DNS TXT record [1.0]
+- [x] **ORG-02**: Tenant admin can create organizations with membership, invitations, org-scoped roles, org claim in tokens and an org switcher [1.0]
+- [x] **ORG-03**: Organization admin can configure enterprise SSO connections (SAML 2.0 SP, OIDC RP) with JIT provisioning [1.0] (SAML 2.0 ships experimental behind the operator flag `saml_experimental`, off by default, until the Phase 7 external review)
+- [x] **ORG-04**: Users are routed to their organization's IdP by email domain; domains are verified by DNS TXT record [1.0]
 - [x] **ORG-05**: Admin can define roles and permissions at tenant and org level, emitted as token claims [0.4]
 
 ### Administration, API and operations
 
 - [x] **ADM-01**: Every console action is available through an OpenAPI 3.1 management API authenticated with OAuth tokens and fine-grained admin scopes [0.1]
-- [ ] **ADM-02**: Admin can manage tenants, users, clients, organizations, connections, branding, keys, sessions and the audit log from the console [0.2–1.0]
+- [x] **ADM-02**: Admin can manage tenants, users, clients, organizations, connections, branding, keys, sessions and the audit log from the console [0.2–1.0]
 - [x] **ADM-03**: On an empty database the operator gets a one-time setup URL to create the first admin; there are no default credentials [0.1]
 - [x] **ADM-04**: Every security-relevant event and admin action is audited, queryable in the console and streamable as JSON [0.2]
 - [x] **ADM-05**: Integrators receive signed, retried webhooks for user and session lifecycle events [0.4]
@@ -215,12 +215,12 @@ Which phases cover which requirements. Updated during roadmap creation.
 | UI-05 | Phase 7 | Pending |
 | UI-07 | Phase 3 | Complete |
 | ORG-01 | Phase 5 | Complete |
-| ORG-02 | Phase 6 | Pending |
-| ORG-03 | Phase 6 | Pending |
-| ORG-04 | Phase 6 | Pending |
+| ORG-02 | Phase 6 | Complete |
+| ORG-03 | Phase 6 | Complete (SAML experimental, operator flag) |
+| ORG-04 | Phase 6 | Complete |
 | ORG-05 | Phase 5 | Complete |
 | ADM-01 | Phase 2 | Complete |
-| ADM-02 | Phase 6 | Pending |
+| ADM-02 | Phase 6 | Complete |
 | ADM-03 | Phase 2 | Complete |
 | ADM-04 | Phase 3 | Complete |
 | ADM-05 | Phase 5 | Complete |
