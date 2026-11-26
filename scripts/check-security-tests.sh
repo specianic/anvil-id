@@ -25,14 +25,26 @@
 # trusted proxies, form_post, the destructive-migration guard, Postgres composite tenant keys and
 # the new admin routes.
 #
+# Release 0.3 adds the Phase 4 controls: the outbound SSRF guard, upstream sign-in (state, binding
+# cookie, nonce, iss, ID token alg/aud/exp, require_verified_email), account linking and the atomic
+# unlink guard, sealed write-only connection secrets, RP-Initiated Logout (hint, redirect URI,
+# confirmation, CSRF exemption scope), Back-Channel Logout (token claims, per-session iss, response
+# classification, worker wake), resource indicators, email code and magic link (single use,
+# attempt cap, POST-only link, per-toggle enforcement, login_code template check), MFA policy and
+# step-up, session switch, email change, theme validation, cookie names, per-route body limits and
+# the admin scope of the new routes.
+#
 # Controls deliberately not mapped here:
-#   - SSRF guard: the server fetches no client-supplied URL (jwks_uri and request_uri are not
-#     fetched). The CAPTCHA verifier only calls operator-configured https endpoints (mapped above).
 #   - "Test code" (SEC-06): enforced by scripts/check-release-graph.sh, not by a unit test.
 #   - Released-migration immutability: enforced by scripts/check-migrations.sh (and its
 #     --self-test), which `just ci` runs as migrations-check.
-#   - Browser-level behaviour (passkey ceremony, consent, sessions, a11y): Playwright specs under
-#     tests/e2e/specs, run by the e2e workflow.
+#   - Browser-level behaviour (passkey ceremony, consent, sessions, a11y, and for 0.3 the
+#     upstream sign-in and linking journeys, RP-Initiated and Back-Channel Logout, email code and
+#     magic link, MFA policy and step-up, theme preview, i18n): Playwright specs under
+#     tests/e2e/specs, run by the e2e workflow, plus the OpenID conformance plans (conformance
+#     workflow).
+#   - JIT sign-up racing a concurrent registration of the same email cannot be produced over HTTP;
+#     its atomicity is the create_user_with_link_* contract tests mapped above.
 #
 # Every finding prints one `SECURITY TEST MISSING:` line.
 set -euo pipefail
@@ -274,6 +286,206 @@ mail templates: no includes, runaway loops bounded|crates/anvil-mail/tests/templ
 mail templates: no includes, runaway loops bounded|crates/anvil-mail/tests/templates.rs|runaway_loops_fail_quickly
 mail templates: render errors do not leak payload|crates/anvil-mail/tests/templates.rs|override_render_errors_do_not_leak_payload_values
 smtp test: errors never include credentials|crates/anvil-mail/tests/smtp_test.rs|auth_rejection_reports_535_without_credentials
+ssrf: blocked address classes refused without connecting|$W/security_ssrf.rs|blocked_ip_literals_are_refused_without_connecting
+ssrf: blocked address classes refused without connecting|crates/anvil-web/src/adapters/outbound.rs|blocked_table
+ssrf: blocked address classes refused without connecting|crates/anvil-web/src/adapters/outbound.rs|any_address_in_a_blocked_v4_net_is_blocked
+ssrf: blocked address classes refused without connecting|crates/anvil-web/src/adapters/outbound.rs|any_address_in_a_blocked_v6_net_is_blocked
+ssrf: DNS answers checked, allow-list explicit|$W/security_ssrf.rs|host_name_resolving_to_loopback_is_blocked_unless_allow_listed
+ssrf: DNS answers checked, allow-list explicit|crates/anvil-web/src/adapters/outbound.rs|allow_list_overrides_and_dev_default
+ssrf: redirects never followed|$W/security_ssrf.rs|redirects_are_never_followed
+ssrf: userinfo and non-https schemes rejected|$W/security_ssrf.rs|userinfo_and_non_https_schemes_are_rejected
+ssrf: userinfo and non-https schemes rejected|crates/anvil-web/src/adapters/outbound.rs|check_url_rules
+ssrf: body size and time bounded|$W/security_ssrf.rs|oversized_body_is_too_large
+ssrf: body size and time bounded|$W/security_ssrf.rs|slow_server_times_out
+ssrf: errors do not echo the destination|$W/security_ssrf.rs|errors_do_not_echo_the_destination
+ssrf: errors do not echo the destination|crates/anvil-web/src/adapters/outbound.rs|errors_never_echo_details
+ssrf: proxy environment ignored, extra CA only when configured|$W/security_ssrf.rs|proxy_environment_is_ignored
+ssrf: proxy environment ignored, extra CA only when configured|$W/security_ssrf.rs|extra_ca_is_trusted_only_when_configured
+ssrf: upstream discovery endpoints obey the outbound policy|$W/upstream_adapter.rs|discovery_rejects_endpoints_the_outbound_policy_refuses
+ssrf: upstream discovery endpoints obey the outbound policy|$W/upstream_adapter.rs|production_policy_blocks_loopback_upstreams
+ssrf: back-channel to a blocked destination gives up without a request|$W/backchannel.rs|blocked_destination_gives_up_without_a_request
+upstream: discovery issuer must match|$W/upstream_adapter.rs|discovery_issuer_mismatch_is_rejected
+upstream: JWKS failures fail closed, private keys refused|$W/upstream_adapter.rs|jwks_fetch_failures_fail_closed
+upstream: JWKS failures fail closed, private keys refused|$W/upstream_adapter.rs|jwks_with_private_members_is_rejected
+upstream: errors never echo bodies or URLs|$W/upstream_adapter.rs|upstream_errors_never_echo_bodies_or_urls
+upstream: state bound to the flow|$W/security_linking.rs|tampered_or_foreign_state_is_rejected
+upstream: state bound to the flow|$W/security_linking.rs|a_replayed_callback_is_rejected
+upstream: binding cookie required|$W/security_linking.rs|callback_without_the_binding_cookie_is_rejected_and_keeps_the_flow
+upstream: binding cookie required|$W/security_linking.rs|callback_with_another_binding_cookie_is_rejected
+upstream: binding cookie cleared only on a state match|$W/security_linking.rs|forged_callback_does_not_cancel_pending_sign_in
+upstream: binding cookie cleared only on a state match|$W/security_linking.rs|matching_callback_clears_the_binding_cookie_even_when_it_fails_later
+upstream: sealed flow values bound to flow and tenant|crates/anvil-core/src/service/upstream.rs|sealed_values_open_only_in_their_flow_and_tenant
+upstream: nonce|$W/security_linking.rs|an_id_token_for_another_nonce_is_rejected
+upstream: nonce|crates/anvil-core/src/upstream/claims.rs|nonce_rules
+upstream: RFC 9207 iss on the callback|$W/security_linking.rs|rfc9207_iss_must_match_when_the_provider_advertises_it
+upstream: ID token issuer|crates/anvil-core/src/upstream/claims.rs|google_rule_rejects_other_issuers
+upstream: ID token issuer|crates/anvil-core/src/upstream/claims.rs|microsoft_single_tenant_still_checks_tid
+upstream: ID token alg (none, HS confusion, allow-list, signature)|crates/anvil-core/src/upstream/claims.rs|alg_none_rejected
+upstream: ID token alg (none, HS confusion, allow-list, signature)|crates/anvil-core/src/upstream/claims.rs|hs256_with_public_key_bytes_rejected
+upstream: ID token alg (none, HS confusion, allow-list, signature)|crates/anvil-core/src/upstream/claims.rs|alg_outside_allow_list_rejected
+upstream: ID token alg (none, HS confusion, allow-list, signature)|crates/anvil-core/src/upstream/claims.rs|unknown_kid_and_bad_signature_rejected
+upstream: ID token audience|crates/anvil-core/src/upstream/claims.rs|audience_rules
+upstream: ID token exp/iat|crates/anvil-core/src/upstream/claims.rs|time_rules
+upstream: ID token check order|crates/anvil-core/src/upstream/claims.rs|check_order_signature_before_issuer_before_audience
+upstream: UserInfo of another subject refused|$W/security_linking.rs|userinfo_fallback_rejects_another_subject
+upstream: provider error not echoed|$W/security_linking.rs|provider_error_is_a_generic_error_without_echoing_it
+upstream: start needs csrf and the flow cookie|$W/security_linking.rs|start_requires_the_csrf_token_and_the_flow_cookie
+upstream: only the callback accepts a cross-site post|$W/security_linking.rs|only_the_callback_accepts_a_cross_site_post
+upstream: untrusted emails never verified|crates/anvil-core/src/upstream/claims.rs|untrusted_never_verified
+upstream: untrusted emails never verified|crates/anvil-core/src/upstream/claims.rs|microsoft_email_never_verified_and_ids_kept
+upstream: require_verified_email applies to upstream accounts|$W/security_linking.rs|untrusted_jit_account_must_verify_before_sign_in
+upstream: require_verified_email applies to upstream accounts|$W/security_linking.rs|linked_unverified_account_is_refused_under_require_verified_email
+linking: unverified upstream email never auto-links|$W/security_linking.rs|unverified_upstream_email_never_auto_links_and_hides_the_account
+linking: unverified upstream email never auto-links|crates/anvil-core/src/upstream/linking.rs|unverified_upstream_email_never_links_and_hides_candidate
+linking: unverified local account never auto-linked|$W/security_linking.rs|unverified_local_account_is_never_auto_linked
+linking: unverified local account never auto-linked|crates/anvil-core/src/upstream/linking.rs|unverified_local_email_refuses_auto_link
+linking: untrusted connection needs confirmation|$W/security_linking.rs|untrusted_connection_with_a_verified_email_needs_confirmation
+linking: confirmation page does not enumerate accounts|$W/security_linking.rs|confirmation_page_does_not_tell_whether_an_untrusted_email_has_an_account
+linking: Microsoft never auto-links|$W/security_linking.rs|microsoft_email_never_auto_links_even_when_trusted
+linking: Microsoft never auto-links|crates/anvil-core/src/upstream/linking.rs|microsoft_never_auto_links
+linking: inactive link refused|crates/anvil-core/src/upstream/linking.rs|existing_inactive_link_refused
+linking: one identity, one user|$W/security_linking.rs|an_identity_linked_to_one_user_cannot_be_linked_to_another
+linking: one identity, one user|$W/account_linked.rs|connect_refuses_an_identity_linked_to_another_user
+linking: account-page link needs the owner, re-auth and the binding|$W/security_linking.rs|link_from_the_account_page_needs_the_owner_signed_in
+linking: account-page link needs the owner, re-auth and the binding|$W/account_linked.rs|connect_needs_a_recent_sign_in_and_the_binding
+linking: unlink keeps a sign-in method|$W/account_linked.rs|unlink_of_the_only_sign_in_method_is_refused
+linking: unlink keeps a sign-in method|crates/anvil-storage/src/contract/connections.rs|delete_link_keeps_a_sign_in_method
+linking: unlink guard atomic under concurrency|crates/anvil-storage/src/contract/connections.rs|delete_link_concurrent_never_removes_the_last_method
+linking: unverified email is not a remaining sign-in method|$W/account_linked.rs|unverified_email_is_not_a_remaining_sign_in_method
+linking: unlink only own links, csrf, re-auth|$W/account_linked.rs|unlink_of_another_users_link_is_not_found
+linking: unlink only own links, csrf, re-auth|$W/account_linked.rs|unlink_without_csrf_or_flow_cookie_is_forbidden
+linking: unlink only own links, csrf, re-auth|$W/account_linked.rs|unlink_needs_a_recent_sign_in
+linking: unlink only own links, csrf, re-auth|crates/anvil-storage/src/contract/connections.rs|identity_link_delete_only_own
+linking: JIT user and link created atomically|crates/anvil-storage/src/contract/connections.rs|create_user_with_link_is_atomic
+linking: JIT user and link created atomically|crates/anvil-storage/src/contract/connections.rs|create_user_with_link_stores_verification_atomically
+linking: tenant isolation|crates/anvil-storage/src/contract/connections.rs|connections_isolated_by_tenant
+connections: secret sealed with tenant and connection AAD|crates/anvil-core/src/service/connection.rs|secret_is_sealed_with_tenant_and_connection_aad
+connections: secret sealed at rest (SQLite)|crates/anvil-storage-sqlite/tests/plaintext.rs|connection_secret_sealed_at_rest
+connections: secret sealed at rest (Postgres)|crates/anvil-storage-postgres/tests/plaintext.rs|connection_secret_sealed_and_bound_to_tenant_and_connection
+connections: write-only secret, never echoed|$W/admin_connections.rs|crud_round_trip_with_write_only_secret
+connections: write-only secret, never echoed|$W/security_admin_v03.rs|the_secret_is_never_echoed_in_validation_errors
+connections: write-only secret, never echoed|crates/anvil-core/src/service/connection.rs|debug_of_inputs_hides_the_secret
+connections: issuer and endpoints https only|crates/anvil-core/src/service/connection.rs|oidc_issuer_must_be_https_or_loopback_http
+connections: issuer and endpoints https only|crates/anvil-core/src/service/connection.rs|endpoint_overrides_and_oauth2_endpoints_are_checked
+connections: Microsoft email trust needs the risk flag|$W/admin_connections.rs|microsoft_email_trust_needs_the_risk_flag_and_is_audited
+connections: Microsoft email trust needs the risk flag|crates/anvil-core/src/service/connection.rs|email_trust_defaults_per_kind_and_microsoft_needs_the_flag
+admin v0.3: connection routes need a token|$W/security_admin_v03.rs|every_connection_route_rejects_a_missing_token
+admin v0.3: connection routes require the settings scope|$W/security_admin_v03.rs|every_connection_route_requires_the_settings_scope
+admin v0.3: another tenant's connection not found|$W/security_admin_v03.rs|another_tenants_connection_is_not_found
+admin v0.3: system tenant connections need admin write|$W/security_admin_v03.rs|system_tenant_connections_need_admin_write
+admin v0.3: branding routes enforce the admin scope|$W/security_theme.rs|every_branding_route_enforces_the_admin_scope
+logout: id_token_hint alg none rejected|$W/security_logout.rs|alg_none_hint_is_rejected
+logout: id_token_hint signature, tenant and type checked|$W/security_logout.rs|a_hint_signed_by_a_foreign_key_is_rejected
+logout: id_token_hint signature, tenant and type checked|$W/security_logout.rs|a_hint_from_another_tenant_is_rejected
+logout: id_token_hint signature, tenant and type checked|$W/security_logout.rs|a_tampered_payload_is_rejected
+logout: id_token_hint signature, tenant and type checked|$W/security_logout.rs|a_token_that_is_not_an_id_token_is_rejected
+logout: id_token_hint signature, tenant and type checked|$W/security_logout.rs|a_hint_for_an_unknown_client_is_rejected
+logout: post_logout_redirect_uri exact and registered|$W/security_logout.rs|unregistered_or_modified_redirect_uris_are_rejected
+logout: post_logout_redirect_uri exact and registered|$W/security_logout.rs|a_uri_without_hint_or_client_id_is_rejected
+logout: client_id must match the hint|$W/security_logout.rs|client_id_must_match_the_hint
+logout: client_id must match the hint|$W/security_logout.rs|an_unknown_client_id_is_rejected
+logout: repeated parameters invalid|$W/security_logout.rs|repeated_parameters_and_non_form_posts_are_invalid_requests
+logout: repeated parameters invalid|crates/anvil-core/src/service/logout.rs|from_pairs_rejects_every_repeated_known_parameter
+logout: hint for another session does not redirect|$W/logout.rs|a_hint_for_another_session_asks_and_does_not_redirect
+logout: confirmation needs the flow cookie and csrf|$W/security_logout.rs|confirmation_requires_flow_cookie_and_csrf
+logout: CSRF/fetch-metadata exemption only for end_session|$W/security_logout.rs|confirmation_post_is_behind_fetch_metadata_but_end_session_post_is_not
+logout: CSRF/fetch-metadata exemption only for end_session|$W/security_logout.rs|a_cross_site_post_without_a_valid_hint_never_logs_out
+back-channel: logout token has exactly the spec claims|crates/anvil-core/src/service/logout.rs|logout_token_has_typ_and_exactly_the_spec_claims
+back-channel: logout token has exactly the spec claims|$W/backchannel.rs|logout_delivers_only_a_spec_logout_token_and_204_marks_delivered
+back-channel: signed with the client's id token alg|$W/backchannel.rs|token_is_signed_with_the_clients_id_token_alg
+back-channel: iss is the issuer of the RP session|$W/backchannel.rs|logout_token_iss_is_the_issuer_the_rp_signed_in_with
+back-channel: iss is the issuer of the RP session|crates/anvil-core/src/service/logout.rs|logout_token_uses_the_delivery_issuer_before_the_canonical_one
+back-channel: iss is the issuer of the RP session|crates/anvil-storage/src/contract/logout.rs|rp_session_records_issuer_and_deliveries_copy_it
+back-channel: response classification (4xx give up, 5xx retry, removed URI)|$W/backchannel.rs|status_400_gives_up_after_one_attempt_and_is_audited_without_token
+back-channel: response classification (4xx give up, 5xx retry, removed URI)|$W/backchannel.rs|status_500_retries_with_backoff_and_gives_up_at_the_deadline
+back-channel: response classification (4xx give up, 5xx retry, removed URI)|$W/backchannel.rs|removed_uri_gives_up
+back-channel: response classification (4xx give up, 5xx retry, removed URI)|crates/anvil-web/src/adapters/backchannel.rs|outbound_results_map_to_delivery_outcomes
+back-channel: every revocation enqueues|crates/anvil-storage/src/contract/logout.rs|revoke_with_families_enqueues_backchannel_delivery
+back-channel: every revocation enqueues|crates/anvil-storage/src/contract/logout.rs|revoke_all_for_user_enqueues_backchannel_delivery
+back-channel: every revocation enqueues|crates/anvil-storage/src/contract/logout.rs|complete_recovery_enqueues_backchannel_delivery
+back-channel: every revocation enqueues|crates/anvil-storage/src/contract/logout.rs|user_delete_enqueues_backchannel_delivery
+back-channel: each delivery claimed once under concurrency|crates/anvil-storage/src/contract/logout.rs|delivery_claim_concurrent_each_row_once
+back-channel: every revocation path wakes the worker|$W/backchannel_wake.rs|account_session_revocation_wakes_and_the_page_read_does_not
+back-channel: every revocation path wakes the worker|$W/backchannel_wake.rs|admin_session_and_user_deletion_wake_the_worker
+back-channel: every revocation path wakes the worker|$W/backchannel_wake.rs|session_switch_delivers_the_old_users_logout_without_waiting_for_the_poll
+resources: unlisted or malformed resource is invalid_target|$W/resource_indicators.rs|unlisted_or_malformed_resources_redirect_invalid_target
+resources: unlisted or malformed resource is invalid_target|$W/resource_indicators.rs|malformed_resources_at_token_are_invalid_target_before_the_code_is_used
+resources: bad resource with an untrusted redirect is an error page|$W/resource_indicators.rs|a_bad_resource_with_an_untrusted_redirect_is_an_error_page
+resources: downscope only within the grant|$W/resource_indicators.rs|code_exchange_outside_the_grant_is_invalid_target_and_burns_the_code
+resources: downscope only within the grant|$W/resource_indicators.rs|refresh_downscopes_and_the_refresh_token_keeps_the_full_grant
+resources: downscope only within the grant|crates/anvil-core/src/service/token.rs|refresh_resources_downscope_within_the_family_grant
+resources: client_credentials only allowed resources|$W/resource_indicators.rs|client_credentials_accepts_allowed_resources_only
+resources: client_credentials only allowed resources|crates/anvil-core/src/service/token.rs|client_credentials_resources_must_be_allowed
+resources: UserInfo refuses tokens for other audiences|$W/resource_indicators.rs|userinfo_refuses_tokens_bound_only_to_other_resources
+email code: unknown, unverified and blocked addresses look the same|$W/security_email_code.rs|unknown_unverified_and_blocked_addresses_look_the_same_and_get_nothing
+email code: unknown, unverified and blocked addresses look the same|$W/security_email_code.rs|an_address_unverified_after_the_send_cannot_use_its_code_or_link
+email code: single use|$W/security_email_code.rs|a_code_works_once
+email code: single use|$W/security_email_code.rs|concurrent_submits_of_one_code_sign_in_once
+email code: single use|crates/anvil-core/src/flow/email_code.rs|right_code_is_accepted_once_and_clears_code_and_link
+email code: attempt cap and per-user lock|$W/security_email_code.rs|five_wrong_codes_invalidate_the_code_and_the_link
+email code: attempt cap and per-user lock|$W/security_email_code.rs|code_attempts_are_locked_per_user_across_new_codes
+email code: attempt cap and per-user lock|crates/anvil-core/src/flow/email_code.rs|five_wrong_codes_invalidate_code_and_link
+email code: expiry|$W/security_email_code.rs|expired_code_and_link_are_refused
+email code: send limits|$W/security_email_code.rs|a_flow_sends_at_most_three_emails
+email code: send limits|$W/security_email_code.rs|sends_per_address_escalate_across_peers
+email code: a new code replaces the previous one|$W/security_email_code.rs|a_new_code_replaces_the_previous_one
+email code: link GET consumes nothing, POST once|$W/security_email_code.rs|link_get_consumes_nothing_and_the_post_works_once
+email code: link from another browser consumes nothing|$W/security_email_code.rs|link_from_another_browser_consumes_nothing
+email code: csrf, rejected posts consume nothing|$W/security_email_code.rs|posts_without_or_with_a_wrong_csrf_token_are_403
+email code: csrf, rejected posts consume nothing|$W/security_email_code.rs|rejected_posts_consume_nothing
+email code: code and link token not stored in clear|$W/security_email_code.rs|the_code_and_the_link_token_are_not_stored_in_clear
+email code: code and link token not stored in clear|crates/anvil-core/src/flow/email_code.rs|state_json_holds_no_code_or_token
+email code: never claims MFA|$W/security_email_code.rs|email_sign_in_never_claims_mfa
+email code: per-toggle enforcement (code / link)|$W/security_email_code.rs|code_only_tenant_refuses_the_link_routes
+email code: per-toggle enforcement (code / link)|$W/security_email_code.rs|link_only_tenant_refuses_the_code_route
+email code: per-toggle enforcement (code / link)|$W/security_email_code.rs|a_method_switched_off_after_the_send_is_refused
+email code: per-toggle enforcement (code / link)|$W/security_email_code.rs|core_refuses_a_code_the_email_did_not_carry
+email code: per-toggle enforcement (code / link)|$W/security_email_code.rs|core_refuses_a_link_the_email_did_not_carry
+email code: login_code template must guard optional code/link|crates/anvil-mail/tests/templates.rs|login_code_unguarded_code_is_rejected
+email code: login_code template must guard optional code/link|crates/anvil-mail/tests/templates.rs|login_code_unguarded_link_is_rejected
+email code: login_code template must guard optional code/link|crates/anvil-mail/tests/templates.rs|login_code_bare_if_is_rejected_because_rendering_is_strict
+email code: login_code template must guard optional code/link|$W/admin_api_v02.rs|email_templates_default_override_validation_and_reset
+mfa policy: strictest wins, client never relaxes the tenant|crates/anvil-core/src/policy/mfa.rs|effective_policy_never_weakens_tenant
+mfa policy: strictest wins, client never relaxes the tenant|$W/flow_mfa_policy.rs|client_off_cannot_relax_tenant_required
+mfa policy: required enrols a factor before the session|$W/flow_mfa_policy.rs|required_without_a_factor_enrols_then_signs_in_with_mfa
+mfa policy: required applies after upstream sign-in|$W/upstream_login.rs|required_mfa_policy_asks_for_the_second_factor_after_an_upstream_sign_in
+mfa policy: enrolment csrf|$W/flow_mfa_policy.rs|enrolment_post_without_csrf_or_with_a_wrong_one_is_forbidden
+step-up: refused once the session is gone|$W/authorize_step_up.rs|step_up_is_refused_once_the_session_is_gone
+step-up: essential acr not met is unmet_authentication_requirements|$W/authorize_step_up.rs|essential_acr_a_user_cannot_meet_is_unmet_authentication_requirements
+step-up: voluntary acr not met issues the lower acr|$W/authorize_step_up.rs|voluntary_acr_a_user_cannot_meet_issues_the_lower_acr
+step-up: prompt=none never shows a step-up page|$W/authorize_step_up.rs|prompt_none_never_shows_a_step_up_page
+step-up: acr request classification|crates/anvil-core/src/policy/mfa.rs|acr_request_classification
+session switch: signing in as another user revokes the previous session|$W/authorize_step_up.rs|signing_in_as_another_user_revokes_the_previous_users_session
+session switch: signing in as another user revokes the previous session|$W/authorize_prompt.rs|use_another_account_signs_in_bob_and_logs_alice_out
+session switch: never answers with the old session|$W/authorize_prompt.rs|use_another_account_without_signing_in_never_answers_with_the_old_session
+session switch: chooser binding and ownership|$W/authorize_prompt.rs|chooser_submissions_without_a_valid_binding_are_rejected
+session switch: chooser binding and ownership|$W/authorize_prompt.rs|another_users_chooser_flow_is_refused
+login hint: only an email, escaped|$W/authorize_step_up.rs|login_hint_prefills_only_an_email_and_is_escaped
+email change: needs a recent sign-in|$W/account_profile.rs|email_change_needs_a_recent_sign_in
+email change: confirmed by POST only, single use|$W/account_profile.rs|email_change_is_confirmed_by_post_only_switches_and_notifies_the_old_address
+email change: confirmed by POST only, single use|crates/anvil-storage/src/contract/users.rs|email_change_rejects_invalid_tokens
+email change: confirmed by POST only, single use|crates/anvil-storage/src/contract/users.rs|email_change_concurrent_single_winner
+email change: tampered, expired or missing links rejected|$W/account_profile.rs|tampered_expired_or_missing_links_are_rejected
+email change: tampered, expired or missing links rejected|crates/anvil-core/src/service/account.rs|email_change_link_aad_binds_tenant_and_token
+email change: conflict keeps the token|$W/account_profile.rs|address_taken_at_confirmation_keeps_the_token_until_it_is_free
+email change: conflict keeps the token|crates/anvil-storage/src/contract/users.rs|email_change_conflict_keeps_token
+account pages: csrf and flow cookie|$W/account_profile.rs|posts_without_csrf_wrong_token_or_flow_cookie_are_forbidden_and_change_nothing
+account pages: password change needs a recent sign-in|$W/account_profile.rs|password_change_needs_a_recent_sign_in
+theme: custom CSS validator|crates/anvil-core/src/policy/branding.rs|css_forbidden_constructs_report_their_line
+theme: custom CSS validator|crates/anvil-core/src/policy/branding.rs|url_in_any_casing_is_rejected
+theme: custom CSS validator|crates/anvil-core/src/policy/branding.rs|css_control_characters_refused
+theme: custom CSS validator|crates/anvil-core/src/policy/branding.rs|accepted_css_never_escapes_its_context
+theme: custom CSS validator|$W/security_theme.rs|dangerous_custom_css_is_refused_by_the_api
+theme: logos sniffed and size limited|crates/anvil-core/src/policy/branding.rs|logo_sniffing
+theme: logos sniffed and size limited|$W/security_theme.rs|logos_are_sniffed_and_size_limited
+theme: cross-tenant theme, logo and preview|$W/security_theme.rs|tenants_cannot_read_each_others_theme_logo_or_preview
+theme: cross-tenant theme, logo and preview|$W/security_theme.rs|expired_or_unknown_preview_tokens_are_not_found
+theme: cross-tenant theme, logo and preview|crates/anvil-storage/src/contract/branding.rs|branding_isolated_by_tenant
+theme: frame-ancestors only for the preview page|$W/security_theme.rs|only_the_preview_page_may_be_framed_by_self
+cookies: names unique per tenant|crates/anvil-web/src/cookies.rs|tenants_created_in_the_same_millisecond_get_distinct_cookie_names
+body limit: 413 per route family, 400 KiB only for logos|$W/security_body_limit.rs|protocol_and_page_routes_answer_413_above_64_kib
+body limit: 413 per route family, 400 KiB only for logos|$W/security_body_limit.rs|admin_json_routes_answer_413_above_64_kib
+body limit: 413 per route family, 400 KiB only for logos|$W/security_body_limit.rs|logo_uploads_accept_up_to_400_kib_and_no_more
 EOF
 )
 
