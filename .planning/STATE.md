@@ -6,15 +6,15 @@ current_phase: 05
 current_phase_name: release 0 4 operate it
 current_plan: 33
 status: executing
-stopped_at: Completed 06-22-PLAN.md
-last_updated: "2026-11-26T12:48:21.618Z"
+stopped_at: Completed 06-24-PLAN.md
+last_updated: "2026-11-26T13:00:25.402Z"
 last_activity: 2026-11-26
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 162
-  completed_plans: 156
-  percent: 96
+  completed_plans: 157
+  percent: 97
 ---
 
 # Project State
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 **Status:** Ready to execute
 **Last Activity:** 2026-11-26
 **Last Activity Description:** 05-28 phase gate complete (632-pair security map, 0.4 plaintext scan, anvilid 0.4.0, 0.4 migrations pinned, every workflow incl. load and deploy green on f80dcb4)
-**Progress:** [██████████] 96%
+**Progress:** [██████████] 97%
 
 Phase 5 has 33 plans (05-01 through 05-33). Every plan except 05-29 (release v0.4.0 after owner sign-off) has a
 SUMMARY. Current Plan counts plans in execution order: 05-29 is the 33rd and last. Phase 4 still has one open plan, 04-33 (manual real-provider checklist, then tag v0.3.0); it must be
@@ -213,6 +213,7 @@ done before 05-29 tags v0.4.0.
 | Phase 06 P17 | 80min | 3 tasks | 18 files |
 | Phase 06 P23 | 17min | 2 tasks | 14 files |
 | Phase 06 P22 | 45min | 2 tasks | 13 files |
+| Phase 06 P24 | 35min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -497,6 +498,7 @@ Recent decisions affecting current work:
 - [Phase 06]: 06-17: routing needs a verified domain + enabled same-org connection; allow_local_password=false also needs has_links (409); routing=false + allow_local_password=true is the recovery path
 - [Phase 06]: 06-23: org connection opens in a side panel; SAML offered only when TenantView.features.saml; routing targets only enabled org connections; routing 409s inline
 - [Phase 06]: 06-22: email-first only when tenant_has_routing; routing by email domain only; local sign-in (password, email code, magic link) refused for allow_local_password=false domains, passkeys allowed; SAML targets only while saml_experimental is on
+- [Phase 06]: 06-24: mock SAML IdP serves https on request (https: true); SAML specs set ignoreHTTPSErrors; hrd's org OIDC IdP is a second AnvilID tenant (mock-idp has no generic OIDC kind)
 
 ### Pending Todos
 
@@ -509,6 +511,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-26T12:48:21.615Z
-Stopped at: Completed 06-22-PLAN.md
+Last session: 2026-11-26T13:00:25.399Z
+Stopped at: Completed 06-24-PLAN.md
 Resume file: None
