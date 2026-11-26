@@ -1136,21 +1136,26 @@ impl OrgRepo for PgOrgs {
         routed_domain_row(&self.pool, tenant, domain).await
     }
 
-    async fn tenant_has_routing(&self, tenant: TenantId) -> Result<bool, StorageError> {
-        sqlx::query_scalar!(
-            r#"SELECT EXISTS (
-                 SELECT 1
-                   FROM org_domain d
-                   JOIN connection c
-                     ON c.tenant_id = d.tenant_id AND c.org_id = d.org_id
-                    AND c.id = d.connection_id
-                  WHERE d.tenant_id = $1 AND d.verified_at IS NOT NULL AND d.routing
-                    AND c.enabled) AS "exists!""#,
+    async fn routing_connections(&self, tenant: TenantId) -> Result<Vec<Connection>, StorageError> {
+        sqlx::query_as!(
+            ConnectionRow,
+            "SELECT c.id, c.tenant_id, c.slug, c.display_name, c.kind, c.enabled, c.config,
+                    c.secret_enc, c.trust_email_verified, c.created_at, c.updated_at, c.org_id
+               FROM connection c
+              WHERE c.tenant_id = $1 AND c.enabled
+                AND EXISTS (SELECT 1 FROM org_domain d
+                             WHERE d.tenant_id = c.tenant_id AND d.connection_id = c.id
+                               AND d.org_id = c.org_id AND d.verified_at IS NOT NULL
+                               AND d.routing)
+              ORDER BY c.id",
             tenant.0,
         )
-        .fetch_one(&self.pool)
+        .fetch_all(&self.pool)
         .await
-        .map_err(map_err)
+        .map_err(map_err)?
+        .into_iter()
+        .map(ConnectionRow::into_model)
+        .collect()
     }
 
     async fn verified_domains_of_org(

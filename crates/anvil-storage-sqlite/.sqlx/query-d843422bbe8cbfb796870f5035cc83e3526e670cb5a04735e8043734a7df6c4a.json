@@ -1,0 +1,146 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT c.id AS \"id!: uuid::Uuid\", c.tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      c.slug AS \"slug!\", c.display_name AS \"display_name!\",\n                      c.enabled AS \"enabled!: bool\", c.config AS \"config!\",\n                      c.secret_enc AS \"secret_enc?\",\n                      c.trust_email_verified AS \"trust_email_verified!: bool\",\n                      c.created_at AS \"created_at!\", c.updated_at AS \"updated_at!\",\n                      c.org_id AS \"org_id?: uuid::Uuid\"\n                 FROM connection c\n                WHERE c.tenant_id = ?1 AND c.enabled = 1\n                  AND EXISTS(SELECT 1 FROM org_domain d\n                              WHERE d.tenant_id = c.tenant_id AND d.connection_id = c.id\n                                AND d.org_id = c.org_id AND d.verified_at IS NOT NULL\n                                AND d.routing = 1)\n                ORDER BY c.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: uuid::Uuid",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "connection",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "tenant_id!: uuid::Uuid",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "connection",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "name": "slug!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "connection",
+            "name": "slug"
+          }
+        }
+      },
+      {
+        "name": "display_name!",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "connection",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "name": "enabled!: bool",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "connection",
+            "name": "enabled"
+          }
+        }
+      },
+      {
+        "name": "config!",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "connection",
+            "name": "config"
+          }
+        }
+      },
+      {
+        "name": "secret_enc?",
+        "ordinal": 6,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "connection",
+            "name": "secret_enc"
+          }
+        }
+      },
+      {
+        "name": "trust_email_verified!: bool",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "connection",
+            "name": "trust_email_verified"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "connection",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "updated_at!",
+        "ordinal": 9,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "connection",
+            "name": "updated_at"
+          }
+        }
+      },
+      {
+        "name": "org_id?: uuid::Uuid",
+        "ordinal": 10,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "connection",
+            "name": "org_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "d843422bbe8cbfb796870f5035cc83e3526e670cb5a04735e8043734a7df6c4a"
+}

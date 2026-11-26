@@ -717,7 +717,18 @@ pub fn identify_input(mut state: LoginState, input: IdentifyInput) -> IdentifySt
         return invalid(state);
     }
     match (input, state.step) {
-        (IdentifyInput::Email(raw), LoginStep::EmailFirst) => {
+        // The email-first form also answers from the password step after it (a brute-force
+        // lock or CAPTCHA page of a routed tenant renders it bound to that flow): the email is
+        // routed again, as after "change".
+        (IdentifyInput::Email(raw), step)
+            if step == LoginStep::EmailFirst
+                || (step == LoginStep::Identify && state.email_first) =>
+        {
+            if step == LoginStep::Identify {
+                state.step = LoginStep::EmailFirst;
+                state.email_first = false;
+                state.passkey_challenge = None;
+            }
             let raw = raw.trim().to_owned();
             state.identifier = (!raw.is_empty()).then(|| raw.clone());
             match normalize_email(&raw) {
@@ -2149,6 +2160,30 @@ mod tests {
                 assert_eq!(p.step, LoginStep::EmailFirst);
                 assert_eq!(f.id, IDENTIFY_FORM_ID);
                 assert_eq!(f.fields[0].value.as_deref(), Some("alice@acme.example"));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn email_first_form_answers_from_the_password_step() {
+        // The lock / CAPTCHA page of a routed tenant renders the email-first form bound to a
+        // flow at the password step; its submission is routed again.
+        let (state, _, _) = submitted("alice@acme.example");
+        let (p, _) = render(routed(state, HrdRoute::Local, false));
+        assert_eq!(p.step, LoginStep::Identify);
+        assert!(p.email_first);
+        match identify_input(p, IdentifyInput::Email(" bob@acme.example ".into())) {
+            IdentifyStep::Route {
+                state,
+                email,
+                chose_sso,
+            } => {
+                assert_eq!(email, "bob@acme.example");
+                assert!(!chose_sso);
+                assert_eq!(state.step, LoginStep::EmailFirst);
+                assert!(!state.email_first);
+                assert_eq!(state.identifier.as_deref(), Some("bob@acme.example"));
             }
             other => panic!("{other:?}"),
         }

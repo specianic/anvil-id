@@ -15,23 +15,34 @@ mod ui_helpers;
 mod upstream_flow;
 mod upstream_support;
 
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
 use anvil_cache::limiter::RateQuota;
 use anvil_core::model::{
-    ClientAuthMethod, Connection, ConnectionConfig, ConnectionId, ConnectionUpdate, NameIdFormat,
-    NewConnection, OrgClientPolicy, OrgDomain, OrgDomainUpdate, Organization, SamlAttributeMapping,
+    CAPTCHA_SECRET_PURPOSE, CaptchaProvider, CaptchaSettings, ClientAuthMethod, Connection,
+    ConnectionConfig, ConnectionId, ConnectionUpdate, NameIdFormat, NewConnection, OidcConfig,
+    OrgClientPolicy, OrgDomain, OrgDomainUpdate, OrgId, Organization, SamlAttributeMapping,
     SamlConfig,
 };
 use anvil_core::ports::Clock as _;
+use anvil_web::AppConfig;
+use anvil_web::adapters::captcha::CaptchaEndpoints;
 use anvil_web::adapters::outbound::OutboundPolicy;
+use axum::body::Body;
+use axum::http::{Method, Request, header};
 use email_code_support::{login_codes, one_code, submit_code};
 use serde_json::json;
 use support::{TestApp, TestResponse, csrf_from, location};
 use token_support::{CHALLENGE, REDIRECT, register_with, web_input};
-use ui_helpers::{form_action, hidden_inputs, message_keys, normalize, register, to_path};
+use ui_helpers::{
+    form_action, hidden_inputs, message_keys, normalize, register, session_cookie, to_path,
+};
 use upstream_flow::{
     Started, Upstream, add_org_connection, callback_at, claim_domain, create_org, form_id,
     mark_verified, reply_for, session, setup, tenant, tenant_settings, verify_domain,
 };
+use wiremock::matchers::{body_string_contains, method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// Slug of the org's OIDC connection.
 const ORG_SLUG: &str = "acme-sso";
@@ -639,6 +650,11 @@ async fn organization_param_with_single_connection_goes_to_idp() {
 async fn routing_ignored_for_saml_when_flag_off() {
     let (app, claim, conn) = saml_fixture(false).await;
     route(&app, &claim, &conn, false).await;
+    // A second domain routed to an OIDC connection keeps the email page on.
+    let org = org_of(&app, &claim).await;
+    let other = verify_domain(&app, &org, "beta-corp.com").await;
+    let oidc = static_org_oidc(&app, org.id, "beta-sso").await;
+    route(&app, &other, &oidc, false).await;
     account(&app, ALICE).await;
     // Treated as not routed: the password step, and the password is not refused.
     let step = identify(&app, ALICE).await;
@@ -771,4 +787,386 @@ async fn identify_requires_the_flow_binding() {
         )
         .await;
     assert_eq!(resp.status, 403, "{}", resp.text());
+}
+
+// ---------------------------------------------------------------------------------------------
+// The email-first decision follows the flag-aware routing rule (06-28)
+// ---------------------------------------------------------------------------------------------
+
+/// Creates an enabled OIDC connection owned by `org` with a static configuration (never started
+/// by these tests).
+async fn static_org_oidc(app: &TestApp, org_id: OrgId, slug: &str) -> Connection {
+    app.storage()
+        .connections()
+        .create(
+            tenant(app).id,
+            &NewConnection {
+                id: ConnectionId::new_v7(),
+                slug: slug.into(),
+                display_name: format!("{slug} SSO"),
+                enabled: true,
+                config: ConnectionConfig::Oidc(OidcConfig {
+                    issuer: "https://idp.example.test".into(),
+                    client_id: "anvil".into(),
+                    scopes: vec![],
+                    use_pkce: true,
+                    fetch_userinfo: false,
+                }),
+                secret_enc: None,
+                trust_email_verified: false,
+                created_at: app.clock().now(),
+                org_id: Some(org_id),
+            },
+        )
+        .await
+        .expect("create OIDC connection")
+}
+
+/// The org of `claim`.
+async fn org_of(app: &TestApp, claim: &OrgDomain) -> Organization {
+    app.storage()
+        .organizations()
+        .get(tenant(app).id, claim.org_id)
+        .await
+        .expect("get org")
+        .expect("org exists")
+}
+
+#[tokio::test]
+async fn email_first_not_shown_when_only_route_is_saml_with_flag_off() {
+    let (app, claim, conn) = saml_fixture(false).await;
+    route(&app, &claim, &conn, false).await;
+    account(&app, ALICE).await;
+    // Nothing can route while the flag is off: the combined form, and the password signs in.
+    let page = login_page(&app).await;
+    let html = page.html();
+    assert_eq!(form_id(&html), "login", "{html}");
+    assert!(!html.contains("login-identify-form"), "{html}");
+    let resp = post_page(
+        &app,
+        &page,
+        &[("identifier", ALICE), ("password", PASSWORD)],
+    )
+    .await;
+    signed_in(&resp);
+}
+
+#[tokio::test]
+async fn email_first_shown_when_only_route_is_saml_with_flag_on() {
+    let (app, claim, conn) = saml_fixture(true).await;
+    route(&app, &claim, &conn, false).await;
+    let page = login_page(&app).await;
+    assert_eq!(
+        form_id(&page.html()),
+        "login-identify-form",
+        "{}",
+        page.text()
+    );
+}
+
+#[tokio::test]
+async fn email_first_not_shown_for_disabled_or_unverified_route() {
+    // An unverified claim with routing on: no email page.
+    let h = fixture().await;
+    let app = &h.u.app;
+    let pending = claim_domain(app, &h.org, "pending-corp.com", false).await;
+    set_routing(app, &pending, Some(&h.conn), true, false).await;
+    assert_eq!(form_id(&login_page(app).await.html()), "login");
+    // The verified claim with routing off: no email page.
+    set_routing(app, &h.claim, Some(&h.conn), false, false).await;
+    assert_eq!(form_id(&login_page(app).await.html()), "login");
+    // Routing on: the email page ...
+    route(app, &h.claim, &h.conn, false).await;
+    assert_eq!(
+        form_id(&login_page(app).await.html()),
+        "login-identify-form"
+    );
+    // ... until the target connection is disabled.
+    app.storage()
+        .connections()
+        .update(
+            tenant(app).id,
+            h.conn.id,
+            &ConnectionUpdate {
+                enabled: Some(false),
+                ..ConnectionUpdate::default()
+            },
+            app.clock().now(),
+        )
+        .await
+        .expect("update")
+        .expect("connection");
+    assert_eq!(form_id(&login_page(app).await.html()), "login");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Lock and CAPTCHA pages in a routed tenant (06-28)
+// ---------------------------------------------------------------------------------------------
+
+const WRONG: &str = "wrong password 123";
+
+fn peer(n: u8) -> SocketAddr {
+    SocketAddr::new(IpAddr::V4(Ipv4Addr::new(198, 51, 100, n)), 40000)
+}
+
+/// An app (`f` applied after the defaults) whose default tenant routes [`DOMAIN`] to an OIDC
+/// connection of an org (`allow_local_password = true`), so its sign-in starts at the email page.
+async fn routed_app(f: impl FnOnce(&mut AppConfig)) -> TestApp {
+    let app = TestApp::with(|c| {
+        c.outbound = OutboundPolicy::loopback_dev();
+        c.rate_limits.auth = RateQuota::per_minute(6000, 1000);
+        f(c);
+    })
+    .await;
+    let org = create_org(&app, "acme", &[]).await;
+    let claim = verify_domain(&app, &org, DOMAIN).await;
+    let conn = static_org_oidc(&app, org.id, ORG_SLUG).await;
+    route(&app, &claim, &conn, true).await;
+    app
+}
+
+/// Posts the first form of `page` from `peer` (CSRF token and hidden inputs carried over).
+async fn post_page_from(
+    app: &TestApp,
+    peer: SocketAddr,
+    page: &TestResponse,
+    pairs: &[(&str, &str)],
+) -> TestResponse {
+    let html = page.html();
+    let action = form_action(app, &html);
+    let csrf = csrf_from(&html);
+    let hidden: Vec<(String, String)> = hidden_inputs(&html)
+        .into_iter()
+        .filter(|(n, _)| !pairs.iter().any(|(k, _)| k == n))
+        .collect();
+    let mut all: Vec<(&str, &str)> = vec![("csrf_token", &csrf)];
+    all.extend(hidden.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+    all.extend_from_slice(pairs);
+    let body = url::form_urlencoded::Serializer::new(String::new())
+        .extend_pairs(all)
+        .finish();
+    app.send_from(
+        peer,
+        Request::builder()
+            .method(Method::POST)
+            .uri(&action)
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .header("sec-fetch-site", "same-origin")
+            .body(Body::from(body))
+            .expect("request"),
+    )
+    .await
+}
+
+/// The `flow` parameter of the first form's action.
+fn flow_param(app: &TestApp, html: &str) -> String {
+    let action = form_action(app, html);
+    let url = url::Url::parse(&format!("https://op.test{action}")).expect("action URL");
+    url.query_pairs()
+        .find(|(k, _)| k == "flow")
+        .map(|(_, v)| v.into_owned())
+        .expect("flow parameter")
+}
+
+/// Asserts that `html` carries the email-first form bound to `flow` with `email` echoed.
+fn assert_email_first_form(app: &TestApp, html: &str, flow: &str, email: &str) {
+    assert_eq!(form_id(html), "login-identify-form", "{html}");
+    assert!(!html.contains("type=\"password\""), "{html}");
+    assert_eq!(flow_param(app, html), flow, "bound to the posted flow");
+    assert!(
+        html.contains(&format!("value=\"{email}\"")),
+        "identifier echoed: {html}"
+    );
+}
+
+/// (status, Retry-After, page with per-flow values normalised).
+type Observed = (u16, Option<String>, String);
+
+/// The email page, then 5 wrong passwords on the password step of `email` (400), a 6th (429,
+/// locked 1 s: the flow's own password step with the lock message) and the right password while
+/// locked (429 from the gate, before the flow runs). Returns what each password POST answered,
+/// the flow id, and the gate's 429 page.
+async fn lock_steps(app: &TestApp, email: &str) -> (Vec<Observed>, String, TestResponse) {
+    let mut page = identify(app, email).await;
+    assert_password_step(&page, email);
+    let flow = flow_param(app, &page.html());
+    let mut seen = Vec::new();
+    for i in 0..7 {
+        let password = if i < 6 { WRONG } else { PASSWORD };
+        let resp = post_page(app, &page, &[("password", password)]).await;
+        let expected = if i < 5 { 400 } else { 429 };
+        assert_eq!(resp.status, expected, "attempt {i}: {}", resp.text());
+        if i == 5 {
+            // The failure that locks answers with the flow's form (the password step).
+            assert_password_step_status(&resp, email);
+        }
+        seen.push((
+            resp.status.as_u16(),
+            resp.header("retry-after").map(str::to_owned),
+            normalize(&resp.html()),
+        ));
+        page = resp;
+    }
+    (seen, flow, page)
+}
+
+/// [`assert_password_step`] for a page with any status.
+fn assert_password_step_status(resp: &TestResponse, email: &str) {
+    let html = resp.html();
+    assert_eq!(form_id(&html), "login", "{html}");
+    assert!(html.contains("id=\"login-email-locked\""), "{html}");
+    assert!(
+        hidden_inputs(&html)
+            .iter()
+            .any(|(n, v)| n == "identifier" && v == email),
+        "{html}"
+    );
+}
+
+#[tokio::test]
+async fn locked_page_in_routed_tenant_shows_email_first_form() {
+    let app = routed_app(|_| {}).await;
+    account(&app, BOB).await;
+    let (_, flow, locked) = lock_steps(&app, BOB).await;
+
+    // Locked: the right password is not looked at, and the gate's 429 is the email-first form of
+    // the posted flow, not the combined form.
+    assert_eq!(locked.header("retry-after"), Some("1"));
+    let html = locked.html();
+    assert_eq!(
+        message_keys(&html),
+        vec!["login.too_many_attempts".to_owned()]
+    );
+    assert_email_first_form(&app, &html, &flow, BOB);
+    assert!(session_cookie(&app).is_none());
+
+    // After the lock window the email-first form works on the same flow: routed again, then the
+    // password step signs in.
+    app.clock().advance(std::time::Duration::from_secs(2));
+    let step = post_page(&app, &locked, &[("identifier", BOB)]).await;
+    assert_password_step(&step, BOB);
+    assert_eq!(flow_param(&app, &step.html()), flow);
+    let resp = post_page(&app, &step, &[("password", PASSWORD)]).await;
+    signed_in(&resp);
+}
+
+#[tokio::test]
+async fn locked_page_identical_for_known_and_unknown_identifiers_in_routed_tenant() {
+    let known = routed_app(|_| {}).await;
+    account(&known, BOB).await;
+    let unknown = routed_app(|_| {}).await;
+    let (a, ..) = lock_steps(&known, BOB).await;
+    let (b, ..) = lock_steps(&unknown, BOB).await;
+    assert_eq!(a.len(), b.len());
+    for (i, (x, y)) in a.iter().zip(&b).enumerate() {
+        assert_eq!(
+            x, y,
+            "step {i} differs between a known and an unknown identifier"
+        );
+    }
+    // The gate's 429 is the email-first form in both.
+    assert!(
+        a[6].2.contains("<form id=\"login-identify-form\""),
+        "{}",
+        a[5].2
+    );
+    assert_eq!(a[6].1.as_deref(), Some("1"));
+}
+
+/// Turnstile settings with `secret` sealed for the default tenant.
+fn captcha_settings(app: &TestApp, secret: &str) -> CaptchaSettings {
+    let t = tenant(app);
+    let sealed = app
+        .kek()
+        .seal(CAPTCHA_SECRET_PURPOSE, t.id.0.as_bytes(), secret.as_bytes())
+        .expect("seal");
+    CaptchaSettings {
+        provider: CaptchaProvider::Turnstile,
+        site_key: "site-key-123".into(),
+        secret_sealed: anvil_jose::encoding::b64url(&sealed),
+    }
+}
+
+#[tokio::test]
+async fn captcha_page_in_routed_tenant_shows_email_first_form() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/siteverify"))
+        .and(body_string_contains("response=good-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"success":true}"#))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/siteverify"))
+        .and(body_string_contains("response=bad-token"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{"success":false,"error-codes":["invalid-input-response"]}"#),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let uri = server.uri();
+    let app = routed_app(|c| {
+        c.rate_limits.loose_threshold_per_hour = 5;
+        c.captcha_endpoints = CaptchaEndpoints {
+            turnstile: format!("{uri}/siteverify"),
+            hcaptcha: format!("{uri}/siteverify"),
+        };
+    })
+    .await;
+    account(&app, BOB).await;
+    let settings = captcha_settings(&app, "provider-secret");
+    tenant_settings(&app, |s| s.captcha = Some(settings)).await;
+
+    // Failures from five IPs reach the identifier tier.
+    let mut page = identify(&app, BOB).await;
+    assert_password_step(&page, BOB);
+    let flow = flow_param(&app, &page.html());
+    for n in 1..=5 {
+        let resp = post_page_from(&app, peer(n), &page, &[("password", WRONG)]).await;
+        assert_eq!(resp.status, 400, "ip {n}: {}", resp.text());
+        page = resp;
+    }
+    // A response the provider rejects: the email-first form of the posted flow with the CAPTCHA
+    // error, not the combined form.
+    let resp = post_page_from(
+        &app,
+        peer(6),
+        &page,
+        &[
+            ("password", PASSWORD),
+            ("cf-turnstile-response", "bad-token"),
+        ],
+    )
+    .await;
+    assert_eq!(resp.status, 400, "{}", resp.text());
+    let html = resp.html();
+    assert_eq!(message_keys(&html), vec!["login.captcha_failed".to_owned()]);
+    assert_email_first_form(&app, &html, &flow, BOB);
+    // The email page posts no CAPTCHA response (the email step is not gated), so it carries no
+    // widget; the password step after it does.
+    assert!(!html.contains("id=\"captcha-widget\""), "{html}");
+
+    // The email page leads to the password step with the widget (the tier still asks for a
+    // CAPTCHA), and a verified CAPTCHA signs in.
+    let step = post_page_from(&app, peer(6), &resp, &[("identifier", BOB)]).await;
+    assert_password_step(&step, BOB);
+    assert!(
+        step.html().contains("id=\"captcha-widget\""),
+        "{}",
+        step.text()
+    );
+    let resp = post_page_from(
+        &app,
+        peer(6),
+        &step,
+        &[
+            ("password", PASSWORD),
+            ("cf-turnstile-response", "good-token"),
+        ],
+    )
+    .await;
+    signed_in(&resp);
 }

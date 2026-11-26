@@ -76,7 +76,7 @@ use std::time::Duration;
 use anvil_cache::limiter::Decision;
 use anvil_core::error::CoreError;
 use anvil_core::flow::email_code::{EMAIL_CODE_FORM_ID, LINK_INVALID, OTHER_BROWSER};
-use anvil_core::flow::engine::{FlowEnv, FlowInput, FlowState};
+use anvil_core::flow::engine::FlowInput;
 use anvil_core::flow::form::FieldKind;
 use anvil_core::flow::form::{FormDescription, FormMessage, MessageLevel};
 use anvil_core::flow::login::{
@@ -349,7 +349,7 @@ async fn submit(
 
     match guard_attempt(&state, &strict, &loose, captcha.is_some()).await {
         Decision::Deny { retry_after } => {
-            return match posted_login_form(&state, &tenant, &posted) {
+            return match posted_login_form(&state, &tenant, &posted).await {
                 Ok(form) => {
                     let extras = Extras {
                         upstream: identify_buttons(&state, &tenant, &loc, &form).await,
@@ -364,11 +364,14 @@ async fn submit(
             if let Some(settings) = captcha
                 && let Err(key) = verify_captcha(&state, &tenant, &ctx, settings, &form, ip).await
             {
-                return match posted_login_form(&state, &tenant, &posted) {
+                return match posted_login_form(&state, &tenant, &posted).await {
                     Ok(mut form) => {
                         form.messages = vec![FormMessage::error(key)];
+                        // The widget goes with the password form only: the email-first form
+                        // (routed tenants) is not gated, and the password step after it carries
+                        // the widget (`password_step_captcha`).
                         let extras = Extras {
-                            captcha: Some(settings),
+                            captcha: (form.id == "login").then_some(settings),
                             upstream: identify_buttons(&state, &tenant, &loc, &form).await,
                             ..Extras::default()
                         };
@@ -431,11 +434,18 @@ async fn submit(
 
 /// `POST /ui/login/identify?flow=`: the email-first page (`identifier`) or the single-sign-on
 /// choice (`choice` = `sso`, `password` or `change`). No account is looked up, so there is no
-/// brute-force gate: the answer depends on the email's domain only.
+/// brute-force gate: the answer depends on the email's domain only. When the answer is the
+/// password step and the email's brute-force tier asks for a CAPTCHA, the page carries the
+/// widget, so a user sent back to the email-first page by a CAPTCHA demand can complete it.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "axum handler: one argument per extractor"
+)]
 async fn identify(
     State(state): State<AppState>,
     tenant: ResolvedTenant,
     RequestLocale(loc, _): RequestLocale,
+    ClientIp(ip): ClientIp,
     AuditContext(ctx): AuditContext,
     jar: CookieJar,
     Query(q): Query<UiQuery>,
@@ -475,6 +485,7 @@ async fn identify(
             let mut extras = Extras::default();
             if let FlowOutcome::Render(f) = outcome.as_ref() {
                 extras.upstream = identify_buttons(&state, &tenant, &loc, f).await;
+                extras.captcha = password_step_captcha(&state, &tenant, f, ip).await;
             }
             outcome_response_with(&state, &tenant, &loc, *outcome, &extras)
         }
@@ -504,6 +515,33 @@ async fn identify(
         Err(CoreError::InvalidRequest(_)) => restart_login(&state, &tenant, &loc).await,
         Err(e) => core_error_page_in(&state, Some(&tenant), &loc, &e),
     }
+}
+
+/// The tenant's CAPTCHA when `form` is the password step and the brute-force gate of its email
+/// asks for one (the same keys and decision as the password POST, read only: nothing is
+/// recorded). The decision depends on the attempts made with the address, never on whether an
+/// account exists.
+async fn password_step_captcha<'a>(
+    state: &AppState,
+    tenant: &'a ResolvedTenant,
+    form: &FormDescription,
+    ip: IpAddr,
+) -> Option<&'a CaptchaSettings> {
+    let captcha = tenant.tenant.settings.captcha.as_ref()?;
+    if form.id != "login" {
+        return None;
+    }
+    let identifier = form
+        .fields
+        .iter()
+        .find(|f| f.name == "identifier")
+        .and_then(|f| f.value.as_deref())?;
+    let (strict, loose) = attempt_keys(tenant.tenant.id, identifier, ip);
+    matches!(
+        guard_attempt(state, &strict, &loose, true).await,
+        Decision::RequireCaptcha
+    )
+    .then_some(captcha)
 }
 
 /// Starts the sign-in at the org IdP home-realm discovery chose (`start_idp`: the same starts as
@@ -594,21 +632,16 @@ struct Posted<'a> {
     identifier: &'a str,
 }
 
-/// The sign-in form of the identify step bound to the posted flow, with the identifier echoed.
-/// Used when the brute-force gate answers before the flow runs, so the response is the same
-/// whether or not the account exists.
-fn posted_login_form(
+/// The form a new sign-in of this tenant starts with (`FlowService::initial_login_form`: the
+/// email-first form in a tenant with a routable domain, the combined form otherwise), bound to the
+/// posted flow, with the identifier echoed. Used when the brute-force gate (lock or CAPTCHA
+/// demand) answers before the flow runs, so the response is the same whether or not the account
+/// exists; the web layer never decides email-first itself.
+async fn posted_login_form(
     state: &AppState,
     tenant: &ResolvedTenant,
     posted: &Posted<'_>,
 ) -> Result<FormDescription, CoreError> {
-    let env = FlowEnv {
-        registration: tenant.tenant.settings.registration,
-        require_verified_email: tenant.tenant.settings.require_verified_email,
-        policy: state.config().password_policy,
-        email_code: email_code_enabled(&tenant.tenant),
-    };
-    let (_, form) = FlowState::initial(FlowKind::Login, None, &env)?;
     let base = ui_base(tenant);
     let rp = Err(CoreError::Internal("not used".into()));
     let ctx = RequestContext::default();
@@ -619,6 +652,7 @@ fn posted_login_form(
         rp: &rp,
         ctx: &ctx,
     };
+    let form = state.ui_flow_service().initial_login_form(&cx).await?;
     let mut form = bind_form(form, &cx, posted.flow_id, posted.csrf);
     let echoed = posted.identifier.trim();
     if let Some(field) = form.fields.iter_mut().find(|f| f.name == "identifier")
@@ -864,7 +898,7 @@ async fn passkey_submit(
             csrf,
             identifier: "",
         };
-        return match posted_login_form(&state, &tenant, &posted) {
+        return match posted_login_form(&state, &tenant, &posted).await {
             Ok(form) => {
                 let extras = Extras {
                     upstream: identify_buttons(&state, &tenant, &loc, &form).await,

@@ -659,8 +659,9 @@ impl FlowService {
         self.create_flow(cx, &state, form, auth_request).await
     }
 
-    /// The initial state and form of a flow of `kind`. A login of a tenant with a routed domain
-    /// starts at the email-first page; every other login keeps the combined form.
+    /// The initial state and form of a flow of `kind`. A login of a tenant with a routable
+    /// domain ([`Self::email_first_enabled`]) starts at the email-first page; every other login
+    /// keeps the combined form.
     async fn initial(
         &self,
         cx: &FlowContext<'_>,
@@ -674,13 +675,31 @@ impl FlowService {
         FlowState::initial(kind, token, &self.env(cx))
     }
 
-    /// Whether the tenant's sign-in asks for the email first (at least one routed domain).
+    /// The form a new login of this tenant starts with (the same decision [`Self::start`] makes:
+    /// email-first in a tenant with a routable domain, the combined form otherwise). No flow is
+    /// created; the web layer renders it on pages answered before the flow runs (brute-force
+    /// lock, CAPTCHA demand), so it never decides email-first itself.
+    pub async fn initial_login_form(
+        &self,
+        cx: &FlowContext<'_>,
+    ) -> Result<FormDescription, CoreError> {
+        let (_, form) = self.initial(cx, FlowKind::Login, None).await?;
+        Ok(form)
+    }
+
+    /// Whether the tenant's sign-in asks for the email first: at least one candidate routing
+    /// connection ([`OrgRepo::routing_connections`](crate::ports::OrgRepo::routing_connections))
+    /// can route by the same flag-aware rule as home-realm routing ([`Self::idp_routable`]). A
+    /// tenant whose only route is a SAML connection while `saml_experimental` is off keeps the
+    /// combined form.
     async fn email_first_enabled(&self, tenant: TenantId) -> Result<bool, CoreError> {
         Ok(self
             .storage
             .organizations()
-            .tenant_has_routing(tenant)
-            .await?)
+            .routing_connections(tenant)
+            .await?
+            .iter()
+            .any(|c| self.idp_routable(c)))
     }
 
     /// Whether an org connection can be a home-realm target: enabled, owned by an org, OIDC (or

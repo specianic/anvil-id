@@ -1281,20 +1281,31 @@ impl OrgRepo for SqliteOrgs {
         .transpose()
     }
 
-    async fn tenant_has_routing(&self, tenant: TenantId) -> Result<bool, StorageError> {
-        sqlx::query_scalar!(
-            r#"SELECT EXISTS(SELECT 1 FROM org_domain d
-                               JOIN connection c ON c.tenant_id = d.tenant_id
-                                                AND c.id = d.connection_id
-                                                AND c.org_id = d.org_id
-                              WHERE d.tenant_id = ?1 AND d.verified_at IS NOT NULL
-                                AND d.routing = 1 AND c.enabled = 1)
-                      AS "routing!: bool""#,
+    async fn routing_connections(&self, tenant: TenantId) -> Result<Vec<Connection>, StorageError> {
+        sqlx::query_as!(
+            ConnectionRow,
+            r#"SELECT c.id AS "id!: uuid::Uuid", c.tenant_id AS "tenant_id!: uuid::Uuid",
+                      c.slug AS "slug!", c.display_name AS "display_name!",
+                      c.enabled AS "enabled!: bool", c.config AS "config!",
+                      c.secret_enc AS "secret_enc?",
+                      c.trust_email_verified AS "trust_email_verified!: bool",
+                      c.created_at AS "created_at!", c.updated_at AS "updated_at!",
+                      c.org_id AS "org_id?: uuid::Uuid"
+                 FROM connection c
+                WHERE c.tenant_id = ?1 AND c.enabled = 1
+                  AND EXISTS(SELECT 1 FROM org_domain d
+                              WHERE d.tenant_id = c.tenant_id AND d.connection_id = c.id
+                                AND d.org_id = c.org_id AND d.verified_at IS NOT NULL
+                                AND d.routing = 1)
+                ORDER BY c.id"#,
             tenant.0,
         )
-        .fetch_one(&self.reader)
+        .fetch_all(&self.reader)
         .await
-        .map_err(map_err)
+        .map_err(map_err)?
+        .into_iter()
+        .map(Connection::try_from)
+        .collect()
     }
 
     async fn verified_domains_of_org(

@@ -332,7 +332,12 @@ pub async fn domain_routed_domain_requires_verified_routing_enabled_connection(s
         repo.routed_domain(tenant, &domain).await.expect("routed"),
         None
     );
-    assert!(!repo.tenant_has_routing(tenant).await.expect("has routing"));
+    assert!(
+        repo.routing_connections(tenant)
+            .await
+            .expect("routing connections")
+            .is_empty()
+    );
 
     repo.mark_verified(tenant, claim.id, now_ms())
         .await
@@ -345,7 +350,34 @@ pub async fn domain_routed_domain_requires_verified_routing_enabled_connection(s
     assert_eq!(d.id, claim.id);
     assert_eq!(c.id, conn.id);
     assert_eq!(c.org_id, Some(org.id));
-    assert!(repo.tenant_has_routing(tenant).await.expect("has routing"));
+    let ids =
+        |v: Vec<anvil_core::model::Connection>| v.into_iter().map(|c| c.id).collect::<Vec<_>>();
+    assert_eq!(
+        ids(repo
+            .routing_connections(tenant)
+            .await
+            .expect("routing connections")),
+        vec![conn.id]
+    );
+    // A second routed claim on the same connection does not duplicate it.
+    let domain2 = unique_domain();
+    let claim2 = new_org_domain(org.id, &domain2, Some(conn.id));
+    repo.create_domain(tenant, &claim2).await.expect("create");
+    repo.mark_verified(tenant, claim2.id, now_ms())
+        .await
+        .expect("verify");
+    assert_eq!(
+        ids(repo
+            .routing_connections(tenant)
+            .await
+            .expect("routing connections")),
+        vec![conn.id]
+    );
+    assert!(
+        repo.unverify(tenant, claim2.id, now_ms())
+            .await
+            .expect("unverify")
+    );
     // Exact match only: a subdomain or a parent is not routed.
     assert_eq!(
         repo.routed_domain(tenant, &format!("sub.{domain}"))
@@ -370,7 +402,12 @@ pub async fn domain_routed_domain_requires_verified_routing_enabled_connection(s
         repo.routed_domain(tenant, &domain).await.expect("routed"),
         None
     );
-    assert!(!repo.tenant_has_routing(tenant).await.expect("has routing"));
+    assert!(
+        repo.routing_connections(tenant)
+            .await
+            .expect("routing connections")
+            .is_empty()
+    );
     repo.update_domain(
         tenant,
         claim.id,
@@ -400,7 +437,12 @@ pub async fn domain_routed_domain_requires_verified_routing_enabled_connection(s
         repo.routed_domain(tenant, &domain).await.expect("routed"),
         None
     );
-    assert!(!repo.tenant_has_routing(tenant).await.expect("has routing"));
+    assert!(
+        repo.routing_connections(tenant)
+            .await
+            .expect("routing connections")
+            .is_empty()
+    );
     connections
         .update(
             tenant,
@@ -653,7 +695,12 @@ pub async fn domains_isolated_by_tenant(s: &TestStorage) {
         repo.routed_domain(other, &domain).await.expect("routed"),
         None
     );
-    assert!(!repo.tenant_has_routing(other).await.expect("has routing"));
+    assert!(
+        repo.routing_connections(other)
+            .await
+            .expect("routing connections")
+            .is_empty()
+    );
     assert!(
         repo.verified_domains_of_org(other, org.id)
             .await

@@ -1628,9 +1628,12 @@ pub trait OrgRepo: Send + Sync {
         domain: &str,
     ) -> Result<Option<(OrgDomain, Connection)>, StorageError>;
 
-    /// Whether at least one domain of the tenant would route ([`OrgRepo::routed_domain`]
-    /// semantics). Decides whether the sign-in page asks for the email first.
-    async fn tenant_has_routing(&self, tenant: TenantId) -> Result<bool, StorageError>;
+    /// The candidate routing connections of the tenant ([`OrgRepo::routed_domain`] semantics
+    /// without the domain filter): the distinct connections referenced by a **verified** claim
+    /// with `routing = true` that exist, belong to the claim's org and are enabled, ordered by
+    /// connection id. The core decides which of them can route (`FlowService::idp_routable`,
+    /// flag-aware); that decides whether the sign-in page asks for the email first.
+    async fn routing_connections(&self, tenant: TenantId) -> Result<Vec<Connection>, StorageError>;
 
     /// The verified domains of `org`, in domain order.
     async fn verified_domains_of_org(
