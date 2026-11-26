@@ -936,6 +936,13 @@ impl BulkExport {
         Ok(Some(records))
     }
 
+    /// Marks the export as failed after a caller-side error (e.g. writing the output), so
+    /// [`BulkExport::finish`] records a failure even when every page was read.
+    pub fn mark_failed(&mut self) {
+        self.failed = true;
+        self.done = true;
+    }
+
     /// Users returned so far.
     pub fn count(&self) -> u64 {
         self.count

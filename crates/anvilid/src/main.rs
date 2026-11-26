@@ -304,7 +304,12 @@ async fn users_import(cfg: &Config, args: &users_import::ImportArgs) -> anyhow::
 
 #[tokio::main(flavor = "multi_thread")]
 async fn users_export(cfg: &Config, args: &users_export::ExportArgs) -> anyhow::Result<()> {
-    let _telemetry = telemetry::init_tracing(cfg.log_format, None)?;
+    // Without --out, stdout carries the export itself, and the audit mirror (JSON lines on
+    // stdout) would corrupt it: no tracing then. The `user_exported` event is stored either way.
+    let _telemetry = match args.out {
+        Some(_) => Some(telemetry::init_tracing(cfg.log_format, None)?),
+        None => None,
+    };
     users_export::run(cfg, args).await
 }
 
