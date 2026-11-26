@@ -246,7 +246,36 @@ Plans:
   2. An organization admin configures an OIDC or SAML 2.0 connection and users log in through it with just-in-time provisioning; SAML stays flagged experimental unless it passes the signature-wrapping attack corpus (decision D4)
   3. After a domain is verified by DNS TXT record, a user entering an email on that domain is routed to the organization's IdP
   4. Every managed object (tenants, users, clients, organizations, connections, branding, keys, sessions, audit log) can be administered from the console
-**Plans**: TBD
+**Plans**: 27 plans in 9 waves
+
+Plans:
+- [ ] 06-01-PLAN.md — Dependencies (bergshamra-dsig on aws-lc, uppsala, hickory, psl, flate2), scoped chrono deny exception (Q2), D4 spike, ARCHITECTURE verdict (wave 1)
+- [ ] 06-02-PLAN.md — Foundation A: org/SAML model, org_id fields, errors, audit actions + webhook events, reserved org claims, compile fixes, TRANSITIONAL converters, OpenAPI (wave 1)
+- [ ] 06-03-PLAN.md — E2E infra: mock SAML IdP (xml-crypto) and mock DNS with self-tests (wave 1)
+- [ ] 06-04-PLAN.md — Foundation B: ports (OrgRepo, DomainTxtLookup, SamlXml), shims, AppDeps/AppConfig + operator keys, module/route skeletons, contract suite (wave 2)
+- [ ] 06-05-PLAN.md — Pure core: domain rules + routing, TXT record format, active-org resolution + org claims + org:admin bounding, org MFA, SAML request/validation (TDD) (wave 2)
+- [ ] 06-06-PLAN.md — Carry-over: passkey picker narrowed to the step user at the second factor (wave 2)
+- [ ] 06-07-PLAN.md — SQLite 0008 additive + 0009 no-transaction rebuild, org repos, 0.4 -> 1.0 upgrade with row counts (wave 3)
+- [ ] 06-08-PLAN.md — Postgres 0007, org repos, 0.4 -> 1.0 upgrade (wave 3)
+- [ ] 06-09-PLAN.md — SAML XML adapter (one parser, strict pre-check, verify-then-read), D4 attack corpus, fuzz targets (wave 3)
+- [ ] 06-10-PLAN.md — DNS TXT adapter (hickory, FQDN, bounded, uncached) + single domain check, UDP stub tests (wave 3)
+- [ ] 06-11-PLAN.md — Signing keys admin API (list, rotate) (wave 3)
+- [ ] 06-12-PLAN.md — Org admin API: orgs, members, org roles, invitations; org-admin principal (Q1) (wave 4)
+- [ ] 06-13-PLAN.md — Org in the grant: organization parameter, org claims in all token surfaces, refresh re-check, opaque/introspection claims (wave 4)
+- [ ] 06-14-PLAN.md — Enterprise OIDC per org: shared completion path, domain-bound email trust, JIT membership (wave 4)
+- [ ] 06-15-PLAN.md — org:admin reservation (DCR/CIMD/system tenant), client org policy rules, tenant YAML excludes org objects (wave 4)
+- [ ] 06-16-PLAN.md — Console: signing keys page + e2e (wave 4)
+- [ ] 06-17-PLAN.md — Org SSO admin API: OIDC/SAML connections (flag, metadata import), DNS-verified domains + routing, org branding (wave 5)
+- [ ] 06-18-PLAN.md — SAML login: start, ACS POST, continue GET, replay cache, SP metadata, behind the experimental flag (wave 5)
+- [ ] 06-19-PLAN.md — Org switcher + org MFA strictest-wins (wave 5)
+- [ ] 06-20-PLAN.md — Invitation acceptance (email template, pages, registration via invite) + daily domain re-check job (wave 5)
+- [ ] 06-21-PLAN.md — Console: organizations section (members, invitations, roles, user memberships, client policy) + e2e (wave 5)
+- [ ] 06-22-PLAN.md — Identifier-first login with home-realm discovery, allow_local_password policy, enumeration-safe (wave 6)
+- [ ] 06-23-PLAN.md — Console: org SSO tabs (connections incl. SAML, domains, branding), e2e runner env + e2e (wave 6)
+- [ ] 06-24-PLAN.md — E2E: org switch, invitations, SAML, HRD (+ no-JS) (wave 7)
+- [ ] 06-25-PLAN.md — Docs: ORGANIZATIONS, SAML (experimental profile, interop checklist), UPGRADING 0.4 -> 1.0, ARCHITECTURE/OPERATIONS/CONFIG/WEBHOOKS/theme (wave 7)
+- [ ] 06-26-PLAN.md — Phase gate: security map, plaintext scan, just ci, version 1.0.0-beta.1 + migration pins, requirements, all workflows green (wave 8)
+- [ ] 06-27-PLAN.md — Prerelease v1.0.0-beta.1 after owner sign-off (v0.3.0/v0.4.0 tagged first; 1.0.0 ships in Phase 7) (wave 9)
 
 ### Phase 7: Release 1.0 "Credible for business" (Certification and release)
 **Goal**: AnvilID 1.0 ships as a certified, externally reviewed, stable platform that teams can migrate onto from other systems
@@ -272,7 +301,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 3. Release 0.2 "Secure by default" | 34/34 | Complete    | 2026-11-25 |
 | 4. Release 0.3 "Real-world logins" | 36/37 | In Progress|  |
 | 5. Release 0.4 "Operate it" | 32/33 | In Progress|  |
-| 6. Release 1.0 (Organizations and SSO) | 0/TBD | Not started | - |
+| 6. Release 1.0 (Organizations and SSO) | 0/27 | Planned | - |
 | 7. Release 1.0 (Certification and release) | 0/TBD | Not started | - |
 
 ---
