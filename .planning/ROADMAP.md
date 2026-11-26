@@ -200,7 +200,7 @@ Plans:
   3. An MCP client completes authorization using a Client ID Metadata Document and resource indicators, and dynamic client registration obeys the admin policy (disabled / allow-listed / open)
   4. An operator manages multiple isolated tenants (each with its own issuer) from the console, defines roles, permissions and custom attributes that appear in tokens, and receives signed, retried webhooks for lifecycle events
   5. The in-repo Helm chart and Docker Compose examples deploy a working instance that exposes health endpoints, Prometheus metrics, OpenTelemetry traces and JSON logs
-**Plans**: 29 plans in 9 waves
+**Plans**: 33 plans in 10 waves
 
 Plans:
 - [ ] 05-01-PLAN.md — Foundation A: every Phase 5 runtime + dev dependency, domain model, errors, audit actions, compile fixes, OpenAPI (wave 1)
@@ -230,8 +230,12 @@ Plans:
 - [ ] 05-25-PLAN.md — MCP: mock client/resource server e2e with CIMD + resource indicators, docs/MCP.md (wave 7)
 - [ ] 05-26-PLAN.md — HA + perf gates in CI (restarts, shared limit, exactly-once webhooks, PRD targets, host VmRSS), telemetry redaction test; sole wave-7 owner of Rust fixes (wave 7)
 - [ ] 05-27-PLAN.md — Feature e2e (attributes, webhooks, DCR, RBAC claims) + UPGRADING/OPERATIONS/WEBHOOKS/ARCHITECTURE docs (wave 7)
-- [ ] 05-28-PLAN.md — Phase gate: security map, just ci, version 0.4.0 + migration pins, requirements, all workflows green incl. deploy + load; owner checkpoint after 3 failed perf runs (wave 8)
-- [ ] 05-29-PLAN.md — Release v0.4.0 after owner sign-off (v0.3.0 tagged first) (wave 9)
+- [ ] 05-30-PLAN.md — Gap: passkey accepted as the second factor under MFA required (no enrolment loop), negative tests (wave 8)
+- [ ] 05-31-PLAN.md — Gap: one hmac_sha256 in anvil-jose for the limiter, shared outbound client for the CLI, jobs shutdown timeout >= webhook timeout, stale comments (wave 8)
+- [ ] 05-32-PLAN.md — Gap: no admin scopes on non-system static clients, 1 MiB config document limit, schema bounds, OIDC path-insertion discovery (wave 8)
+- [ ] 05-33-PLAN.md — Gap: Attributes nav on every account page, CIMD consent CSS, console client secrets shown once (wave 8)
+- [ ] 05-28-PLAN.md — Phase gate: security map (incl. gap-plan tests), plaintext scan of 0.4 secrets, just ci, version 0.4.0 + migration pins, requirements, all workflows green incl. deploy + load; owner checkpoint after 3 failed perf runs (wave 9)
+- [ ] 05-29-PLAN.md — Release v0.4.0 after owner sign-off (v0.3.0 tagged first) (wave 10)
 
 ### Phase 6: Release 1.0 "Credible for business" (Organizations and SSO)
 **Goal**: SaaS builders can serve business customers: organizations with members and roles, each able to bring its own SAML or OIDC identity provider, with users routed automatically by email domain
@@ -267,7 +271,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 2. Release 0.1 "First login" | 23/23 | Complete    | 2026-11-25 |
 | 3. Release 0.2 "Secure by default" | 34/34 | Complete    | 2026-11-25 |
 | 4. Release 0.3 "Real-world logins" | 36/37 | In Progress|  |
-| 5. Release 0.4 "Operate it" | 23/29 | In Progress|  |
+| 5. Release 0.4 "Operate it" | 27/33 | In Progress|  |
 | 6. Release 1.0 (Organizations and SSO) | 0/TBD | Not started | - |
 | 7. Release 1.0 (Certification and release) | 0/TBD | Not started | - |
 

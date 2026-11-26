@@ -37,3 +37,49 @@
 - (from 05-27, for the gate 05-28; Rust source, not editable in wave 7) Doc-only fixes left in code: (1) the stale `crates/anvilid/src/config.rs` notes from 05-16 are still there (module doc line ~19 "not supported until 05-16"; `#[allow(dead_code, reason = "read by the shared limiter (05-16)")]` on `Config.redis_failure`); (2) `policy/webhook_event.rs` module doc says `data.tenant` is the tenant slug, but the payload carries the tenant id (docs/WEBHOOKS.md and UPGRADING.md document the id). The user-facing docs are done; only these code comments remain.
 - (from 05-24) The 05-23 console follow-up is done: the tenants list shows `tenant.issuer` and `tenant.discovery_url` (no discovery fetch per row; `discoveryUrl`/`hostIssuer` helpers removed from admin-ui/src/lib/tenant.ts).
 - (from 05-24, console follow-up) The client create and client secret rotation pages (admin-ui `routes/t/$tenant/clients/new.tsx`, `clients/$clientId.tsx`, `ClientForm.tsx` SecretOnce) still keep the returned `client_secret` in the TanStack mutation result until the mutation is garbage-collected. The 0.4 pages (webhook secrets, initial access tokens, config-generated secrets) move the value into component state inside `mutationFn` and return the record without it, with an explicit "I have stored it" dismissal (`OneTimeSecret` in components/WebhookForm.tsx). Apply the same pattern to the client pages.
+
+## Gate dispositions
+
+Decided before the gate 05-28 (planner, 2026-11-26). Entries are numbered in list order above. Dispositions: (a) already
+resolved (verified in code), (b) planned in a gap plan (05-30..05-33, wave 8), (c) done by the gate 05-28 itself (listed in its
+must-haves), (d) moved to Phase 6. Counts: (a) 15, (b) 15, (c) 5, (d) 2.
+
+| # | Entry (source) | Disp. | Evidence / plan |
+|---|---|---|---|
+| 1 | Tenant view has no `issuer` (05-04) | a | `admin/dto.rs` `TenantView.issuer` + `discovery_url` (05-23); console uses them (05-24, entry 36) |
+| 2 | Passkey-only user sent to enrolment under `required` (05-11) | b | 05-30: passkeys count as a second factor (one helper for engine, step-up, `mfa_context`); second-factor passkey ceremony bound to the step user; negative tests |
+| 3 | Telemetry docs for 05-27 (05-05) | a | OPERATIONS.md documents `otel_endpoint` base URL, `OTEL_EXPORTER_OTLP_HEADERS`, `traceparent` from `trusted_proxies`, metrics listener, `shutdown_drain`, `database_max_connections`; ARCHITECTURE §15 "As built in 0.4" corrects the `otel` feature note |
+| 4 | DCR empty `allowed_scopes`, informational URIs (05-09) | a | Resolved in `service::registration` (entry 22) |
+| 5 | Map `CimdError` to `CoreError` (05-09) | a | `service/client_resolver.rs` `cimd_error`, `fetch_error` |
+| 6 | Duplicate reserved-claim list (05-10) | a | `service/claims.rs` uses `policy::claims_mapping::is_reserved_claim`; no private list left |
+| 7 | Plaintext scan misses 0.4 secret columns (05-06) | c | 05-28 Task 1 extends both `tests/plaintext.rs` (IAT hashes, RAT hashes, sealed webhook secrets); in its must-haves |
+| 8 | config.rs stale redis note + dead_code allow (05-16) | b | 05-31 Task 2 |
+| 9 | Attributes nav only on the attributes page (05-19) | b | 05-33 Task 1: one `attributes_nav` rule used by every account handler |
+| 10 | `CimdError` mapping done (05-15) | a | Same as 5 |
+| 11 | dead_code allow on `cimd_fetch_permits` (05-15) | b | 05-31 Task 2 (state.rs) |
+| 12 | CIMD resources / per-host budget / `client_metadata_cache` docs (05-15) | a | MCP.md (one `dcr.allowed_resources` list for both kinds, installation-wide budget), OPERATIONS.md per-host budget line, ARCHITECTURE §6 "no `client_metadata_cache` table" |
+| 13 | `security_cimd.rs` names in the security map (05-15) | c | 05-28 map (must-haves) |
+| 14 | No CSS for CIMD consent initials (05-13) | b | 05-33 Task 1 (anvil.css) |
+| 15 | Limiter HMAC via rustls HKDF provider (05-16) | b | 05-31 Task 1: `anvil_jose::hmac_sha256`, one implementation (limiter, email codes, recovery codes, webhooks); RFC 4231 test kept |
+| 16 | CIMD resources from `dcr.allowed_resources` — confirm (05-15) | a | Accepted for 0.4 and documented in MCP.md ("One list covers both kinds of client") |
+| 17 | Webhook `data.tenant` is the id; code doc says slug (05-14) | b | User docs done (WEBHOOKS.md, UPGRADING.md); 05-31 Task 2 fixes the webhook_event.rs doc and parameter names |
+| 18 | `JOBS_SHUTDOWN_TIMEOUT` < `WEBHOOK_TIMEOUT`; `security_webhooks.rs` map (05-14) | b | 05-31 Task 3 (timeout = webhook timeout + 5 s, Compose grace 40 s, docs); the map half is (c) in 05-28 |
+| 19 | Console typecheck fails on audit actions (05-12) | a | `npm run typecheck` passes; audit page lists `role_*`, `admin_recovery_issued`, ... (05-24) |
+| 20 | Opaque tokens / introspection carry no role claims (05-12) | d | Phase 6. Adding claims to introspection is a feature, not a fix: live versus issuance-time role semantics, extra reads per introspection, and claim mapping for opaque tokens need a design, and Phase 6 reworks roles for organizations anyway. Nothing is leaked or wrongly granted today, and UPGRADING.md states the 0.4 limit |
+| 21 | Static clients of non-system tenants accept `admin:*` (05-12) | b | 05-32 Task 1 (decision: fix; small hardening, consistent with DCR/CIMD): refused on create and scope updates outside the system tenant, one `is_reserved_admin_token` rule |
+| 22 | DCR doc facts (05-21) | a | docs/MCP.md DCR section (informational URIs neither stored nor echoed, IAT bounds, soft `max_clients`, 404 when disabled, Auth class) |
+| 23 | `security_registration.rs` names in the map (05-21) | c | 05-28 map (must-haves; the 18 names) |
+| 24 | IAT service API for 05-23 (05-21) | a | `admin/registration.rs` list/issue/revoke routes (05-23) |
+| 25 | 64 KiB body limit on `/config/apply|plan` (05-20) | b | 05-32 Task 2 (decision: fix; small): 1 MiB `CONFIG_BODY_LIMIT` for the two routes only, 413 test, CONFIG-YAML.md |
+| 26 | `validate_document` should share DCR/CIMD validation (05-20) | a | Done by 05-23 (entry 30) |
+| 27 | CLI duplicates outbound-client setup (05-20) | b | 05-31 Task 2: `startup::outbound_client` used by `serve` and `tenant_config` |
+| 28 | `security_admin_config.rs` names in the map (05-20) | c | 05-28 map (must-haves) |
+| 29 | Issuer on the tenant view done (05-23) | a | Same as 1 |
+| 30 | DCR/CIMD settings validation done; JSON Schema lacks the bounds (05-23) | b | Validation verified (`service::tenant::registration_settings_issues`); 05-32 Task 2 encodes the bounds in `docs/schemas/tenant-config-v1.json` and fixes the stale CONFIG-YAML.md sentence |
+| 31 | `security_admin_v04.rs` names in the map (05-23) | c | 05-28 map (must-haves; the 5 names) |
+| 32 | OIDC path-insertion discovery not served (05-25) | b | 05-32 Task 2: `tenant::classify` serves `/.well-known/openid-configuration/t/{slug}`, test, MCP.md |
+| 33 | Resource URI case folding (05-25) | d | Phase 6. Exact matching is deliberate and mirrors redirect URI matching. MCP says SHOULD, and changing how a security-relevant identifier is compared needs its own design and tests. It is documented in MCP.md as a 0.4 limit; revisit if MCP clients send non-canonical case |
+| 34 | MCP.md DCR/CIMD facts, OPERATIONS budget line (05-25) | a | MCP.md covers them; OPERATIONS.md has the per-host budget line |
+| 35 | Stale code comments config.rs / webhook_event.rs (05-27) | b | 05-31 Task 2 |
+| 36 | Console tenants list uses `tenant.issuer` (05-24) | a | `admin-ui/src/routes/tenants/index.tsx` shows `tenant.issuer` / `tenant.discovery_url` |
+| 37 | Client create/rotation keep `client_secret` in the mutation cache (05-24) | b | 05-33 Task 2: `OneTimeSecret` pattern, `SecretOnce` removed |
