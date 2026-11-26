@@ -25,9 +25,10 @@ use crate::clock::Clock;
 use crate::error::CoreError;
 use crate::model::{
     AuditAction, AuditActor, AuditDetails, AuditOutcome, CAPTCHA_SECRET_PURPOSE, CaptchaProvider,
-    CaptchaSettings, DEFAULT_SIGNING_ALG, DEFAULT_TENANT_SLUG, KeyState, NewSigningKey, NewTenant,
-    Page, PageRequest, RequestContext, SIGNING_KEY_PURPOSE, SYSTEM_TENANT_SLUG, SigningKeyId,
-    Tenant, TenantId, TenantSettings, TenantUpdate, signing_key_aad,
+    CaptchaSettings, CimdPolicy, CimdSettings, DEFAULT_SIGNING_ALG, DEFAULT_TENANT_SLUG, DcrPolicy,
+    DcrSettings, KeyState, NewSigningKey, NewTenant, Page, PageRequest, RequestContext,
+    SIGNING_KEY_PURPOSE, SYSTEM_TENANT_SLUG, SigningKeyId, Tenant, TenantId, TenantSettings,
+    TenantUpdate, signing_key_aad,
 };
 use crate::policy::claims_mapping::validate_mapping;
 use crate::ports::{Storage, StorageError};
@@ -187,6 +188,186 @@ pub(crate) fn validate_host(host: &str) -> Result<String, CoreError> {
             "host",
             "must be a DNS host name with an optional port, without scheme or path",
         ))
+    }
+}
+
+/// Most entries in each DCR/CIMD list setting (hosts, scopes, resources).
+pub const MAX_REGISTRATION_LIST_LEN: usize = 100;
+/// Upper bound of `dcr.max_clients`.
+pub const MAX_DCR_MAX_CLIENTS: u32 = 1_000_000;
+/// Lower bound of the CIMD cache lifetimes (seconds): a document is never refetched more often.
+pub const MIN_CIMD_CACHE_SECS: u32 = 60;
+/// Upper bound of the CIMD cache lifetimes (seconds): seven days.
+pub const MAX_CIMD_CACHE_SECS: u32 = 7 * 86_400;
+
+/// An allow-list host (`dcr.allowed_redirect_hosts`, `cimd.allowed_hosts`): a DNS host name or an
+/// IP literal (IPv6 in brackets), without scheme, port, path or wildcard. Matching is ASCII
+/// case-insensitive on the URL host with the port ignored, so a port would never match.
+fn check_allow_list_host(host: &str) -> Result<(), String> {
+    let bad = || {
+        Err(format!(
+            "{host:?} must be a host name (or IP literal) without scheme, port, path or wildcard"
+        ))
+    };
+    if host.is_empty() || host.len() > 253 || host.trim() != host {
+        return bad();
+    }
+    if let Some(inner) = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
+        return match inner.parse::<std::net::Ipv6Addr>() {
+            Ok(_) => Ok(()),
+            Err(_) => bad(),
+        };
+    }
+    let ok = host.split('.').all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+            && label
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    });
+    if ok { Ok(()) } else { bad() }
+}
+
+/// Every issue of an allow-list host setting: syntax, size and case-insensitive duplicates.
+fn host_list_issues(field: &'static str, hosts: &[String], out: &mut Vec<(&'static str, String)>) {
+    if hosts.len() > MAX_REGISTRATION_LIST_LEN {
+        out.push((
+            field,
+            format!("at most {MAX_REGISTRATION_LIST_LEN} entries"),
+        ));
+        return;
+    }
+    let mut seen: Vec<String> = Vec::with_capacity(hosts.len());
+    for h in hosts {
+        if let Err(message) = check_allow_list_host(h) {
+            out.push((field, message));
+            continue;
+        }
+        let lower = h.to_ascii_lowercase();
+        if seen.contains(&lower) {
+            out.push((field, format!("duplicate host {h:?}")));
+        } else {
+            seen.push(lower);
+        }
+    }
+}
+
+/// Every issue of a tenant's dynamic client registration and Client ID Metadata Document
+/// settings, as `(field, message)` with fields like `dcr.policy` or `cimd.min_cache_secs`:
+///
+/// - the system tenant keeps both policies `disabled` (`system` = the tenant is `system`);
+/// - allow-list hosts are host names or IP literals (no scheme, port, path or wildcard), at most
+///   [`MAX_REGISTRATION_LIST_LEN`], no duplicates; CIMD `allow_listed` needs at least one host;
+/// - `dcr.allowed_scopes` are scope tokens, never admin API scopes (`admin:*`);
+/// - `dcr.allowed_resources` are RFC 8707 resource indicators (absolute URI, no fragment or
+///   query);
+/// - `dcr.max_clients` is at most [`MAX_DCR_MAX_CLIENTS`];
+/// - the CIMD cache bounds lie in [`MIN_CIMD_CACHE_SECS`]`..=`[`MAX_CIMD_CACHE_SECS`] with
+///   `min_cache_secs <= max_cache_secs`.
+///
+/// Shared by [`TenantService`] (create and update) and the declarative configuration's
+/// `validate_document`, so both apply the same rules.
+pub fn registration_settings_issues(
+    system: bool,
+    dcr: &DcrSettings,
+    cimd: &CimdSettings,
+) -> Vec<(&'static str, String)> {
+    let mut out = Vec::new();
+    if system && dcr.policy != DcrPolicy::Disabled {
+        out.push((
+            "dcr.policy",
+            "dynamic client registration is always disabled for the system tenant".to_owned(),
+        ));
+    }
+    if system && cimd.policy != CimdPolicy::Disabled {
+        out.push((
+            "cimd.policy",
+            "Client ID Metadata Documents are always disabled for the system tenant".to_owned(),
+        ));
+    }
+    host_list_issues(
+        "dcr.allowed_redirect_hosts",
+        &dcr.allowed_redirect_hosts,
+        &mut out,
+    );
+    if dcr.allowed_scopes.len() > MAX_REGISTRATION_LIST_LEN {
+        out.push((
+            "dcr.allowed_scopes",
+            format!("at most {MAX_REGISTRATION_LIST_LEN} entries"),
+        ));
+    } else {
+        for s in &dcr.allowed_scopes {
+            if s.is_empty() || s.contains(' ') || crate::model::Scope::parse(s).is_err() {
+                out.push(("dcr.allowed_scopes", format!("invalid scope token {s:?}")));
+            } else if s.starts_with("admin:") {
+                out.push((
+                    "dcr.allowed_scopes",
+                    format!("{s:?}: admin API scopes can never be registered dynamically"),
+                ));
+            }
+        }
+    }
+    if dcr.allowed_resources.len() > MAX_REGISTRATION_LIST_LEN {
+        out.push((
+            "dcr.allowed_resources",
+            format!("at most {MAX_REGISTRATION_LIST_LEN} entries"),
+        ));
+    } else if let Err(e) = crate::oauth::resource::parse_resources(&dcr.allowed_resources) {
+        let message = match e {
+            CoreError::InvalidTarget(m) => m,
+            other => other.to_string(),
+        };
+        out.push(("dcr.allowed_resources", message));
+    }
+    if dcr.max_clients > MAX_DCR_MAX_CLIENTS {
+        out.push((
+            "dcr.max_clients",
+            format!("must be at most {MAX_DCR_MAX_CLIENTS}"),
+        ));
+    }
+    host_list_issues("cimd.allowed_hosts", &cimd.allowed_hosts, &mut out);
+    if cimd.policy == CimdPolicy::AllowListed && cimd.allowed_hosts.is_empty() {
+        out.push((
+            "cimd.allowed_hosts",
+            "the allow_listed policy needs at least one host".to_owned(),
+        ));
+    }
+    let range = MIN_CIMD_CACHE_SECS..=MAX_CIMD_CACHE_SECS;
+    if !range.contains(&cimd.min_cache_secs) {
+        out.push((
+            "cimd.min_cache_secs",
+            format!("must be between {MIN_CIMD_CACHE_SECS} and {MAX_CIMD_CACHE_SECS} seconds"),
+        ));
+    }
+    if !range.contains(&cimd.max_cache_secs) {
+        out.push((
+            "cimd.max_cache_secs",
+            format!("must be between {MIN_CIMD_CACHE_SECS} and {MAX_CIMD_CACHE_SECS} seconds"),
+        ));
+    }
+    if cimd.min_cache_secs > cimd.max_cache_secs {
+        out.push((
+            "cimd.min_cache_secs",
+            "must not exceed max_cache_secs".to_owned(),
+        ));
+    }
+    out
+}
+
+/// [`registration_settings_issues`] as a result: the first issue as a validation error.
+pub fn validate_registration_settings(
+    system: bool,
+    dcr: &DcrSettings,
+    cimd: &CimdSettings,
+) -> Result<(), CoreError> {
+    match registration_settings_issues(system, dcr, cimd)
+        .into_iter()
+        .next()
+    {
+        None => Ok(()),
+        Some((field, message)) => Err(validation(field, &message)),
     }
 }
 
@@ -518,6 +699,11 @@ impl TenantService {
         validate_phase4_settings(None, &settings, input.installation_smtp)?;
         // A new tenant has no attribute definitions yet.
         validate_mapping(&settings.claims, &[])?;
+        validate_registration_settings(
+            input.slug == SYSTEM_TENANT_SLUG,
+            &settings.dcr,
+            &settings.cimd,
+        )?;
         let now = self.clock.now();
         let new = NewTenant {
             id: TenantId::new_v7(),
@@ -626,6 +812,14 @@ impl TenantService {
             if new.claims != tenant.settings.claims {
                 let attributes = self.storage.attributes().list(tenant.id).await?;
                 validate_mapping(&new.claims, &attributes)?;
+            }
+            // Likewise the DCR/CIMD settings, when either changes.
+            if new.dcr != tenant.settings.dcr || new.cimd != tenant.settings.cimd {
+                validate_registration_settings(
+                    tenant.slug == SYSTEM_TENANT_SLUG,
+                    &new.dcr,
+                    &new.cimd,
+                )?;
             }
         }
         let settings_changed = settings.is_some();
@@ -1076,5 +1270,164 @@ mod tests {
         assert_eq!(planned.mfa_policy, crate::model::MfaPolicy::Required);
         assert!(!planned.auto_link);
         assert_eq!(planned.upstream_registration, Some(false));
+    }
+
+    #[test]
+    fn registration_settings_are_validated() {
+        let fields = |system: bool, dcr: &DcrSettings, cimd: &CimdSettings| -> Vec<&'static str> {
+            registration_settings_issues(system, dcr, cimd)
+                .into_iter()
+                .map(|(f, _)| f)
+                .collect()
+        };
+        let dcr = DcrSettings::default();
+        let cimd = CimdSettings::default();
+        assert!(fields(false, &dcr, &cimd).is_empty());
+        assert!(fields(true, &dcr, &cimd).is_empty());
+
+        // The system tenant keeps both policies disabled; other tenants may enable them.
+        let open = DcrSettings {
+            policy: DcrPolicy::Open,
+            ..DcrSettings::default()
+        };
+        let listed = CimdSettings {
+            policy: CimdPolicy::AllowListed,
+            allowed_hosts: vec!["mcp.example".into()],
+            ..CimdSettings::default()
+        };
+        assert_eq!(fields(true, &open, &listed), ["dcr.policy", "cimd.policy"]);
+        assert!(fields(false, &open, &listed).is_empty());
+        assert!(validate_registration_settings(false, &open, &listed).is_ok());
+        assert!(matches!(
+            validate_registration_settings(true, &open, &cimd),
+            Err(CoreError::Validation {
+                field: "dcr.policy",
+                ..
+            })
+        ));
+
+        // Hosts: names and IP literals only, no duplicates.
+        for good in [
+            "app.example",
+            "App.Example",
+            "localhost",
+            "127.0.0.1",
+            "[::1]",
+        ] {
+            let d = DcrSettings {
+                allowed_redirect_hosts: vec![good.into()],
+                ..DcrSettings::default()
+            };
+            assert!(fields(false, &d, &cimd).is_empty(), "{good}");
+        }
+        for bad in [
+            "",
+            "https://app.example",
+            "app.example:8443",
+            "app.example/cb",
+            "*.app.example",
+            " app.example",
+            "-app.example",
+            "[nope]",
+            "app..example",
+        ] {
+            let d = DcrSettings {
+                allowed_redirect_hosts: vec![bad.into()],
+                ..DcrSettings::default()
+            };
+            assert_eq!(
+                fields(false, &d, &cimd),
+                ["dcr.allowed_redirect_hosts"],
+                "{bad:?}"
+            );
+            let c = CimdSettings {
+                allowed_hosts: vec![bad.into()],
+                ..CimdSettings::default()
+            };
+            assert_eq!(fields(false, &dcr, &c), ["cimd.allowed_hosts"], "{bad:?}");
+        }
+        let dup = DcrSettings {
+            allowed_redirect_hosts: vec!["a.example".into(), "A.example".into()],
+            ..DcrSettings::default()
+        };
+        assert_eq!(fields(false, &dup, &cimd), ["dcr.allowed_redirect_hosts"]);
+        let many = DcrSettings {
+            allowed_redirect_hosts: (0..=MAX_REGISTRATION_LIST_LEN)
+                .map(|i| format!("h{i}.example"))
+                .collect(),
+            ..DcrSettings::default()
+        };
+        assert_eq!(fields(false, &many, &cimd), ["dcr.allowed_redirect_hosts"]);
+        let empty_list = CimdSettings {
+            policy: CimdPolicy::AllowListed,
+            ..CimdSettings::default()
+        };
+        assert_eq!(fields(false, &dcr, &empty_list), ["cimd.allowed_hosts"]);
+
+        // Scopes, resources, client cap.
+        for (bad, field) in [
+            (
+                DcrSettings {
+                    allowed_scopes: vec!["openid profile".into()],
+                    ..DcrSettings::default()
+                },
+                "dcr.allowed_scopes",
+            ),
+            (
+                DcrSettings {
+                    allowed_scopes: vec!["admin:read".into()],
+                    ..DcrSettings::default()
+                },
+                "dcr.allowed_scopes",
+            ),
+            (
+                DcrSettings {
+                    allowed_resources: vec!["https://api.example/#frag".into()],
+                    ..DcrSettings::default()
+                },
+                "dcr.allowed_resources",
+            ),
+            (
+                DcrSettings {
+                    allowed_resources: vec!["not a uri".into()],
+                    ..DcrSettings::default()
+                },
+                "dcr.allowed_resources",
+            ),
+            (
+                DcrSettings {
+                    max_clients: MAX_DCR_MAX_CLIENTS + 1,
+                    ..DcrSettings::default()
+                },
+                "dcr.max_clients",
+            ),
+        ] {
+            assert_eq!(fields(false, &bad, &cimd), [field], "{bad:?}");
+        }
+        let fine = DcrSettings {
+            allowed_scopes: vec!["openid".into(), "mcp:tools".into()],
+            allowed_resources: vec!["https://mcp.example/".into()],
+            max_clients: 0,
+            ..DcrSettings::default()
+        };
+        assert!(fields(false, &fine, &cimd).is_empty());
+
+        // Cache bounds.
+        let swapped = CimdSettings {
+            min_cache_secs: 3600,
+            max_cache_secs: 600,
+            ..CimdSettings::default()
+        };
+        assert_eq!(fields(false, &dcr, &swapped), ["cimd.min_cache_secs"]);
+        let low = CimdSettings {
+            min_cache_secs: MIN_CIMD_CACHE_SECS - 1,
+            ..CimdSettings::default()
+        };
+        assert_eq!(fields(false, &dcr, &low), ["cimd.min_cache_secs"]);
+        let high = CimdSettings {
+            max_cache_secs: MAX_CIMD_CACHE_SECS + 1,
+            ..CimdSettings::default()
+        };
+        assert_eq!(fields(false, &dcr, &high), ["cimd.max_cache_secs"]);
     }
 }

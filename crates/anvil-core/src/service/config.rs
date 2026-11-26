@@ -93,8 +93,9 @@ use crate::service::role::{
     RoleInput, RoleService, check_escalation, guard_roles_losing_admin, validate_description,
 };
 use crate::service::tenant::{
-    NewTenantInput, TenantPatch, TenantService, normalize_signing_algs, validate_display_name,
-    validate_host, validate_locale_tag, validate_new_slug, validate_phase4_settings, validate_slug,
+    NewTenantInput, TenantPatch, TenantService, normalize_signing_algs,
+    registration_settings_issues, validate_display_name, validate_host, validate_locale_tag,
+    validate_new_slug, validate_phase4_settings, validate_slug,
 };
 use crate::service::webhook::{
     NewWebhookInput, WebhookService, WebhookUrlCheck, signing_keys, validate_webhook_events,
@@ -635,23 +636,10 @@ fn validate_tenant_section(issues: &mut Issues, doc: &TenantConfigDocument, syst
     }
     issues.check("tenant.settings", normalize_signing_algs(&s.signing_algs));
     issues.check("tenant.settings", validate_locale_tag(&s.default_locale));
-    if system && s.dcr.policy != DcrPolicy::Disabled {
-        issues.push(
-            "tenant.settings.dcr.policy",
-            "dynamic client registration is always disabled for the system tenant",
-        );
-    }
-    if system && s.cimd.policy != CimdPolicy::Disabled {
-        issues.push(
-            "tenant.settings.cimd.policy",
-            "Client ID Metadata Documents are always disabled for the system tenant",
-        );
-    }
-    if s.cimd.min_cache_secs > s.cimd.max_cache_secs {
-        issues.push(
-            "tenant.settings.cimd.min_cache_secs",
-            "must not exceed max_cache_secs",
-        );
+    // The same DCR/CIMD rules as TenantService (system tenant disabled, hosts, scopes,
+    // resources, cache bounds).
+    for (field, message) in registration_settings_issues(system, &s.dcr, &s.cimd) {
+        issues.push(join("tenant.settings", field), message);
     }
     if let Err(e) = validate_mapping(&s.claims, &doc.attributes) {
         issues.push("tenant.settings.claims", message_of(e));
@@ -2614,6 +2602,7 @@ mod tests {
         validate_document(&d, &validators()).unwrap();
         d.tenant.settings.dcr.policy = DcrPolicy::Open;
         d.tenant.settings.cimd.policy = CimdPolicy::AllowListed;
+        d.tenant.settings.cimd.allowed_hosts = vec!["mcp.example".into()];
         d.clients[0].client_id = CONSOLE_CLIENT_ID.into();
         let got = paths(validate_document(&d, &validators()));
         assert_eq!(
