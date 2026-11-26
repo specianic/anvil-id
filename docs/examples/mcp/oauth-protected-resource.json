@@ -1,0 +1,7 @@
+{
+  "resource": "https://mcp.example.com/mcp",
+  "resource_name": "Example MCP server",
+  "authorization_servers": ["https://id.example.com/t/agents"],
+  "bearer_methods_supported": ["header"],
+  "scopes_supported": ["openid", "profile"]
+}

@@ -7,15 +7,24 @@
 //! `aud = [client_id]`; introspection returns `aud`; UserInfo refuses tokens whose `aud` holds
 //! neither the client id nor `{issuer}/userinfo`; the consent screen lists the resources.
 //!
+//! MCP prerequisites (AGT-01/AGT-02): the RFC 8414 path-insertion document of a path tenant
+//! carries the fields an MCP client relies on (issuer, endpoints, S256, the CIMD flag and the
+//! registration endpoint per tenant policy) exactly as the path-appended OIDC document does; a
+//! Client ID Metadata Document client asking for an MCP server gets `aud` = that server and
+//! cannot obtain or use the token for another resource.
+//!
 //! Clients are created through storage with `allowed_resources` (the admin API for that field is
-//! another plan's); every client skips consent except in the consent-screen test.
+//! another plan's); every client skips consent except in the consent-screen test. CIMD clients
+//! take their resources from the tenant's `dcr.allowed_resources`.
 
 mod authz;
+mod cimd_support;
 mod support;
 mod token_support;
 
 use anvil_core::model::{
-    ClientAuthMethod, ClientUpdate, ConsentMode, GrantType, SecretHash, TenantId, TokenFormat,
+    CimdPolicy, ClientAuthMethod, ClientUpdate, ConsentId, ConsentMode, DcrPolicy, GrantType,
+    NewConsent, SecretHash, TenantId, TenantUpdate, TokenFormat,
 };
 use anvil_jose::encoding::secret_hash;
 use serde_json::{Value, json as j};
@@ -567,4 +576,174 @@ async fn the_consent_screen_lists_the_requested_resources() {
     let path = format!("/ui/consent?request={}", &loc[prefix.len()..]);
     let html = authz::get(&f.app, &path, Some(&f.session)).await.html();
     assert!(!html.contains("consent-resources"), "{html}");
+}
+
+// ---------------------------------------------------------------------------------------------
+// MCP prerequisites: RFC 8414 path insertion and CIMD clients bound to one resource
+// ---------------------------------------------------------------------------------------------
+
+/// Metadata fields an MCP client reads (MCP authorization, revision 2026-07-28: endpoints, PKCE
+/// S256 support, the CIMD flag, the registration endpoint, RFC 9207 `iss`).
+const MCP_FIELDS: [&str; 9] = [
+    "issuer",
+    "authorization_endpoint",
+    "token_endpoint",
+    "jwks_uri",
+    "code_challenge_methods_supported",
+    "client_id_metadata_document_supported",
+    "registration_endpoint",
+    "authorization_response_iss_parameter_supported",
+    "scopes_supported",
+];
+
+async fn discovery(app: &TestApp, path: &str) -> Value {
+    let resp = app.get(path).await;
+    assert_eq!(resp.status, 200, "{path}: {}", resp.text());
+    json(&resp)
+}
+
+#[tokio::test]
+async fn rfc8414_path_insertion_serves_the_mcp_fields_of_a_path_tenant() {
+    let app = TestApp::new().await;
+    let tenant = authz::path_tenant(&app, "agents").await;
+    let inserted = "/.well-known/oauth-authorization-server/t/agents";
+    let appended = "/t/agents/.well-known/openid-configuration";
+    let iss = app.issuer(Some("agents"));
+
+    // Default policies (disabled): no CIMD flag and no registration endpoint on either form.
+    for path in [inserted, appended] {
+        let doc = discovery(&app, path).await;
+        assert!(
+            doc.get("client_id_metadata_document_supported").is_none(),
+            "{path}"
+        );
+        assert!(doc.get("registration_endpoint").is_none(), "{path}");
+    }
+
+    let mut settings = tenant.settings.clone();
+    settings.cimd.policy = CimdPolicy::Open;
+    settings.dcr.policy = DcrPolicy::Open;
+    app.storage()
+        .tenants()
+        .update(
+            tenant.id,
+            &TenantUpdate {
+                settings: Some(settings),
+                ..TenantUpdate::default()
+            },
+        )
+        .await
+        .expect("tenant update")
+        .expect("tenant exists");
+
+    let a = discovery(&app, inserted).await;
+    let b = discovery(&app, appended).await;
+    for f in MCP_FIELDS {
+        assert!(!a[f].is_null(), "{f} missing: {a}");
+        assert_eq!(a[f], b[f], "{f}");
+    }
+    // MCP clients compare `issuer` with the issuer they built the well-known URL from.
+    assert_eq!(a["issuer"], j!(iss));
+    assert_eq!(a["authorization_endpoint"], j!(format!("{iss}/authorize")));
+    assert_eq!(a["token_endpoint"], j!(format!("{iss}/token")));
+    assert_eq!(a["registration_endpoint"], j!(format!("{iss}/register")));
+    assert_eq!(a["client_id_metadata_document_supported"], true);
+    assert_eq!(a["authorization_response_iss_parameter_supported"], true);
+    assert!(
+        a["code_challenge_methods_supported"]
+            .as_array()
+            .is_some_and(|m| m.iter().any(|v| v == "S256")),
+        "{a}"
+    );
+
+    // The root RFC 8414 document is the default tenant's, unaffected by the path tenant.
+    let root = discovery(&app, "/.well-known/oauth-authorization-server").await;
+    assert_ne!(root["issuer"], j!(iss));
+    assert!(root.get("client_id_metadata_document_supported").is_none());
+    assert!(root.get("registration_endpoint").is_none());
+}
+
+#[tokio::test]
+async fn a_cimd_client_gets_a_token_for_the_mcp_server_and_no_other_resource() {
+    use cimd_support::{DOC_PATH, DocServer};
+
+    // Development mode: the metadata document is served over http on loopback.
+    let app = TestApp::dev().await;
+    let tenant = cimd_support::set_policy(&app, CimdPolicy::Open, &[], &[MCP]).await;
+    let docs = DocServer::start().await;
+    let client_id = docs.url(DOC_PATH);
+    docs.serve(DOC_PATH, &cimd_support::doc(&client_id), None)
+        .await;
+    let user = authz::user(&app, &tenant, "ada@example.test").await;
+    let session = authz::session(&app, &tenant, user).await;
+    let iss = app.issuer(None);
+    let authorize =
+        |resource: &str| cimd_support::authorize_path(&client_id, &[("resource", resource)]);
+
+    // A resource outside `dcr.allowed_resources`: invalid_target to the document's redirect URI.
+    let resp = authz::get(&app, &authorize(API), Some(&session)).await;
+    authz::assert_error_redirect(&resp, authz::RP, "invalid_target", &iss);
+
+    // The user consented to the MCP server (the consent screen is covered in consent.rs).
+    app.storage()
+        .grants()
+        .upsert_consent(
+            tenant.id,
+            &NewConsent {
+                id: ConsentId::new_v7(),
+                user_id: user,
+                client_id: client_id.clone(),
+                scopes: vec!["openid".into(), "profile".into()],
+                resources: vec![MCP.into()],
+                created_at: app.clock_now(),
+            },
+            app.clock_now(),
+        )
+        .await
+        .expect("consent");
+    let code = cimd_code(&app, &authorize(MCP), &session).await;
+
+    // Token request for another resource: invalid_target, and the code is gone.
+    let exchange = |code: String, resource: &'static str| {
+        let client_id = client_id.clone();
+        let app = &app;
+        async move {
+            app.post_form(
+                "/token",
+                &[
+                    ("grant_type", "authorization_code"),
+                    ("code", &code),
+                    ("redirect_uri", authz::RP),
+                    ("code_verifier", VERIFIER),
+                    ("client_id", &client_id),
+                    ("resource", resource),
+                ],
+            )
+            .await
+        }
+    };
+    assert_oauth_error(&exchange(code.clone(), API).await, 400, "invalid_target");
+    assert_oauth_error(&exchange(code, MCP).await, 400, "invalid_grant");
+
+    // The MCP-shaped request (resource at /authorize and /token): aud is exactly the MCP server.
+    let code = cimd_code(&app, &authorize(MCP), &session).await;
+    let resp = exchange(code, MCP).await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let body = json(&resp);
+    let claims = jwt_claims(&field(&body, "access_token"));
+    assert_eq!(claims["aud"], j!(MCP));
+    assert_eq!(claims["iss"], j!(iss));
+    assert_eq!(claims["client_id"], j!(client_id));
+    let id = jwt_claims(&field(&body, "id_token"));
+    assert_eq!(id["aud"], j!([client_id]), "ID token aud stays the client");
+
+    // Another resource server refuses it: UserInfo is not in aud.
+    assert_invalid_token(&userinfo_get(&app, &field(&body, "access_token")).await);
+}
+
+/// /authorize for a consented CIMD client → the code.
+async fn cimd_code(app: &TestApp, path: &str, session: &str) -> String {
+    let resp = authz::get(app, path, Some(session)).await;
+    assert_eq!(resp.status, 303, "{}", resp.text());
+    authz::param(&resp, "code").unwrap_or_else(|| panic!("{}", location(&resp)))
 }
