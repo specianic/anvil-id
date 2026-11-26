@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
-current_phase: 04
-current_phase_name: release 0 3 real world logins
-current_plan: 37
+current_phase: 05
+current_phase_name: release 0 4 operate it
+current_plan: 33
 status: executing
-stopped_at: Completed 05-30-PLAN.md
-last_updated: "2026-11-26T07:03:47.577Z"
+stopped_at: "Completed 05-28-PLAN.md (Phase 5 gate green on f80dcb4); pending: 04-33 manual provider checklist + v0.3.0 tag (owner), then 05-29 v0.4.0"
+last_updated: "2026-11-26T08:24:29.701Z"
 last_activity: 2026-11-26
 progress:
   total_phases: 7
   completed_phases: 3
-  total_plans: 135
-  completed_plans: 132
-  percent: 98
+  total_plans: 143
+  completed_plans: 133
+  percent: 93
 ---
 
 # Project State
@@ -24,22 +24,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-25)
 
 **Core value:** A standards-correct, secure OIDC provider that anyone can run in two minutes.
-**Current focus:** Phase 4: Release 0.3 "Real-world logins" (M3) — gate passed (04-32); next the manual provider checklist and the v0.3.0 tag (04-33)
+**Current focus:** Phase 5: Release 0.4 "Operate it" (M4) — gate passed (05-28, every workflow green on f80dcb4); next the v0.4.0 release (05-29). Still pending from Phase 4: the manual provider checklist and the v0.3.0 tag (04-33), which must come first
 
 ## Current Position
 
-**Current Phase:** 04
-**Current Phase Name:** release 0 3 real world logins
+**Current Phase:** 05
+**Current Phase Name:** release 0 4 operate it
 **Total Phases:** 7
-**Current Plan:** 37
-**Total Plans in Phase:** 37
+**Current Plan:** 33
+**Total Plans in Phase:** 33
 **Status:** Ready to execute
 **Last Activity:** 2026-11-26
-**Last Activity Description:** 04-32 phase gate complete (430-pair security map, anvilid 0.3.0, 0.3 migrations pinned, every workflow green on 9f88363)
-**Progress:** [██████████] 98%
+**Last Activity Description:** 05-28 phase gate complete (632-pair security map, 0.4 plaintext scan, anvilid 0.4.0, 0.4 migrations pinned, every workflow incl. load and deploy green on f80dcb4)
+**Progress:** [█████████░] 93%
 
-Phase 4 has 37 plans (04-01 through 04-37). Every plan except 04-33 (manual real-provider checklist, then tag
-v0.3.0) has a SUMMARY. Current Plan counts plans in execution order: 04-33 is the 37th and last.
+Phase 5 has 33 plans (05-01 through 05-33). Every plan except 05-29 (release v0.4.0 after owner sign-off) has a
+SUMMARY. Current Plan counts plans in execution order: 05-29 is the 33rd and last. Phase 4 still has one open plan, 04-33 (manual real-provider checklist, then tag v0.3.0); it must be
+done before 05-29 tags v0.4.0.
 
 ## Performance Metrics
 
@@ -188,6 +189,7 @@ v0.3.0) has a SUMMARY. Current Plan counts plans in execution order: 04-33 is th
 | Phase 05 P31 | 25min | 3 tasks | 16 files |
 | Phase 05 P33 | 10min | 2 tasks | 13 files |
 | Phase 05 P30 | 80min | 2 tasks | 13 files |
+| Phase 05 P28 | 75min | 2 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -437,6 +439,10 @@ Recent decisions affecting current work:
 - [Phase 05]: 05-31: anvil_jose::hmac_sha256(key, parts) is the one HMAC-SHA-256 (limiter, email/recovery codes, webhook signatures); JOBS_SHUTDOWN_TIMEOUT derived as WEBHOOK_TIMEOUT + 5 s
 - [Phase 05]: 05-33: account_attributes::attributes_nav is the one rule for the Attributes nav entry; handlers compute it before one-time changes
 - [Phase 05]: 05-30: a passkey counts as a second factor everywhere (SecondFactorMethods::any, one helper service::authorize::second_factor_methods); under optional a password user with a passkey is asked for it
+- [Phase 05]: 05-28: security map 632 pairs; anvil-cache limiter contract.rs maps to the limiter_contract binary, generic contract fns accepted
+- [Phase 05]: 05-28: Redis breaker test proves the skip by exact retry_after/error counts, not a wall-clock bound
+- [Phase 05]: 05-28: HA shared-limit burst opens connections before the barrier (window excludes TCP setup); 1 s guard and bound unchanged
+- [Phase 05]: 05-28: all 14 Phase 5 requirements ticked; ORG-05 for its tenant-level 0.4 scope (org roles in Phase 6)
 
 ### Pending Todos
 
@@ -449,6 +455,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-26T07:03:47.574Z
-Stopped at: Completed 05-30-PLAN.md
+Last session: 2026-11-26T08:24:29.699Z
+Stopped at: Completed 05-28-PLAN.md (Phase 5 gate green on f80dcb4); pending: 04-33 manual provider checklist + v0.3.0 tag (owner), then 05-29 v0.4.0
 Resume file: None
