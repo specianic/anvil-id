@@ -200,8 +200,8 @@ from handler code.
 | `client` | id, tenant_id, client_id, name, type (confidential/public), application_type (web/native), require_pkce, auth_method, secret_hash, jwks / jwks_uri, redirect_uris, post_logout_redirect_uris, grant_types, scopes, token_format (jwt/opaque), consent_mode (required/skip_first_party), backchannel_logout_uri, backchannel_logout_session_required, allowed_resources, mfa_policy (nullable), created_at | `client_id` is unique per tenant; URL-form client IDs (CIMD) are cached in `client_metadata_cache` |
 | `signing_key` | id, tenant_id, kid, alg, state (next/active/retired), private_key (encrypted with KEK), public_jwk, activated_at, retired_at, expires_at | |
 | `browser_session` | id, tenant_id, user_id, auth_time, acr, amr (JSON), ip, user_agent, created_at, last_seen_at, expires_at, idle_expires_at | Session cookie holds an opaque random ID; only its hash is stored |
-| `rp_session` | tenant_id, session_id, client_id, created_at | Which clients a browser session signed in to (for back-channel logout). Primary key (tenant_id, session_id, client_id); cascades with the session. Recorded in the `GrantRepo::create_code` transaction, only for a stored session of the same tenant. There is no `sid` column: the OIDC `sid` is the browser session id (§8.3) |
-| `logout_delivery` (0.3) | id, tenant_id, client_id, uri, sub, sid, attempts, next_attempt_at, give_up_at, created_at, delivered_at, last_error | Back-channel logout queue. No foreign key to session, user or client, so a delivery survives the deletion that caused it. Rows are enqueued by the revoking storage intents (§7.1) |
+| `rp_session` | tenant_id, session_id, client_id, issuer, created_at | Which clients a browser session signed in to (for back-channel logout). Primary key (tenant_id, session_id, client_id); cascades with the session. Recorded in the `GrantRepo::create_code` transaction, only for a stored session of the same tenant. `issuer` is the issuer the client got its code (and ID tokens) from; a later code for the same row overwrites it (latest wins). It is null only for rows written before the 0.3 issuer migration. There is no `sid` column: the OIDC `sid` is the browser session id (§8.3) |
+| `logout_delivery` (0.3) | id, tenant_id, client_id, uri, sub, sid, issuer, attempts, next_attempt_at, give_up_at, created_at, delivered_at, last_error | Back-channel logout queue. No foreign key to session, user or client, so a delivery survives the deletion that caused it. Rows are enqueued by the revoking storage intents (§7.1); `issuer` is copied from the RP session |
 | `flow` | id, tenant_id, kind (login/registration/recovery/verification/settings/consent/logout), state (JSON), csrf_hash, expires_at, browser_session_id? | Short-lived flow state machines (§9). `logout` (0.3) is the sign-out confirmation |
 | `authorization_request` | id, tenant_id, client_id, params (JSON: redirect_uri, scope, state, nonce, code_challenge, resource, prompt, max_age, acr_values…), created_at, expires_at | Created at `/authorize`, consumed when a code is issued. Also used for PAR |
 | `authorization_code` | code_hash (PK), tenant_id, client_id, user_id, browser_session_id, redirect_uri, scope, nonce, code_challenge, resource, auth_time, acr, amr, expires_at, consumed_at, token_family_id | The token family is created in the same transaction as the code, so a code replay that races the exchange still finds and revokes it |
@@ -226,7 +226,8 @@ from handler code.
 RS256) and `can_introspect`; and to `browser_session`: `ip`, `user_agent` (shown on the sessions
 page). `flow.kind` gains `settings` and `consent`.
 
-0.3 (SQLite migration `0005_release_0_3`, Postgres `0004_release_0_3`) adds `connection`,
+0.3 (SQLite migrations `0005_release_0_3` and `0006_release_0_3_logout_issuer`, Postgres
+`0004_release_0_3` and `0005_release_0_3_logout_issuer`) adds `connection`,
 `identity_link`, `rp_session`, `logout_delivery`, `branding` and `branding_logo` (Postgres also
 `branding_draft`); the client columns `post_logout_redirect_uris`, `backchannel_logout_uri`,
 `backchannel_logout_session_required`, `allowed_resources` and `mfa_policy`; and `resource` on
@@ -235,7 +236,8 @@ page). `flow.kind` gains `settings` and `consent`.
 `upstream_registration` (unset = follow the registration mode) and `default_locale` (default `en`);
 settings JSON written by 0.2 still parses. The `flow`, `self_service_token` and `email_template`
 kind checks are widened: Postgres swaps the CHECK constraints, SQLite rebuilds the three tables in
-the migration transaction (copy every row, no table references them).
+the migration transaction (copy every row, no table references them). The second migration only
+adds the nullable `issuer` column to `rp_session` and `logout_delivery`.
 
 **Tenant-scoped foreign keys.** Rows that point at a user reference `(tenant_id, user_id)` →
 `user (tenant_id, id)`, so the database itself rejects a row whose user belongs to another tenant.
@@ -306,7 +308,8 @@ active key and activate the next one; returns `false` for stale ids), `FlowRepo:
 (compare-and-swap of a flow's state, used to consume a pending passkey challenge or TOTP secret
 exactly once), `JobRepo::try_lease` and `UserRepo::complete_recovery` with an optional
 `RecoveryNotice`. 0.3 adds `ConnectionRepo::create_user_with_link` (just-in-time user + identity
-link), `SessionRepo::upgrade_auth` (step-up of an active session in place),
+link, plus the verification token and email when the address is not verified),
+`ConnectionRepo::delete_link` (unlink with the last-sign-in-method guard, §9.2), `SessionRepo::upgrade_auth` (step-up of an active session in place),
 `UserRepo::complete_email_change` (consume the token, switch the address, enqueue the notice to the
 old address; a taken address returns `Conflict` and leaves the token unconsumed),
 `LogoutRepo::claim_due_deliveries` (lease a batch of due deliveries; Postgres uses
@@ -316,7 +319,8 @@ old address; a taken address returns `Conflict` and leaves the token unconsumed)
 `UserRepo::complete_recovery` and `UserRepo::delete` insert, in the same transaction, one
 `logout_delivery` per (session revoked by that call × `rp_session` of that session whose client has
 a `backchannel_logout_uri`): `sub` = user id, `sid` = session id, `next_attempt_at` = now,
-`give_up_at` = now + 24 h. The session ids come from the revoking `UPDATE … RETURNING`, so a call
+`give_up_at` = now + 24 h, `issuer` = the RP session's issuer. The session ids come from the
+revoking `UPDATE … RETURNING`, so a call
 that revokes nothing enqueues nothing. No service fans out deliveries itself, so no revocation path
 can forget them.
 
@@ -380,8 +384,9 @@ contract:
 
 Every expiring row has an `expires_at` column, and every read checks it, so correctness never depends
 on cleanup. A background job deletes expired rows in batches (codes, flows, tokens, sessions,
-replay guards; since 0.3 also logout deliveries past `give_up_at` and branding drafts past their
-preview expiry). Replaced branding logos are not purged yet (open item for 0.3).
+replay guards; since 0.3 also logout deliveries past `give_up_at`, branding drafts past their
+preview expiry, branding logos that no published or draft branding references any more, and, on
+both backends, expired token families). Deleting a client also deletes its client-scoped branding.
 
 ## 8. Keys and token formats
 
@@ -442,9 +447,11 @@ preview expiry). Replaced branding logos are not purged yet (open item for 0.3).
   presented at code exchange burns the code and revokes its family; malformed values are refused
   before anything is consumed. Access-token `aud` is the selected resource (a JSON string), several
   resources (an array in request order), or the client id when none was requested. ID-token `aud`
-  stays the client id. Introspection returns `aud` in the same shape. Remembered consent is still
-  scope-only, so a client with a stored grant is not asked again for a different allowed resource
-  (open item, Phase 5).
+  stays the client id. Introspection returns `aud` in the same shape. Known limitation of 0.3:
+  remembered consent covers scopes only, so a client with a stored grant is not asked again when it
+  requests a different allowed resource. Covering resources changes the consent model (the
+  `consent_grant` schema, the consent screen and revocation) and is planned with the Phase 5
+  permissions work.
 - **UserInfo audience (0.3).** UserInfo accepts an access token only when its `aud` contains the
   requesting client's id or `{issuer}/userinfo`. A token bound only to other resources is
   `invalid_token` (401), checked before scopes. Clients that request no resource are unaffected.
@@ -507,12 +514,16 @@ preview expiry). Replaced branding logos are not purged yet (open item for 0.3).
   outbound policy refuses = give up. A retry that would land after `created_at + 24 h` gives up.
   Give-ups are audited as `backchannel_logout_failed` with a reason
   (`status|blocked|network|timeout|expired|client_removed|internal`), never the token or the URI.
-- The worker wakes on every revoking logout and otherwise polls every 10 s. On Postgres,
-  `FOR UPDATE SKIP LOCKED` keeps several nodes from claiming the same row.
-- The logout token's `iss` is the tenant's canonical issuer (custom host if set, otherwise
-  `public_url` + base path), because the worker has no request host. For a tenant with a custom
-  host whose user signed in through `/t/{slug}`, this differs from the ID token's `iss`; this is an
-  open item before 0.3.
+- Every web path that revokes sessions wakes the worker through one helper
+  (`AppState::wake_logout_worker`): RP-initiated logout and its confirmation, every sign-in (so a
+  session switch), signing out sessions on the account page, a password change that signs out
+  other sessions, recovery completion, and the admin session and user deletions. Otherwise the
+  worker polls every 10 s. On Postgres, `FOR UPDATE SKIP LOCKED` keeps several nodes from claiming
+  the same row.
+- The logout token's `iss` is the issuer the RP received its ID tokens from: the `issuer` recorded
+  on the RP session when the code was issued (path or custom host) and copied to the delivery. The
+  tenant's canonical issuer (custom host if set, otherwise `public_url` + base path) is used only
+  for deliveries from rows written before that column existed.
 
 ## 9. Flow engine (login, registration, recovery, consent)
 
@@ -576,8 +587,10 @@ Login flow:
   same rule in Phase 6. The decision is a pure function in core (`policy::mfa`).
 - `off` never asks for a second factor. `optional` asks users who have one (TOTP; a passkey sign-in
   already counts as MFA). `required` asks, and a user without a second factor enrols an
-  authenticator app during sign-in and gets recovery codes once. In-flow passkey registration is
-  not offered as an enrolment choice in 0.3.
+  authenticator app during sign-in and gets recovery codes once. Known limitation of 0.3: passkey
+  registration is not offered as an in-flow enrolment choice (TOTP only; the per-tenant and
+  per-client MFA policy does not require it, and passkeys can be added from the account page). It
+  is planned for Phase 5.
 - An existing single-factor session is re-checked only when the request asks for an `acr` or the
   effective policy is `required`. `acr_values=urn:anvilid:acr:mfa` (or an essential `acr` claim)
   steps the session up in place: same session id and cookie, `amr` gains `otp` and `mfa`,
@@ -631,21 +644,44 @@ failures never cached).
   | Not linked, no match, registration not allowed | Refuse |
 
   An unverified or untrusted email never links automatically and never reveals whether an account
-  exists. The account page links the signed-in user (mode `account`, §10.2); an identity linked to
-  another user is refused. Unlinking is refused when it would leave the user without a password,
-  passkey, other link or tenant email sign-in.
+  exists. The account page links the signed-in user (mode `account`, §10.2) and then returns to
+  `/ui/account/linked` (303); an identity linked to another user is refused. Unlinking is refused
+  when it would leave the user without a sign-in method: a password, a passkey, another link, or
+  tenant email sign-in (`email_otp` or `magic_link`) with a verified address. The check and the
+  delete are one atomic storage intent (`ConnectionRepo::delete_link`, the user row locked), so
+  two concurrent unlinks cannot both pass.
 - Apple sends the user's name only on the first authorization, as unsigned form data: AnvilID takes
   only the name from it (trimmed, at most 200 characters per part); the email always comes from the
   signed ID token.
-- Upstream sign-in does not yet apply `require_verified_email` to accounts created from an
-  untrusted provider (open item before 0.3).
+- **Verified email.** A just-in-time account gets `email_verified` only from a trusted, verified
+  upstream email. Otherwise it is created unverified and its verification email is stored in the
+  same transaction as the user and link, as in local registration. Under the tenant's
+  `require_verified_email`, an upstream sign-in that resolves to an account with an unverified
+  address (just created, or through an existing link) creates no session: it is audited
+  `upstream_login_failed` with reason `email_not_verified` and the sign-in page shows
+  `registration.check_email` (just created) or `login.email_not_verified`. A trusted provider
+  asserting a verified email signs in at once. Linking from the account page is not affected.
+- **Binding cookie.** The callback clears the binding cookie only once its `state` and the binding
+  cookie matched the pending sign-in (on success and on any later failure). A forged or mismatched
+  callback (missing or foreign `state`, no or another binding cookie) leaves it in place, so it
+  cannot cancel the browser's pending sign-in.
+- **Generic OIDC and UserInfo.** With `fetch_userinfo` on, UserInfo supplies the email, its
+  verification and the names. With it off, UserInfo is still called when the ID token has no
+  `email` (OIDC Core §5.4 lets a provider return it only there), and only `email` and
+  `email_verified` are taken. In both cases the UserInfo `sub` must equal the ID token's, otherwise
+  the sign-in fails (`userinfo_subject`). A failed fallback call leaves the identity without an
+  email, so an existing link still signs in.
 
 ### 9.3 Email code and magic link (0.3)
 
 - Off by default; the tenant settings `email_otp` and `magic_link` can be turned on only when SMTP
-  is configured. In 0.3 either setting enables the method, and the `login_code` email always carries
-  both the 6-digit code and the link (open item: decide whether the two settings should mean
-  different things).
+  is configured. Either setting offers email sign-in on the sign-in page, and each controls its own
+  method: `email_otp` is the 6-digit code, `magic_link` is the link. The `login_code` email, the
+  "check your email" page and the accepted inputs follow whichever is on (code only, link only, or
+  both); `POST /ui/login/email-code/verify` is 404 without `email_otp` and `/ui/login/email-link`
+  404 without `magic_link`. In the `login_code` template `code` and `link` are optional (at least
+  one is present), and template overrides that use them without `{% if … is defined %}` are
+  refused on save.
 - The sign-in page offers "Email me a sign-in code". Every address gets the same answer; only an
   active account with a **verified** address gets the email (re-checked when the code or link is
   used). The code and link are valid 10 minutes, bound to the flow, consumed together once by
@@ -876,7 +912,7 @@ listener).
 | PKCE | Required by default for every client (`client.require_pkce = true`); only `S256` is accepted, `plain` is rejected. Only confidential clients may set `require_pkce = false` (public clients always need PKCE); such clients may omit `nonce` as OIDC Core allows for the code flow, and the code stays bound to the client's authentication at the token endpoint. If a client sends `code_challenge` at authorization, `code_verifier` is mandatory at the token endpoint (downgrade defense) |
 | Client authentication | One `ClientAuthenticator`. Constant-time comparison (`subtle`) of hashed secrets. `private_key_jwt`: `aud` must equal the issuer, `exp` ≤ 5 min, `jti` recorded in `replay_guard` |
 | CSRF | Synchronizer token per flow plus `Sec-Fetch-Site`/`Origin` checks on every state-changing browser request. Fetch-Metadata rules for unsafe methods: (1) if `Sec-Fetch-Site` is present, only `same-origin` or `none` pass; (2) otherwise, if `Origin` is present, it must equal the public origin or the tenant's host origin; (3) if neither header is present the request passes this layer (non-browser clients, older browsers) and the synchronizer token alone decides. The layer fails closed if the allowed origins are unknown. Exempt: `/token` and `/api/admin/*` (client-authenticated, no cookies) and `POST /authorize` (cross-site by design) |
-| Cookies | `__Host-` prefix, `Secure`, `HttpOnly`, `SameSite=Lax` (session) or `Strict` (flow). Dev mode on `http://localhost` drops the `__Host-`/`Secure` requirements with a warning |
+| Cookies | `__Host-` prefix, `Secure`, `HttpOnly`, `SameSite=Lax` (session) or `Strict` (flow). Dev mode on `http://localhost` drops the `__Host-`/`Secure` requirements with a warning. Names carry a per-tenant suffix (path-based tenants share a host, and `__Host-` cookies cannot be scoped by path): since 0.3 the first 16 hex characters of SHA-256 over the tenant UUID's 16 bytes, stable for the tenant's life (earlier releases used the UUIDv7's first 12 hex characters, its creation millisecond, so tenants created in the same millisecond shared cookie names) |
 | Rate limiting | One keyed limiter (`anvil-cache`, GCRA) with route classes and default quotas: `auth` (POSTs under `/ui/login`, `/ui/registration`, `/ui/recovery` and `/setup`: 10/min per IP, burst 5), `token` (`/token`, `/introspect`, `/revoke`: 50/s per IP, plus 100/s per claimed client id), `admin` (20/s per IP), `default` (50/s per IP). `/health/*`, `/healthz` and `/assets/*` are never limited. All quotas are configurable (§13); `rate_limit_enabled = false` switches the limiter off with a warning. A request without a peer address gets a generic 500, never an invented address. 429 answers carry `Retry-After` (whole seconds, at least 1) and the shape of their surface: OAuth JSON `invalid_request`/`too many requests` with `no-store`, admin problem JSON `urn:anvilid:problem:too_many_requests`, or the themed error page `too_many_requests` |
 | Brute-force on secrets | Argon2 verification runs on a bounded pool; login attempts against unknown users perform a dummy hash (constant-time behavior). **Two tiers (0.2):** a strict key (tenant + identifier + IP) allows 5 free failures, then locks progressively (1 s doubling, capped at 15 min; success clears it); a loose key (tenant + identifier, any IP) counts failures per hour and never locks: over the threshold it requires a CAPTCHA when the tenant has one, otherwise it delays. Nobody can lock an account out from arbitrary IPs. Known and unknown identifiers behave identically, the identifier is never logged or audited (`rate_limit_lockout` records key kind and seconds only). The second factor is throttled per user, passkey failures per IP |
 | CAPTCHA (0.2) | Optional per tenant (Turnstile or hCaptcha), shown only when the loose tier asks for it. Verification fails closed (HTTP error, timeout, malformed or oversized body, redirects; https endpoints only). The widget is a third-party script by the operator's choice: the page with the widget gets a CSP that allows the provider, every other page keeps `script-src 'self'`. A CAPTCHA can conflict with WCAG 2.2 SC 3.3.8 (accessible authentication); operators enabling it accept that trade-off |
@@ -977,7 +1013,7 @@ its schedule with a small random delay.
 | Expired-row cleanup | 5 min (0.1) |
 | Signing-key rotation check | 1 h (0.2) |
 | Email outbox delivery | continuous (polling with backoff) |
-| Back-channel logout delivery | 0.3: woken by every revoking logout, otherwise polls every 10 s; runs on every node and claims rows with a 2-minute row lease instead of a `job_lease` (§8.3) |
+| Back-channel logout delivery | 0.3: woken by every path that revokes sessions (§8.3), otherwise polls every 10 s; runs on every node and claims rows with a 2-minute row lease instead of a `job_lease` (§8.3) |
 | Webhook delivery (0.4) | event-driven, with retry |
 | Audit log retention | daily (0.2; not scheduled when `audit_retention_days = 0`) |
 

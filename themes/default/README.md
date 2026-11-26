@@ -272,7 +272,8 @@ Release 0.3 pages:
   (button `linked-unlink-{id}-submit`), empty state `linked-none`, available providers
   `linked-available` with connect forms `linked-connect-{slug}` (button
   `linked-connect-{slug}-submit`); `account-reauth` / `link-reauth`. Cells carry `data-label` like
-  the sessions table.
+  the sessions table. After a successful Connect the provider's return answers 303 back to
+  `/ui/account/linked`, where the new row is listed (there is no separate "linked" message page).
 - Theme preview (`preview.html`): `preview-banner`, `preview-login`, `preview-consent` (sample
   markup only).
 - Logo: `base.html` renders `<span class="anvil-logo" role="img" aria-label="{tenant name}">`
@@ -362,7 +363,7 @@ tables, no images, no external resources). The mail worker renders both from a p
 | `invitation` | `tenant_name`, `email`, `link`, `expires_in` |
 | `password_changed` | `tenant_name`, `email` |
 | `recovery_code_used` | `tenant_name`, `remaining` |
-| `login_code` (0.3) | `tenant_name`, `code`, `link`, `expires_minutes` |
+| `login_code` (0.3) | `tenant_name`, `code`?, `link`?, `expires_minutes` |
 | `email_change` (0.3, sent to the new address) | `tenant_name`, `link`, `new_email`, `expires_minutes` |
 | `email_changed` (0.3, sent to the old address) | `tenant_name`, `new_email` |
 
@@ -370,9 +371,21 @@ Tenants can override these per kind through the management API (`email-templates
 override is checked when it is saved: valid syntax, only the payload keys above, no `include` /
 `extends` of theme files, and a fuel limit on rendering.
 
+`?` marks an optional key. The `login_code` email carries `code` when the tenant's `email_otp` is
+on and `link` when `magic_link` is on; at least one of them is always present. Rendering is strict,
+so a template must guard each optional key with `is defined` (a bare `{% if code %}` fails when the
+key is absent):
+
+```
+{% if code is defined %}Your code: {{ code }}{% endif %}
+{% if link is defined %}Sign in: {{ link }}{% endif %}
+```
+
+The check on save renders an override with code only, link only and both, and refuses one that
+uses `code` or `link` unguarded (the error names the key and the line).
+
 `expires_in` is human-readable text such as `1 hour`; `expires_minutes` is a number. No email
-reveals whether any other account exists. The `login_code` email carries both the code and the
-magic link. Emails are not translated in 0.3.
+reveals whether any other account exists. Emails are not translated in 0.3.
 
 ## Overriding the theme
 

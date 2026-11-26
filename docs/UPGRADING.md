@@ -51,23 +51,26 @@ the KEK. The KEK now also seals upstream connection secrets; without it they can
 
 ### Migrations
 
-The upgrade is automatic and keeps all data. It is one migration per backend, applied in a single
-transaction:
+The upgrade is automatic and keeps all data. There are two migrations per backend, each applied in
+a single transaction:
 
 - **SQLite:** `0005_release_0_3`. It rebuilds the `flow`, `self_service_token` and `email_template`
   tables to widen their `kind` checks (new values `logout`, `email_change`, `login_code`,
   `email_changed`). Each rebuild creates the new table, copies every row, drops the old table and
   recreates its indexes. No other table references these three, so nothing cascades. The rebuilds
   are reviewed as non-destructive, and a failure rolls the whole migration back.
+  Then `0006_release_0_3_logout_issuer`, which only adds a column (below).
 - **Postgres:** `0004_release_0_3`. It swaps the same three CHECK constraints in place and only
-  adds columns, tables and constraints.
+  adds columns, tables and constraints. Then `0005_release_0_3_logout_issuer`, which only adds a
+  column.
 
-Neither migration is destructive, so no `--allow-destructive-migrations` flag is needed. Both add
+None of these migrations is destructive, so no `--allow-destructive-migrations` flag is needed. They add
 the tables `connection`, `identity_link`, `rp_session`, `logout_delivery`, `branding` and
 `branding_logo` (Postgres also `branding_draft`), the client columns `post_logout_redirect_uris`,
 `backchannel_logout_uri`, `backchannel_logout_session_required`, `allowed_resources` and
 `mfa_policy`, and a `resource` column on authorization codes, token families and opaque access
-tokens. The CI upgrade tests build a 0.2 database, upgrade it, compare every row and run the full
+tokens, and the nullable `issuer` column on `rp_session` and `logout_delivery` (the issuer each
+application signed in through, used as the back-channel logout token's `iss`). The CI upgrade tests build a 0.2 database, upgrade it, compare every row and run the full
 storage contract suite on the result.
 
 Stop every 0.2 node before you start a 0.3 node. Running 0.2 and 0.3 binaries against the same
@@ -132,6 +135,23 @@ logout endpoints are internal, add their addresses to `outbound_allow_cidrs`, an
 - **Switching users:** when a second user signs in on a browser that holds another user's session,
   the first session is signed out together with its tokens.
 - **`login_hint`** that is an email address now prefills the sign-in form.
+- **Everyone signs in again after the upgrade.** Session, flow and upstream cookie names now end
+  in a suffix derived from the whole tenant id (the first 16 hex characters of its SHA-256) instead
+  of the first 12 hex characters of the tenant UUID. The old suffix was only the tenant's creation
+  millisecond, so two tenants created in the same millisecond shared cookie names. Old cookies are
+  not read any more: existing browser sessions end, and sign-ins in progress during the upgrade
+  start over. Refresh tokens already issued to applications keep working. Old cookies expire with
+  the browser session and are harmless.
+- **Email code and magic link are independent settings:** `email_otp` offers the 6-digit code and
+  `magic_link` the sign-in link; turning on either one offers email sign-in, and the `login_code`
+  email carries only the enabled methods. Custom `login_code` templates must guard `code` and
+  `link` with `{% if code is defined %}` / `{% if link is defined %}`; an unguarded use is refused
+  when the template is saved.
+- **Upstream accounts follow `require_verified_email`:** an account created at first upstream
+  sign-in from an untrusted or unverified email gets a verification email. When the tenant
+  requires a verified email, that account (and any linked account whose email is not verified)
+  cannot sign in until the address is verified. A trusted provider asserting a verified email signs
+  in at once.
 - **Admin API:** new `connections` and `branding` resources use the existing
   `admin:settings:{read|write}` scopes (plus `admin:write` for the `system` tenant). Tokens that
   already hold `admin:settings:write` can manage them.
