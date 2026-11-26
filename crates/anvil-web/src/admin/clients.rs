@@ -3,6 +3,13 @@
 //! Registration rules (C1 PKCE rule, redirect URI validation, auth method consistency) live in
 //! `ClientService`; this module only maps HTTP to it. Changes to the system tenant's clients
 //! need `admin:write` (see [`AdminAuth::require_full_admin`]).
+//!
+//! The list includes dynamically registered (`registration_source = dynamic`, RFC 7591) and
+//! metadata-document clients (`cimd`, with `metadata_expires_at`), so administrators can see and
+//! delete them. Deleting a CIMD client removes its materialised row only: the next request with
+//! that URL client id fetches the document again if the tenant's CIMD policy allows it. To block
+//! a document host, use the `allow_listed` CIMD policy without that host (or `disabled`); both
+//! take effect at once, also for already materialised rows.
 
 use anvil_core::model::{SYSTEM_TENANT_SLUG, Tenant};
 use anvil_core::service::admin_scope::{Access, Resource};
@@ -34,7 +41,8 @@ async fn authorize(
     Ok(state.admin_tenants().get(slug).await?)
 }
 
-/// List the clients of a tenant.
+/// List the clients of a tenant: static, dynamically registered and CIMD clients
+/// (`registration_source`).
 #[utoipa::path(
     get,
     path = "/api/admin/v1/tenants/{slug}/clients",
@@ -186,7 +194,9 @@ pub(crate) async fn update_client(
     Ok(json(StatusCode::OK, &ClientView::from(client)))
 }
 
-/// Delete a client and revoke its tokens.
+/// Delete a client and revoke its tokens. A deleted CIMD client (URL client id, percent-encoded
+/// in the path) is fetched again on its next use if the tenant's CIMD policy still allows its
+/// host; block a host with the `allow_listed` CIMD policy instead.
 #[utoipa::path(
     delete,
     path = "/api/admin/v1/tenants/{slug}/clients/{client_id}",

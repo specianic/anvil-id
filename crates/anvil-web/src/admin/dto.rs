@@ -6,10 +6,12 @@ use anvil_core::model::{
     ActorKind as CoreActorKind, Address as CoreAddress, AppleConfig as CoreAppleConfig,
     ApplicationType as CoreApplicationType, AuditAction as CoreAuditAction, AuditEvent,
     AuditOutcome as CoreAuditOutcome, CaptchaProvider as CoreCaptchaProvider,
+    CimdPolicy as CoreCimdPolicy, CimdSettings as CoreCimdSettings,
     ClaimMapping as CoreClaimMapping, Client, ClientAuthMethod as CoreClientAuthMethod,
-    ClientType as CoreClientType, Connection, ConnectionConfig as CoreConnectionConfig,
-    ConnectionKind as CoreConnectionKind, ConsentMode as CoreConsentMode,
-    CredentialKind as CoreCredentialKind, CredentialSummary, DEFAULT_SIGNING_ALG,
+    ClientSource as CoreClientSource, ClientType as CoreClientType, Connection,
+    ConnectionConfig as CoreConnectionConfig, ConnectionKind as CoreConnectionKind,
+    ConsentMode as CoreConsentMode, CredentialKind as CoreCredentialKind, CredentialSummary,
+    DEFAULT_SIGNING_ALG, DcrPolicy as CoreDcrPolicy, DcrSettings as CoreDcrSettings,
     EmailKind as CoreEmailKind, EndpointOverrides as CoreEndpointOverrides,
     GrantType as CoreGrantType, MfaPolicy as CoreMfaPolicy, OAuth2Config as CoreOAuth2Config,
     OidcConfig as CoreOidcConfig, Page, RegistrationMode as CoreRegistrationMode,
@@ -104,6 +106,22 @@ wire_enum!(
 wire_enum!(
     /// CAPTCHA provider.
     CaptchaProvider => CoreCaptchaProvider { Turnstile, Hcaptcha }
+);
+wire_enum!(
+    /// Dynamic client registration policy: `disabled` (no `/register`), `allow_listed` (an
+    /// initial access token is required; optional redirect-host allow-list) or `open`.
+    DcrPolicy => CoreDcrPolicy { Disabled, AllowListed, Open }
+);
+wire_enum!(
+    /// Client ID Metadata Document policy: `disabled` (URL client ids are unknown clients),
+    /// `allow_listed` (documents on `allowed_hosts` only) or `open` (any https host passing the
+    /// outbound policy).
+    CimdPolicy => CoreCimdPolicy { Disabled, AllowListed, Open }
+);
+wire_enum!(
+    /// How a client came to exist: `static` (administrator), `dynamic` (RFC 7591 registration)
+    /// or `cimd` (materialised from a Client ID Metadata Document; the client id is its URL).
+    ClientSource => CoreClientSource { Static, Dynamic, Cimd }
 );
 wire_enum!(
     /// Kind of a user credential.
@@ -320,6 +338,10 @@ pub struct TenantSettings {
     pub default_locale: String,
     /// Mapping of roles and permissions into tokens.
     pub claims: TokenClaimMapping,
+    /// Dynamic client registration policy in force (always `disabled` for `system`).
+    pub dcr: DcrSettings,
+    /// Client ID Metadata Document policy in force (always `disabled` for `system`).
+    pub cimd: CimdSettings,
 }
 
 impl From<CoreTenantSettings> for TenantSettings {
@@ -340,6 +362,174 @@ impl From<CoreTenantSettings> for TenantSettings {
             upstream_registration: s.upstream_registration,
             default_locale: s.default_locale,
             claims: s.claims.into(),
+            dcr: s.dcr.into(),
+            cimd: s.cimd.into(),
+        }
+    }
+}
+
+/// Dynamic client registration settings (RFC 7591).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct DcrSettings {
+    /// Default `disabled`; `system` is always `disabled`.
+    pub policy: DcrPolicy,
+    /// Redirect-URI hosts accepted under `allow_listed` (host names or IP literals, no port);
+    /// empty = any host allowed by the redirect URI rules.
+    pub allowed_redirect_hosts: Vec<String>,
+    /// Scopes a registered client may request; empty = `openid profile email address phone`.
+    /// Admin API scopes are refused.
+    pub allowed_scopes: Vec<String>,
+    /// RFC 8707 resource indicators registered (and CIMD) clients may be granted.
+    pub allowed_resources: Vec<String>,
+    /// Registered confidential clients may use `client_credentials`.
+    pub allow_client_credentials: bool,
+    /// Most dynamically registered clients the tenant may hold (default 1000; soft cap).
+    pub max_clients: u32,
+}
+
+impl Default for DcrSettings {
+    fn default() -> Self {
+        CoreDcrSettings::default().into()
+    }
+}
+
+impl From<CoreDcrSettings> for DcrSettings {
+    fn from(d: CoreDcrSettings) -> Self {
+        Self {
+            policy: d.policy.into(),
+            allowed_redirect_hosts: d.allowed_redirect_hosts,
+            allowed_scopes: d.allowed_scopes,
+            allowed_resources: d.allowed_resources,
+            allow_client_credentials: d.allow_client_credentials,
+            max_clients: d.max_clients,
+        }
+    }
+}
+
+impl From<DcrSettings> for CoreDcrSettings {
+    fn from(d: DcrSettings) -> Self {
+        Self {
+            policy: d.policy.into(),
+            allowed_redirect_hosts: d.allowed_redirect_hosts,
+            allowed_scopes: d.allowed_scopes,
+            allowed_resources: d.allowed_resources,
+            allow_client_credentials: d.allow_client_credentials,
+            max_clients: d.max_clients,
+        }
+    }
+}
+
+/// Client ID Metadata Document settings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct CimdSettings {
+    /// Default `disabled`; `system` is always `disabled`. Blocking a document URL is done with
+    /// `allow_listed` (only the listed hosts are fetched).
+    pub policy: CimdPolicy,
+    /// Hosts whose documents are accepted under `allow_listed` (at least one); host names or IP
+    /// literals, no port.
+    pub allowed_hosts: Vec<String>,
+    /// A document's `Cache-Control: max-age` is clamped to `min_cache_secs..=max_cache_secs`
+    /// (60 to 604800 seconds; default 300 and 86400).
+    pub min_cache_secs: u32,
+    pub max_cache_secs: u32,
+}
+
+impl Default for CimdSettings {
+    fn default() -> Self {
+        CoreCimdSettings::default().into()
+    }
+}
+
+impl From<CoreCimdSettings> for CimdSettings {
+    fn from(c: CoreCimdSettings) -> Self {
+        Self {
+            policy: c.policy.into(),
+            allowed_hosts: c.allowed_hosts,
+            min_cache_secs: c.min_cache_secs,
+            max_cache_secs: c.max_cache_secs,
+        }
+    }
+}
+
+impl From<CimdSettings> for CoreCimdSettings {
+    fn from(c: CimdSettings) -> Self {
+        Self {
+            policy: c.policy.into(),
+            allowed_hosts: c.allowed_hosts,
+            min_cache_secs: c.min_cache_secs,
+            max_cache_secs: c.max_cache_secs,
+        }
+    }
+}
+
+/// Partial DCR settings update: absent fields keep their current value; lists replace the
+/// whole list.
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DcrSettingsPatch {
+    #[serde(default)]
+    pub policy: Option<DcrPolicy>,
+    #[serde(default)]
+    pub allowed_redirect_hosts: Option<Vec<String>>,
+    #[serde(default)]
+    pub allowed_scopes: Option<Vec<String>>,
+    #[serde(default)]
+    pub allowed_resources: Option<Vec<String>>,
+    #[serde(default)]
+    pub allow_client_credentials: Option<bool>,
+    #[serde(default)]
+    pub max_clients: Option<u32>,
+}
+
+impl DcrSettingsPatch {
+    /// The settings after this patch.
+    pub fn merge(self, current: &CoreDcrSettings) -> CoreDcrSettings {
+        CoreDcrSettings {
+            policy: self.policy.map_or(current.policy, Into::into),
+            allowed_redirect_hosts: self
+                .allowed_redirect_hosts
+                .unwrap_or_else(|| current.allowed_redirect_hosts.clone()),
+            allowed_scopes: self
+                .allowed_scopes
+                .unwrap_or_else(|| current.allowed_scopes.clone()),
+            allowed_resources: self
+                .allowed_resources
+                .unwrap_or_else(|| current.allowed_resources.clone()),
+            allow_client_credentials: self
+                .allow_client_credentials
+                .unwrap_or(current.allow_client_credentials),
+            max_clients: self.max_clients.unwrap_or(current.max_clients),
+        }
+    }
+}
+
+/// Partial CIMD settings update: absent fields keep their current value; `allowed_hosts`
+/// replaces the whole list.
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CimdSettingsPatch {
+    #[serde(default)]
+    pub policy: Option<CimdPolicy>,
+    #[serde(default)]
+    pub allowed_hosts: Option<Vec<String>>,
+    #[serde(default)]
+    pub min_cache_secs: Option<u32>,
+    #[serde(default)]
+    pub max_cache_secs: Option<u32>,
+}
+
+impl CimdSettingsPatch {
+    /// The settings after this patch.
+    pub fn merge(self, current: &CoreCimdSettings) -> CoreCimdSettings {
+        CoreCimdSettings {
+            policy: self.policy.map_or(current.policy, Into::into),
+            allowed_hosts: self
+                .allowed_hosts
+                .unwrap_or_else(|| current.allowed_hosts.clone()),
+            min_cache_secs: self.min_cache_secs.unwrap_or(current.min_cache_secs),
+            max_cache_secs: self.max_cache_secs.unwrap_or(current.max_cache_secs),
         }
     }
 }
@@ -408,6 +598,10 @@ pub struct NewTenantSettings {
     pub default_locale: String,
     /// Default: `roles` gated by scope `roles`, `permissions` in the access token.
     pub claims: TokenClaimMapping,
+    /// Default: disabled.
+    pub dcr: DcrSettings,
+    /// Default: disabled.
+    pub cimd: CimdSettings,
 }
 
 impl Default for NewTenantSettings {
@@ -424,6 +618,8 @@ impl Default for NewTenantSettings {
             upstream_registration: core.upstream_registration,
             default_locale: core.default_locale,
             claims: core.claims.into(),
+            dcr: core.dcr.into(),
+            cimd: core.cimd.into(),
         }
     }
 }
@@ -441,9 +637,9 @@ impl From<NewTenantSettings> for CoreTenantSettings {
             auto_link: s.auto_link,
             upstream_registration: s.upstream_registration,
             default_locale: s.default_locale,
-            cimd: Default::default(),
+            cimd: s.cimd.into(),
             claims: s.claims.into(),
-            dcr: Default::default(),
+            dcr: s.dcr.into(),
         }
     }
 }
@@ -484,6 +680,12 @@ pub struct TenantSettingsPatch {
     /// protocol or standard claims are refused (422).
     #[serde(default)]
     pub claims: Option<TokenClaimMappingPatch>,
+    /// Absent fields stay unchanged. The system tenant refuses any policy but `disabled` (422).
+    #[serde(default)]
+    pub dcr: Option<DcrSettingsPatch>,
+    /// Absent fields stay unchanged. The system tenant refuses any policy but `disabled` (422).
+    #[serde(default)]
+    pub cimd: Option<CimdSettingsPatch>,
 }
 
 impl TenantSettingsPatch {
@@ -506,7 +708,9 @@ impl TenantSettingsPatch {
             || self.auto_link.is_some()
             || self.upstream_registration.is_some()
             || self.default_locale.is_some()
-            || self.claims.is_some();
+            || self.claims.is_some()
+            || self.dcr.is_some()
+            || self.cimd.is_some();
         let settings = touched.then(|| CoreTenantSettings {
             registration: self.registration.map_or(current.registration, Into::into),
             require_verified_email: self
@@ -526,9 +730,14 @@ impl TenantSettingsPatch {
             default_locale: self
                 .default_locale
                 .unwrap_or_else(|| current.default_locale.clone()),
-            // DCR/CIMD are not part of this patch: keep the stored values.
-            dcr: current.dcr.clone(),
-            cimd: current.cimd.clone(),
+            dcr: match self.dcr {
+                Some(patch) => patch.merge(&current.dcr),
+                None => current.dcr.clone(),
+            },
+            cimd: match self.cimd {
+                Some(patch) => patch.merge(&current.cimd),
+                None => current.cimd.clone(),
+            },
             claims: match self.claims {
                 Some(patch) => patch.merge(&current.claims),
                 None => current.claims.clone(),
@@ -547,19 +756,36 @@ pub struct TenantView {
     pub display_name: String,
     /// Custom host for host-based serving.
     pub host: Option<String>,
+    /// The tenant's canonical issuer, computed by the server: `{scheme}://{host}` for a custom
+    /// host, the public URL for `default`, else `{public_url}/t/{slug}`.
+    pub issuer: String,
+    /// The OpenID Provider configuration document of [`Self::issuer`].
+    pub discovery_url: String,
     pub settings: TenantSettings,
     #[schema(format = DateTime)]
     pub created_at: String,
 }
 
-impl From<Tenant> for TenantView {
-    fn from(t: Tenant) -> Self {
+impl TenantView {
+    /// The view of `t`, whose canonical issuer is `issuer`. DCR/CIMD settings show the policy
+    /// in force (always `disabled` for the system tenant).
+    pub fn new(t: Tenant, issuer: String) -> Self {
+        let dcr = t.effective_dcr();
+        let cimd = t.effective_cimd();
+        let mut settings = TenantSettings::from(t.settings);
+        settings.dcr = dcr.into();
+        settings.cimd = cimd.into();
         Self {
             id: t.id.0,
             slug: t.slug,
             display_name: t.display_name,
             host: t.host,
-            settings: t.settings.into(),
+            discovery_url: format!(
+                "{}/.well-known/openid-configuration",
+                issuer.trim_end_matches('/')
+            ),
+            issuer,
+            settings,
             created_at: ts(t.created_at),
         }
     }
@@ -573,10 +799,18 @@ pub struct TenantList {
     pub next_cursor: Option<Uuid>,
 }
 
-impl From<Page<Tenant>> for TenantList {
-    fn from(p: Page<Tenant>) -> Self {
+impl TenantList {
+    /// The page `p`, each tenant with its canonical issuer from `issuer_of`.
+    pub fn new(p: Page<Tenant>, issuer_of: impl Fn(&Tenant) -> String) -> Self {
         Self {
-            items: p.items.into_iter().map(Into::into).collect(),
+            items: p
+                .items
+                .into_iter()
+                .map(|t| {
+                    let issuer = issuer_of(&t);
+                    TenantView::new(t, issuer)
+                })
+                .collect(),
             next_cursor: p.next_cursor,
         }
     }
@@ -682,6 +916,12 @@ pub struct ClientView {
     pub allowed_resources: Vec<String>,
     /// Client MFA policy; `null` = the tenant's. The strictest of both wins.
     pub mfa_policy: Option<MfaPolicy>,
+    /// How the client came to exist. Dynamic and CIMD clients can be deleted like any client;
+    /// a deleted CIMD client is fetched again on its next use if the CIMD policy allows it.
+    pub registration_source: ClientSource,
+    /// CIMD clients: when the cached metadata document must be fetched again; `null` otherwise.
+    #[schema(format = DateTime)]
+    pub metadata_expires_at: Option<String>,
     #[schema(format = DateTime)]
     pub created_at: String,
     #[schema(format = DateTime)]
@@ -715,6 +955,8 @@ impl From<Client> for ClientView {
             backchannel_logout_session_required: c.backchannel_logout_session_required,
             allowed_resources: c.allowed_resources,
             mfa_policy: c.mfa_policy.map(Into::into),
+            registration_source: c.registration_source.into(),
+            metadata_expires_at: c.metadata_expires_at.map(ts),
             created_at: ts(c.created_at),
             updated_at: ts(c.updated_at),
             client_secret: None,

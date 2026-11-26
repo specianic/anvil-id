@@ -42,9 +42,52 @@ export interface paths {
          *     CAPTCHA secret is write-only. Turning on `email_otp` or `magic_link` needs SMTP (the tenant's
          *     SMTP settings or the installation SMTP). Enabling a signing algorithm creates its key at once; disabling
          *     one that a client still uses for its ID tokens is refused (409, the problem lists the
-         *     clients).
+         *     clients). `dcr` and `cimd` are merged field by field; the system tenant refuses any policy
+         *     but `disabled` (422).
          */
         patch: operations["updateTenant"];
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/attributes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the attribute definitions of a tenant. */
+        get: operations["listAttributes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/attributes/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get an attribute definition. */
+        get: operations["getAttribute"];
+        /**
+         * Create or replace an attribute definition. Stored user values are never rewritten: a value
+         *     that no longer validates is omitted from tokens until it is corrected.
+         */
+        put: operations["putAttribute"];
+        post?: never;
+        /**
+         * Delete an attribute definition. Users' stored values are kept (a re-created definition sees
+         *     them again) but no longer reach tokens.
+         */
+        delete: operations["deleteAttribute"];
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/admin/v1/tenants/{slug}/audit-events": {
@@ -142,7 +185,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List the clients of a tenant. */
+        /**
+         * List the clients of a tenant: static, dynamically registered and CIMD clients
+         *     (`registration_source`).
+         */
         get: operations["listClients"];
         put?: never;
         /** Register a client. Secret-based clients get their `client_secret` in this response only. */
@@ -164,7 +210,11 @@ export interface paths {
         get: operations["getClient"];
         put?: never;
         post?: never;
-        /** Delete a client and revoke its tokens. */
+        /**
+         * Delete a client and revoke its tokens. A deleted CIMD client (URL client id, percent-encoded
+         *     in the path) is fetched again on its next use if the tenant's CIMD policy still allows its
+         *     host; block a host with the `allow_listed` CIMD policy instead.
+         */
         delete: operations["deleteClient"];
         options?: never;
         head?: never;
@@ -420,6 +470,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/tenants/{slug}/initial-access-tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the initial access tokens of a tenant (values are never returned). */
+        get: operations["listInitialAccessTokens"];
+        put?: never;
+        /**
+         * Issue an initial access token. The value is returned once. Tokens can be issued under any
+         *     registration policy (to prepare a switch to `allow_listed`), never for the system tenant.
+         */
+        post: operations["createInitialAccessToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/initial-access-tokens/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke an initial access token. Clients it already registered are not affected. */
+        delete: operations["revokeInitialAccessToken"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/tenants/{slug}/roles": {
         parameters: {
             query?: never;
@@ -593,6 +681,27 @@ export interface paths {
         patch: operations["updateUser"];
         trace?: never;
     };
+    "/api/admin/v1/tenants/{slug}/users/{user_id}/attributes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a user's attribute values. */
+        get: operations["getUserAttributes"];
+        /**
+         * Replace a user's attribute values. Every value is validated against its definition; a refusal
+         *     changes nothing and lists each failing JSON pointer.
+         */
+        put: operations["putUserAttributes"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/tenants/{slug}/users/{user_id}/credentials": {
         parameters: {
             query?: never;
@@ -689,6 +798,117 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/tenants/{slug}/webhooks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the webhook endpoints of a tenant. */
+        get: operations["listWebhooks"];
+        put?: never;
+        /** Create a webhook endpoint. The response carries the signing secret once. */
+        post: operations["createWebhook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/webhooks/deliveries/{delivery_id}/redeliver": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Queue a delivery's event again (new delivery id, fresh attempts). The original delivery is
+         *     unchanged.
+         */
+        post: operations["redeliverWebhookDelivery"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/webhooks/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a webhook endpoint (without its secret). */
+        get: operations["getWebhook"];
+        put?: never;
+        post?: never;
+        /** Delete a webhook endpoint and its delivery log. */
+        delete: operations["deleteWebhook"];
+        options?: never;
+        head?: never;
+        /** Update a webhook endpoint. Re-enabling clears the system's disabled reason. */
+        patch: operations["updateWebhook"];
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/webhooks/{id}/deliveries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The delivery log of an endpoint, newest first. */
+        get: operations["listWebhookDeliveries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/webhooks/{id}/secret": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rotate the signing secret. The new secret is returned once; the previous one keeps signing
+         *     (as a second signature) for 24 hours.
+         */
+        post: operations["rotateWebhookSecret"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/webhooks/{id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Queue the `test` event for the endpoint, whatever its subscriptions. */
+        post: operations["sendWebhookTest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -731,6 +951,27 @@ export interface components {
             role: components["schemas"]["RoleDto"];
             /** Format: uuid */
             user_id: string;
+        };
+        /** @description A custom attribute definition. */
+        AttributeDefinitionDto: {
+            claim?: components["schemas"]["TokenClaimRule"] | null;
+            /** @description Unique in the tenant: `^[a-z][a-z0-9_]{0,63}$`, not a protocol or standard claim name. */
+            name: string;
+            /**
+             * Format: int32
+             * @description Display order (ascending).
+             */
+            position: number;
+            /** @description Every user must have a value (checked when a user's values are written). */
+            required: boolean;
+            /** @description JSON Schema (draft 2020-12) every value must satisfy. */
+            schema: Record<string, never>;
+            /** @description The user may edit the value on the account page. */
+            user_editable: boolean;
+        };
+        /** @description Attribute definitions, by position then name. */
+        AttributeDefinitionList: {
+            items: components["schemas"]["AttributeDefinitionDto"][];
         };
         /**
          * @description An audited action.
@@ -826,6 +1067,52 @@ export interface components {
             provider: components["schemas"]["CaptchaProvider"];
             site_key: string;
         };
+        /**
+         * @description Client ID Metadata Document policy: `disabled` (URL client ids are unknown clients),
+         *     `allow_listed` (documents on `allowed_hosts` only) or `open` (any https host passing the
+         *     outbound policy).
+         * @enum {string}
+         */
+        CimdPolicy: "disabled" | "allow_listed" | "open";
+        /** @description Client ID Metadata Document settings. */
+        CimdSettings: {
+            /**
+             * @description Hosts whose documents are accepted under `allow_listed` (at least one); host names or IP
+             *     literals, no port.
+             * @default []
+             */
+            allowed_hosts: string[];
+            /**
+             * Format: int32
+             * @default 86400
+             */
+            max_cache_secs: number;
+            /**
+             * Format: int32
+             * @description A document's `Cache-Control: max-age` is clamped to `min_cache_secs..=max_cache_secs`
+             *     (60 to 604800 seconds; default 300 and 86400).
+             * @default 300
+             */
+            min_cache_secs: number;
+            /**
+             * @description Default `disabled`; `system` is always `disabled`. Blocking a document URL is done with
+             *     `allow_listed` (only the listed hosts are fetched).
+             * @default disabled
+             */
+            policy: components["schemas"]["CimdPolicy"];
+        };
+        /**
+         * @description Partial CIMD settings update: absent fields keep their current value; `allowed_hosts`
+         *     replaces the whole list.
+         */
+        CimdSettingsPatch: {
+            allowed_hosts?: string[] | null;
+            /** Format: int32 */
+            max_cache_secs?: number | null;
+            /** Format: int32 */
+            min_cache_secs?: number | null;
+            policy?: components["schemas"]["CimdPolicy"] | null;
+        };
         /** @description JSON pointers (RFC 6901, e.g. `/id`) into a generic OAuth2 profile response. */
         ClaimMapping: {
             email?: string | null;
@@ -855,6 +1142,12 @@ export interface components {
             client_id: string;
             client_secret: string;
         };
+        /**
+         * @description How a client came to exist: `static` (administrator), `dynamic` (RFC 7591 registration)
+         *     or `cimd` (materialised from a Client ID Metadata Document; the client id is its URL).
+         * @enum {string}
+         */
+        ClientSource: "static" | "dynamic" | "cimd";
         /**
          * @description OAuth client type (RFC 6749 §2.1).
          * @enum {string}
@@ -887,11 +1180,21 @@ export interface components {
             id_token_signed_response_alg: string;
             /** @description Inline public JWK Set (`private_key_jwt` only). */
             jwks?: Record<string, never> | null;
+            /**
+             * Format: date-time
+             * @description CIMD clients: when the cached metadata document must be fetched again; `null` otherwise.
+             */
+            metadata_expires_at?: string | null;
             mfa_policy?: components["schemas"]["MfaPolicy"] | null;
             name: string;
             /** @description Where RP-initiated logout may redirect after signing out. */
             post_logout_redirect_uris: string[];
             redirect_uris: string[];
+            /**
+             * @description How the client came to exist. Dynamic and CIMD clients can be deleted like any client;
+             *     a deleted CIMD client is fetched again on its next use if the CIMD policy allows it.
+             */
+            registration_source: components["schemas"]["ClientSource"];
             require_pkce: boolean;
             scopes: string[];
             token_format: components["schemas"]["TokenFormat"];
@@ -1092,6 +1395,66 @@ export interface components {
             last_used_at?: string | null;
         };
         /**
+         * @description Dynamic client registration policy: `disabled` (no `/register`), `allow_listed` (an
+         *     initial access token is required; optional redirect-host allow-list) or `open`.
+         * @enum {string}
+         */
+        DcrPolicy: "disabled" | "allow_listed" | "open";
+        /** @description Dynamic client registration settings (RFC 7591). */
+        DcrSettings: {
+            /**
+             * @description Registered confidential clients may use `client_credentials`.
+             * @default false
+             */
+            allow_client_credentials: boolean;
+            /**
+             * @description Redirect-URI hosts accepted under `allow_listed` (host names or IP literals, no port);
+             *     empty = any host allowed by the redirect URI rules.
+             * @default []
+             */
+            allowed_redirect_hosts: string[];
+            /**
+             * @description RFC 8707 resource indicators registered (and CIMD) clients may be granted.
+             * @default []
+             */
+            allowed_resources: string[];
+            /**
+             * @description Scopes a registered client may request; empty = `openid profile email address phone`.
+             *     Admin API scopes are refused.
+             * @default []
+             */
+            allowed_scopes: string[];
+            /**
+             * Format: int32
+             * @description Most dynamically registered clients the tenant may hold (default 1000; soft cap).
+             * @default 1000
+             */
+            max_clients: number;
+            /**
+             * @description Default `disabled`; `system` is always `disabled`.
+             * @default disabled
+             */
+            policy: components["schemas"]["DcrPolicy"];
+        };
+        /**
+         * @description Partial DCR settings update: absent fields keep their current value; lists replace the
+         *     whole list.
+         */
+        DcrSettingsPatch: {
+            allow_client_credentials?: boolean | null;
+            allowed_redirect_hosts?: string[] | null;
+            allowed_resources?: string[] | null;
+            allowed_scopes?: string[] | null;
+            /** Format: int32 */
+            max_clients?: number | null;
+            policy?: components["schemas"]["DcrPolicy"] | null;
+        };
+        /**
+         * @description State of a delivery.
+         * @enum {string}
+         */
+        DeliveryStatus: "pending" | "delivered" | "failed";
+        /**
          * @description Kind of a transactional email.
          * @enum {string}
          */
@@ -1159,12 +1522,62 @@ export interface components {
          * @enum {string}
          */
         GrantType: "authorization_code" | "refresh_token" | "client_credentials";
+        /** @description An initial access token (never its value). */
+        InitialAccessTokenDto: {
+            /** Format: date-time */
+            created_at: string;
+            description: string;
+            /** Format: date-time */
+            expires_at?: string | null;
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            revoked_at?: string | null;
+            /**
+             * @description `true` while the token can still authorize a registration (not revoked, not expired,
+             *     uses left).
+             */
+            usable: boolean;
+            /**
+             * Format: int32
+             * @description Remaining uses; `null` = unlimited until expiry or revocation.
+             */
+            uses_remaining?: number | null;
+        };
+        /** @description Initial access tokens, in id (creation) order. */
+        InitialAccessTokenList: {
+            items: components["schemas"]["InitialAccessTokenDto"][];
+        };
+        /** @description An issued token with its value: returned once, by `POST`. */
+        IssuedInitialAccessToken: {
+            token: components["schemas"]["InitialAccessTokenDto"];
+            /**
+             * @description The bearer value for `POST /register` (`Authorization: Bearer …`). Shown once; only its
+             *     hash is stored.
+             */
+            value: string;
+        };
         /**
          * @description Whether sign-in needs a second factor: `off`, `optional` (users who enrolled one) or
          *     `required` (users without one enrol first). Across tenant and client the strictest wins.
          * @enum {string}
          */
         MfaPolicy: "off" | "optional" | "required";
+        /** @description Body of `POST /tenants/{slug}/initial-access-tokens`. */
+        NewInitialAccessToken: {
+            /** @description At most 200 characters, no control characters. */
+            description?: string;
+            /**
+             * Format: int64
+             * @description Lifetime in seconds, 60 to 31536000 (365 days); default 86400 (24 hours).
+             */
+            expires_in?: number | null;
+            /**
+             * Format: int32
+             * @description Number of registrations it authorizes, 1 to 100000; `null` = unlimited until expiry.
+             */
+            uses?: number | null;
+        };
         /** @description Body of `POST /tenants/{slug}/roles`. */
         NewRoleDto: {
             /** @description At most 500 characters. */
@@ -1184,6 +1597,16 @@ export interface components {
              * @default true
              */
             auto_link: boolean;
+            /**
+             * @description Default: disabled.
+             * @default {
+             *       "allowed_hosts": [],
+             *       "max_cache_secs": 86400,
+             *       "min_cache_secs": 300,
+             *       "policy": "disabled"
+             *     }
+             */
+            cimd: components["schemas"]["CimdSettings"];
             /**
              * @description Default: `roles` gated by scope `roles`, `permissions` in the access token.
              * @default {
@@ -1206,6 +1629,18 @@ export interface components {
              *     }
              */
             claims: components["schemas"]["TokenClaimMapping"];
+            /**
+             * @description Default: disabled.
+             * @default {
+             *       "allow_client_credentials": false,
+             *       "allowed_redirect_hosts": [],
+             *       "allowed_resources": [],
+             *       "allowed_scopes": [],
+             *       "max_clients": 1000,
+             *       "policy": "disabled"
+             *     }
+             */
+            dcr: components["schemas"]["DcrSettings"];
             /**
              * @description Default `en`; a language tag such as `de` or `pt-BR`.
              * @default en
@@ -1242,6 +1677,20 @@ export interface components {
              * @default null
              */
             upstream_registration: boolean | null;
+        };
+        /** @description Body of `POST /tenants/{slug}/webhooks`. The secret is generated by the server. */
+        NewWebhookEndpoint: {
+            /** @description Default `true`. */
+            enabled?: boolean;
+            /** @description At least one lifecycle event type (`test` is refused). */
+            events: components["schemas"]["WebhookEventType"][];
+            /** @description `^[a-z0-9][a-z0-9_-]{0,63}$`, unique in the tenant. */
+            name: string;
+            /**
+             * @description `https` URL (plain `http` only in development mode); private, loopback and link-local
+             *     addresses are refused.
+             */
+            url: string;
         };
         /** @description A generic OAuth2 provider (no ID token; identity from a profile endpoint). */
         OAuth2ConnectionConfig: {
@@ -1281,6 +1730,16 @@ export interface components {
         PublishBranding: {
             /** @description The preview token returned by the preview operation of the same scope. */
             token: string;
+        };
+        /** @description Body of `PUT /tenants/{slug}/attributes/{name}` (create or replace; the name is the path's). */
+        PutAttributeDefinition: {
+            claim?: components["schemas"]["TokenClaimRule"] | null;
+            /** Format: int32 */
+            position?: number;
+            required?: boolean;
+            /** @description JSON Schema (draft 2020-12): at most 16 KiB and depth 32, local `#/$defs` references only. */
+            schema: Record<string, never>;
+            user_editable?: boolean;
         };
         /** @description Tokens and custom CSS (live `PUT` and preview drafts). */
         PutBranding: {
@@ -1329,6 +1788,13 @@ export interface components {
             /** @description Default `starttls`. */
             tls?: components["schemas"]["SmtpTls"];
             username?: string | null;
+        };
+        /**
+         * @description Body of `PUT /tenants/{slug}/users/{user_id}/attributes`: the complete set of defined values
+         *     (an absent defined attribute is removed; unknown keys are refused).
+         */
+        PutUserAttributes: {
+            values: Record<string, never>;
         };
         /**
          * @description Who may self-register in a tenant.
@@ -1518,8 +1984,12 @@ export interface components {
              */
             auto_link: boolean;
             captcha?: components["schemas"]["CaptchaView"] | null;
+            /** @description Client ID Metadata Document policy in force (always `disabled` for `system`). */
+            cimd: components["schemas"]["CimdSettings"];
             /** @description Mapping of roles and permissions into tokens. */
             claims: components["schemas"]["TokenClaimMapping"];
+            /** @description Dynamic client registration policy in force (always `disabled` for `system`). */
+            dcr: components["schemas"]["DcrSettings"];
             /** @description Page language when neither `ui_locales` nor `Accept-Language` matches. */
             default_locale: string;
             /** @description Sign-in with a one-time code sent by email. */
@@ -1543,7 +2013,9 @@ export interface components {
         TenantSettingsPatch: {
             auto_link?: boolean | null;
             captcha?: components["schemas"]["CaptchaInput"] | null;
+            cimd?: components["schemas"]["CimdSettingsPatch"] | null;
             claims?: components["schemas"]["TokenClaimMappingPatch"] | null;
+            dcr?: components["schemas"]["DcrSettingsPatch"] | null;
             default_locale?: string | null;
             /** @description Turning it on needs SMTP (tenant SMTP settings or the installation SMTP). */
             email_otp?: boolean | null;
@@ -1564,11 +2036,18 @@ export interface components {
         TenantView: {
             /** Format: date-time */
             created_at: string;
+            /** @description The OpenID Provider configuration document of [`Self::issuer`]. */
+            discovery_url: string;
             display_name: string;
             /** @description Custom host for host-based serving. */
             host?: string | null;
             /** Format: uuid */
             id: string;
+            /**
+             * @description The tenant's canonical issuer, computed by the server: `{scheme}://{host}` for a custom
+             *     host, the public URL for `default`, else `{public_url}/t/{slug}`.
+             */
+            issuer: string;
             settings: components["schemas"]["TenantSettings"];
             /** @description Immutable; path-based issuers are `{public_url}/t/{slug}`. */
             slug: string;
@@ -1734,6 +2213,15 @@ export interface components {
             status?: components["schemas"]["UserStatus"] | null;
             username?: string | null;
         };
+        /**
+         * @description A user's attribute values. Keys without a current definition (left by a deleted definition)
+         *     are kept and shown.
+         */
+        UserAttributes: {
+            /** Format: uuid */
+            user_id: string;
+            values: Record<string, never>;
+        };
         /** @description One page of users. */
         UserList: {
             items: components["schemas"]["UserView"][];
@@ -1764,6 +2252,103 @@ export interface components {
             updated_at: string;
             username?: string | null;
         };
+        /** @description One delivery of an event to an endpoint. The payload (ids only) is not returned. */
+        WebhookDeliveryDto: {
+            /**
+             * Format: int32
+             * @description Attempts made so far (at most 10).
+             */
+            attempts: number;
+            /** Format: date-time */
+            completed_at?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: uuid */
+            endpoint_id: string;
+            /**
+             * @description Error class of the last failed attempt (`status_5xx`, `status_4xx`, `status_429`,
+             *     `redirect`, `timeout`, `network`, `blocked`, `gone`, `internal`); never a response body.
+             */
+            error_class?: string | null;
+            event_type: components["schemas"]["WebhookEventType"];
+            /**
+             * Format: uuid
+             * @description Also the `webhook-id` header of every attempt.
+             */
+            id: string;
+            /**
+             * Format: int32
+             * @description HTTP status of the last attempt; `null` if none was received.
+             */
+            last_http_status?: number | null;
+            /**
+             * Format: date-time
+             * @description When the next attempt is due (pending deliveries only).
+             */
+            next_attempt_at?: string | null;
+            status: components["schemas"]["DeliveryStatus"];
+        };
+        /** @description One page of deliveries, newest first. */
+        WebhookDeliveryList: {
+            items: components["schemas"]["WebhookDeliveryDto"][];
+            /**
+             * Format: uuid
+             * @description Present if and only if more items follow.
+             */
+            next_cursor?: string | null;
+        };
+        /** @description A webhook endpoint. The signing secret is write-only. */
+        WebhookEndpointDto: {
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * @description Why the system disabled the endpoint (`gone` after an HTTP 410); `null` otherwise.
+             *     Re-enabling clears it.
+             */
+            disabled_reason?: string | null;
+            enabled: boolean;
+            /** @description Subscribed event types, sorted. */
+            events: components["schemas"]["WebhookEventType"][];
+            /** Format: uuid */
+            id: string;
+            /** @description Unique in the tenant: `^[a-z0-9][a-z0-9_-]{0,63}$`. */
+            name: string;
+            /**
+             * Format: date-time
+             * @description End of the rotation window during which the previous secret still signs; `null` if none.
+             */
+            previous_secret_expires_at?: string | null;
+            /** @description Always `true`: a secret is stored (sealed); it cannot be read back. */
+            secret_configured: boolean;
+            /** Format: date-time */
+            updated_at: string;
+            url: string;
+        };
+        /** @description Webhook endpoints, in name order. */
+        WebhookEndpointList: {
+            items: components["schemas"]["WebhookEndpointDto"][];
+        };
+        /**
+         * @description Body of `PATCH /tenants/{slug}/webhooks/{id}`. Absent fields stay unchanged; `events`
+         *     replaces the whole set.
+         */
+        WebhookEndpointPatch: {
+            enabled?: boolean | null;
+            events?: components["schemas"]["WebhookEventType"][] | null;
+            name?: string | null;
+            url?: string | null;
+        };
+        /** @description An endpoint with its signing secret: returned by create and secret rotation only. */
+        WebhookEndpointWithSecret: {
+            endpoint: components["schemas"]["WebhookEndpointDto"];
+            /** @description The Standard Webhooks signing secret (`whsec_…`). Shown once; store it now. */
+            secret: string;
+        };
+        /**
+         * @description A webhook event type. `test` is only sent by the test action and cannot be subscribed to.
+         * @enum {string}
+         */
+        WebhookEventType: "user.created" | "user.updated" | "user.deleted" | "user.email_verified" | "user.email_changed" | "user.password_changed" | "session.created" | "session.revoked" | "session.logged_out" | "test";
     };
     responses: never;
     parameters: never;
@@ -2048,6 +2633,223 @@ export interface operations {
             };
             /** @description Validation failed */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listAttributes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every definition, by position then name */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttributeDefinitionList"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getAttribute: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Attribute name */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The definition */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttributeDefinitionDto"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or attribute */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    putAttribute: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Attribute name */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutAttributeDefinition"];
+            };
+        };
+        responses: {
+            /** @description The stored definition */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttributeDefinitionDto"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid name, schema or claim rule (the field error names it) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    deleteAttribute: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Attribute name */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or attribute */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -4056,6 +4858,169 @@ export interface operations {
             };
         };
     };
+    listInitialAccessTokens: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every token of the tenant, including revoked and expired ones */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InitialAccessTokenList"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    createInitialAccessToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewInitialAccessToken"];
+            };
+        };
+        responses: {
+            /** @description Issued; `value` is shown only in this response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IssuedInitialAccessToken"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid description, lifetime or use count, or the system tenant */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    revokeInitialAccessToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Token id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revoked */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or token, or already revoked */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     listRoles: {
         parameters: {
             query?: never;
@@ -5101,6 +6066,123 @@ export interface operations {
             };
         };
     };
+    getUserAttributes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description User id */
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The stored values */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserAttributes"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or user */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    putUserAttributes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description User id */
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutUserAttributes"];
+            };
+        };
+        responses: {
+            /** @description The stored values */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserAttributes"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or user */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid values: `errors` lists each failing JSON pointer (`/department`); nothing was stored */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     listUserCredentials: {
         parameters: {
             query?: never;
@@ -5466,6 +6548,528 @@ export interface operations {
                 };
             };
             /** @description Unknown tenant or user */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listWebhooks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every endpoint, in name order */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookEndpointList"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    createWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewWebhookEndpoint"];
+            };
+        };
+        responses: {
+            /** @description Created; `secret` is shown only in this response */
+            201: {
+                headers: {
+                    /** @description URL of the new endpoint */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookEndpointWithSecret"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description An endpoint with this name already exists */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid name, events, or a URL refused by the outbound policy */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    redeliverWebhookDelivery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Delivery id */
+                delivery_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The new delivery */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookDeliveryDto"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or delivery */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Endpoint id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The endpoint */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookEndpointDto"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or endpoint */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    deleteWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Endpoint id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or endpoint */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    updateWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Endpoint id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebhookEndpointPatch"];
+            };
+        };
+        responses: {
+            /** @description The updated endpoint */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookEndpointDto"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or endpoint */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Name already in use */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid name, events, or a URL refused by the outbound policy */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listWebhookDeliveries: {
+        parameters: {
+            query?: {
+                /** @description Return items after this id (the previous page's `next_cursor`). */
+                after?: string;
+                /** @description Page size, 1 to 200 (default 50). */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Endpoint id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of deliveries, newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookDeliveryList"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or endpoint */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid query */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    rotateWebhookSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Endpoint id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The new secret, shown only in this response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookEndpointWithSecret"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or endpoint */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    sendWebhookTest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Endpoint id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Queued; follow it in the delivery log */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookDeliveryDto"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or endpoint */
             404: {
                 headers: {
                     [name: string]: unknown;

@@ -4,6 +4,12 @@
 //! ([`TokenClaimMapping`]). A rule names the claim, the tokens it goes into and the scope that
 //! gates it; names that collide with protocol or standard claims are refused (422) by
 //! `TenantService`.
+//!
+//! The tenant view carries the server-computed canonical `issuer` and its `discovery_url`.
+//! Settings carry `dcr` (dynamic client registration policy, allowed redirect hosts, scopes,
+//! resources, `client_credentials`, `max_clients`) and `cimd` (Client ID Metadata Document
+//! policy, allowed hosts, cache bounds); the system tenant keeps both `disabled` (a PATCH asking
+//! otherwise is a 422), and both are validated by `TenantService`.
 
 use anvil_core::model::{
     ClaimMappingSettings, ClaimRule as CoreClaimRule, TokenTarget as CoreTokenTarget,
@@ -49,7 +55,10 @@ pub(crate) async fn list_tenants(
 ) -> AdminResult<Response> {
     auth.require(Resource::Tenants, Access::Read)?;
     let page = state.admin_tenants().list(page_request(q)?).await?;
-    Ok(json(StatusCode::OK, &TenantList::from(page)))
+    Ok(json(
+        StatusCode::OK,
+        &TenantList::new(page, |t| state.admin_issuer_of(t)),
+    ))
 }
 
 /// Create a tenant (with its first signing key).
@@ -87,7 +96,8 @@ pub(crate) async fn create_tenant(
         )
         .await?;
     let location = format!("/api/admin/v1/tenants/{}", tenant.slug);
-    Ok(created(&location, &TenantView::from(tenant)))
+    let issuer = state.admin_issuer_of(&tenant);
+    Ok(created(&location, &TenantView::new(tenant, issuer)))
 }
 
 /// Get a tenant.
@@ -117,14 +127,16 @@ pub(crate) async fn get_tenant(
 ) -> AdminResult<Response> {
     auth.require(Resource::Tenants, Access::Read)?;
     let tenant = state.admin_tenants().get(&slug).await?;
-    Ok(json(StatusCode::OK, &TenantView::from(tenant)))
+    let issuer = state.admin_issuer_of(&tenant);
+    Ok(json(StatusCode::OK, &TenantView::new(tenant, issuer)))
 }
 
 /// Update a tenant (the slug is immutable). Settings are merged with the current ones; the
 /// CAPTCHA secret is write-only. Turning on `email_otp` or `magic_link` needs SMTP (the tenant's
 /// SMTP settings or the installation SMTP). Enabling a signing algorithm creates its key at once; disabling
 /// one that a client still uses for its ID tokens is refused (409, the problem lists the
-/// clients).
+/// clients). `dcr` and `cimd` are merged field by field; the system tenant refuses any policy
+/// but `disabled` (422).
 #[utoipa::path(
     patch,
     path = "/api/admin/v1/tenants/{slug}",
@@ -159,7 +171,8 @@ pub(crate) async fn update_tenant(
     let tenant = tenants
         .update(&slug, patch, captcha, auth.actor(), &ctx)
         .await?;
-    Ok(json(StatusCode::OK, &TenantView::from(tenant)))
+    let issuer = state.admin_issuer_of(&tenant);
+    Ok(json(StatusCode::OK, &TenantView::new(tenant, issuer)))
 }
 
 /// Delete a tenant with all its data. `system` and `default` cannot be deleted (403).
