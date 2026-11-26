@@ -12,10 +12,24 @@
 #      Logout) and into <out-backchannel-config> (Back-Channel Logout plan; `client` is the back-channel
 #      client there).
 #
-# Usage: setup.sh <setup-url> <out-config> <out-backchannel-config>
+# Usage: setup.sh [--public] <setup-url> <out-config> <out-backchannel-config>
 #
-# The setup URL's host is resolved to 127.0.0.1 (the suite reaches the same listener as
-# host.docker.internal from inside Docker). The certificate is self-signed, so curl runs with -k.
+# Local mode (default, used by run.sh and CI): the setup URL's host is resolved to 127.0.0.1 (the suite
+# reaches the same listener as host.docker.internal from inside Docker). The certificate is self-signed,
+# so curl runs with -k. The suite callbacks point at the self-hosted suite
+# (https://localhost.emobix.co.uk:8443).
+#
+# Public mode (--public, for the hosted suite used for certification, see docs/CERTIFICATION.md): the
+# setup URL must be https and is reached through normal DNS resolution with normal TLS verification
+# (no --resolve, no -k), so the deployment needs a publicly trusted certificate. The suite callbacks
+# point at SUITE_URL (default https://www.certification.openid.net).
+#
+# Optional environment (both modes):
+#   SUITE_URL    suite base URL for the client callbacks (local default https://localhost.emobix.co.uk:8443,
+#                public default https://www.certification.openid.net)
+#   SUITE_ALIAS  suite alias (default anvilid). The callbacks are SUITE_URL/test/a/SUITE_ALIAS/...; a
+#                different alias is also written into the rendered configs.
+#
 # Secrets (admin password, management secret, client secrets, user password) are never printed; they
 # only end up in the two config files, which the caller keeps in a temporary directory and deletes on exit.
 set -euo pipefail
@@ -23,24 +37,38 @@ set -euo pipefail
 log() { printf '[conformance-setup] %s\n' "$*" >&2; }
 die() { log "ERROR: $*"; exit 2; }
 
-[[ $# -eq 3 ]] || die "usage: setup.sh <setup-url> <out-config> <out-backchannel-config>"
+USAGE="usage: setup.sh [--public] <setup-url> <out-config> <out-backchannel-config>"
+PUBLIC=0
+if [[ "${1:-}" == "--public" ]]; then
+  PUBLIC=1
+  shift
+fi
+[[ $# -eq 3 ]] || die "$USAGE"
 SETUP_URL="$1"
 OUT_CONFIG="$2"
 OUT_BACKCHANNEL_CONFIG="$3"
 TEMPLATE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/config.template.json"
 [[ -f "$TEMPLATE" ]] || die "missing $TEMPLATE"
 
-# Suite callback base. The suite's public name is localhost.emobix.co.uk:8443; each client alias
-# gets /test/a/{alias}/callback.
-SUITE_ALIAS="anvilid"
-SUITE_BASE="https://localhost.emobix.co.uk:8443/test/a/${SUITE_ALIAS}"
+# Suite callback base. The self-hosted suite's public name is localhost.emobix.co.uk:8443, the hosted
+# suite is www.certification.openid.net; each client alias gets /test/a/{alias}/callback.
+if [[ "$PUBLIC" -eq 1 ]]; then
+  SUITE_URL="${SUITE_URL:-https://www.certification.openid.net}"
+  [[ "$SETUP_URL" == https://* ]] || die "--public needs an https setup URL"
+else
+  SUITE_URL="${SUITE_URL:-https://localhost.emobix.co.uk:8443}"
+fi
+SUITE_URL="${SUITE_URL%/}"
+SUITE_ALIAS="${SUITE_ALIAS:-anvilid}"
+[[ "$SUITE_ALIAS" =~ ^[A-Za-z0-9._-]+$ ]] || die "SUITE_ALIAS may only contain letters, digits, '.', '_' and '-'"
+SUITE_BASE="${SUITE_URL}/test/a/${SUITE_ALIAS}"
 SUITE_CALLBACK="${SUITE_BASE}/callback"
 # Logout endpoints of the suite for the same alias (suite: CreatePostLogoutRedirectUri,
 # CreateBackchannelLogoutUri, both `base_url` + fixed suffix).
 SUITE_POST_LOGOUT="${SUITE_BASE}/post_logout_redirect"
 SUITE_BACKCHANNEL="${SUITE_BASE}/backchannel_logout"
 
-# Base URL (scheme://host:port) and the host:port pair to pin to loopback.
+# Base URL (scheme://host:port) and the host:port pair to pin to loopback (local mode only).
 BASE_URL=$(python3 -c 'import sys,urllib.parse as u;p=u.urlsplit(sys.argv[1]);print(f"{p.scheme}://{p.netloc}")' "$SETUP_URL")
 HOSTPORT=$(python3 -c 'import sys,urllib.parse as u;p=u.urlsplit(sys.argv[1]);print(f"{p.hostname}:{p.port or 443}")' "$SETUP_URL")
 
@@ -49,7 +77,11 @@ trap 'rm -rf "$WORK"' EXIT
 JAR="$WORK/cookies"
 
 curl_() {
-  curl -sS -k --fail-with-body --resolve "${HOSTPORT}:127.0.0.1" "$@"
+  if [[ "$PUBLIC" -eq 1 ]]; then
+    curl -sS --fail-with-body "$@"
+  else
+    curl -sS -k --fail-with-body --resolve "${HOSTPORT}:127.0.0.1" "$@"
+  fi
 }
 
 rand() { python3 -c 'import secrets;print(secrets.token_urlsafe(24))'; }
@@ -227,7 +259,7 @@ render_config() {
   BASE_URL="$BASE_URL" CLIENT_ID="$2" CLIENT_SECRET="$3" \
   CLIENT2_ID="$client2_id" CLIENT2_SECRET="$client2_secret" \
   POST_CLIENT_ID="$post_id" POST_CLIENT_SECRET="$post_secret" \
-  USER_EMAIL="$user_email" USER_PASSWORD="$user_password" \
+  USER_EMAIL="$user_email" USER_PASSWORD="$user_password" SUITE_ALIAS="$SUITE_ALIAS" \
   python3 - "$TEMPLATE" "$1" <<'PY'
 import json, os, sys
 template, out = sys.argv[1:3]
@@ -246,7 +278,11 @@ values = {
 for placeholder, env in values.items():
     # Values are JSON-escaped (without the surrounding quotes) before substitution.
     text = text.replace(placeholder, json.dumps(os.environ[env])[1:-1])
-json.loads(text)  # must still be valid JSON
+config = json.loads(text)  # must still be valid JSON
+if config.get("alias") != os.environ["SUITE_ALIAS"]:
+    # Only a non-default alias rewrites the file; the default keeps the template's formatting.
+    config["alias"] = os.environ["SUITE_ALIAS"]
+    text = json.dumps(config, indent=2) + "\n"
 open(out, "w", encoding="utf-8").write(text)
 PY
 }

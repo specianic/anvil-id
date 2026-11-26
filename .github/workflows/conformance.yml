@@ -5,12 +5,15 @@
 # logout tokens reach the suite through a per-run callback CA and a 127.0.0.1/32 outbound allow-list,
 # both operator settings), and enforces the committed expected-skips and expected-failures
 # files exactly. Same entry point as local runs: `tests/conformance/run.sh all` (= `just conformance`).
+# Also runs on `v*` tag pushes; those runs keep the `conformance-results` artifact for 90 days.
 # No secrets.
 name: conformance
 
 on:
   push:
     branches: [main]
+    # Release tags: the release candidate's run is kept as evidence (90-day artifact below).
+    tags: ["v*"]
   workflow_dispatch:
   # PRs that touch protocol code, the theme (browser automation selectors, form_post page) or the
   # harness. crates/** covers crates/anvil-core/src/oauth/**, service/{authorize,token,consent}.rs and
@@ -61,3 +64,6 @@ jobs:
           name: conformance-results
           path: conformance-results/
           if-no-files-found: warn
+          # Tag runs are release evidence (docs/CERTIFICATION.md) and are kept for 90 days (the maximum
+          # without a repository setting change). 0 = the repository default, unchanged for other runs.
+          retention-days: ${{ startsWith(github.ref, 'refs/tags/') && 90 || 0 }}

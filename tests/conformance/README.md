@@ -32,10 +32,17 @@ tests/conformance/run.sh backchannel  # Back-Channel Logout OP only
 
 Every selection starts its own suite and its own fresh `anvilid`; `all` runs the five plans in the
 order above against one suite instance and one `anvilid`. CI (`.github/workflows/conformance.yml`) runs `run.sh all` on pushes
-to `main`, on manual dispatch and on pull requests that touch `crates/**` (this includes
+to `main`, on `v*` tag pushes, on manual dispatch and on pull requests that touch `crates/**` (this includes
 `crates/anvil-core/src/oauth/**`, the authorize/token/consent services and
 `crates/anvil-web/src/protocol/**`), `themes/**`, the harness or the workflow. Results and logs are
-uploaded as the `conformance-results` artifact on every run, failed or not.
+uploaded as the `conformance-results` artifact on every run, failed or not. Tag runs keep the artifact
+for 90 days, so the release candidate's evidence stays retrievable; other runs use the repository's
+default retention.
+
+This self-hosted run is our own regression evidence. It is not the certification artefact: an
+OpenID certification submission uses logs from the hosted suite at `www.certification.openid.net`
+against a publicly reachable deployment. [docs/CERTIFICATION.md](../../docs/CERTIFICATION.md) is the
+runbook for that, and it reuses `setup.sh --public` (below) to provision the deployment.
 
 Requirements: Docker with the compose plugin, Python 3, curl, openssl and the Rust toolchain. The first
 run downloads about 1 GB of images (MongoDB, the suite server and nginx). After that a run takes a few
@@ -124,8 +131,8 @@ uses (see the next section).
 
 ### Setup flow (`setup.sh`)
 
-`setup.sh <setup-url> <out-config> <out-backchannel-config>` provisions the instance through public
-interfaces only:
+`setup.sh <setup-url> <out-config> <out-backchannel-config>` (local mode, used by `run.sh`) provisions
+the instance through public interfaces only:
 
 1. `GET /setup?token=…` with a cookie jar (CSRF token and flow cookie), then `POST` an admin email and a
    random password. The result page exposes the management client credentials in `#mgmt-client-id` and
@@ -159,7 +166,26 @@ interfaces only:
    name does not match the reviewed skip's `*anvilid-oidcc.json` pattern.
 
 No secret is printed. The two rendered configs are the only place the secrets are written, and they are
-deleted on exit. `anvilid.log` contains the one-time setup URL, which is consumed during the run and belongs to
+deleted on exit.
+
+#### Public mode (`setup.sh --public`)
+
+`setup.sh --public <setup-url> <out-config> <out-backchannel-config>` runs the same five steps against
+a publicly reachable deployment, for the hosted suite (see
+[docs/CERTIFICATION.md](../../docs/CERTIFICATION.md)). The differences:
+
+- The setup URL must be `https://`. curl resolves the host through normal DNS and verifies TLS
+  normally (no `--resolve` to 127.0.0.1 and no `-k`), so the deployment needs a publicly trusted
+  certificate.
+- The client callbacks, post-logout redirect and back-channel logout URIs point at `SUITE_URL`,
+  which defaults to `https://www.certification.openid.net` in public mode (local mode:
+  `https://localhost.emobix.co.uk:8443`).
+
+Both modes accept `SUITE_ALIAS` (default `anvilid`). The URIs are `$SUITE_URL/test/a/$SUITE_ALIAS/…`, and a
+non-default alias is also written into the rendered configs' `alias` field. On the hosted suite, choose
+an alias nobody else is using. Secrets are still never printed. In public mode the rendered configs
+are the operator's to keep safe and delete, and the admin password is not shown anywhere. The
+deployment is meant to be thrown away after the run. `run.sh` always uses the default local mode. `anvilid.log` contains the one-time setup URL, which is consumed during the run and belongs to
 an instance that no longer exists.
 
 ### Browser automation
