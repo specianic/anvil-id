@@ -575,5 +575,5 @@ job: each run that checked something logs one `domain re-check ran` line with th
 - The 0.4 limitations above still apply.
 - SAML 2.0 is experimental and off by default ([SAML.md](SAML.md)).
 - The domain re-check interval (24 hours) and grace period (7 days) are fixed.
-- Tenant-restricted system administrators (system roles limited to some tenants) are deferred to
-  Phase 7.
+- Tenant-restricted system administrators (system roles limited to some tenants) are planned for a
+  later 1.x release.

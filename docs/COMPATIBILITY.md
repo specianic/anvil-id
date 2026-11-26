@@ -51,7 +51,7 @@ are breaking too, even though no tool detects them; review catches those.
 
 No surface is deprecated in 1.0. When something is deprecated in a 1.x release:
 
-1. **Announce** it in the release notes (CHANGELOG) and in [UPGRADING.md](UPGRADING.md), with the
+1. **Announce** it in the release notes (the GitHub release for that version) and in [UPGRADING.md](UPGRADING.md), with the
    replacement and the earliest major version that removes it.
 2. **Warn at runtime:**
    - HTTP APIs answer the deprecated operation with a `Deprecation` header (RFC 9745) and, once a
