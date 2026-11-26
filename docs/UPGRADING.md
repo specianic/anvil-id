@@ -300,3 +300,109 @@ metadata documents (`cimd.policy`) are `disabled` in every tenant, and always in
 - Keep tenant configuration in version control with `anvilid tenant export` ([CONFIG-YAML.md](CONFIG-YAML.md)).
 - For MCP servers and agents, enable dynamic registration or client metadata documents for the
   tenant ([MCP.md](MCP.md)).
+
+## 0.4 to 1.0
+
+**Back up first.** Stop AnvilID, then copy the database (for SQLite, the whole data directory, or
+`anvilid backup create`) and the KEK. The SQLite upgrade rebuilds five tables (below); a backup is
+the only way back if anything goes wrong, and a downgrade to 0.4 means restoring it.
+
+**Stop every 0.4 node before you start a 1.0 node.** Running 0.4 and 1.0 binaries against the
+same database is not supported: 0.4 does not know the new columns and constraints.
+
+### Migrations
+
+The upgrade is automatic and keeps all data. None of the migrations is destructive, so no
+`--allow-destructive-migrations` flag is needed.
+
+- **SQLite:** two migrations.
+  - `0008_release_1_0` (one transaction, additive): the tables `organization`, `org_membership`,
+    `org_invitation` and `org_domain`; `org_id` on `authorization_code` and `token_family`;
+    `organization` on `client` (default `off`).
+  - `0009_release_1_0_rebuild` rebuilds `connection`, `role`, `role_assignment`, `replay_guard` and
+    `email_template` to add organization columns, foreign keys and new kinds (`saml` connections,
+    `saml_assertion_id` replay entries, the `org_invitation` email template). SQLite cannot alter
+    these constraints in place, and `identity_link` and `role_assignment` reference the rebuilt
+    tables, so this migration runs **outside** sqlx's per-migration transaction: it turns foreign
+    keys off, rebuilds the five tables in its own transaction (each: create the new table, copy
+    every column of every row, drop the old one, rename, recreate every index), checks
+    `pragma_foreign_key_check` before `COMMIT` (any violation rolls everything back), then turns
+    foreign keys on again. Re-running it after a crash between its commit and sqlx's bookkeeping
+    is safe. This is why a backup matters most for SQLite.
+- **Postgres:** `0007_release_1_0`, one transaction, in place: the same four tables, new columns,
+  swapped CHECK constraints for the new kinds, the role-assignment primary key replaced by two
+  partial unique indexes, and composite foreign keys. Rows are not copied.
+
+The CI upgrade tests build a populated 0.4 database on each backend (tenants, users, roles and
+assignments, connections of several kinds with identity links, replay entries, email templates,
+a client, a token family and a code), upgrade it, compare every row and run the full storage
+contract suite on the result. Every 0.4 row becomes tenant-level: `org_id` is null and every
+client's `organization` policy is `off`.
+
+### Tenants without organizations behave as in 0.4
+
+Nothing changes for a tenant until you create an organization, set a client's `organization`
+policy, or verify and route a domain:
+
+- The sign-in page stays the combined form. It turns into the email-first page only for tenants
+  with a verified domain routed to an enabled organization connection.
+- Clients default to `organization: off`, so no token carries organization claims.
+- Organization connections never appear on the tenant's sign-in page.
+
+Changes that do apply to every tenant:
+
+- **Opaque tokens:** introspection and UserInfo now return the role, permission and attribute
+  claims that a JWT access token would carry (0.4 returned none for opaque tokens).
+- **Reserved claim names:** `org_id`, `org_slug`, `org_roles` and `org_permissions` are reserved.
+  A custom attribute claim or a renamed role/permission claim with one of these names is refused
+  when saved and is never emitted.
+- **Discovery:** `claims_supported` lists the four organization claims.
+- **`org:admin` is a reserved scope:** it can never be registered through dynamic registration or
+  a client metadata document, cannot be listed in `dcr.allowed_scopes`, and cannot be held by
+  `system` tenant clients.
+- **Second-factor passkeys:** at the second-factor step the browser's passkey picker now offers
+  only the signing-in user's passkeys.
+- **Admin API:** new `organizations` resource with the scopes `admin:organizations:read|write`;
+  signing keys (`GET /tenants/{slug}/keys`, `POST /tenants/{slug}/keys/rotate`, scope
+  `admin:settings:*`); the email template kind `org_invitation` (nine kinds); the client field
+  `organization`; tenant settings `claims.org_roles` / `claims.org_permissions`; the tenant view
+  field `features.saml`; the connection view fields `organization` and, for SAML, `sp`. The
+  tenant's `GET …/connections` list now includes organization connections (with `organization`
+  set); changing one there answers `409`, so automation that edits every listed connection should
+  skip them.
+- **Tenant YAML** documents never contain organizations or anything they own, and `--prune` never
+  deletes them ([CONFIG-YAML.md](CONFIG-YAML.md#organizations-are-not-part-of-the-document)).
+
+### New configuration keys
+
+| Key | Default | Effect of the default |
+|---|---|---|
+| `saml_experimental` (`ANVILID_SAML_EXPERIMENTAL`, `--saml-experimental`) | `false` | SAML 2.0 connections cannot be created or used ([SAML.md](SAML.md)) |
+| `domain_verification_resolvers` (`ANVILID_DOMAIN_VERIFICATION_RESOLVERS`, `--domain-verification-resolvers`) | empty | Domain TXT lookups use the system resolver configuration |
+
+[OPERATIONS.md](OPERATIONS.md#configuration-keys-added-in-10) describes both, the DNS lookup and
+the daily domain re-check job, which every node schedules (one node runs it at a time).
+
+### New token claims
+
+With an active organization, tokens carry `org_id`, `org_slug`, `org_roles` and `org_permissions`
+([ORGANIZATIONS.md](ORGANIZATIONS.md#organizations-in-tokens)). Resource servers that reject
+unknown claims should allow them before you turn on organizations for their clients.
+
+### Limitations in 1.0
+
+- SAML 2.0 is experimental and off by default; IdP-initiated SSO, encrypted assertions and Single
+  Logout are not supported.
+- Tenant-restricted system administrators are deferred to Phase 7.
+- KEK rotation is still not supported, and `jwks_uri` is still refused for dynamic and CIMD
+  clients.
+- The other open items are listed in [ORGANIZATIONS.md](ORGANIZATIONS.md#limitations-in-10).
+
+### What to configure next
+
+- Create organizations and set the `organization` policy of the clients that serve business
+  customers ([ORGANIZATIONS.md](ORGANIZATIONS.md)).
+- On B2B tenants with closed registration, decide on `upstream_registration` before adding
+  organization connections (org just-in-time sign-up follows it).
+- Behind a firewall that blocks outbound DNS, set `domain_verification_resolvers`.
+- Subscribe to the `organization.*` webhook events ([WEBHOOKS.md](WEBHOOKS.md)).
