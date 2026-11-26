@@ -14,10 +14,13 @@ on:
       - "fuzz/**"
       - "crates/anvil-core/src/oauth/**"
       - "crates/anvil-jose/src/**"
+      - "crates/anvil-core/src/policy/home_realm.rs"
+      - "crates/anvil-web/src/adapters/saml_xml.rs"
   pull_request:
     paths:
       - "crates/anvil-jose/**"
       - "crates/anvil-core/**"
+      - "crates/anvil-web/src/adapters/saml_xml.rs"
       - "fuzz/**"
 
 permissions:
@@ -53,7 +56,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [jwt_decode, client_assertion, authorize_parse, redirect_match]
+        target:
+          [
+            jwt_decode,
+            client_assertion,
+            authorize_parse,
+            redirect_match,
+            saml_response_parse,
+            saml_metadata_parse,
+            org_domain_parse,
+          ]
     steps:
       - uses: actions/checkout@v7
       - name: Install nightly toolchain

@@ -66,6 +66,7 @@ fn client(
         registration_source: anvil_core::model::ClientSource::Static,
         metadata_expires_at: None,
         registration_access_token_hash: None,
+        organization: anvil_core::model::OrgClientPolicy::default(),
         created_at: at,
         updated_at: at,
     }

@@ -16,6 +16,8 @@ cargo-fuzz = true
 [dependencies]
 anvil-core = { path = "../crates/anvil-core" }
 anvil-jose = { path = "../crates/anvil-jose" }
+# SAML targets (06-09): the production SamlXmlAdapter.
+anvil-web = { path = "../crates/anvil-web" }
 arbitrary = { version = "1.5", features = ["derive"] }
 base64 = "0.23.1"
 libfuzzer-sys = "0.4.13"
@@ -71,6 +73,27 @@ bench = false
 [[bin]]
 name = "tenant_config_parse"
 path = "fuzz_targets/tenant_config_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "saml_response_parse"
+path = "fuzz_targets/saml_response_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "saml_metadata_parse"
+path = "fuzz_targets/saml_metadata_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "org_domain_parse"
+path = "fuzz_targets/org_domain_parse.rs"
 test = false
 doc = false
 bench = false
