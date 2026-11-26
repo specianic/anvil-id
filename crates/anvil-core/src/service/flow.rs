@@ -15,6 +15,13 @@
 //! - Login: unknown users, blocked users and users without a password run
 //!   `PasswordHasher::verify(None, …)` (the dummy hash) and produce the same failure as a wrong
 //!   password ([`password_login_result`]).
+//! - Imported Firebase scrypt hashes need their tenant hash profile: core resolves it through
+//!   [`HashProfileService::material_for`] and passes the material to the hasher. A missing or
+//!   unopenable profile passes `None`, which the hasher fails closed (`valid = false`), audited
+//!   and shown like a wrong password.
+//! - A successful login with outdated parameters or a legacy scheme is rehashed to the current
+//!   Argon2id parameters with a compare-and-swap on the old stored value
+//!   (`UserRepo::replace_password_if`), so a concurrent password change is never overwritten.
 //! - Recovery request: the response is `recovery.sent` whether or not an account exists; the
 //!   request does the same lookup either way and issues a token only for an active user.
 //!
@@ -130,6 +137,7 @@ use super::account::{
 };
 use super::audit::AuditService;
 use super::authorize::{mfa_context, second_factor_methods};
+use super::hash_profile::HashProfileService;
 use super::saml::SamlService;
 use super::session::{NewSessionCookie, SessionService};
 use super::upstream::{StartResult, UpstreamService, confirm_link};
@@ -153,15 +161,17 @@ use crate::flow::upstream::upstream_aad;
 use crate::model::{
     ActorKind, AuditAction, AuditActor, AuditDetails, AuditOutcome, AuthRequestId, BrowserSession,
     Connection, ConnectionKind, CounterOutcome, CredentialId, CredentialKind, Flow, FlowId,
-    FlowKind, NewEmail, NewFlow, NewPasskey, NewPasswordCredential, NewSelfServiceToken, NewUser,
-    OrgId, OutboxId, PasskeyCredential, RecoveryCodeHash, RecoveryNotice, RequestContext,
-    SecretHash, SelfServiceKind, SessionId, StandardClaims, TOTP_SEED_PURPOSE, Tenant, TenantId,
-    TotpCredential, User, UserId, UserStatus, credential_aad, normalize_email, seal_payload,
+    FlowKind, HashProfileMaterial, NewEmail, NewFlow, NewPasskey, NewPasswordCredential,
+    NewSelfServiceToken, NewUser, OrgId, OutboxId, PasskeyCredential, RecoveryCodeHash,
+    RecoveryNotice, RequestContext, SecretHash, SelfServiceKind, SessionId, StandardClaims,
+    TOTP_SEED_PURPOSE, Tenant, TenantId, TotpCredential, User, UserId, UserStatus, credential_aad,
+    normalize_email, seal_payload,
 };
 use crate::oauth::decision::{SessionDecision, decide};
 use crate::policy::PasswordPolicy;
 use crate::policy::home_realm::{self, Route, RoutedDomain};
 use crate::policy::mfa::{AcrRequest, MfaRequirement, mfa_requirement};
+use crate::policy::password_import::{FIREBASE_PROFILE_PREFIX, StoredHash, parse_stored};
 use crate::policy::return_to::{ReturnTarget, parse_return_target};
 use crate::ports::{
     AssertionIdentity, BreachChecker, Clock, PasskeyCeremonies, PasskeyError, PasskeyUser,
@@ -2351,10 +2361,10 @@ impl FlowService {
                     }
                     _ => None,
                 };
-                // No hash profile yet: imported legacy hashes and their profiles land in 07-14.
+                let profile = self.hash_profile_for(tenant, phc.as_deref()).await?;
                 let check = match self
                     .hasher
-                    .verify(phc.as_deref(), password.expose_secret(), None)
+                    .verify(phc.as_deref(), password.expose_secret(), profile.as_ref())
                     .await
                 {
                     Ok(c) => c,
@@ -2364,8 +2374,10 @@ impl FlowService {
                 match password_login_result(user, phc.is_some(), check, env.require_verified_email)
                 {
                     Ok(u) => {
-                        if check.needs_rehash {
-                            self.rehash(tenant, u.id, password).await?;
+                        if check.needs_rehash
+                            && let Some(old_phc) = phc.as_deref()
+                        {
+                            self.rehash(tenant, u.id, old_phc, password).await?;
                         }
                         exec.attempt = Some(AuthAttempt::PasswordSucceeded {
                             ident_hash,
@@ -3118,19 +3130,49 @@ impl FlowService {
             .await
     }
 
-    /// Re-hashes a password with the current parameters after a successful login. Skipped
-    /// (retried at the next login) when the hasher is overloaded.
+    /// The unsealed hash profile an imported Firebase scrypt hash references, if `phc` is one.
+    /// A missing profile, or a sealed key that does not open, gives `None`: the hasher then fails
+    /// the check closed, and the user sees an ordinary login failure. Storage errors propagate.
+    async fn hash_profile_for(
+        &self,
+        tenant: TenantId,
+        phc: Option<&str>,
+    ) -> Result<Option<HashProfileMaterial>, CoreError> {
+        let Some(phc) = phc.filter(|p| p.starts_with(FIREBASE_PROFILE_PREFIX)) else {
+            return Ok(None);
+        };
+        let Ok(StoredHash::FirebaseScrypt { profile, .. }) = parse_stored(phc) else {
+            return Ok(None);
+        };
+        let profiles = HashProfileService {
+            storage: Arc::clone(&self.storage),
+            clock: Arc::clone(&self.clock),
+            kek: Arc::clone(&self.kek),
+        };
+        match profiles.material_for(tenant, profile).await {
+            Ok(material) => Ok(material),
+            Err(CoreError::Storage(e)) => Err(e.into()),
+            Err(_) => Ok(None),
+        }
+    }
+
+    /// Re-hashes a password with the current parameters after a successful login, replacing
+    /// `old_phc` only if it is still the stored value (compare-and-swap): when the password
+    /// changed in the meantime the newer one stays and the rehash is dropped. Skipped (retried
+    /// at the next login) when the hasher is overloaded.
     async fn rehash(
         &self,
         tenant: TenantId,
         user: UserId,
+        old_phc: &str,
         password: &SecretString,
     ) -> Result<(), CoreError> {
         match self.hasher.hash(password.expose_secret()).await {
             Ok(phc) => {
+                // `false` (another writer won) is not an error.
                 self.storage
                     .users()
-                    .set_password(tenant, user, &phc, self.clock.now())
+                    .replace_password_if(tenant, user, old_phc, &phc, self.clock.now())
                     .await?;
                 Ok(())
             }
