@@ -54,6 +54,27 @@
 //! cookie matched the pending sign-in: only then may the caller clear the binding cookie, so a
 //! forged callback cannot cancel a pending sign-in.
 //!
+//! # Enterprise (organization) connections
+//!
+//! Every `Login` identity, OIDC/OAuth from the callback today and SAML (06-18) from its own
+//! continue step, goes through one completion path, [`UpstreamService::complete_identity`]: link
+//! decision, just-in-time registration, org membership, `require_verified_email`, then MFA and
+//! the session through `FlowService::upstream_primary`. For a connection owned by an
+//! organization (`Connection.org_id`):
+//!
+//! - the upstream email counts as verified only per [`enterprise_email_trust`]: present, on one of
+//!   **that** org's verified domains, and (OIDC/OAuth) the provider's `email_verified` strictly
+//!   true (SAML: the signed assertion vouches). Otherwise it is never auto-linked and a match
+//!   needs the Phase 4 confirmation, so org A's IdP cannot take over an account on a domain
+//!   verified by org B;
+//! - just-in-time registration creates the user, the identity link and the org membership with
+//!   the org's default roles (those that still exist) in one storage transaction;
+//! - a user who signs in through the org connection (existing link, auto-link or a confirmed
+//!   link) and is not yet a member becomes one (JIT membership).
+//!
+//! Each membership added this way is audited `org_member_added` (target: the user; details: the
+//! org and the connection).
+//!
 //! An upstream sign-in is single factor (`amr` `[fed]`, pwd `acr`); the flow's effective MFA
 //! policy then applies (`FlowService::upstream_primary`). The `Link` purpose links the identity to
 //! the settings flow's owner instead (mode `account`); an identity linked to another user is
@@ -91,17 +112,20 @@ use crate::flow::upstream::{
 use crate::model::{
     ActorKind, AuditAction, AuditActor, AuditDetails, AuditOutcome, AuthRequestId, BrowserSession,
     Connection, ConnectionConfig, ConnectionKind, Flow, FlowId, FlowKind, IdentityLinkId,
-    NewIdentityLink, NewUser, RegistrationMode, SelfServiceKind, StandardClaims, TenantId, User,
-    UserId, UserStatus, normalize_email,
+    NewIdentityLink, NewMembership, NewUser, Organization, RegistrationMode, RoleId,
+    SelfServiceKind, StandardClaims, TenantId, User, UserId, UserStatus, normalize_email,
 };
 use crate::ports::{
-    ApiProfile, Clock, CodeExchange, ProviderMetadata, Storage, StorageError, UpstreamClient,
+    AddMemberOutcome, ApiProfile, Clock, CodeExchange, ProviderMetadata, Storage, StorageError,
+    UpstreamClient,
 };
 use crate::upstream::claims::{
     UpstreamIdentity, UpstreamTokenError, normalise_apple, normalise_github, normalise_oauth2,
     normalise_oidc, validate_id_token,
 };
-use crate::upstream::linking::{EmailMatch, LinkDecision, LinkInputs, RefuseReason, link_decision};
+use crate::upstream::linking::{
+    EmailMatch, LinkDecision, LinkInputs, RefuseReason, enterprise_email_trust, link_decision,
+};
 use crate::upstream::providers::{
     Protocol, ResolvedProvider, apple_client_secret_claims, authorization_url, resolve,
 };
@@ -290,6 +314,100 @@ fn token_reason(e: &UpstreamTokenError) -> &'static str {
     }
 }
 
+/// The organization owning `conn`: `Ok(None)` for a tenant connection, `Ok(Some(None))` if the
+/// org no longer exists (deleting an org deletes its connections, so only a race gets here).
+async fn owning_org(
+    storage: &dyn Storage,
+    tenant: TenantId,
+    conn: &Connection,
+) -> Result<Option<Option<Organization>>, CoreError> {
+    match conn.org_id {
+        None => Ok(None),
+        Some(org_id) => Ok(Some(storage.organizations().get(tenant, org_id).await?)),
+    }
+}
+
+/// The org's default roles for a just-in-time member: only those that still exist and can be
+/// assigned in the org (tenant roles, or roles owned by this org), so a deleted default role
+/// does not block every sign-in.
+async fn default_roles(
+    storage: &dyn Storage,
+    tenant: TenantId,
+    org: &Organization,
+) -> Result<Vec<RoleId>, CoreError> {
+    let mut roles = Vec::with_capacity(org.settings.default_role_ids.len());
+    for id in &org.settings.default_role_ids {
+        if let Some(role) = storage.roles().get(tenant, *id).await?
+            && role.org_id.is_none_or(|o| o == org.id)
+            && !roles.contains(id)
+        {
+            roles.push(*id);
+        }
+    }
+    Ok(roles)
+}
+
+/// Audits `org_member_added` for a membership created by an upstream sign-in through `conn`.
+async fn audit_member_added(
+    audit: &AuditService,
+    cx: &FlowContext<'_>,
+    conn: &Connection,
+    org: &Organization,
+    user: UserId,
+) -> Result<(), CoreError> {
+    audit
+        .record(
+            cx.tenant.id,
+            AuditActor::user(user),
+            AuditAction::OrgMemberAdded,
+            Some(user.to_string()),
+            AuditOutcome::Success,
+            cx.ctx,
+            AuditDetails::org(org.id, &org.slug)
+                .with(AuditDetails::connection(&conn.slug, conn.kind().as_str())),
+        )
+        .await
+}
+
+/// JIT membership: makes `user` a member of the org owning `conn` (with the org's default roles)
+/// if it is an org connection and the user is not a member yet. Returns `false` if storage
+/// refused the membership (org or user gone meanwhile).
+///
+/// Run after the sign-in is decided (existing link, auto-link, confirmed link), never for an
+/// unconfirmed match.
+async fn ensure_org_membership(
+    storage: &dyn Storage,
+    audit: &AuditService,
+    cx: &FlowContext<'_>,
+    conn: &Connection,
+    user: UserId,
+) -> Result<bool, CoreError> {
+    let tenant = cx.tenant.id;
+    let org = match owning_org(storage, tenant, conn).await? {
+        None => return Ok(true),
+        Some(None) => return Ok(false),
+        Some(Some(org)) => org,
+    };
+    let orgs = storage.organizations();
+    if orgs.is_member(tenant, org.id, user).await? {
+        return Ok(true);
+    }
+    let membership = NewMembership {
+        org_id: org.id,
+        user_id: user,
+        role_ids: default_roles(storage, tenant, &org).await?,
+        created_at: audit.clock.now(),
+    };
+    match orgs.add_member(tenant, &membership).await? {
+        AddMemberOutcome::Added => {
+            audit_member_added(audit, cx, conn, &org, user).await?;
+            Ok(true)
+        }
+        AddMemberOutcome::AlreadyMember => Ok(true),
+        AddMemberOutcome::NotFound => Ok(false),
+    }
+}
+
 /// Links the identity waiting in a login flow to `user`, who just proved their account in that
 /// flow (`identity_linked`, mode `confirmed`). A link that can no longer be created (connection
 /// gone or disabled, subject linked meanwhile) is audited `upstream_login_failed` and does not
@@ -349,7 +467,12 @@ pub(crate) async fn confirm_link(
                     cx.ctx,
                     AuditDetails::link(&conn.slug, "confirmed"),
                 )
-                .await
+                .await?;
+            // The user proved both the account and the org IdP identity: JIT membership.
+            if !ensure_org_membership(storage, audit, cx, &conn, user).await? {
+                return failed("membership_refused").await;
+            }
+            Ok(())
         }
         Err(StorageError::Conflict(_)) => failed("link_conflict").await,
         Err(e) => Err(e.into()),
@@ -854,7 +977,7 @@ impl UpstreamService<'_> {
         };
         match (pending.purpose, opened.rest) {
             (UpstreamPurpose::Login, Rest::Login(state)) => {
-                self.sign_in(cx, &flow, state, conn, identity, current)
+                self.complete_identity(cx, &flow, state, conn, identity, current)
                     .await
             }
             (UpstreamPurpose::Link { user_id }, Rest::Settings(s)) if s.user == user_id => {
@@ -1078,21 +1201,46 @@ impl UpstreamService<'_> {
             .map_err(|_| CoreError::Internal("signing the Apple client secret failed".into()))
     }
 
-    /// `Login` purpose: the link decision, then sign-in (with the MFA policy), link
-    /// confirmation or just-in-time registration.
-    async fn sign_in(
+    /// The shared completion of a `Login` identity (module docs), for every upstream protocol:
+    /// OIDC/OAuth from [`Self::callback`], SAML from its continue step (06-18). `flow` is the
+    /// login flow the sign-in started in (already proved to be this browser's, its pending
+    /// authorization consumed) and `state` its login state; `identity` is the validated,
+    /// normalised identity (`email_verified` already AND-ed with the connection's trust; SAML
+    /// passes the extracted attributes). Applies the org email trust for org connections, the
+    /// link decision, JIT registration (with the org membership), JIT membership,
+    /// `require_verified_email`, then MFA and the session through `FlowService::upstream_primary`.
+    /// Failures are audited `upstream_login_failed` and restart the sign-in from `flow`.
+    pub(crate) async fn complete_identity(
         &self,
         cx: &FlowContext<'_>,
         flow: &Flow,
         state: LoginState,
         conn: &Connection,
-        identity: UpstreamIdentity,
+        mut identity: UpstreamIdentity,
         current: Option<&BrowserSession>,
     ) -> Result<UpstreamOutcome, CoreError> {
         let tenant = cx.tenant.id;
         let now = self.clock().now();
         let to = FailTo::Login(Some(flow));
         let storage = self.storage();
+        let org = match owning_org(storage, tenant, conn).await? {
+            None => None,
+            Some(None) => return self.fail(cx, Some(conn), to, "connection_disabled").await,
+            Some(Some(org)) => Some(org),
+        };
+        if let Some(org) = &org {
+            // Pattern 9: an org IdP is trusted only for its own org's verified domains.
+            let domains = storage
+                .organizations()
+                .verified_domains_of_org(tenant, org.id)
+                .await?;
+            let upstream_verified = match conn.config {
+                ConnectionConfig::Saml(_) => None,
+                _ => Some(identity.email_verified),
+            };
+            identity.email_verified =
+                enterprise_email_trust(identity.email.as_deref(), &domains, upstream_verified);
+        }
         let link = storage
             .connections()
             .find_link(tenant, conn.id, &identity.subject)
@@ -1204,6 +1352,17 @@ impl UpstreamService<'_> {
                         now,
                     )?)
                 };
+                // Org connection: the membership with the org's default roles, in the same
+                // transaction as the user and the link.
+                let membership = match &org {
+                    Some(o) => Some(NewMembership {
+                        org_id: o.id,
+                        user_id: new_user.id,
+                        role_ids: default_roles(storage, tenant, o).await?,
+                        created_at: now,
+                    }),
+                    None => None,
+                };
                 let created = storage
                     .connections()
                     .create_user_with_link(
@@ -1212,7 +1371,7 @@ impl UpstreamService<'_> {
                         &new_link(new_user.id, conn, &identity, now),
                         verification.as_ref().map(|(t, _)| t),
                         verification.as_ref().map(|(_, e)| e),
-                        None,
+                        membership.as_ref(),
                     )
                     .await;
                 let u = match created {
@@ -1233,6 +1392,9 @@ impl UpstreamService<'_> {
                         AuditDetails::connection(&conn.slug, conn.kind().as_str()),
                     )
                     .await?;
+                if let Some(o) = &org {
+                    audit_member_added(&self.audit(), cx, conn, o, u.id).await?;
+                }
                 just_created = true;
                 u
             }
@@ -1259,6 +1421,13 @@ impl UpstreamService<'_> {
                     .await?,
                 request: flow.auth_request_id,
             });
+        }
+        // JIT membership for an existing user signing in through an org connection (a
+        // just-created user got it with the account).
+        if !just_created
+            && !ensure_org_membership(storage, &self.audit(), cx, conn, user.id).await?
+        {
+            return self.fail(cx, Some(conn), to, "membership_refused").await;
         }
         Ok(
             match self

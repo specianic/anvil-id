@@ -12,10 +12,47 @@
 //!   email is verified and trusted (no account enumeration through unverified addresses).
 //! - No match: just-in-time registration when allowed, else refuse.
 //!
+//! Enterprise connections (owned by an organization, ORG-03) decide the upstream email's trust
+//! with [`enterprise_email_trust`] before [`link_decision`]: only an address on one of the org's
+//! **verified** domains can be trusted, so a customer's IdP cannot assert addresses at someone
+//! else's domain (cross-org account takeover).
+//!
 //! Pure: no I/O.
 
 use super::claims::UpstreamIdentity;
-use crate::model::{ConnectionKind, IdentityLink, UserId};
+use crate::model::{ConnectionKind, IdentityLink, UserId, normalize_email};
+
+/// Whether the email asserted by an organization's IdP is trusted (research Pattern 9):
+///
+/// - the email is present and normalises (trimmed, lowercase, one `@`);
+/// - its domain is exactly one of `verified_org_domains` (the org's verified domains, lowercase
+///   A-labels), compared case-insensitively; a subdomain of a verified domain is not covered,
+///   and a non-ASCII (U-label) domain never matches;
+/// - `upstream_verified`: OIDC/OAuth passes `Some(identity.email_verified)` (the provider's
+///   `email_verified`, strictly boolean `true`, already AND-ed with the connection's trust);
+///   SAML passes `None` (the signed assertion vouches, and the verified org domain is what grants
+///   trust).
+///
+/// Anything else is untrusted: never auto-linked, and a match needs the Phase 4 confirmation.
+pub fn enterprise_email_trust(
+    email: Option<&str>,
+    verified_org_domains: &[String],
+    upstream_verified: Option<bool>,
+) -> bool {
+    if upstream_verified == Some(false) {
+        return false;
+    }
+    let Some(email) = email.and_then(|e| normalize_email(e).ok()) else {
+        return false;
+    };
+    let Some((_, domain)) = email.rsplit_once('@') else {
+        return false;
+    };
+    domain.is_ascii()
+        && verified_org_domains
+            .iter()
+            .any(|d| d.eq_ignore_ascii_case(domain))
+}
 
 /// A local account whose email equals the upstream email.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -281,6 +318,104 @@ mod tests {
             assert_eq!(
                 link_decision(&i),
                 LinkDecision::Refuse(RefuseReason::NoAccount)
+            );
+        }
+    }
+
+    fn domains(list: &[&str]) -> Vec<String> {
+        list.iter().map(|d| (*d).to_owned()).collect()
+    }
+
+    #[test]
+    fn enterprise_trust_needs_a_verified_org_domain_and_upstream_verification() {
+        let acme = domains(&["acme.com"]);
+        assert!(enterprise_email_trust(
+            Some("a@acme.com"),
+            &acme,
+            Some(true)
+        ));
+        assert!(!enterprise_email_trust(
+            Some("a@acme.com"),
+            &acme,
+            Some(false)
+        ));
+    }
+
+    #[test]
+    fn enterprise_trust_refuses_other_and_sub_domains() {
+        let acme = domains(&["acme.com"]);
+        for email in [
+            "a@sub.acme.com",
+            "a@acme.com.evil.example",
+            "a@evilacme.com",
+            "a@orgb.example",
+            "a@acme.co",
+        ] {
+            assert!(
+                !enterprise_email_trust(Some(email), &acme, Some(true)),
+                "{email}"
+            );
+        }
+        assert!(!enterprise_email_trust(Some("a@acme.com"), &[], Some(true)));
+    }
+
+    #[test]
+    fn enterprise_trust_compares_domains_case_insensitively_after_normalisation() {
+        let acme = domains(&["acme.com"]);
+        assert!(enterprise_email_trust(
+            Some("  Alice@ACME.Com "),
+            &acme,
+            Some(true)
+        ));
+        let upper = domains(&["ACME.COM"]);
+        assert!(enterprise_email_trust(
+            Some("a@acme.com"),
+            &upper,
+            Some(true)
+        ));
+    }
+
+    #[test]
+    fn enterprise_trust_refuses_missing_or_malformed_email() {
+        let acme = domains(&["acme.com"]);
+        assert!(!enterprise_email_trust(None, &acme, Some(true)));
+        assert!(!enterprise_email_trust(None, &acme, None));
+        for email in ["", "acme.com", "a@b@acme.com", "a b@acme.com", "@acme.com"] {
+            assert!(
+                !enterprise_email_trust(Some(email), &acme, Some(true)),
+                "{email:?}"
+            );
+        }
+        // A U-label never matches the stored A-label (and is never trusted on its own).
+        let idn = domains(&["xn--bcher-kva.example"]);
+        assert!(!enterprise_email_trust(
+            Some("a@bücher.example"),
+            &idn,
+            Some(true)
+        ));
+    }
+
+    #[test]
+    fn enterprise_trust_saml_variant_relies_on_the_verified_domain_only() {
+        let acme = domains(&["acme.com", "acme.io"]);
+        assert!(enterprise_email_trust(Some("a@acme.io"), &acme, None));
+        assert!(!enterprise_email_trust(Some("a@orgb.example"), &acme, None));
+        assert!(!enterprise_email_trust(Some("a@sub.acme.io"), &acme, None));
+    }
+
+    proptest! {
+        #[test]
+        fn enterprise_trust_implies_listed_domain(
+            local in "[a-z]{1,8}",
+            domain in "[a-z]{1,6}\\.(com|example|io)",
+            listed in proptest::collection::vec("[a-z]{1,6}\\.(com|example|io)", 0..4),
+            upstream in proptest::option::of(any::<bool>()),
+        ) {
+            let email = format!("{local}@{domain}");
+            let trusted = enterprise_email_trust(Some(&email), &listed, upstream);
+            prop_assert_eq!(
+                trusted,
+                upstream != Some(false) && listed.iter().any(|d| d == &domain)
             );
         }
     }
