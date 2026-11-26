@@ -10,6 +10,8 @@ pub mod captcha;
 pub mod hibp;
 pub mod outbound;
 pub mod passkey;
+// Legacy password-hash verifiers for imported credentials (07-01, ADM-08).
+pub mod password;
 pub mod qr;
 pub mod upstream;
 

@@ -88,6 +88,19 @@ must show `tsp-ltv` as the only parent. The bergshamra crates are built with
 (through `kryptering`), and the RustCrypto provider is not compiled. They bring RustCrypto encoding
 crates (`der`, `spki`, `pkcs8`, `x509-cert` 0.2) for certificate parsing only.
 
+A fourth exception, for legacy password-hash verification (1.0, ADM-08, decision Q1; **owner review
+pending (07-01)**): imported bcrypt, scrypt and Firebase scrypt hashes are verified with RustCrypto
+`scrypt` 0.12.0 (`default-features = false`) and `bcrypt` 0.19.3 (`default-features = false,
+features = ["alloc"]`), used only by `anvil-web` (`adapters/password/`). aws-lc-rs provides neither
+scrypt nor bcrypt, and calling its C scrypt through FFI would need `unsafe`, which the workspace
+denies. This is verification of imported hashes only: each imported hash is verified once at first
+login and then re-hashed with Argon2id; no key material is generated or stored by these crates.
+PBKDF2, SHA-2 and the AES-256-CTR step of Firebase scrypt stay on aws-lc-rs. `deny.toml` allows
+`blowfish` only through `wrappers = ["bcrypt"]` and `salsa20` only through `wrappers = ["scrypt"]`;
+`cargo tree -i blowfish --target all` must show only `bcrypt`, and `cargo tree -i salsa20 --target
+all` only `scrypt` (`scrypt` itself was already in the graph through `pkcs5`, a webauthn-rs
+dependency, before this exception).
+
 ### 2.1 Conditions on the Rust choice
 
 Rust is chosen on these conditions. If any of them proves unworkable during M0, revisit the language
