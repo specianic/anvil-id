@@ -355,7 +355,7 @@ async fn callback_post(
 
 /// The response to an upstream outcome. The binding cookie is cleared only when
 /// `clear_binding` (the callback proved the binding; module docs).
-async fn outcome_page(
+pub(super) async fn outcome_page(
     state: &AppState,
     tenant: &ResolvedTenant,
     loc: &Locale,
