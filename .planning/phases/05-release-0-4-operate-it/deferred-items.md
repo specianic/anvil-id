@@ -1,3 +1,4 @@
 # Phase 5 deferred items
 
 - (found by 05-04) The admin API tenant view has no `issuer` field; the console derives it from each tenant's discovery document. 05-23 (admin API bundle) should expose the server-computed issuer on the tenant view and the console should use it.
+- (found by 05-11) Under MFA policy `required`, a user whose only factor is a passkey (for example one enrolled in-flow) who signs in with the password is sent to the enrolment page again: `user_has_factor` counts TOTP only, and the second-factor step accepts no passkey assertion. A passkey sign-in from the sign-in page satisfies `required` on its own. Follow-up: accept a passkey assertion bound to the step's user at the second-factor/enrolment step (or count passkeys in `user_has_factor` with a passkey option on the second-factor page).
