@@ -3,13 +3,18 @@
 #
 #   scripts/check-deps.sh              check the workspace, exit non-zero on any violation
 #   scripts/check-deps.sh --self-test  prove the checker rejects forbidden NORMAL dependencies,
-#                                      accepts dev-dependencies and rejects base64 outside
-#                                      anvil-jose
+#                                      accepts dev-dependencies, rejects base64 outside
+#                                      anvil-jose and a second locked aws-lc version
 #
 # Also enforces "one implementation per concern" for base64 (CLAUDE.md): only anvil-jose may
 # depend on the base64 crate (any dependency kind), and no Rust source under crates/ outside
 # crates/anvil-jose/src may call `base64::` or carry a hand-rolled base64 alphabet. Everything
 # else uses anvil_jose::encoding::{b64url, b64url_decode, b64std, b64std_decode}.
+#
+# One aws-lc (ARCHITECTURE.md §4, 06-01): exactly one aws-lc-rs and one aws-lc-sys version in
+# Cargo.lock (distinct `version` values of the `[[package]]` entries with that name; zero or more
+# than one is a violation). A version listed twice by `cargo tree -d` because of a host/target
+# feature split is not a duplicate, so the rule reads the lockfile instead of `cargo tree`.
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -65,6 +70,10 @@ check() {
   local io=(tokio mio hyper axum tower reqwest sqlx sqlx-core libsqlite3-sys tokio-postgres)
   local store_impls=(anvil-storage-sqlite anvil-storage-postgres)
 
+  # First: a lockfile that no longer matches the manifests makes the `cargo tree --locked` calls
+  # below exit (set -e), and this rule's violation must already be in the output by then.
+  check_single_aws_lc
+
   # anvil-core: pure domain + ports, no I/O.
   # psl + idna: domain normalisation and public-suffix data (policy::home_realm); pure, no I/O.
   allow_direct anvil-core anvil-jose secrecy serde serde_json time uuid url thiserror async-trait psl idna
@@ -89,6 +98,33 @@ check() {
     echo "dependency rules OK"
   fi
   return "$fail"
+}
+
+# One aws-lc: exactly one locked version each of aws-lc-rs and aws-lc-sys.
+check_single_aws_lc() {
+  local lock="$ROOT/Cargo.lock" crate versions count
+  if [[ ! -f $lock ]]; then
+    echo "RULE VIOLATION: no Cargo.lock at ${lock}"
+    fail=1
+    return
+  fi
+  for crate in aws-lc-rs aws-lc-sys; do
+    # name/version of each [[package]] block; a block ends at the next table header.
+    versions=$(awk -v want="$crate" '
+      /^\[/ { name = ""; inpkg = ($0 == "[[package]]"); next }
+      inpkg && /^name = "/ { name = $3; gsub(/"/, "", name); next }
+      inpkg && /^version = "/ && name == want { v = $3; gsub(/"/, "", v); print v }
+    ' "$lock" | sort -uV | paste -sd' ' -)
+    if [[ -z $versions ]]; then
+      count=0
+    else
+      count=$(wc -w <<<"$versions")
+    fi
+    if ((count != 1)); then
+      echo "RULE VIOLATION: Cargo.lock has $count versions of $crate (${versions:-none})"
+      fail=1
+    fi
+  done
 }
 
 # One base64 implementation: anvil_jose::encoding.
@@ -189,6 +225,8 @@ self_test() {
   run_case "H: base64:: inside anvil-jose/src is allowed" pass \
     --append crates/anvil-jose/src/encoding.rs \
     'const _E: base64::engine::GeneralPurpose = base64::engine::general_purpose::STANDARD;'
+  run_case "I: Cargo.lock gains a second aws-lc-sys version" fail \
+    --append Cargo.lock $'\n[[package]]\nname = "aws-lc-sys"\nversion = "0.99.0"'
 
   if ((failures > 0)); then
     echo "dependency checker self-test FAILED ($failures case(s))"
