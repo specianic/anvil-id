@@ -6,14 +6,14 @@ current_phase: 05
 current_phase_name: release 0 4 operate it
 current_plan: 33
 status: executing
-stopped_at: Completed 06-30-PLAN.md
-last_updated: "2026-11-26T13:21:49.888Z"
+stopped_at: Completed 06-29-PLAN.md
+last_updated: "2026-11-26T13:26:31.611Z"
 last_activity: 2026-11-26
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 166
-  completed_plans: 159
+  completed_plans: 160
   percent: 96
 ---
 
@@ -216,6 +216,7 @@ done before 05-29 tags v0.4.0.
 | Phase 06 P24 | 35min | 2 tasks | 7 files |
 | Phase 06 P25 | 70min | 2 tasks | 9 files |
 | Phase 06 P30 | 10min | 2 tasks | 10 files |
+| Phase 06 P29 | 50min | 2 tasks | 17 files |
 
 ## Accumulated Context
 
@@ -503,6 +504,7 @@ Recent decisions affecting current work:
 - [Phase 06]: 06-24: mock SAML IdP serves https on request (https: true); SAML specs set ignoreHTTPSErrors; hrd's org OIDC IdP is a second AnvilID tenant (mock-idp has no generic OIDC kind)
 - [Phase 06]: 06-25: docs name the org-admin resource {public_url}/api/admin/v1; D4 stays open (experimental, corpus green, review and interop in Phase 7); org JIT under closed registration documented as current behaviour + open decision
 - [Phase 06]: 06-30: check-deps.sh enforces one aws-lc-rs/aws-lc-sys version from Cargo.lock (runs first in check())
+- [Phase 06]: 06-29: listUserOrganizations accepts users or organizations read scope; org admin tokens get 401 on tenant routes (system-token extractor)
 
 ### Pending Todos
 
@@ -515,6 +517,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-26T13:21:49.885Z
-Stopped at: Completed 06-30-PLAN.md
+Last session: 2026-11-26T13:26:31.607Z
+Stopped at: Completed 06-29-PLAN.md
 Resume file: None
