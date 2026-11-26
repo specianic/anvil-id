@@ -33,6 +33,7 @@ import { Route as TTenantKeysIndexRouteImport } from './routes/t/$tenant/keys/in
 import { Route as TTenantOrganizationsIndexRouteImport } from './routes/t/$tenant/organizations/index'
 import { Route as TTenantOrganizationsOrgIdRouteImport } from './routes/t/$tenant/organizations/$orgId'
 import { Route as TTenantOrganizationsNewRouteImport } from './routes/t/$tenant/organizations/new'
+import { Route as TTenantPasswordProfilesIndexRouteImport } from './routes/t/$tenant/password-profiles/index'
 import { Route as TTenantRolesIndexRouteImport } from './routes/t/$tenant/roles/index'
 import { Route as TTenantRolesRoleNameRouteImport } from './routes/t/$tenant/roles/$roleName'
 import { Route as TTenantRolesNewRouteImport } from './routes/t/$tenant/roles/new'
@@ -177,6 +178,12 @@ const TTenantOrganizationsNewRoute = TTenantOrganizationsNewRouteImport.update({
   path: '/organizations/new',
   getParentRoute: () => TTenantRoute,
 } as any)
+const TTenantPasswordProfilesIndexRoute =
+  TTenantPasswordProfilesIndexRouteImport.update({
+    id: '/password-profiles/',
+    path: '/password-profiles/',
+    getParentRoute: () => TTenantRoute,
+  } as any)
 const TTenantRolesIndexRoute = TTenantRolesIndexRouteImport.update({
   id: '/roles/',
   path: '/roles/',
@@ -314,6 +321,7 @@ export interface FileRoutesByFullPath {
   '/t/$tenant/email/': typeof TTenantEmailIndexRoute
   '/t/$tenant/keys/': typeof TTenantKeysIndexRoute
   '/t/$tenant/organizations/': typeof TTenantOrganizationsIndexRoute
+  '/t/$tenant/password-profiles/': typeof TTenantPasswordProfilesIndexRoute
   '/t/$tenant/roles/': typeof TTenantRolesIndexRoute
   '/t/$tenant/sessions/': typeof TTenantSessionsIndexRoute
   '/t/$tenant/settings/': typeof TTenantSettingsIndexRoute
@@ -357,6 +365,7 @@ export interface FileRoutesByTo {
   '/t/$tenant/email': typeof TTenantEmailIndexRoute
   '/t/$tenant/keys': typeof TTenantKeysIndexRoute
   '/t/$tenant/organizations': typeof TTenantOrganizationsIndexRoute
+  '/t/$tenant/password-profiles': typeof TTenantPasswordProfilesIndexRoute
   '/t/$tenant/roles': typeof TTenantRolesIndexRoute
   '/t/$tenant/sessions': typeof TTenantSessionsIndexRoute
   '/t/$tenant/settings': typeof TTenantSettingsIndexRoute
@@ -403,6 +412,7 @@ export interface FileRoutesById {
   '/t/$tenant/email/': typeof TTenantEmailIndexRoute
   '/t/$tenant/keys/': typeof TTenantKeysIndexRoute
   '/t/$tenant/organizations/': typeof TTenantOrganizationsIndexRoute
+  '/t/$tenant/password-profiles/': typeof TTenantPasswordProfilesIndexRoute
   '/t/$tenant/roles/': typeof TTenantRolesIndexRoute
   '/t/$tenant/sessions/': typeof TTenantSessionsIndexRoute
   '/t/$tenant/settings/': typeof TTenantSettingsIndexRoute
@@ -450,6 +460,7 @@ export interface FileRouteTypes {
     | '/t/$tenant/email/'
     | '/t/$tenant/keys/'
     | '/t/$tenant/organizations/'
+    | '/t/$tenant/password-profiles/'
     | '/t/$tenant/roles/'
     | '/t/$tenant/sessions/'
     | '/t/$tenant/settings/'
@@ -493,6 +504,7 @@ export interface FileRouteTypes {
     | '/t/$tenant/email'
     | '/t/$tenant/keys'
     | '/t/$tenant/organizations'
+    | '/t/$tenant/password-profiles'
     | '/t/$tenant/roles'
     | '/t/$tenant/sessions'
     | '/t/$tenant/settings'
@@ -538,6 +550,7 @@ export interface FileRouteTypes {
     | '/t/$tenant/email/'
     | '/t/$tenant/keys/'
     | '/t/$tenant/organizations/'
+    | '/t/$tenant/password-profiles/'
     | '/t/$tenant/roles/'
     | '/t/$tenant/sessions/'
     | '/t/$tenant/settings/'
@@ -728,6 +741,13 @@ declare module '@tanstack/react-router' {
       path: '/organizations/new'
       fullPath: '/t/$tenant/organizations/new'
       preLoaderRoute: typeof TTenantOrganizationsNewRouteImport
+      parentRoute: typeof TTenantRoute
+    }
+    '/t/$tenant/password-profiles/': {
+      id: '/t/$tenant/password-profiles/'
+      path: '/password-profiles'
+      fullPath: '/t/$tenant/password-profiles/'
+      preLoaderRoute: typeof TTenantPasswordProfilesIndexRouteImport
       parentRoute: typeof TTenantRoute
     }
     '/t/$tenant/roles/': {
@@ -924,6 +944,7 @@ interface TTenantRouteChildren {
   TTenantEmailIndexRoute: typeof TTenantEmailIndexRoute
   TTenantKeysIndexRoute: typeof TTenantKeysIndexRoute
   TTenantOrganizationsIndexRoute: typeof TTenantOrganizationsIndexRoute
+  TTenantPasswordProfilesIndexRoute: typeof TTenantPasswordProfilesIndexRoute
   TTenantRolesIndexRoute: typeof TTenantRolesIndexRoute
   TTenantSessionsIndexRoute: typeof TTenantSessionsIndexRoute
   TTenantSettingsIndexRoute: typeof TTenantSettingsIndexRoute
@@ -958,6 +979,7 @@ const TTenantRouteChildren: TTenantRouteChildren = {
   TTenantEmailIndexRoute: TTenantEmailIndexRoute,
   TTenantKeysIndexRoute: TTenantKeysIndexRoute,
   TTenantOrganizationsIndexRoute: TTenantOrganizationsIndexRoute,
+  TTenantPasswordProfilesIndexRoute: TTenantPasswordProfilesIndexRoute,
   TTenantRolesIndexRoute: TTenantRolesIndexRoute,
   TTenantSessionsIndexRoute: TTenantSessionsIndexRoute,
   TTenantSettingsIndexRoute: TTenantSettingsIndexRoute,

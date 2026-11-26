@@ -2,6 +2,7 @@
 // registration through upstream connections and the default page language. Saved with a
 // field-wise PATCH of the tenant: only changed fields are sent. Since 0.4 also the token claim
 // mapping of roles and permissions, and links to the registration, configuration and webhook pages.
+// Since 1.0 also the tenant PAR policy and the headless flow API's allowed browser origins.
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { type FormEvent, useState } from "react";
@@ -437,6 +438,166 @@ function ClaimMapping({ tenant }: { tenant: TenantView }) {
   );
 }
 
+/** Field errors of the PAR/headless PATCH under `key` (`headless.allowed_origins` and the like). */
+function errorsUnder(errors: FieldErrors, key: string) {
+  return Object.entries(errors)
+    .filter(([field]) => field === key || field.startsWith(`${key}.`))
+    .flatMap(([, messages]) => messages);
+}
+
+/**
+ * Pushed authorization requests for every client (`settings.par`, OIDC-18) and the browser origins
+ * allowed to call the headless flow API (`settings.headless`, UI-05). Both objects are replaced
+ * whole on save; the API validates the origins.
+ */
+function ParAndHeadless({ tenant }: { tenant: TenantView }) {
+  const slug = tenant.slug;
+  const queryClient = useQueryClient();
+  const [requirePar, setRequirePar] = useState(tenant.settings.par.require_pushed_authorization_requests);
+  const [origins, setOrigins] = useState<string[]>([...tenant.settings.headless.allowed_origins]);
+  const [draft, setDraft] = useState("");
+  const [localError, setLocalError] = useState<string | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
+
+  const save = useMutation({
+    mutationFn: async () =>
+      unwrap(
+        await api.PATCH("/api/admin/v1/tenants/{slug}", {
+          params: { path: { slug } },
+          body: {
+            settings: {
+              par: { require_pushed_authorization_requests: requirePar },
+              headless: { allowed_origins: origins },
+            },
+          },
+        }),
+      ),
+    onMutate: () => setStatus(null),
+    onSuccess: async (updated) => {
+      queryClient.setQueryData(tenantQueryKey(slug), updated);
+      setRequirePar(updated.settings.par.require_pushed_authorization_requests);
+      setOrigins([...updated.settings.headless.allowed_origins]);
+      setStatus("Authorization request and headless settings saved.");
+      await queryClient.invalidateQueries({ queryKey: ["tenant"] });
+    },
+  });
+
+  const errors = settingsErrors(save.error);
+  const parErrors = errorsUnder(errors, "par");
+  const originErrors = errorsUnder(errors, "headless");
+  const otherError = save.error && parErrors.length === 0 && originErrors.length === 0 ? save.error : null;
+
+  const addOrigin = () => {
+    const value = draft.trim();
+    if (value === "") return;
+    // Exact comparison only; the API checks the form of each origin.
+    if (origins.includes(value)) {
+      setLocalError(`${value} is already in the list.`);
+      return;
+    }
+    setLocalError(null);
+    setOrigins((o) => [...o, value]);
+    setDraft("");
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>
+          <h2>Authorization requests and headless sign-in</h2>
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <form
+          className="space-y-4"
+          aria-label="Authorization requests and headless sign-in"
+          noValidate
+          data-testid="par-headless-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            save.mutate();
+          }}
+        >
+          {save.error instanceof ApiError && save.error.status === 422 && (
+            <p role="alert" className="text-destructive text-sm">
+              The settings were not saved. Fix the errors below.
+            </p>
+          )}
+          {otherError ? <ProblemAlert error={otherError} /> : null}
+          <CheckboxField
+            label="Require PAR for all clients"
+            name="require_pushed_authorization_requests"
+            hint="Every client of this tenant must send its authorization requests to the pushed authorization request endpoint first (RFC 9126). Clients can also require it individually."
+            checked={requirePar}
+            onChange={(e) => setRequirePar(e.target.checked)}
+            errors={parErrors}
+            data-testid="tenant-require-par"
+          />
+          <fieldset className="space-y-3 rounded-md border p-4" data-testid="headless-origins">
+            <legend className="px-1 text-sm font-medium">Headless API allowed origins</legend>
+            <p className="text-muted-foreground text-sm">
+              Single-page apps on these exact origins may call the headless flow API from the browser. Use{" "}
+              <code>https://host[:port]</code> without a path or wildcard; the app must be on the same site as the
+              issuer. Empty: only the tenant's own origin. At most 50.
+            </p>
+            {origins.length === 0 ? (
+              <p className="text-muted-foreground text-sm" data-testid="headless-origins-empty">
+                No extra origins.
+              </p>
+            ) : (
+              <ul className="space-y-1">
+                {origins.map((origin) => (
+                  <li key={origin} className="flex items-center gap-2" data-testid="headless-origin" data-origin={origin}>
+                    <code className="text-sm break-all">{origin}</code>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      aria-label={`Remove ${origin}`}
+                      onClick={() => setOrigins((o) => o.filter((x) => x !== origin))}
+                    >
+                      Remove
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="flex flex-wrap items-end gap-2">
+              <div className="min-w-64 flex-1">
+                <TextField
+                  label="Origin to add"
+                  value={draft}
+                  placeholder="https://app.example.com"
+                  autoComplete="off"
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      addOrigin();
+                    }
+                  }}
+                  errors={[
+                    ...(localError ? [{ message: localError }] : []),
+                    ...originErrors,
+                  ]}
+                  data-testid="headless-origin-input"
+                />
+              </div>
+              <Button type="button" variant="outline" onClick={addOrigin} data-testid="headless-origin-add">
+                Add origin
+              </Button>
+            </div>
+          </fieldset>
+          <Button type="submit" disabled={save.isPending} data-testid="save-par-headless">
+            {save.isPending ? "Saving…" : "Save authorization request settings"}
+          </Button>
+          <StatusMessage message={status} />
+        </form>
+      </CardContent>
+    </Card>
+  );
+}
+
 /** The other tenant settings pages. */
 function MoreSettings() {
   const tenant = useTenant();
@@ -463,6 +624,12 @@ function MoreSettings() {
               Configuration
             </Link>{" "}
             <span className="text-muted-foreground">Export the tenant as a document, plan and apply changes.</span>
+          </li>
+          <li>
+            <Link to="/t/$tenant/password-profiles" params={{ tenant }} className={link} data-testid="password-profiles-link">
+              Password hash profiles
+            </Link>{" "}
+            <span className="text-muted-foreground">Firebase scrypt parameters for imported password hashes.</span>
           </li>
           <li>
             <Link to="/t/$tenant/webhooks" params={{ tenant }} className={link}>
@@ -555,6 +722,7 @@ function LoginSettingsPage() {
         <>
           <SettingsForm key={query.data.id} tenant={query.data} />
           <ClaimMapping key={`claims-${query.data.id}`} tenant={query.data} />
+          <ParAndHeadless key={`par-${query.data.id}`} tenant={query.data} />
           <MoreSettings />
           <DeleteTenant tenant={query.data} />
         </>

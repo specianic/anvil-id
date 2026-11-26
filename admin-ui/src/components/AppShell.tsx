@@ -6,7 +6,13 @@ import { Button } from "@/components/ui/button";
 import { TENANT_PAGES, lastTenant, useOptionalTenant } from "@/lib/tenant";
 
 // Tenant-scoped pages; the tenant comes from the route (or the last used one on the tenant list pages).
-const NAV = TENANT_PAGES;
+// Password hash profiles (07-20) sit between Signing keys and Login settings; they are a navigation
+// entry only (the tenant switcher keeps the TENANT_PAGES sections).
+const NAV = [
+  ...TENANT_PAGES.slice(0, -1),
+  { to: "/t/$tenant/password-profiles", label: "Password hash profiles" },
+  ...TENANT_PAGES.slice(-1),
+] as const;
 
 const focusRing = "focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none";
 

@@ -27,6 +27,7 @@ type TokenFormat = components["schemas"]["TokenFormat"];
 type ConsentMode = components["schemas"]["ConsentMode"];
 type MfaPolicy = components["schemas"]["MfaPolicy"];
 type OrgClientPolicy = components["schemas"]["OrgClientPolicy"];
+type ClientKind = components["schemas"]["ClientKind"];
 export type CreateClient = components["schemas"]["CreateClient"];
 export type UpdateClient = components["schemas"]["UpdateClient"];
 
@@ -51,6 +52,9 @@ export interface ClientFormValues {
   /** `inherit` = no client override (the tenant policy applies). */
   mfa_policy: MfaPolicy | "inherit";
   organization: OrgClientPolicy;
+  require_pushed_authorization_requests: boolean;
+  client_kind: ClientKind;
+  headless_native: boolean;
 }
 
 export const NEW_CLIENT: ClientFormValues = {
@@ -73,6 +77,9 @@ export const NEW_CLIENT: ClientFormValues = {
   allowed_resources: "",
   mfa_policy: "inherit",
   organization: "off",
+  require_pushed_authorization_requests: false,
+  client_kind: "application",
+  headless_native: false,
 };
 
 export function valuesFromClient(client: ClientView): ClientFormValues {
@@ -96,6 +103,18 @@ export function valuesFromClient(client: ClientView): ClientFormValues {
     allowed_resources: client.allowed_resources.join("\n"),
     mfa_policy: client.mfa_policy ?? "inherit",
     organization: client.organization,
+    require_pushed_authorization_requests: client.require_pushed_authorization_requests,
+    client_kind: client.client_kind,
+    headless_native: client.headless_native,
+  };
+}
+
+/** The 1.0 PAR, client kind and native headless fields, shared by the create and update bodies. */
+function v10Fields(values: ClientFormValues) {
+  return {
+    require_pushed_authorization_requests: values.require_pushed_authorization_requests,
+    client_kind: values.client_kind,
+    headless_native: values.headless_native,
   };
 }
 
@@ -151,6 +170,7 @@ export function createBody(values: ClientFormValues): CreateClient {
     id_token_signed_response_alg: values.id_token_signed_response_alg,
     can_introspect: confidential ? values.can_introspect : false,
     ...logoutAndPolicy(values),
+    ...v10Fields(values),
   };
 }
 
@@ -167,6 +187,7 @@ export function updateBody(values: ClientFormValues): UpdateClient {
     id_token_signed_response_alg: values.id_token_signed_response_alg,
     can_introspect: confidential ? values.can_introspect : false,
     ...logoutAndPolicy(values),
+    ...v10Fields(values),
   };
   if (values.auth_method === "private_key_jwt") body.jwks = parseJwks(values);
   return body;
@@ -198,7 +219,16 @@ const FORM_FIELDS = new Set([
   "allowed_resources",
   "mfa_policy",
   "organization",
+  "require_pushed_authorization_requests",
+  "client_kind",
+  "headless_native",
 ]);
+
+const CLIENT_KIND_HINTS: Record<ClientKind, string> = {
+  application: "A regular application acting for a signed-in user.",
+  agent:
+    "An AI agent or other automated client acting for a user. Agents always see the consent screen: consent cannot be skipped for them.",
+};
 
 const MFA_OPTIONS: readonly { value: MfaPolicy | "inherit"; label: string }[] = [
   { value: "inherit", label: "Inherit (tenant policy)" },
@@ -511,6 +541,45 @@ export function ClientForm({ mode, initial, submitLabel, pending, error, onSubmi
             data-testid="client-organization-policy"
           />
         )}
+      </fieldset>
+
+      <fieldset className="grid gap-4 sm:grid-cols-2" data-testid="client-v10-fields">
+        <legend className="mb-2 text-base font-semibold">Authorization requests and client kind</legend>
+        <div className="sm:col-span-2">
+          <CheckboxField
+            label="Require pushed authorization requests"
+            name="require_pushed_authorization_requests"
+            hint="The client must send its authorization requests to the pushed authorization request endpoint first (RFC 9126). The tenant can also require this for every client."
+            checked={values.require_pushed_authorization_requests}
+            onChange={(e) => set("require_pushed_authorization_requests", e.target.checked)}
+            errors={errors.require_pushed_authorization_requests}
+            data-testid="client-require-par"
+          />
+        </div>
+        <SelectField
+          label="Client kind"
+          name="client_kind"
+          value={values.client_kind}
+          onChange={(e) => set("client_kind", e.target.value as ClientKind)}
+          options={[
+            { value: "application", label: "Application" },
+            { value: "agent", label: "Agent" },
+          ]}
+          hint={CLIENT_KIND_HINTS[values.client_kind]}
+          errors={errors.client_kind}
+          data-testid="client-kind"
+        />
+        <div className="sm:col-span-2">
+          <CheckboxField
+            label="Native headless client"
+            name="headless_native"
+            hint="Lets this client drive the sign-in through the headless flow API without a browser. Only for clients created by an administrator (never dynamically registered or metadata-document clients) that are applications, skip consent (first-party) and require PKCE."
+            checked={values.headless_native}
+            onChange={(e) => set("headless_native", e.target.checked)}
+            errors={errors.headless_native}
+            data-testid="client-headless-native"
+          />
+        </div>
       </fieldset>
 
       <Button type="submit" disabled={pending}>
