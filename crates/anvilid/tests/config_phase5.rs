@@ -275,8 +275,9 @@ fn invalid_values_fail_validation_naming_the_key() {
     }
 }
 
+/// An unreachable shared limiter backend fails startup, naming the key without echoing the URL.
 #[test]
-fn redis_url_fails_startup_explicitly() {
+fn redis_url_unreachable_fails_startup_explicitly() {
     let dir = tempfile::tempdir().expect("tempdir");
     let out = run(
         dir.path(),
@@ -291,12 +292,14 @@ fn redis_url_fails_startup_explicitly() {
         ],
         &[(
             "ANVILID_REDIS_URL",
-            "redis://:startup-pass@cache.example.test:6379",
+            // Port 1 (tcpmux) is not a Redis server on any CI runner or dev host.
+            "redis://:startup-pass@127.0.0.1:1",
         )],
     );
     let all = text(&out);
     assert!(!out.status.success(), "{all}");
-    assert!(all.contains("redis_url is not supported yet"), "{all}");
+    assert!(all.contains("redis_url: "), "{all}");
+    assert!(all.contains("unreachable"), "{all}");
     assert!(!all.contains("startup-pass"), "{all}");
     // It failed before the database was opened.
     assert!(!dir.path().join("anvilid.db").exists(), "{all}");
