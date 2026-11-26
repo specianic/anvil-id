@@ -183,7 +183,7 @@ Plans:
 - [ ] 04-29-PLAN.md — E2E: email code/magic link, account page, live theming (wave 7)
 - [ ] 04-30-PLAN.md — German catalog, catalog parity test, i18n e2e (wave 7)
 - [ ] 04-31-PLAN.md — Docs: ARCHITECTURE (incl. sid divergence, SSRF), PRD, UPGRADING 0.2→0.3, theme README, manual social-login checklist (wave 7)
-- [ ] 04-34-PLAN.md — Gap closure (storage): logout-token iss per RP session (SQLite 0006 / Postgres 0005), atomic unlink guard, logo + client-branding purge, Postgres token-family purge, verification-aware create_user_with_link (wave 8)
+- [x] 04-34-PLAN.md — Gap closure (storage): logout-token iss per RP session (SQLite 0006 / Postgres 0005), atomic unlink guard, logo + client-branding purge, Postgres token-family purge, verification-aware create_user_with_link (wave 8)
 - [ ] 04-35-PLAN.md — Gap closure: independent email_otp / magic_link (optional login_code variables, per-toggle routes) (wave 8)
 - [ ] 04-36-PLAN.md — Gap closure: back-channel wake on every revocation path, upstream buttons on lock/CAPTCHA/passkey pages, console client card, body-limit regression test (wave 8)
 - [ ] 04-37-PLAN.md — Gap closure: require_verified_email for upstream accounts, binding-cookie clear rule, link redirect, docs for the closed gaps (wave 9)
