@@ -215,6 +215,21 @@ provision() {
     log "setup complete; admin and benchmark clients created"
 }
 
+# admin_token <base-url>: an access token of the system-tenant admin automation client
+# ($LOAD_TMP/admin.json, created by provision) with admin:read admin:write.
+admin_token() {
+    client_token "$1/t/system/token" "$LOAD_TMP/admin.json" "admin:read admin:write"
+}
+
+# api_call <method> <url> <token> <json-body> <out-file>: an admin API request; prints the HTTP
+# status (000 when no response arrived) and writes the response body to <out-file>.
+api_call() {
+    local method=$1 url=$2 token=$3 body=$4 out=$5
+    curl -sS -o "$out" -w '%{http_code}' --max-time 15 -X "$method" \
+        -H "authorization: Bearer $token" -H 'content-type: application/json' \
+        --data-binary @- "$url" <<<"$body" 2>/dev/null || true
+}
+
 # run_k6 <script> <summary-json> [k6 args...]: runs k6 with the benchmark client in the
 # environment (CLIENT_ID, CLIENT_SECRET; never on the command line) and BASE. The script writes
 # its end-of-test summary to <summary-json> (handleSummary). Returns k6's exit status (non-zero

@@ -6,9 +6,12 @@
 // as latency and dropped iterations instead of a lower request rate (no coordinated omission).
 //
 // Two scenarios: a 15 s warm-up at the same rate (tagged phase=warmup, excluded from the latency
-// threshold) and the 60 s measured run (phase=measure). Failure, check and dropped-iteration
-// thresholds cover the whole run: a single error anywhere fails it. k6 exits non-zero when a
-// threshold fails.
+// threshold) and the 60 s measured run (phase=measure). Failure, check, dropped-iteration and
+// HTTP 429 thresholds cover the whole run: a single error anywhere fails it. k6 exits non-zero
+// when a threshold fails.
+//
+// The thresholds are the PRD §6.3 / QUAL-05 targets. They change only by an owner decision, never
+// to make a run pass (05-CONTEXT Q2; tests/load/README.md).
 //
 // Env: BASE (default http://localhost:8080), RATE (default 1000), CLIENT_ID, CLIENT_SECRET,
 // SUMMARY (path of the JSON summary, default summary-token.json). Run by tests/load/run-perf.sh.
@@ -16,6 +19,7 @@
 import http from 'k6/http';
 import { check } from 'k6';
 import encoding from 'k6/encoding';
+import { Counter } from 'k6/metrics';
 
 const BASE = __ENV.BASE || 'http://localhost:8080';
 const RATE = parseInt(__ENV.RATE || '1000', 10);
@@ -25,6 +29,10 @@ const MEASURE = '60s';
 if (!__ENV.CLIENT_ID || !__ENV.CLIENT_SECRET) {
   throw new Error('CLIENT_ID and CLIENT_SECRET are required');
 }
+
+// Responses with status 429 (the token quotas are raised above the rate; any 429 means the run
+// measured the limiter, which fails it).
+const http429 = new Counter('http_429');
 
 const arrival = {
   executor: 'constant-arrival-rate',
@@ -45,6 +53,7 @@ export const options = {
     http_req_failed: ['rate==0'],
     checks: ['rate==1'],
     dropped_iterations: ['count==0'],
+    http_429: ['count==0'],
     // Recorded in the summary (measured throughput); no threshold of its own.
     'http_reqs{phase:measure}': ['count>=0'],
   },
@@ -66,6 +75,7 @@ const PARAMS = {
 
 export default function () {
   const r = http.post(`${BASE}/token`, 'grant_type=client_credentials', PARAMS);
+  if (r.status === 429) http429.add(1);
   check(r, { 'status 200': (x) => x.status === 200 });
 }
 
@@ -78,7 +88,8 @@ export function handleSummary(data) {
     `token: p99=${value('http_req_duration{phase:measure}', 'p(99)')} ms, ` +
     `reqs(measure)=${value('http_reqs{phase:measure}', 'count')}, ` +
     `failed=${value('http_req_failed', 'rate')}, ` +
-    `dropped=${value('dropped_iterations', 'count') || 0}\n`;
+    `dropped=${value('dropped_iterations', 'count') || 0}, ` +
+    `http_429=${value('http_429', 'count') || 0}\n`;
   return {
     [__ENV.SUMMARY || 'summary-token.json']: JSON.stringify(data, null, 2),
     stdout: line,

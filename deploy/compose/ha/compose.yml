@@ -8,12 +8,14 @@
 # Environment (from the caller; nothing secret is stored here):
 #   ANVILID_KEK        required, base64 32 bytes (run-ha.sh generates one per run, env only)
 #   ANVILID_IMAGE      default anvilid:ci (scripts/docker-image.sh)
-#   RATE_LIMIT_TOKEN   token quotas per IP and per client (default 5000/s: the load test must not
-#                      measure the limiter; 05-26 lowers them for the shared-limit check)
+#   RATE_LIMIT_TOKEN   token quotas per IP and per client, burst = rate (default 5000/s: the load
+#                      test must not measure the limiter; run-ha.sh recreates the nodes with 10/s
+#                      for the shared-limit check)
 #
-# ANVILID_SHUTDOWN_DRAIN, ANVILID_REDIS_URL and ANVILID_DATABASE_MAX_CONNECTIONS take effect once
-# plans 05-05 / 05-16 add those keys; until then anvilid ignores them (unknown ANVILID_* keys are
-# not read).
+# Host ports (loopback only): 8080 HAProxy, 8081-8083 the nodes directly (shared-limit check),
+# 9000 the counting webhook sink (/stats). The sink has a fixed address (172.30.75.200) inside
+# the compose subnet, which is the outbound allow-list (ANVILID_OUTBOUND_ALLOW_CIDRS), so the
+# SSRF guard lets webhook deliveries reach it and nothing else private.
 #
 # Images are pinned by digest (tag kept for readability).
 name: anvilid-ha
@@ -40,6 +42,11 @@ x-anvilid: &anvilid
     ANVILID_REDIS_URL: redis://valkey:6379
     ANVILID_SHUTDOWN_DRAIN: 10s
     ANVILID_DATABASE_MAX_CONNECTIONS: "20"
+    # Webhook deliveries may reach the compose subnet (the sink); plain http follows development
+    # mode (loopback public URL).
+    ANVILID_OUTBOUND_ALLOW_CIDRS: 172.30.75.0/24
+    # Hermetic test stack: no breached-password lookups to the internet for the test users.
+    ANVILID_BREACH_CHECK: "off"
   # SIGTERM -> readiness 503 -> drain (10 s) -> graceful shutdown; well inside 30 s.
   stop_grace_period: 30s
   networks: [ha]
@@ -71,16 +78,36 @@ services:
     networks: [ha]
 
   # Three identical nodes, started together on an empty database (concurrent first start).
-  node1: *anvilid
-  node2: *anvilid
-  node3: *anvilid
+  node1:
+    <<: *anvilid
+    ports: ["127.0.0.1:8081:8080"]
+  node2:
+    <<: *anvilid
+    ports: ["127.0.0.1:8082:8080"]
+  node3:
+    <<: *anvilid
+    ports: ["127.0.0.1:8083:8080"]
+
+  # Counting webhook receiver (tests/load/webhook-sink.mjs) for the exactly-once check.
+  sink:
+    image: node:24-alpine@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5
+    command: ["node", "/sink/webhook-sink.mjs"]
+    user: "1000:1000"
+    environment:
+      PORT: "9000"
+    volumes:
+      - ../../../tests/load/webhook-sink.mjs:/sink/webhook-sink.mjs:ro
+    ports: ["127.0.0.1:9000:9000"]
+    networks:
+      ha:
+        ipv4_address: 172.30.75.200
 
   haproxy:
     image: haproxy:3.2-alpine@sha256:7816a9801a6846b912bc37e48529808e2fa87c3c47992441940f68e393ebcfeb
     volumes:
       - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     depends_on: [node1, node2, node3]
     networks: [ha]
 
@@ -89,3 +116,5 @@ networks:
     ipam:
       config:
         - subnet: 172.30.75.0/24
+          # Dynamic addresses come from the lower half; the sink's fixed address is outside it.
+          ip_range: 172.30.75.0/25
