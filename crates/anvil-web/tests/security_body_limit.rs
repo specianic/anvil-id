@@ -129,6 +129,9 @@ async fn protocol_and_page_routes_answer_413_above_64_kib() {
     let (action, _) = open_form(&app, "/ui/login").await;
     assert!(action.starts_with("/ui/login?flow="), "{action}");
     assert_413(&app, Method::POST, &action, None, FORM, &big).await;
+    // The JSON-answering form endpoint of the same page (passkey ceremony).
+    let options = action.replace("/ui/login?", "/ui/login/passkey/options?");
+    assert_413(&app, Method::POST, &options, None, FORM, &big).await;
 }
 
 #[tokio::test]

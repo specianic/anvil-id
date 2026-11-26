@@ -572,8 +572,9 @@ async fn passkey_options(
     let json_error = |status: StatusCode, key: &str| {
         no_store((status, axum::Json(serde_json::json!({ "error": key }))).into_response())
     };
-    let Ok(Form(form)) = form else {
-        return json_error(StatusCode::BAD_REQUEST, "invalid_request");
+    let form = match form {
+        Ok(Form(form)) => form,
+        Err(e) => return json_error(rejection_status(&e), "invalid_request"),
     };
     let (Some(flow_id), Some(csrf)) = (q.flow_id(), form.csrf_token.as_deref()) else {
         return json_error(StatusCode::FORBIDDEN, "csrf");
@@ -813,19 +814,31 @@ pub(super) fn bad_form(state: &AppState, tenant: &ResolvedTenant, loc: &Locale) 
 
 /// The page for a form body the extractor refused: 413 when the body was over the request body
 /// limit (also when it was streamed without `Content-Length` and refused while read), else 400.
-/// Every `Result<Form<_>, FormRejection>` handler answers its rejection through this function.
+/// Every page handler with a `Result<Form<_>, FormRejection>` answers its rejection here.
 pub(super) fn rejected_form(
     state: &AppState,
     tenant: Option<&ResolvedTenant>,
     loc: &Locale,
     rejection: &FormRejection,
 ) -> Response {
-    let status = if rejection_is_too_large(rejection) {
+    error_page_in(
+        state,
+        tenant,
+        loc,
+        rejection_status(rejection),
+        "invalid_request",
+        "",
+    )
+}
+
+/// The status for a refused form body: 413 over the body limit, else 400. The JSON-answering
+/// form endpoints (passkey ceremonies) use it directly; pages go through [`rejected_form`].
+pub(super) fn rejection_status(rejection: &FormRejection) -> StatusCode {
+    if rejection_is_too_large(rejection) {
         StatusCode::PAYLOAD_TOO_LARGE
     } else {
         StatusCode::BAD_REQUEST
-    };
-    error_page_in(state, tenant, loc, status, "invalid_request", "")
+    }
 }
 
 /// The `Display` text of `http_body_util::LengthLimitError`, the error the body limit layers

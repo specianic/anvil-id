@@ -40,7 +40,7 @@ use serde::{Deserialize, Serialize};
 
 use super::consent::{PageMessage, account_locale, localized};
 use super::format::{human, iso};
-use super::login::{UiQuery, csrf_page, rejected_form};
+use super::login::{UiQuery, csrf_page, rejected_form, rejection_is_too_large};
 use crate::adapters::passkey::{WebauthnPasskeys, relying_party};
 use crate::errors::core_error_page_in;
 use crate::i18n::{Locale, RequestLocale};
@@ -495,7 +495,14 @@ async fn passkey_options(
     Query(q): Query<UiQuery>,
     form: Result<Form<SecurityForm>, FormRejection>,
 ) -> Response {
-    let form_csrf = form.ok().and_then(|Form(f)| f.csrf_token);
+    // The CSRF token may come in the form or the header; a body over the limit is refused.
+    let form_csrf = match form {
+        Ok(Form(f)) => f.csrf_token,
+        Err(e) if rejection_is_too_large(&e) => {
+            return json_error(StatusCode::PAYLOAD_TOO_LARGE, "invalid_request");
+        }
+        Err(_) => None,
+    };
     let header_csrf = headers
         .get("x-csrf-token")
         .and_then(|v| v.to_str().ok())
