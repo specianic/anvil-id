@@ -7,8 +7,9 @@
 //! databases built through this upgrade path. Needs Docker (one shared testcontainers Postgres per
 //! test binary, a fresh database per test), like the contract suite.
 //!
-//! Later releases add their own upgrade tests below (0.2 → 0.3, the 0.3 logout issuer, and
-//! 0.3 → 0.4 from `fixtures/release_0_3.sql`, which also checks the administrator backfill).
+//! Later releases add their own upgrade tests below (0.2 → 0.3, the 0.3 logout issuer,
+//! 0.3 → 0.4 from `fixtures/release_0_3.sql`, which also checks the administrator backfill, and
+//! 0.4 → 1.0 from `fixtures/release_0_4.sql`, which counts the rows of every table 0007 changes).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -920,6 +921,406 @@ async fn upgrade_from_0_3_backfills_administrators_and_keeps_rows() {
             .expect("holders"),
         3
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// 0.4 → 1.0
+
+/// Last schema version shipped in 0.4 (0006).
+const LAST_V0_4_VERSION: i64 = 6;
+
+const V4_SYSTEM: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0004_0001);
+const V4_ACME: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0004_0002);
+const V4_ADMIN: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0004_0010);
+const V4_ADA: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0004_0011);
+const V4_BOB: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0004_0012);
+const V4_CORP: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0004_0031);
+const V4_FAMILY: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0004_0070);
+
+/// Every table migration 0007 changes in place, plus the tables that reference them.
+const V4_COUNTED_TABLES: &[&str] = &[
+    "tenant",
+    "\"user\"",
+    "connection",
+    "identity_link",
+    "role",
+    "role_assignment",
+    "replay_guard",
+    "email_template",
+    "client",
+    "token_family",
+    "authorization_code",
+];
+
+/// Row count per table in [`V4_COUNTED_TABLES`].
+async fn row_counts(conn: &mut PgConnection) -> BTreeMap<&'static str, i64> {
+    let mut counts = BTreeMap::new();
+    for table in V4_COUNTED_TABLES {
+        // `table` comes from the constant list above, never from input.
+        let n: i64 =
+            sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {table}")))
+                .fetch_one(&mut *conn)
+                .await
+                .expect("count");
+        counts.insert(*table, n);
+    }
+    counts
+}
+
+/// A database at the last 0.4 schema version, populated from `fixtures/release_0_4.sql`, with its
+/// per-table row counts before the upgrade.
+async fn populated_v0_4() -> (String, BTreeMap<&'static str, i64>) {
+    let url = fresh_database().await;
+    let mut conn = connect(&url).await;
+    sqlx::migrate!()
+        .run_to(LAST_V0_4_VERSION, &mut conn)
+        .await
+        .expect("0.4 migrations apply");
+    sqlx::raw_sql(include_str!("fixtures/release_0_4.sql"))
+        .execute(&mut conn)
+        .await
+        .expect("0.4 fixtures load");
+    let before = row_counts(&mut conn).await;
+    conn.close().await.expect("close");
+    (url, before)
+}
+
+/// 0.4 → 1.0 (0007): every row survives the in-place schema change, every foreign key still
+/// holds, the 0.4 semantics are unchanged and the widened kinds are accepted.
+#[tokio::test]
+async fn upgrade_from_0_4_keeps_every_row() {
+    use anvil_core::model::{
+        ConnectionKind, EmailKind, EmailTemplate, OrgClientPolicy, ReplayKind, SYSTEM_ADMIN_ROLE,
+    };
+    use anvil_core::ports::JtiOutcome;
+
+    let (url, before) = populated_v0_4().await;
+    assert_eq!(before["identity_link"], 4, "fixture sanity");
+    assert_eq!(before["role_assignment"], 4, "fixture sanity");
+    assert_eq!(before["connection"], 3, "fixture sanity");
+    assert_eq!(before["replay_guard"], 3, "fixture sanity");
+    assert_eq!(before["email_template"], 2, "fixture sanity");
+
+    // The 1.0 binary starts: migrate with the defaults (destructive refused).
+    let s = PostgresStorage::connect(&url, MAX_CONNECTIONS)
+        .await
+        .expect("connect");
+    s.migrate_with(MigrateOptions::default())
+        .await
+        .expect("0007 applies without the destructive flag");
+
+    let mut conn = connect(&url).await;
+    assert_eq!(
+        row_counts(&mut conn).await,
+        before,
+        "no row is lost or added"
+    );
+
+    // Every reference still resolves, and every pre-existing row is tenant-level (org_id NULL).
+    let orphans: i64 = sqlx::query_scalar(
+        "SELECT (SELECT count(*) FROM identity_link l
+                  WHERE NOT EXISTS (SELECT 1 FROM connection c
+                                     WHERE c.tenant_id = l.tenant_id AND c.id = l.connection_id)
+                     OR NOT EXISTS (SELECT 1 FROM \"user\" u
+                                     WHERE u.tenant_id = l.tenant_id AND u.id = l.user_id))
+              + (SELECT count(*) FROM role_assignment a
+                  WHERE NOT EXISTS (SELECT 1 FROM role r
+                                     WHERE r.tenant_id = a.tenant_id AND r.id = a.role_id)
+                     OR NOT EXISTS (SELECT 1 FROM \"user\" u
+                                     WHERE u.tenant_id = a.tenant_id AND u.id = a.user_id))",
+    )
+    .fetch_one(&mut conn)
+    .await
+    .expect("orphan check");
+    assert_eq!(orphans, 0, "every link and assignment keeps its targets");
+    let with_org: i64 = sqlx::query_scalar(
+        "SELECT (SELECT count(*) FROM connection WHERE org_id IS NOT NULL)
+              + (SELECT count(*) FROM role WHERE org_id IS NOT NULL)
+              + (SELECT count(*) FROM role_assignment WHERE org_id IS NOT NULL)
+              + (SELECT count(*) FROM token_family WHERE org_id IS NOT NULL)
+              + (SELECT count(*) FROM authorization_code WHERE org_id IS NOT NULL)
+              + (SELECT count(*) FROM client WHERE organization <> 'off')",
+    )
+    .fetch_one(&mut conn)
+    .await
+    .expect("org columns");
+    assert_eq!(
+        with_org, 0,
+        "0.4 rows are tenant-level with the 1.0 defaults"
+    );
+    // The swapped CHECKs still reject unknown kinds.
+    for bad in [
+        format!("UPDATE connection SET kind = 'bogus' WHERE id = '{V4_CORP}'"),
+        format!(
+            "INSERT INTO replay_guard (tenant_id, kind, value_hash, expires_at)
+                  VALUES ('{V4_ACME}', 'bogus', decode(repeat('99', 32), 'hex'), now())"
+        ),
+        format!(
+            "INSERT INTO email_template (tenant_id, kind, subject, body_html, body_text,
+                                         updated_at)
+                  VALUES ('{V4_ACME}', 'bogus', 's', 'h', 't', now())"
+        ),
+    ] {
+        assert!(
+            exec(&mut conn, &bad).await.is_err(),
+            "an unknown kind is still rejected: {bad}"
+        );
+    }
+    conn.close().await.expect("close");
+
+    // Through the storage traits: administrators keep administering, 0.4 role semantics hold.
+    let system = TenantId(V4_SYSTEM);
+    let acme = TenantId(V4_ACME);
+    let admin_role = s
+        .roles()
+        .get_by_name(system, SYSTEM_ADMIN_ROLE)
+        .await
+        .expect("get_by_name")
+        .expect("the administrator role survives");
+    assert_eq!(
+        s.roles()
+            .roles_for_user(system, UserId(V4_ADMIN))
+            .await
+            .expect("roles_for_user"),
+        vec![admin_role.clone()]
+    );
+    assert_eq!(
+        s.roles()
+            .holders_of_permission(system, "admin:write")
+            .await
+            .expect("holders"),
+        1
+    );
+    let ada_roles: Vec<String> = s
+        .roles()
+        .roles_for_user(acme, UserId(V4_ADA))
+        .await
+        .expect("roles_for_user")
+        .into_iter()
+        .map(|r| r.name)
+        .collect();
+    assert_eq!(ada_roles, vec!["editor".to_owned(), "viewer".to_owned()]);
+    assert_eq!(
+        s.roles()
+            .holders_of_permission(acme, "docs:read")
+            .await
+            .expect("holders"),
+        2
+    );
+    // Re-assigning an existing tenant-wide role is still idempotent (the partial unique index
+    // replaced the primary key as the conflict target).
+    let viewer = s
+        .roles()
+        .get_by_name(acme, "viewer")
+        .await
+        .expect("get_by_name")
+        .expect("viewer");
+    assert!(
+        s.roles()
+            .assign(acme, viewer.id, UserId(V4_BOB), now())
+            .await
+            .expect("assign again")
+    );
+    let mut conn = connect(&url).await;
+    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM role_assignment")
+        .fetch_one(&mut conn)
+        .await
+        .expect("count");
+    assert_eq!(n, before["role_assignment"], "no duplicate assignment");
+    conn.close().await.expect("close");
+
+    // Connections and links read back unchanged, as tenant connections.
+    let conns = s.connections().list(acme).await.expect("list");
+    assert_eq!(
+        conns
+            .iter()
+            .map(|c| (c.slug.as_str(), c.config.kind(), c.org_id))
+            .collect::<Vec<_>>(),
+        vec![
+            ("corp", ConnectionKind::Oidc, None),
+            ("google", ConnectionKind::Google, None),
+        ]
+    );
+    assert_eq!(
+        s.connections()
+            .links_for_user(acme, UserId(V4_ADA))
+            .await
+            .expect("links")
+            .len(),
+        2
+    );
+    assert!(
+        s.connections()
+            .has_links(acme, anvil_core::model::ConnectionId(V4_CORP))
+            .await
+            .expect("has_links")
+    );
+
+    // Grants and clients carry the 1.0 defaults.
+    let family = s
+        .grants()
+        .get_family(acme, TokenFamilyId(V4_FAMILY))
+        .await
+        .expect("get_family")
+        .expect("family survives");
+    assert_eq!(family.org_id, None);
+    assert_eq!(family.user_id, Some(UserId(V4_ADA)));
+    let client = s
+        .clients()
+        .get(acme, "rp")
+        .await
+        .expect("get client")
+        .expect("client survives");
+    assert_eq!(client.organization, OrgClientPolicy::Off);
+
+    // Replay guards: the 0.4 entries still block replays; the new kind is accepted.
+    let jti = SecretHash::from_slice(&[0x41; 32]).expect("hash");
+    let far = now() + time::Duration::days(1);
+    assert_eq!(
+        s.grants()
+            .record_jti(acme, ReplayKind::ClientAssertionJti, &jti, far, now())
+            .await
+            .expect("record_jti"),
+        JtiOutcome::Replayed,
+        "a 0.4 replay guard entry survives"
+    );
+    assert_eq!(
+        s.grants()
+            .record_jti(acme, ReplayKind::SamlAssertionId, &jti, far, now())
+            .await
+            .expect("record_jti"),
+        JtiOutcome::Recorded
+    );
+
+    // Email templates: the 0.4 overrides survive; the org invitation kind is accepted.
+    let templates = s
+        .mail_settings()
+        .list_templates(acme)
+        .await
+        .expect("templates");
+    assert_eq!(
+        templates.iter().map(|t| t.kind).collect::<Vec<_>>(),
+        vec![EmailKind::LoginCode, EmailKind::PasswordChanged]
+    );
+    s.mail_settings()
+        .put_template(
+            acme,
+            &EmailTemplate {
+                kind: EmailKind::OrgInvitation,
+                subject: "Join".into(),
+                body_html: "<p>join</p>".into(),
+                body_text: "join".into(),
+                updated_at: now(),
+            },
+        )
+        .await
+        .expect("org_invitation template");
+
+    // Deleting a 0.4 user still cascades through the replaced keys.
+    assert!(
+        s.users()
+            .delete(acme, UserId(V4_BOB))
+            .await
+            .expect("delete user")
+    );
+    let mut conn = connect(&url).await;
+    let left: i64 = sqlx::query_scalar(
+        "SELECT (SELECT count(*) FROM role_assignment WHERE user_id = $1)
+              + (SELECT count(*) FROM identity_link WHERE user_id = $1)",
+    )
+    .bind(V4_BOB)
+    .fetch_one(&mut conn)
+    .await
+    .expect("count");
+    assert_eq!(left, 0);
+    conn.close().await.expect("close");
+
+    // Organizations work on the upgraded schema: a 0.4 user joins an org with a 0.4 role, and an
+    // org connection routed to by a domain can still be deleted (the claim stays, without a
+    // routing target), and so can the tenant holding all of it.
+    use anvil_storage::contract::{new_membership, new_org, new_org_connection, new_org_domain};
+    let org = s
+        .organizations()
+        .create(acme, &new_org())
+        .await
+        .expect("create org");
+    assert_eq!(
+        s.organizations()
+            .add_member(acme, &new_membership(org.id, UserId(V4_ADA), &[viewer.id]))
+            .await
+            .expect("add member"),
+        anvil_core::ports::AddMemberOutcome::Added
+    );
+    assert_eq!(
+        s.roles()
+            .roles_for_user_in_org(acme, UserId(V4_ADA), org.id)
+            .await
+            .expect("roles in org"),
+        vec![viewer.clone()]
+    );
+    let org_conn = s
+        .connections()
+        .create(acme, &new_org_connection(org.id))
+        .await
+        .expect("org connection");
+    let claim = new_org_domain(org.id, "upgrade.example.test", Some(org_conn.id));
+    s.organizations()
+        .create_domain(acme, &claim)
+        .await
+        .expect("domain");
+    assert!(
+        s.connections()
+            .delete(acme, org_conn.id)
+            .await
+            .expect("delete a routed connection")
+    );
+    let kept = s
+        .organizations()
+        .get_domain(acme, claim.id)
+        .await
+        .expect("get domain")
+        .expect("the claim stays");
+    assert_eq!(kept.connection_id, None);
+    let again = s
+        .connections()
+        .create(acme, &new_org_connection(org.id))
+        .await
+        .expect("org connection");
+    s.organizations()
+        .update_domain(
+            acme,
+            claim.id,
+            &anvil_core::model::OrgDomainUpdate {
+                connection_id: Some(Some(again.id)),
+                ..Default::default()
+            },
+            now(),
+        )
+        .await
+        .expect("update domain")
+        .expect("routed again");
+    assert!(s.tenants().delete(acme).await.expect("delete tenant"));
+}
+
+#[tokio::test]
+async fn upgrade_from_0_4_is_idempotent_on_restart() {
+    let (url, before) = populated_v0_4().await;
+    for start in ["first", "second"] {
+        let s = PostgresStorage::connect(&url, MAX_CONNECTIONS)
+            .await
+            .expect("connect");
+        s.migrate_with(MigrateOptions::default())
+            .await
+            .unwrap_or_else(|e| panic!("{start} start migrates: {e}"));
+    }
+    let mut conn = connect(&url).await;
+    let version: i64 = sqlx::query_scalar("SELECT max(version) FROM _sqlx_migrations")
+        .fetch_one(&mut conn)
+        .await
+        .expect("version");
+    assert!(version > LAST_V0_4_VERSION);
+    assert_eq!(row_counts(&mut conn).await, before);
+    conn.close().await.expect("close");
 }
 
 /// Contract-suite factory: a database built through the upgrade path. The 0.1 fixture tenants
