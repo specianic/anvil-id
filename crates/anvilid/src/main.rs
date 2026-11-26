@@ -22,7 +22,7 @@ use anvil_core::clock::SystemClock;
 use anvil_core::model::WEBHOOK_TIMEOUT;
 use anvil_core::policy::PasswordPolicy;
 use anvil_core::service::bootstrap::BootstrapService;
-use anvil_web::adapters::Argon2Pool;
+use anvil_web::adapters::{Argon2Pool, PasswordDispatcher};
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use secrecy::ExposeSecret;
@@ -263,7 +263,10 @@ async fn setup_url(cfg: &Config) -> anyhow::Result<()> {
         storage,
         clock: Arc::new(SystemClock),
         kek: Arc::new(kek),
-        hasher: Arc::new(Argon2Pool::new(Argon2Pool::owasp_params(), 1)?),
+        hasher: Arc::new(PasswordDispatcher::new(Argon2Pool::new(
+            Argon2Pool::owasp_params(),
+            1,
+        )?)),
         policy: PasswordPolicy::default(),
         public_url: cfg.public_url.clone(),
     };

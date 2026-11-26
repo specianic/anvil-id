@@ -14,7 +14,7 @@ use anvil_jose::Kek;
 use anvil_web::adapters::backchannel::LogoutDeliveryWorker;
 use anvil_web::adapters::dns_txt::HickoryTxtLookup;
 use anvil_web::adapters::webhook::WebhookDeliveryWorker;
-use anvil_web::adapters::{Argon2Pool, OutboundClient, breach_checker_with};
+use anvil_web::adapters::{Argon2Pool, OutboundClient, PasswordDispatcher, breach_checker_with};
 use anvil_web::observability::{MetricsEndpoint, TraceContextHook};
 use anvil_web::{AppConfig, AppDeps, AppState};
 use anyhow::{Context, bail};
@@ -171,10 +171,11 @@ pub async fn start(cfg: &Config, observability: Observability) -> anyhow::Result
     let limiter = limiter::build_limiter(cfg, Arc::clone(&clock), &kek).await?;
     let storage =
         storage::open_storage(url, cfg.migrations(), cfg.database_max_connections).await?;
-    let hasher: Arc<dyn PasswordHasher> = Arc::new(Argon2Pool::new(
+    // The one PasswordHasher: Argon2id plus the imported legacy schemes, all in one bounded pool.
+    let hasher: Arc<dyn PasswordHasher> = Arc::new(PasswordDispatcher::new(Argon2Pool::new(
         Argon2Pool::owasp_params(),
         argon2_permits(),
-    )?);
+    )?));
     let policy = PasswordPolicy::default();
 
     let bootstrap = BootstrapService {

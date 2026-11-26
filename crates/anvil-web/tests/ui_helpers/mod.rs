@@ -17,6 +17,7 @@ use anvil_core::model::PublicUrl;
 use anvil_core::ports::Storage;
 use anvil_core::service::bootstrap::{BootstrapService, InstallResult};
 use anvil_jose::kek::Kek;
+use anvil_web::adapters::PasswordDispatcher;
 use anvil_web::adapters::argon2::Argon2Pool;
 use anvil_web::adapters::hibp::{BreachCheckMode, breach_checker};
 use anvil_web::{AppConfig, AppDeps};
@@ -349,7 +350,7 @@ pub struct OwnApp {
     pub storage: Arc<dyn Storage>,
     pub clock: Arc<TestClock>,
     pub kek: Arc<Kek>,
-    pub hasher: Arc<Argon2Pool>,
+    pub hasher: Arc<PasswordDispatcher>,
     pub config: AppConfig,
     /// The setup token from the install-time setup URL.
     pub setup_token: String,
@@ -362,13 +363,13 @@ impl OwnApp {
         let clock = Arc::new(TestClock::new(start_time()));
         let kek = Arc::new(Kek::generate());
         let config = AppConfig::new(PublicUrl::parse(PROD_URL).expect("valid public url"));
-        let hasher = Arc::new(
+        let hasher = Arc::new(PasswordDispatcher::new(
             Argon2Pool::new(
                 argon2::Params::new(256, 1, 1, None).expect("test argon2 params"),
                 4,
             )
             .expect("argon2 pool"),
-        );
+        ));
         let bootstrap = BootstrapService {
             storage: Arc::clone(&storage),
             clock: Arc::clone(&clock) as Arc<dyn anvil_core::ports::Clock>,

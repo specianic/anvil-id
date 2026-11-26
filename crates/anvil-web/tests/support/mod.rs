@@ -26,6 +26,7 @@ use anvil_core::model::{
 };
 use anvil_core::ports::{Clock, DomainTxtLookup, InstallOutcome, Storage, TxtLookupError};
 use anvil_jose::kek::Kek;
+use anvil_web::adapters::PasswordDispatcher;
 use anvil_web::adapters::argon2::Argon2Pool;
 use anvil_web::adapters::hibp::{BreachCheckMode, breach_checker};
 use anvil_web::{AppConfig, AppDeps, AppState};
@@ -331,11 +332,14 @@ impl TestApp {
             (None, None)
         };
 
-        let hasher = Argon2Pool::new(
-            argon2::Params::new(256, 1, 1, None).expect("test argon2 params"),
-            4,
-        )
-        .expect("argon2 pool");
+        // The production hasher (scheme dispatcher) over a cheap Argon2 pool.
+        let hasher = PasswordDispatcher::new(
+            Argon2Pool::new(
+                argon2::Params::new(256, 1, 1, None).expect("test argon2 params"),
+                4,
+            )
+            .expect("argon2 pool"),
+        );
         let txt = FakeTxt::default();
         let deps = AppDeps {
             storage: Arc::clone(&storage),
