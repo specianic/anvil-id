@@ -319,7 +319,7 @@ async fn saml_connection_create_from_fields_returns_sp_values() {
         Method::POST,
         &conns("acme"),
         Some(&t),
-        Some(saml_body("acme-saml", &[cert.clone()])),
+        Some(saml_body("acme-saml", std::slice::from_ref(&cert))),
     )
     .await;
     assert_eq!(resp.status, 201, "{}", resp.text());
@@ -670,7 +670,7 @@ async fn saml_connection_invalid_input_is_422() {
         ),
         (
             {
-                let mut b = saml_body("s4", &[cert.clone()]);
+                let mut b = saml_body("s4", std::slice::from_ref(&cert));
                 b["config"]["sso_url"] = json!("http://idp.acme.test/sso");
                 b
             },
@@ -678,7 +678,7 @@ async fn saml_connection_invalid_input_is_422() {
         ),
         (
             {
-                let mut b = saml_body("s5", &[cert.clone()]);
+                let mut b = saml_body("s5", std::slice::from_ref(&cert));
                 b["config"]["name_id_format"] = json!("transient");
                 b
             },
@@ -686,7 +686,7 @@ async fn saml_connection_invalid_input_is_422() {
         ),
         (
             {
-                let mut b = saml_body("s6", &[cert.clone()]);
+                let mut b = saml_body("s6", std::slice::from_ref(&cert));
                 b["config"]["metadata_url"] = json!("http://idp.acme.test/md");
                 b
             },

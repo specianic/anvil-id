@@ -1570,6 +1570,8 @@ mod tests {
         );
     }
 
+    type Mutation = dyn Fn(&mut SamlConfig);
+
     #[test]
     fn saml_rules_name_config_fields_and_refuse_a_secret() {
         let kek = Kek::generate();
@@ -1582,7 +1584,7 @@ mod tests {
             f(&mut c);
             ConnectionConfig::Saml(c)
         };
-        let cases: [(&dyn Fn(&mut SamlConfig), &str); 5] = [
+        let cases: [(&Mutation, &str); 5] = [
             (
                 &|c| c.sso_url = "http://idp.example.test/sso".into(),
                 "config.sso_url",

@@ -21,7 +21,9 @@
 //! - `GET|POST …/{org}/domains`, `GET|PATCH|DELETE …/{org}/domains/{id}`,
 //!   `POST …/{org}/domains/{id}/verify`: domain claims with the DNS TXT record to publish, one
 //!   uniform `pending` answer for every failed check, one verified org per domain (409), and the
-//!   routing settings with their guards (see `OrgDomainService`).
+//!   routing settings with their guards (see `OrgDomainService`);
+//! - `…/{org}/branding` (`GET|PUT|DELETE`, `…/logo`, `…/preview`, `…/publish`): the org's theme,
+//!   handled by `admin::branding` with the org scope.
 //!
 //! **Principals** ([`OrgAdminAuth`]): a system-tenant token needs `admin:organizations:read` for
 //! reads and `admin:organizations:write` for writes (or `admin:read` / `admin:write`). On the
@@ -98,6 +100,17 @@ pub(crate) fn routes() -> OpenApiRouter<AppState> {
             delete_org_domain
         ))
         .routes(routes!(verify_org_domain))
+        .routes(routes!(
+            super::branding::get_org_branding,
+            super::branding::put_org_branding,
+            super::branding::delete_org_branding
+        ))
+        .routes(routes!(
+            super::branding::put_org_branding_logo,
+            super::branding::delete_org_branding_logo
+        ))
+        .routes(routes!(super::branding::preview_org_branding))
+        .routes(routes!(super::branding::publish_org_branding))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -441,7 +454,7 @@ async fn tenant_for(
 /// The tenant and org of an `{org}` sub-route. A system administrator needs the organizations
 /// scope for `access`; an org admin's tenant and org were resolved from this path and checked by
 /// [`OrgAdminAuth`].
-async fn org_for(
+pub(super) async fn org_for(
     state: &AppState,
     auth: &AdminAuth,
     slug: &str,

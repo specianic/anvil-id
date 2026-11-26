@@ -587,6 +587,236 @@ export interface paths {
         patch: operations["updateOrganization"];
         trace?: never;
     };
+    "/api/admin/v1/tenants/{slug}/organizations/{org}/branding": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get the organization's branding (`customized: false` when it inherits). */
+        get: operations["getOrganizationBranding"];
+        /**
+         * Set the organization's theme tokens and custom CSS (the logo is kept). Contrast below 4.5:1 is
+         *     returned as warnings, below 3:1 refused.
+         */
+        put: operations["putOrganizationBranding"];
+        post?: never;
+        /** Remove the organization's branding (back to the inherited theme). */
+        delete: operations["deleteOrganizationBranding"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/organizations/{org}/branding/logo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Upload the organization's logo (PNG, JPEG or WebP, at most 256 KiB; SVG refused). */
+        put: operations["putOrganizationBrandingLogo"];
+        post?: never;
+        /** Remove the organization's logo. */
+        delete: operations["deleteOrganizationBrandingLogo"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/organizations/{org}/branding/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Store a preview draft of the organization's branding and return its preview token and URL. */
+        post: operations["previewOrganizationBranding"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/organizations/{org}/branding/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Publish a preview draft of the organization's branding. */
+        post: operations["publishOrganizationBranding"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/organizations/{org}/connections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the organization's enterprise connections (OIDC and SAML). */
+        get: operations["listOrganizationConnections"];
+        put?: never;
+        /**
+         * Create an enterprise connection of the organization: OIDC (client secret sealed, never
+         *     returned) or SAML (experimental: 403 `feature_disabled` unless the operator enabled
+         *     `saml_experimental`). Slugs share the tenant's namespace. A SAML view carries the
+         *     service-provider values to register at the IdP (`sp`).
+         */
+        post: operations["createOrganizationConnection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/organizations/{org}/connections/saml-metadata": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Read SAML IdP metadata to prefill a connection: the pasted document (`xml`) or a metadata URL
+         *     (`url`, https, fetched through the SSRF-guarded outbound client, at most 1 MiB). Persists
+         *     nothing. Needs the operator flag `saml_experimental` (403 `feature_disabled`).
+         */
+        post: operations["importOrganizationSamlMetadata"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/organizations/{org}/connections/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get one of the organization's connections (never its secret). */
+        get: operations["getOrganizationConnection"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete one of the organization's connections with its identity links. Domains routed to it
+         *     stop routing (their claim and verification stay).
+         */
+        delete: operations["deleteOrganizationConnection"];
+        options?: never;
+        head?: never;
+        /**
+         * Update one of the organization's connections. Absent fields stay unchanged; the slug and
+         *     kind are fixed. Every change to a SAML connection except disabling it needs the operator flag
+         *     (403 `feature_disabled`).
+         */
+        patch: operations["updateOrganizationConnection"];
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/organizations/{org}/connections/{id}/secret": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set or remove the client secret of an OIDC connection of the organization. Write-only: the
+         *     response reports `secret_configured`. SAML connections have no secret (422).
+         */
+        put: operations["putOrganizationConnectionSecret"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/organizations/{org}/domains": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the organization's domain claims. */
+        get: operations["listOrganizationDomains"];
+        put?: never;
+        /**
+         * Claim a domain for the organization. The answer carries the TXT record to publish; the claim
+         *     stays `pending` until verified.
+         */
+        post: operations["createOrganizationDomain"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/organizations/{org}/domains/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get one of the organization's domain claims. */
+        get: operations["getOrganizationDomain"];
+        put?: never;
+        post?: never;
+        /** Delete a domain claim; routing for the domain stops. */
+        delete: operations["deleteOrganizationDomain"];
+        options?: never;
+        head?: never;
+        /**
+         * Change the routing settings of a domain claim. Routing needs a verified domain and an
+         *     enabled connection of this organization; turning password sign-in off additionally needs a
+         *     connection that has completed at least one sign-in (409, lockout guard). Setting
+         *     `routing: false, allow_local_password: true` always works (recovery).
+         */
+        patch: operations["updateOrganizationDomain"];
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/organizations/{org}/domains/{id}/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check the claim's DNS TXT record now. Answers 200 with `status`: `verified`, or `pending`
+         *     with the same body whatever the cause (no record, wrong value, DNS failure). 409 when another
+         *     organization of the tenant has already verified the domain.
+         */
+        post: operations["verifyOrganizationDomain"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/tenants/{slug}/organizations/{org}/invitations": {
         parameters: {
             query?: never;
@@ -1293,7 +1523,12 @@ export interface components {
             customized: boolean;
             /** @description Same-origin path of the scope's own logo (`/t/{slug}/theme/logo/{sha256}`), if any. */
             logo_url?: string | null;
-            /** @description `tenant` or `client`. */
+            /**
+             * Format: uuid
+             * @description The organization of an org scope.
+             */
+            org_id?: string | null;
+            /** @description `tenant`, `client` or `org`. */
             scope: string;
             tokens: components["schemas"]["ThemeTokensDto"];
             updated_at?: string | null;
@@ -1517,13 +1752,16 @@ export interface components {
         }) | (components["schemas"]["OAuth2ConnectionConfig"] & {
             /** @enum {string} */
             type: "oauth2";
+        }) | (components["schemas"]["SamlConnectionConfig"] & {
+            /** @enum {string} */
+            type: "saml";
         });
         /**
          * @description Kind of an upstream connection (derived from its config).
          * @enum {string}
          */
         ConnectionKind: "google" | "apple" | "microsoft" | "github" | "oidc" | "oauth2" | "saml";
-        /** @description Every connection of a tenant, in slug order. */
+        /** @description Connections in slug order (a tenant's list includes its organizations' connections). */
         ConnectionList: {
             items: components["schemas"]["ConnectionView"][];
         };
@@ -1540,11 +1778,18 @@ export interface components {
             /** Format: uuid */
             id: string;
             kind: components["schemas"]["ConnectionKind"];
-            /** @description The callback URL to register at the provider. */
+            /**
+             * Format: uuid
+             * @description The organization the connection belongs to; `null` = a tenant-level connection. An
+             *     organization's connection is changed only under that organization.
+             */
+            organization?: string | null;
+            /** @description The callback URL to register at the provider (SAML: the assertion consumer service). */
             redirect_uri: string;
             secret_configured: boolean;
             /** @description Unique per tenant, immutable; part of `redirect_uri`. */
             slug: string;
+            sp?: components["schemas"]["SamlSpValues"] | null;
             /** @description Treat the provider's `email_verified` as proof of address ownership (auto-linking). */
             trust_email_verified: boolean;
             /** Format: date-time */
@@ -1715,6 +1960,65 @@ export interface components {
          * @enum {string}
          */
         DeliveryStatus: "pending" | "delivered" | "failed";
+        /** @description The organization's domain claims, in domain order. */
+        DomainList: {
+            items: components["schemas"]["DomainView"][];
+        };
+        /** @description Body of `PATCH …/{org}/domains/{id}`. Absent fields stay unchanged. */
+        DomainPatchDto: {
+            /**
+             * @description `false` enforces SSO for the domain; it needs routing on and a target connection that has
+             *     completed at least one sign-in (409 otherwise).
+             */
+            allow_local_password?: boolean | null;
+            /**
+             * Format: uuid
+             * @description A connection of this organization; `null` removes the target.
+             */
+            connection_id?: string | null;
+            /** @description Needs a verified domain and an enabled target connection. */
+            routing?: boolean | null;
+        };
+        /**
+         * @description Verification state of a domain claim.
+         * @enum {string}
+         */
+        DomainStatus: "pending" | "verified";
+        /**
+         * @description A domain claimed by an organization, with the DNS record that proves it and its routing
+         *     settings.
+         */
+        DomainView: {
+            /** @description Whether password sign-in stays available for this domain (default `true`). */
+            allow_local_password: boolean;
+            /**
+             * Format: uuid
+             * @description The connection (of this organization) users of this domain are routed to.
+             */
+            connection_id?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** @description Lowercase A-label. */
+            domain: string;
+            /**
+             * Format: date-time
+             * @description Start of the current run of failed re-checks of a verified domain.
+             */
+            failing_since?: string | null;
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            last_checked_at?: string | null;
+            /** @description The TXT record name to publish: `_anvilid-challenge.{domain}.`. */
+            record_name: string;
+            /** @description The TXT record value to publish: `anvilid-domain-verification={token}`. */
+            record_value: string;
+            /** @description Whether identifier-first sign-in routes this domain to `connection_id`. */
+            routing: boolean;
+            status: components["schemas"]["DomainStatus"];
+            /** Format: date-time */
+            verified_at?: string | null;
+        };
         /**
          * @description Kind of a transactional email.
          * @enum {string}
@@ -1914,6 +2218,20 @@ export interface components {
          * @enum {string}
          */
         MfaPolicy: "off" | "optional" | "required";
+        /**
+         * @description SAML `NameIDFormat` requested from and accepted from the IdP (`transient` is refused:
+         *     it cannot identify a returning user).
+         * @enum {string}
+         */
+        NameIdFormat: "unspecified" | "email_address" | "persistent" | "transient";
+        /** @description Body of `POST …/{org}/domains`. */
+        NewDomainDto: {
+            /**
+             * @description A registrable domain name (no scheme, port, path, wildcard, IP address, reserved name or
+             *     public suffix); stored as a lowercase A-label.
+             */
+            domain: string;
+        };
         /** @description Body of `POST /tenants/{slug}/initial-access-tokens`. */
         NewInitialAccessToken: {
             /** @description At most 200 characters, no control characters. */
@@ -1989,6 +2307,22 @@ export interface components {
             /**
              * @description Default: `roles` gated by scope `roles`, `permissions` in the access token.
              * @default {
+             *       "org_permissions": {
+             *         "claim": "org_permissions",
+             *         "scope": null,
+             *         "tokens": [
+             *           "access_token"
+             *         ]
+             *       },
+             *       "org_roles": {
+             *         "claim": "org_roles",
+             *         "scope": "roles",
+             *         "tokens": [
+             *           "access_token",
+             *           "id_token",
+             *           "userinfo"
+             *         ]
+             *       },
              *       "permissions": {
              *         "claim": "permissions",
              *         "scope": null,
@@ -2314,6 +2648,67 @@ export interface components {
         RotateKeyResponse: {
             kid: string;
         };
+        /**
+         * @description Which assertion attributes (matched by `Name` or `FriendlyName`) carry the profile values;
+         *     absent or `null` = not mapped.
+         */
+        SamlAttributeMapping: {
+            /** @default null */
+            email: string | null;
+            /** @default null */
+            family_name: string | null;
+            /** @default null */
+            given_name: string | null;
+            /** @default null */
+            name: string | null;
+        };
+        /**
+         * @description A SAML 2.0 identity provider (organization connections only; experimental, needs the
+         *     operator flag `saml_experimental`). Certificates are public material and shown as PEM.
+         */
+        SamlConnectionConfig: {
+            attributes?: components["schemas"]["SamlAttributeMapping"];
+            /** @description The IdP's entity ID (1-1024 bytes). */
+            idp_entity_id: string;
+            /** @description Where the IdP metadata was imported from (https), for the record. */
+            metadata_url?: string | null;
+            /** @description Default `unspecified`. */
+            name_id_format?: components["schemas"]["NameIdFormat"];
+            /** @description 1-3 IdP signing certificates, one PEM `CERTIFICATE` block each (rollover). */
+            signing_certs: string[];
+            /** @description The IdP's single sign-on URL for the HTTP-Redirect binding (https). */
+            sso_url: string;
+        };
+        /**
+         * @description Body of `POST …/organizations/{org}/connections/saml-metadata`: exactly one of `xml` (the
+         *     pasted metadata document) or `url` (https; fetched through the SSRF-guarded client, at most
+         *     1 MiB).
+         */
+        SamlMetadataImport: {
+            url?: string | null;
+            xml?: string | null;
+        };
+        /**
+         * @description Values read from IdP metadata (`md:EntityDescriptor`) to prefill a SAML connection. Nothing
+         *     is stored.
+         */
+        SamlMetadataView: {
+            idp_entity_id: string;
+            /** @description The URL the metadata was fetched from (absent for pasted XML). */
+            metadata_url?: string | null;
+            /** @description PEM certificates (public material). */
+            signing_certs: string[];
+            sso_url: string;
+        };
+        /** @description The service-provider values an IdP administrator registers for a SAML connection. */
+        SamlSpValues: {
+            /** @description Assertion consumer service URL (HTTP-POST): `{issuer}/ui/login/saml/{slug}/acs`. */
+            acs_url: string;
+            /** @description SP entity ID (audience): `{issuer}/saml/{slug}`. */
+            entity_id: string;
+            /** @description SP metadata: `{issuer}/saml/{slug}/metadata`. */
+            metadata_url: string;
+        };
         /** @description A list of sessions (tenant lists are paged; a user's sessions come in one page). */
         SessionList: {
             items: components["schemas"]["SessionView"][];
@@ -2447,6 +2842,14 @@ export interface components {
          *     (false) a stored secret, `{value: "…"}` sets it; exports always carry `{configured: …}`.
          */
         TenantConfigJson: Record<string, never>;
+        /** @description Optional capabilities of a tenant, decided by the operator's configuration. */
+        TenantFeatures: {
+            /**
+             * @description SAML 2.0 organization connections can be configured (operator flag `saml_experimental`;
+             *     experimental through 1.0). Never in the system tenant, which has no organizations.
+             */
+            saml: boolean;
+        };
         /** @description One page of tenants. */
         TenantList: {
             items: components["schemas"]["TenantView"][];
@@ -2519,6 +2922,8 @@ export interface components {
             /** @description The OpenID Provider configuration document of [`Self::issuer`]. */
             discovery_url: string;
             display_name: string;
+            /** @description Optional capabilities available in this tenant (set by the operator, read-only). */
+            features: components["schemas"]["TenantFeatures"];
             /** @description Custom host for host-based serving. */
             host?: string | null;
             /** Format: uuid */
@@ -2608,14 +3013,18 @@ export interface components {
         /**
          * @description How a user's roles and permissions are mapped into tokens. `null` disables a mapping.
          *     Default: `roles` in every token gated by scope `roles`; `permissions` in the access token
-         *     only, not gated.
+         *     only, not gated; `org_roles` / `org_permissions` (held in the active organization) likewise.
          */
         TokenClaimMapping: {
+            org_permissions?: components["schemas"]["TokenClaimRule"] | null;
+            org_roles?: components["schemas"]["TokenClaimRule"] | null;
             permissions?: components["schemas"]["TokenClaimRule"] | null;
             roles?: components["schemas"]["TokenClaimRule"] | null;
         };
         /** @description Partial claim mapping update: an absent field keeps the current rule, `null` disables it. */
         TokenClaimMappingPatch: {
+            org_permissions?: components["schemas"]["TokenClaimRule"] | null;
+            org_roles?: components["schemas"]["TokenClaimRule"] | null;
             permissions?: components["schemas"]["TokenClaimRule"] | null;
             roles?: components["schemas"]["TokenClaimRule"] | null;
         };
@@ -4879,7 +5288,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Validation failed */
+            /** @description Validation failed (also: a SAML connection, which belongs to an organization) */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -4990,6 +5399,15 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            /** @description The connection belongs to an organization */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
         };
     };
     updateConnection: {
@@ -5039,6 +5457,15 @@ export interface operations {
             };
             /** @description Unknown tenant or connection */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The connection belongs to an organization */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5104,6 +5531,15 @@ export interface operations {
             };
             /** @description Unknown tenant or connection */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The connection belongs to an organization */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5929,6 +6365,1226 @@ export interface operations {
             };
             /** @description Validation failed */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getOrganizationBranding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Organization id or slug */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The branding */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrandingView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or an org admin token of another organization */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    putOrganizationBranding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Organization id or slug */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutBranding"];
+            };
+        };
+        responses: {
+            /** @description The stored branding with contrast warnings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrandingView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or an org admin token of another organization */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    deleteOrganizationBranding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Organization id or slug */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or an org admin token of another organization */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    putOrganizationBrandingLogo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Organization id or slug */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutBrandingLogo"];
+            };
+        };
+        responses: {
+            /** @description The branding with the new logo */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrandingView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or an org admin token of another organization */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    deleteOrganizationBrandingLogo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Organization id or slug */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The branding without logo */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrandingView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or an org admin token of another organization */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    previewOrganizationBranding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Organization id or slug */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutBranding"];
+            };
+        };
+        responses: {
+            /** @description The preview token and URL */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrandingPreview"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or an org admin token of another organization */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    publishOrganizationBranding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Organization id or slug */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PublishBranding"];
+            };
+        };
+        responses: {
+            /** @description The published branding */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrandingView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or an org admin token of another organization */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listOrganizationConnections: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Organization id or slug */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The organization's connections, in slug order */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionList"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or an org admin token of another organization */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    createOrganizationConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Organization id or slug */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateConnection"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    /** @description URL of the new connection */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, an org admin token of another organization, or SAML is not enabled (`feature_disabled`) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Slug already in use in this tenant */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed (also: a kind other than OIDC or SAML) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    importOrganizationSamlMetadata: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Organization id or slug */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SamlMetadataImport"];
+            };
+        };
+        responses: {
+            /** @description The values read from the metadata */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SamlMetadataView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, an org admin token of another organization, or SAML is not enabled (`feature_disabled`) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not exactly one of xml and url, the URL could not be fetched, or the document is not usable IdP metadata */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getOrganizationConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Organization id or slug */
+                org: string;
+                /** @description Connection id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The connection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or an org admin token of another organization */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant, organization or connection (or another organization's connection) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    deleteOrganizationConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Organization id or slug */
+                org: string;
+                /** @description Connection id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or an org admin token of another organization */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant, organization or connection (or another organization's connection) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    updateOrganizationConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Organization id or slug */
+                org: string;
+                /** @description Connection id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateConnection"];
+            };
+        };
+        responses: {
+            /** @description The updated connection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, an org admin token of another organization, or SAML is not enabled (`feature_disabled`) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant, organization or connection (or another organization's connection) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    putOrganizationConnectionSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Organization id or slug */
+                org: string;
+                /** @description Connection id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutConnectionSecret"];
+            };
+        };
+        responses: {
+            /** @description The connection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or an org admin token of another organization */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant, organization or connection (or another organization's connection) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listOrganizationDomains: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Organization id or slug */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The domain claims, in domain order */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DomainList"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or an org admin token of another organization */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    createOrganizationDomain: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Organization id or slug */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewDomainDto"];
+            };
+        };
+        responses: {
+            /** @description Claimed (pending) */
+            201: {
+                headers: {
+                    /** @description URL of the new claim */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DomainView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or an org admin token of another organization */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The organization already claimed this domain */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not an acceptable domain (the message names the reason) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getOrganizationDomain: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Organization id or slug */
+                org: string;
+                /** @description Domain claim id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The domain claim */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DomainView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or an org admin token of another organization */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant, organization or claim (or another organization's claim) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    deleteOrganizationDomain: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Organization id or slug */
+                org: string;
+                /** @description Domain claim id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or an org admin token of another organization */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant, organization or claim (or another organization's claim) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    updateOrganizationDomain: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Organization id or slug */
+                org: string;
+                /** @description Domain claim id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DomainPatchDto"];
+            };
+        };
+        responses: {
+            /** @description The updated claim */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DomainView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or an org admin token of another organization */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant, organization or claim (or another organization's claim) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The settings are not allowed in the claim's state (pending domain, no or disabled target, lockout guard) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed (also: the target is not a connection of this organization) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    verifyOrganizationDomain: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description Organization id or slug */
+                org: string;
+                /** @description Domain claim id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The claim after the check (`status` verified or pending) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DomainView"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or an org admin token of another organization */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant, organization or claim (or another organization's claim) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Another organization of the tenant has already verified this domain */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

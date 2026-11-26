@@ -238,6 +238,33 @@ async fn v10_org_sso_routes_require_scopes() {
         ),
         (Method::DELETE, format!("{o}/domains/{id}"), None, true),
         (Method::POST, format!("{o}/domains/{id}/verify"), None, true),
+        (Method::GET, format!("{o}/branding"), None, false),
+        (
+            Method::PUT,
+            format!("{o}/branding"),
+            Some(json!({"tokens": {}})),
+            true,
+        ),
+        (Method::DELETE, format!("{o}/branding"), None, true),
+        (
+            Method::PUT,
+            format!("{o}/branding/logo"),
+            Some(json!({"data": "AA=="})),
+            true,
+        ),
+        (Method::DELETE, format!("{o}/branding/logo"), None, true),
+        (
+            Method::POST,
+            format!("{o}/branding/preview"),
+            Some(json!({"tokens": {}})),
+            true,
+        ),
+        (
+            Method::POST,
+            format!("{o}/branding/publish"),
+            Some(json!({"token": "x"})),
+            true,
+        ),
     ];
     assert_scope_matrix(&app, routes).await;
 }
@@ -484,6 +511,12 @@ async fn org_admin_token_refused_for_other_org() {
                 Method::POST,
                 format!("{o}/domains"),
                 Some(json!({"domain": "evil-corp.com"})),
+            ),
+            (Method::GET, format!("{o}/branding"), None),
+            (
+                Method::PUT,
+                format!("{o}/branding"),
+                Some(json!({"tokens": {}})),
             ),
         ] {
             let resp = call(&app, method.clone(), &path, t, body).await;

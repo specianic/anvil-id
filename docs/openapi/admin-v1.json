@@ -3228,7 +3228,7 @@
             }
           },
           "422": {
-            "description": "Validation failed",
+            "description": "Validation failed (also: a SAML connection, which belongs to an organization)",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -3405,6 +3405,16 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "The connection belongs to an organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -3490,6 +3500,16 @@
           },
           "404": {
             "description": "Unknown tenant or connection",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The connection belongs to an organization",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -3594,6 +3614,16 @@
           },
           "404": {
             "description": "Unknown tenant or connection",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The connection belongs to an organization",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -4901,6 +4931,2013 @@
           },
           "422": {
             "description": "Validation failed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/organizations/{org}/branding": {
+      "get": {
+        "tags": [
+          "branding"
+        ],
+        "summary": "Get the organization's branding (`customized: false` when it inherits).",
+        "operationId": "getOrganizationBranding",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Organization id or slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The branding",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrandingView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or an org admin token of another organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "branding"
+        ],
+        "summary": "Set the organization's theme tokens and custom CSS (the logo is kept). Contrast below 4.5:1 is\nreturned as warnings, below 3:1 refused.",
+        "operationId": "putOrganizationBranding",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Organization id or slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutBranding"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The stored branding with contrast warnings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrandingView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or an org admin token of another organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "branding"
+        ],
+        "summary": "Remove the organization's branding (back to the inherited theme).",
+        "operationId": "deleteOrganizationBranding",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Organization id or slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or an org admin token of another organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/organizations/{org}/branding/logo": {
+      "put": {
+        "tags": [
+          "branding"
+        ],
+        "summary": "Upload the organization's logo (PNG, JPEG or WebP, at most 256 KiB; SVG refused).",
+        "operationId": "putOrganizationBrandingLogo",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Organization id or slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutBrandingLogo"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The branding with the new logo",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrandingView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or an org admin token of another organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "branding"
+        ],
+        "summary": "Remove the organization's logo.",
+        "operationId": "deleteOrganizationBrandingLogo",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Organization id or slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The branding without logo",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrandingView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or an org admin token of another organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/organizations/{org}/branding/preview": {
+      "post": {
+        "tags": [
+          "branding"
+        ],
+        "summary": "Store a preview draft of the organization's branding and return its preview token and URL.",
+        "operationId": "previewOrganizationBranding",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Organization id or slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutBranding"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The preview token and URL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrandingPreview"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or an org admin token of another organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/organizations/{org}/branding/publish": {
+      "post": {
+        "tags": [
+          "branding"
+        ],
+        "summary": "Publish a preview draft of the organization's branding.",
+        "operationId": "publishOrganizationBranding",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Organization id or slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishBranding"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The published branding",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrandingView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or an org admin token of another organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/organizations/{org}/connections": {
+      "get": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "List the organization's enterprise connections (OIDC and SAML).",
+        "operationId": "listOrganizationConnections",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Organization id or slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The organization's connections, in slug order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or an org admin token of another organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Create an enterprise connection of the organization: OIDC (client secret sealed, never\nreturned) or SAML (experimental: 403 `feature_disabled` unless the operator enabled\n`saml_experimental`). Slugs share the tenant's namespace. A SAML view carries the\nservice-provider values to register at the IdP (`sp`).",
+        "operationId": "createOrganizationConnection",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Organization id or slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateConnection"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "URL of the new connection"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, an org admin token of another organization, or SAML is not enabled (`feature_disabled`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Slug already in use in this tenant",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed (also: a kind other than OIDC or SAML)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/organizations/{org}/connections/saml-metadata": {
+      "post": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Read SAML IdP metadata to prefill a connection: the pasted document (`xml`) or a metadata URL\n(`url`, https, fetched through the SSRF-guarded outbound client, at most 1 MiB). Persists\nnothing. Needs the operator flag `saml_experimental` (403 `feature_disabled`).",
+        "operationId": "importOrganizationSamlMetadata",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Organization id or slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SamlMetadataImport"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The values read from the metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SamlMetadataView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, an org admin token of another organization, or SAML is not enabled (`feature_disabled`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Not exactly one of xml and url, the URL could not be fetched, or the document is not usable IdP metadata",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/organizations/{org}/connections/{id}": {
+      "get": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Get one of the organization's connections (never its secret).",
+        "operationId": "getOrganizationConnection",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Organization id or slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Connection id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The connection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or an org admin token of another organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant, organization or connection (or another organization's connection)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Delete one of the organization's connections with its identity links. Domains routed to it\nstop routing (their claim and verification stay).",
+        "operationId": "deleteOrganizationConnection",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Organization id or slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Connection id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or an org admin token of another organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant, organization or connection (or another organization's connection)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Update one of the organization's connections. Absent fields stay unchanged; the slug and\nkind are fixed. Every change to a SAML connection except disabling it needs the operator flag\n(403 `feature_disabled`).",
+        "operationId": "updateOrganizationConnection",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Organization id or slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Connection id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateConnection"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated connection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, an org admin token of another organization, or SAML is not enabled (`feature_disabled`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant, organization or connection (or another organization's connection)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/organizations/{org}/connections/{id}/secret": {
+      "put": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Set or remove the client secret of an OIDC connection of the organization. Write-only: the\nresponse reports `secret_configured`. SAML connections have no secret (422).",
+        "operationId": "putOrganizationConnectionSecret",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Organization id or slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Connection id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutConnectionSecret"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The connection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or an org admin token of another organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant, organization or connection (or another organization's connection)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/organizations/{org}/domains": {
+      "get": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "List the organization's domain claims.",
+        "operationId": "listOrganizationDomains",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Organization id or slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The domain claims, in domain order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or an org admin token of another organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Claim a domain for the organization. The answer carries the TXT record to publish; the claim\nstays `pending` until verified.",
+        "operationId": "createOrganizationDomain",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Organization id or slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewDomainDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Claimed (pending)",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "URL of the new claim"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or an org admin token of another organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The organization already claimed this domain",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Not an acceptable domain (the message names the reason)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/organizations/{org}/domains/{id}": {
+      "get": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Get one of the organization's domain claims.",
+        "operationId": "getOrganizationDomain",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Organization id or slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Domain claim id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The domain claim",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or an org admin token of another organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant, organization or claim (or another organization's claim)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Delete a domain claim; routing for the domain stops.",
+        "operationId": "deleteOrganizationDomain",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Organization id or slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Domain claim id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or an org admin token of another organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant, organization or claim (or another organization's claim)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Change the routing settings of a domain claim. Routing needs a verified domain and an\nenabled connection of this organization; turning password sign-in off additionally needs a\nconnection that has completed at least one sign-in (409, lockout guard). Setting\n`routing: false, allow_local_password: true` always works (recovery).",
+        "operationId": "updateOrganizationDomain",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Organization id or slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Domain claim id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DomainPatchDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated claim",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or an org admin token of another organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant, organization or claim (or another organization's claim)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The settings are not allowed in the claim's state (pending domain, no or disabled target, lockout guard)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed (also: the target is not a connection of this organization)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/organizations/{org}/domains/{id}/verify": {
+      "post": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Check the claim's DNS TXT record now. Answers 200 with `status`: `verified`, or `pending`\nwith the same body whatever the cause (no record, wrong value, DNS failure). 409 when another\norganization of the tenant has already verified the domain.",
+        "operationId": "verifyOrganizationDomain",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Organization id or slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Domain claim id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The claim after the check (`status` verified or pending)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or an org admin token of another organization",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant, organization or claim (or another organization's claim)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another organization of the tenant has already verified this domain",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -10240,9 +12277,17 @@
             ],
             "description": "Same-origin path of the scope's own logo (`/t/{slug}/theme/logo/{sha256}`), if any."
           },
+          "org_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The organization of an org scope."
+          },
           "scope": {
             "type": "string",
-            "description": "`tenant` or `client`."
+            "description": "`tenant`, `client` or `org`."
           },
           "tokens": {
             "$ref": "#/components/schemas/ThemeTokensDto"
@@ -10835,6 +12880,29 @@
                 }
               }
             ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SamlConnectionConfig",
+                "description": "Organization connections only (422 at tenant level)."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "saml"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Organization connections only (422 at tenant level)."
           }
         ],
         "description": "Connection configuration, tagged by `type`. It never contains the client secret."
@@ -10854,7 +12922,7 @@
       },
       "ConnectionList": {
         "type": "object",
-        "description": "Every connection of a tenant, in slug order.",
+        "description": "Connections in slug order (a tenant's list includes its organizations' connections).",
         "required": [
           "items"
         ],
@@ -10904,9 +12972,17 @@
           "kind": {
             "$ref": "#/components/schemas/ConnectionKind"
           },
+          "organization": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The organization the connection belongs to; `null` = a tenant-level connection. An\norganization's connection is changed only under that organization."
+          },
           "redirect_uri": {
             "type": "string",
-            "description": "The callback URL to register at the provider."
+            "description": "The callback URL to register at the provider (SAML: the assertion consumer service)."
           },
           "secret_configured": {
             "type": "boolean"
@@ -10914,6 +12990,17 @@
           "slug": {
             "type": "string",
             "description": "Unique per tenant, immutable; part of `redirect_uri`."
+          },
+          "sp": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SamlSpValues",
+                "description": "SAML only: the service-provider values to register at the IdP."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "trust_email_verified": {
             "type": "boolean",
@@ -11375,6 +13462,135 @@
           "delivered",
           "failed"
         ]
+      },
+      "DomainList": {
+        "type": "object",
+        "description": "The organization's domain claims, in domain order.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DomainView"
+            }
+          }
+        }
+      },
+      "DomainPatchDto": {
+        "type": "object",
+        "description": "Body of `PATCH …/{org}/domains/{id}`. Absent fields stay unchanged.",
+        "properties": {
+          "allow_local_password": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "`false` enforces SSO for the domain; it needs routing on and a target connection that has\ncompleted at least one sign-in (409 otherwise)."
+          },
+          "connection_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "A connection of this organization; `null` removes the target."
+          },
+          "routing": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Needs a verified domain and an enabled target connection."
+          }
+        },
+        "additionalProperties": false
+      },
+      "DomainStatus": {
+        "type": "string",
+        "description": "Verification state of a domain claim.",
+        "enum": [
+          "pending",
+          "verified"
+        ]
+      },
+      "DomainView": {
+        "type": "object",
+        "description": "A domain claimed by an organization, with the DNS record that proves it and its routing\nsettings.",
+        "required": [
+          "id",
+          "domain",
+          "status",
+          "record_name",
+          "record_value",
+          "routing",
+          "allow_local_password",
+          "created_at"
+        ],
+        "properties": {
+          "allow_local_password": {
+            "type": "boolean",
+            "description": "Whether password sign-in stays available for this domain (default `true`)."
+          },
+          "connection_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The connection (of this organization) users of this domain are routed to."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "domain": {
+            "type": "string",
+            "description": "Lowercase A-label."
+          },
+          "failing_since": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Start of the current run of failed re-checks of a verified domain."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "last_checked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "record_name": {
+            "type": "string",
+            "description": "The TXT record name to publish: `_anvilid-challenge.{domain}.`."
+          },
+          "record_value": {
+            "type": "string",
+            "description": "The TXT record value to publish: `anvilid-domain-verification={token}`."
+          },
+          "routing": {
+            "type": "boolean",
+            "description": "Whether identifier-first sign-in routes this domain to `connection_id`."
+          },
+          "status": {
+            "$ref": "#/components/schemas/DomainStatus"
+          },
+          "verified_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
       },
       "EmailKind": {
         "type": "string",
@@ -11877,6 +14093,30 @@
           "required"
         ]
       },
+      "NameIdFormat": {
+        "type": "string",
+        "description": "SAML `NameIDFormat` requested from and accepted from the IdP (`transient` is refused:\nit cannot identify a returning user).",
+        "enum": [
+          "unspecified",
+          "email_address",
+          "persistent",
+          "transient"
+        ]
+      },
+      "NewDomainDto": {
+        "type": "object",
+        "description": "Body of `POST …/{org}/domains`.",
+        "required": [
+          "domain"
+        ],
+        "properties": {
+          "domain": {
+            "type": "string",
+            "description": "A registrable domain name (no scheme, port, path, wildcard, IP address, reserved name or\npublic suffix); stored as a lowercase A-label."
+          }
+        },
+        "additionalProperties": false
+      },
       "NewInitialAccessToken": {
         "type": "object",
         "description": "Body of `POST /tenants/{slug}/initial-access-tokens`.",
@@ -12037,6 +14277,22 @@
             "$ref": "#/components/schemas/TokenClaimMapping",
             "description": "Default: `roles` gated by scope `roles`, `permissions` in the access token.",
             "default": {
+              "org_permissions": {
+                "claim": "org_permissions",
+                "scope": null,
+                "tokens": [
+                  "access_token"
+                ]
+              },
+              "org_roles": {
+                "claim": "org_roles",
+                "scope": "roles",
+                "tokens": [
+                  "access_token",
+                  "id_token",
+                  "userinfo"
+                ]
+              },
               "permissions": {
                 "claim": "permissions",
                 "scope": null,
@@ -12814,6 +15070,155 @@
           }
         }
       },
+      "SamlAttributeMapping": {
+        "type": "object",
+        "description": "Which assertion attributes (matched by `Name` or `FriendlyName`) carry the profile values;\nabsent or `null` = not mapped.",
+        "properties": {
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "family_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "given_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          }
+        },
+        "additionalProperties": false
+      },
+      "SamlConnectionConfig": {
+        "type": "object",
+        "description": "A SAML 2.0 identity provider (organization connections only; experimental, needs the\noperator flag `saml_experimental`). Certificates are public material and shown as PEM.",
+        "required": [
+          "idp_entity_id",
+          "sso_url",
+          "signing_certs"
+        ],
+        "properties": {
+          "attributes": {
+            "$ref": "#/components/schemas/SamlAttributeMapping"
+          },
+          "idp_entity_id": {
+            "type": "string",
+            "description": "The IdP's entity ID (1-1024 bytes)."
+          },
+          "metadata_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where the IdP metadata was imported from (https), for the record."
+          },
+          "name_id_format": {
+            "$ref": "#/components/schemas/NameIdFormat",
+            "description": "Default `unspecified`."
+          },
+          "signing_certs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "1-3 IdP signing certificates, one PEM `CERTIFICATE` block each (rollover)."
+          },
+          "sso_url": {
+            "type": "string",
+            "description": "The IdP's single sign-on URL for the HTTP-Redirect binding (https)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "SamlMetadataImport": {
+        "type": "object",
+        "description": "Body of `POST …/organizations/{org}/connections/saml-metadata`: exactly one of `xml` (the\npasted metadata document) or `url` (https; fetched through the SSRF-guarded client, at most\n1 MiB).",
+        "properties": {
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "xml": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "SamlMetadataView": {
+        "type": "object",
+        "description": "Values read from IdP metadata (`md:EntityDescriptor`) to prefill a SAML connection. Nothing\nis stored.",
+        "required": [
+          "idp_entity_id",
+          "sso_url",
+          "signing_certs"
+        ],
+        "properties": {
+          "idp_entity_id": {
+            "type": "string"
+          },
+          "metadata_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The URL the metadata was fetched from (absent for pasted XML)."
+          },
+          "signing_certs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "PEM certificates (public material)."
+          },
+          "sso_url": {
+            "type": "string"
+          }
+        }
+      },
+      "SamlSpValues": {
+        "type": "object",
+        "description": "The service-provider values an IdP administrator registers for a SAML connection.",
+        "required": [
+          "entity_id",
+          "acs_url",
+          "metadata_url"
+        ],
+        "properties": {
+          "acs_url": {
+            "type": "string",
+            "description": "Assertion consumer service URL (HTTP-POST): `{issuer}/ui/login/saml/{slug}/acs`."
+          },
+          "entity_id": {
+            "type": "string",
+            "description": "SP entity ID (audience): `{issuer}/saml/{slug}`."
+          },
+          "metadata_url": {
+            "type": "string",
+            "description": "SP metadata: `{issuer}/saml/{slug}/metadata`."
+          }
+        }
+      },
       "SessionList": {
         "type": "object",
         "description": "A list of sessions (tenant lists are paged; a user's sessions come in one page).",
@@ -13193,6 +15598,19 @@
         "type": "object",
         "description": "A `TenantConfig` document, version 1 (JSON form). The full schema is published as\n`docs/schemas/tenant-config-v1.json`. Secrets: `{configured: bool}` keeps (true) or clears\n(false) a stored secret, `{value: \"…\"}` sets it; exports always carry `{configured: …}`."
       },
+      "TenantFeatures": {
+        "type": "object",
+        "description": "Optional capabilities of a tenant, decided by the operator's configuration.",
+        "required": [
+          "saml"
+        ],
+        "properties": {
+          "saml": {
+            "type": "boolean",
+            "description": "SAML 2.0 organization connections can be configured (operator flag `saml_experimental`;\nexperimental through 1.0). Never in the system tenant, which has no organizations."
+          }
+        }
+      },
       "TenantList": {
         "type": "object",
         "description": "One page of tenants.",
@@ -13428,6 +15846,7 @@
           "issuer",
           "discovery_url",
           "settings",
+          "features",
           "created_at"
         ],
         "properties": {
@@ -13441,6 +15860,10 @@
           },
           "display_name": {
             "type": "string"
+          },
+          "features": {
+            "$ref": "#/components/schemas/TenantFeatures",
+            "description": "Optional capabilities available in this tenant (set by the operator, read-only)."
           },
           "host": {
             "type": [
@@ -13621,8 +16044,30 @@
       },
       "TokenClaimMapping": {
         "type": "object",
-        "description": "How a user's roles and permissions are mapped into tokens. `null` disables a mapping.\nDefault: `roles` in every token gated by scope `roles`; `permissions` in the access token\nonly, not gated.",
+        "description": "How a user's roles and permissions are mapped into tokens. `null` disables a mapping.\nDefault: `roles` in every token gated by scope `roles`; `permissions` in the access token\nonly, not gated; `org_roles` / `org_permissions` (held in the active organization) likewise.",
         "properties": {
+          "org_permissions": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TokenClaimRule",
+                "description": "Permissions held in the active organization. Absent on input = the default rule (claim\n`org_permissions` in the access token, not gated)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "org_roles": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TokenClaimRule",
+                "description": "Roles held in the active organization. Absent on input = the default rule (claim\n`org_roles` in every token, gated by scope `roles`)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "permissions": {
             "oneOf": [
               {
@@ -13650,6 +16095,26 @@
         "type": "object",
         "description": "Partial claim mapping update: an absent field keeps the current rule, `null` disables it.",
         "properties": {
+          "org_permissions": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TokenClaimRule"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "org_roles": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TokenClaimRule"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "permissions": {
             "oneOf": [
               {

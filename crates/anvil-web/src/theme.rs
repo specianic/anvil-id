@@ -2,9 +2,10 @@
 //!
 //! - `GET /theme/theme.css`: the tenant's generated stylesheet ([`BrandingService::effective`]),
 //!   linked by every tenant page after `anvil.css`. With `?flow={id}` the flow's authorization
-//!   request decides the client whose branding overrides the tenant's; an unknown, expired or
-//!   other-tenant flow (or one without a request) silently falls back to the tenant scope, so the
-//!   route is no oracle for flow ids. With `?preview={token}` it serves the draft behind a preview
+//!   request decides the client and, through its `organization` parameter (id or slug), the
+//!   organization whose branding overrides the tenant's (client > org > tenant); an unknown,
+//!   expired or other-tenant flow (or one without a request), and an unknown organization,
+//!   silently fall back, so the route is no oracle for flow ids or organization names. With `?preview={token}` it serves the draft behind a preview
 //!   token (404 for an unknown or expired token). `Content-Type: text/css`, `Cache-Control:
 //!   no-cache` and a strong `ETag` (SHA-256 of the body, [`crate::http_cache`]); a matching
 //!   `If-None-Match` answers 304.
@@ -17,7 +18,7 @@
 //! so pages keep `style-src 'self'; img-src 'self'`.
 
 use anvil_core::error::CoreError;
-use anvil_core::model::{AuthRequestId, FlowId};
+use anvil_core::model::{AuthRequestId, FlowId, OrgId};
 use anvil_core::service::branding::{BrandingService, EffectiveTheme};
 use axum::Router;
 use axum::extract::{Path, Query, State};
@@ -56,30 +57,69 @@ struct ThemeQuery {
     preview: Option<String>,
 }
 
-/// The client of an unexpired flow of this tenant through its authorization request; `None`
-/// for anything else.
-async fn flow_client(state: &AppState, tenant: &ResolvedTenant, raw: &str) -> Option<String> {
-    let id = uuid::Uuid::parse_str(raw).ok().map(FlowId)?;
+/// What a flow's authorization request decides about the page theme.
+#[derive(Debug, Default)]
+struct FlowScopes {
+    client: Option<String>,
+    org: Option<OrgId>,
+}
+
+/// The organization named by an authorization request's `organization` parameter: the
+/// canonical id first, then the exact slug (the same rule as the active-org resolution). `None`
+/// for an unknown name.
+async fn requested_org(state: &AppState, tenant: &ResolvedTenant, raw: &str) -> Option<OrgId> {
+    let orgs = state.storage().organizations();
+    let found = match uuid::Uuid::parse_str(raw) {
+        Ok(id) if id.hyphenated().to_string() == raw => orgs.get(tenant.tenant.id, OrgId(id)).await,
+        _ => orgs.get_by_slug(tenant.tenant.id, raw).await,
+    };
+    match found {
+        Ok(o) => o.map(|o| o.id),
+        Err(e) => {
+            tracing::warn!(error = %e, "theme: organization lookup failed; ignoring it");
+            None
+        }
+    }
+}
+
+/// The client and the requested organization of an unexpired flow of this tenant through its
+/// authorization request; empty for anything else.
+async fn flow_scopes(state: &AppState, tenant: &ResolvedTenant, raw: &str) -> FlowScopes {
+    let Some(id) = uuid::Uuid::parse_str(raw).ok().map(FlowId) else {
+        return FlowScopes::default();
+    };
     let now = state.clock().now();
     let flow = match state.storage().flows().get(tenant.tenant.id, id, now).await {
-        Ok(f) => f?,
+        Ok(Some(f)) => f,
+        Ok(None) => return FlowScopes::default(),
         Err(e) => {
             tracing::warn!(error = %e, "theme: flow lookup failed; using the tenant theme");
-            return None;
+            return FlowScopes::default();
         }
     };
-    let request: AuthRequestId = flow.auth_request_id?;
-    match state
+    let Some(request): Option<AuthRequestId> = flow.auth_request_id else {
+        return FlowScopes::default();
+    };
+    let request = match state
         .storage()
         .grants()
         .get_authorization_request(tenant.tenant.id, request, now)
         .await
     {
-        Ok(r) => r.map(|r| r.client_id),
+        Ok(Some(r)) => r,
+        Ok(None) => return FlowScopes::default(),
         Err(e) => {
             tracing::warn!(error = %e, "theme: request lookup failed; using the tenant theme");
-            None
+            return FlowScopes::default();
         }
+    };
+    let org = match request.params.organization.as_deref() {
+        Some(name) => requested_org(state, tenant, name).await,
+        None => None,
+    };
+    FlowScopes {
+        client: Some(request.client_id),
+        org,
     }
 }
 
@@ -122,11 +162,13 @@ async fn theme_css(
             Err(e) => Err(e),
         }
     } else {
-        let client = match q.flow.as_deref() {
-            Some(raw) => flow_client(&state, &tenant, raw).await,
-            None => None,
+        let scopes = match q.flow.as_deref() {
+            Some(raw) => flow_scopes(&state, &tenant, raw).await,
+            None => FlowScopes::default(),
         };
-        service.effective(tenant.tenant.id, client.as_deref()).await
+        service
+            .effective(tenant.tenant.id, scopes.client.as_deref(), scopes.org)
+            .await
     };
     match theme {
         Ok(theme) => css_response(&headers, &theme),

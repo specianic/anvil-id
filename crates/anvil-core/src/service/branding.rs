@@ -7,10 +7,13 @@
 //! CSS allow-list (errors carry the 1-based line). Logos are identified by their magic bytes
 //! (PNG, JPEG, WebP, at most 256 KiB; SVG is refused) and stored by SHA-256.
 //!
+//! Organizations have a scope too ([`BrandingScope::Org`]); it applies to sign-in pages whose
+//! authorization request names the organization.
+//!
 //! Pages get one generated stylesheet ([`BrandingService::effective`]): the tokens merged client >
-//! tenant > default as CSS variables, then a generated `.anvil-logo` rule (hidden without a logo,
-//! otherwise a background image `url("logo/{sha256}")`, resolved relative to the stylesheet URL
-//! `{tenant_base}/theme/theme.css`), then the tenant's and the client's custom CSS. The logo rule
+//! org > tenant > default as CSS variables, then a generated `.anvil-logo` rule (hidden without a
+//! logo, otherwise a background image `url("logo/{sha256}")`, resolved relative to the stylesheet
+//! URL `{tenant_base}/theme/theme.css`), then the tenant's, the org's and the client's custom CSS. The logo rule
 //! is always generated here, never taken from custom CSS (which cannot contain `url(` anyway).
 //!
 //! Drafts back the console's live preview: [`BrandingService::put_draft`] stores a validated draft
@@ -35,7 +38,7 @@ use crate::clock::Clock;
 use crate::error::CoreError;
 use crate::model::{
     AuditAction, AuditActor, AuditDetails, AuditOutcome, Branding, BrandingDraft, BrandingScope,
-    BrandingUpdate, Logo, LogoChange, RequestContext, SecretHash, TenantId, ThemeTokens,
+    BrandingUpdate, Logo, LogoChange, OrgId, RequestContext, SecretHash, TenantId, ThemeTokens,
     truncate_to_ms,
 };
 use crate::policy::branding::{
@@ -188,24 +191,20 @@ fn logo_rule(logo: Option<&LogoRef>) -> String {
     }
 }
 
-/// Builds the page stylesheet: merged variables, the logo rule, then the custom CSS of each layer
-/// (tenant first, so the client's rules win the cascade). Stored input is re-checked by the
-/// policy functions; a stored record that no longer passes is an internal error.
-fn compose(
-    tenant: Option<Layer<'_>>,
-    client: Option<Layer<'_>>,
-    logo: Option<LogoRef>,
-) -> Result<EffectiveTheme, CoreError> {
-    let merged = merge_tokens(
-        &ThemeTokens::default(),
-        tenant.as_ref().map(|l| l.tokens),
-        client.as_ref().map(|l| l.tokens),
-    );
+/// Builds the page stylesheet: merged variables, the logo rule, then the custom CSS of each layer.
+/// `layers` are lowest precedence first (tenant, org, client), so later rules win the cascade.
+/// Stored input is re-checked by the policy functions; a stored record that no longer passes is
+/// an internal error.
+fn compose(layers: &[Layer<'_>], logo: Option<LogoRef>) -> Result<EffectiveTheme, CoreError> {
+    // `merge_tokens` merges two layers over a base; folding keeps its per-field precedence.
+    let merged = layers.iter().fold(ThemeTokens::default(), |acc, l| {
+        merge_tokens(&acc, Some(l.tokens), None)
+    });
     let vars = theme_stylesheet(&merged, None)
         .map_err(|e| CoreError::Internal(format!("stored branding tokens are invalid: {e}")))?;
     let mut css = vars.css;
     css.push_str(&logo_rule(logo.as_ref()));
-    for layer in [tenant.as_ref(), client.as_ref()].into_iter().flatten() {
+    for layer in layers {
         if let Some(custom) = layer.custom_css {
             validate_custom_css(custom)
                 .map_err(|e| CoreError::Internal(format!("stored custom CSS is invalid: {e}")))?;
@@ -276,14 +275,25 @@ impl BrandingService {
             .await
     }
 
-    /// A client scope must name an existing client of the tenant (`NotFound` otherwise).
+    /// A client or org scope must name an existing client or organization of the tenant
+    /// (`NotFound` otherwise).
     async fn check_scope(&self, tenant: TenantId, scope: &BrandingScope) -> Result<(), CoreError> {
-        if let BrandingScope::Client(id) = scope {
-            self.storage
-                .clients()
-                .get(tenant, id)
-                .await?
-                .ok_or(CoreError::NotFound)?;
+        match scope {
+            BrandingScope::Tenant => {}
+            BrandingScope::Client(id) => {
+                self.storage
+                    .clients()
+                    .get(tenant, id)
+                    .await?
+                    .ok_or(CoreError::NotFound)?;
+            }
+            BrandingScope::Org(id) => {
+                self.storage
+                    .organizations()
+                    .get(tenant, *id)
+                    .await?
+                    .ok_or(CoreError::NotFound)?;
+            }
         }
         Ok(())
     }
@@ -453,16 +463,25 @@ impl BrandingService {
             .await
     }
 
-    /// The effective theme of a page: the tenant's branding, overridden by the client's when
-    /// `client_id` is given and that client has branding. The logo is the client's, else the
-    /// tenant's.
+    /// The effective theme of a page: the tenant's branding, overridden by the organization's
+    /// (`org`: the organization the authorization request names), overridden by the client's
+    /// (`client_id`), each only where that scope has branding. Precedence client > org > tenant,
+    /// for tokens, custom CSS order and the logo.
     pub async fn effective(
         &self,
         tenant: TenantId,
         client_id: Option<&str>,
+        org: Option<OrgId>,
     ) -> Result<EffectiveTheme, CoreError> {
         let repo = self.storage.branding();
         let tenant_b = repo.get(tenant, &BrandingScope::Tenant.scope_key()).await?;
+        let org_b = match org {
+            Some(id) => {
+                repo.get(tenant, &BrandingScope::Org(id).scope_key())
+                    .await?
+            }
+            None => None,
+        };
         let client_b = match client_id {
             Some(id) => {
                 repo.get(tenant, &BrandingScope::Client(id.to_owned()).scope_key())
@@ -470,21 +489,20 @@ impl BrandingService {
             }
             None => None,
         };
-        let logo = client_b
-            .as_ref()
-            .and_then(logo_of)
-            .or_else(|| tenant_b.as_ref().and_then(logo_of));
-        compose(
-            tenant_b.as_ref().map(|b| Layer {
+        // Lowest precedence first.
+        let stack: Vec<&Branding> = [tenant_b.as_ref(), org_b.as_ref(), client_b.as_ref()]
+            .into_iter()
+            .flatten()
+            .collect();
+        let logo = stack.iter().rev().find_map(|b| logo_of(b));
+        let layers: Vec<Layer<'_>> = stack
+            .iter()
+            .map(|b| Layer {
                 tokens: &b.tokens,
                 custom_css: b.custom_css.as_deref(),
-            }),
-            client_b.as_ref().map(|b| Layer {
-                tokens: &b.tokens,
-                custom_css: b.custom_css.as_deref(),
-            }),
-            logo,
-        )
+            })
+            .collect();
+        compose(&layers, logo)
     }
 
     /// A stored logo of the tenant by lowercase hex SHA-256 (`None` for another tenant's logo
@@ -569,9 +587,7 @@ impl BrandingService {
             custom_css: draft.custom_css.as_deref(),
         };
         let theme = match &scope {
-            BrandingScope::Tenant => {
-                compose(Some(draft_layer), None, tenant_b.as_ref().and_then(logo_of))?
-            }
+            BrandingScope::Tenant => compose(&[draft_layer], tenant_b.as_ref().and_then(logo_of))?,
             // A client or org draft previews on top of the live tenant branding.
             BrandingScope::Client(_) | BrandingScope::Org(_) => {
                 let client_b = repo.get(tenant, &scope.scope_key()).await?;
@@ -579,14 +595,16 @@ impl BrandingService {
                     .as_ref()
                     .and_then(logo_of)
                     .or_else(|| tenant_b.as_ref().and_then(logo_of));
-                compose(
-                    tenant_b.as_ref().map(|b| Layer {
+                let mut layers: Vec<Layer<'_>> = tenant_b
+                    .as_ref()
+                    .map(|b| Layer {
                         tokens: &b.tokens,
                         custom_css: b.custom_css.as_deref(),
-                    }),
-                    Some(draft_layer),
-                    logo,
-                )?
+                    })
+                    .into_iter()
+                    .collect();
+                layers.push(draft_layer);
+                compose(&layers, logo)?
             }
         };
         Ok(Some(theme))
@@ -654,7 +672,7 @@ mod tests {
 
     #[test]
     fn unbranded_theme_hides_the_logo() {
-        let t = compose(None, None, None).unwrap();
+        let t = compose(&[], None).unwrap();
         assert_eq!(t.css.css, ".anvil-logo{display:none}\n");
         assert_eq!(t.css.hash, hex(&sha256(t.css.css.as_bytes())));
         assert!(t.logo.is_none());
@@ -669,14 +687,16 @@ mod tests {
             content_type: "image/png".into(),
         };
         let t = compose(
-            Some(Layer {
-                tokens: &tenant,
-                custom_css: Some(".a{color:red}"),
-            }),
-            Some(Layer {
-                tokens: &client,
-                custom_css: Some(".b{color:blue}"),
-            }),
+            &[
+                Layer {
+                    tokens: &tenant,
+                    custom_css: Some(".a{color:red}"),
+                },
+                Layer {
+                    tokens: &client,
+                    custom_css: Some(".b{color:blue}"),
+                },
+            ],
             Some(logo),
         )
         .unwrap();
@@ -688,6 +708,54 @@ mod tests {
         let b = css.find(".b{color:blue}").expect("client css");
         assert!(logo_at < a && a < b, "{css}");
         assert!(css.contains(&format!("url(\"logo/{}\")", "a".repeat(64))));
+    }
+
+    #[test]
+    fn three_layers_keep_their_precedence_per_field() {
+        let tenant = ThemeTokens {
+            radius_px: Some(4),
+            font_family: Some("Tenant Sans".into()),
+            ..colors("#111111")
+        };
+        let org = ThemeTokens {
+            font_family: Some("Org Sans".into()),
+            ..colors("#222222")
+        };
+        let client = ThemeTokens {
+            colors: ThemeColors::default(),
+            ..ThemeTokens::default()
+        };
+        let t = compose(
+            &[
+                Layer {
+                    tokens: &tenant,
+                    custom_css: Some(".t{color:red}"),
+                },
+                Layer {
+                    tokens: &org,
+                    custom_css: Some(".o{color:red}"),
+                },
+                Layer {
+                    tokens: &client,
+                    custom_css: Some(".c{color:red}"),
+                },
+            ],
+            None,
+        )
+        .unwrap();
+        let css = &t.css.css;
+        assert!(css.contains("--anvil-primary:#222222"), "{css}");
+        assert!(
+            css.contains("Org Sans") && !css.contains("Tenant Sans"),
+            "{css}"
+        );
+        assert!(css.contains("--anvil-radius:4px"), "{css}");
+        let (a, b, c) = (
+            css.find(".t{").unwrap(),
+            css.find(".o{").unwrap(),
+            css.find(".c{").unwrap(),
+        );
+        assert!(a < b && b < c, "{css}");
     }
 
     #[test]

@@ -1,7 +1,9 @@
 //! Admin API for branding: theme tokens, custom CSS, logo and preview drafts (UI-03).
 //!
-//! Per tenant (`…/tenants/{slug}/branding`) and per client
-//! (`…/tenants/{slug}/clients/{client_id}/branding`):
+//! Per tenant (`…/tenants/{slug}/branding`), per client
+//! (`…/tenants/{slug}/clients/{client_id}/branding`) and per organization
+//! (`…/tenants/{slug}/organizations/{org}/branding`, shown on sign-in pages whose authorization
+//! request names the organization; precedence client > org > tenant):
 //!
 //! - `GET` the scope's branding (`customized: false` with empty tokens when it inherits);
 //! - `PUT` tokens and custom CSS (validated; contrast warnings in the response), `DELETE` back to
@@ -17,7 +19,8 @@
 //! `font_family`, `colors` / `colors_dark` for contrast, `custom_css` with `line N: …`, `logo`).
 //!
 //! Scope: `admin:settings:{read,write}` (or `admin:read` / `admin:write`); writes to the system
-//! tenant (the console's sign-in pages) also need `admin:write`. Live changes are audited
+//! tenant (the console's sign-in pages) also need `admin:write`. Organization branding follows the
+//! organization routes: `admin:organizations:{read,write}`, or the org's own admin. Live changes are audited
 //! (`branding_updated`) by the service.
 
 use anvil_core::error::CoreError;
@@ -32,7 +35,7 @@ use serde::{Deserialize, Serialize};
 use time::format_description::well_known::Rfc3339;
 use utoipa::ToSchema;
 
-use super::auth::{AdminAuth, AdminJson, AdminResult, json, no_content};
+use super::auth::{AdminAuth, AdminJson, AdminResult, OrgAdminAuth, json, no_content};
 use super::dto::Problem;
 use crate::request_context::AuditContext;
 use crate::state::AppState;
@@ -288,10 +291,12 @@ pub struct PublishBranding {
 /// The branding of a scope.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct BrandingView {
-    /// `tenant` or `client`.
+    /// `tenant`, `client` or `org`.
     pub scope: String,
     /// The client of a client scope.
     pub client_id: Option<String>,
+    /// The organization of an org scope.
+    pub org_id: Option<uuid::Uuid>,
     /// `false` when the scope has no branding of its own (it inherits; tokens are empty).
     pub customized: bool,
     pub tokens: ThemeTokensDto,
@@ -316,14 +321,22 @@ pub struct BrandingPreview {
     pub warnings: Vec<ThemeWarningDto>,
 }
 
-/// Checks the settings scope and resolves the tenant; writes to the system tenant need full
-/// administration.
+/// Resolves the tenant for a branding call on `scope`. Tenant and client scopes need the
+/// settings scope (writes to the system tenant need full administration); an org scope follows
+/// the organization routes' principal rules (a system administrator with the organizations
+/// scope, or the org's own admin, checked by [`super::organizations::org_for`]).
 async fn authorize(
     state: &AppState,
     auth: &AdminAuth,
     slug: &str,
+    scope: &BrandingScope,
     access: Access,
 ) -> AdminResult<Tenant> {
+    if let BrandingScope::Org(org) = scope {
+        let (tenant, _) =
+            super::organizations::org_for(state, auth, slug, &org.to_string(), access).await?;
+        return Ok(tenant);
+    }
     auth.require(Resource::Settings, access)?;
     if access == Access::Write && slug == SYSTEM_TENANT_SLUG {
         auth.require_full_admin()?;
@@ -337,16 +350,16 @@ fn view(
     b: Option<anvil_core::model::Branding>,
     ws: Option<Vec<ThemeWarning>>,
 ) -> BrandingView {
-    let (kind, client_id) = match scope {
-        BrandingScope::Tenant => ("tenant", None),
-        BrandingScope::Client(id) => ("client", Some(id.clone())),
-        // No route reaches an org scope before 06-17 adds org branding to the API.
-        BrandingScope::Org(_) => ("org", None),
+    let (kind, client_id, org_id) = match scope {
+        BrandingScope::Tenant => ("tenant", None, None),
+        BrandingScope::Client(id) => ("client", Some(id.clone()), None),
+        BrandingScope::Org(id) => ("org", None, Some(id.0)),
     };
     match b {
         None => BrandingView {
             scope: kind.to_owned(),
             client_id,
+            org_id,
             customized: false,
             tokens: ThemeTokensDto::default(),
             custom_css: None,
@@ -359,6 +372,7 @@ fn view(
             BrandingView {
                 scope: kind.to_owned(),
                 client_id,
+                org_id,
                 customized: true,
                 logo_url: b
                     .logo_sha256
@@ -379,7 +393,7 @@ async fn do_get(
     slug: &str,
     scope: BrandingScope,
 ) -> AdminResult<Response> {
-    let tenant = authorize(state, auth, slug, Access::Read).await?;
+    let tenant = authorize(state, auth, slug, &scope, Access::Read).await?;
     let b = state.branding().get(tenant.id, &scope).await?;
     Ok(json(StatusCode::OK, &view(&tenant, &scope, b, None)))
 }
@@ -392,7 +406,7 @@ async fn do_put(
     scope: BrandingScope,
     body: PutBranding,
 ) -> AdminResult<Response> {
-    let tenant = authorize(state, auth, slug, Access::Write).await?;
+    let tenant = authorize(state, auth, slug, &scope, Access::Write).await?;
     let (b, ws) = state
         .branding()
         .put(tenant.id, &scope, body.into(), auth.actor(), ctx)
@@ -410,7 +424,7 @@ async fn do_delete(
     slug: &str,
     scope: BrandingScope,
 ) -> AdminResult<Response> {
-    let tenant = authorize(state, auth, slug, Access::Write).await?;
+    let tenant = authorize(state, auth, slug, &scope, Access::Write).await?;
     state
         .branding()
         .delete(tenant.id, &scope, auth.actor(), ctx)
@@ -426,7 +440,7 @@ async fn do_put_logo(
     scope: BrandingScope,
     body: PutBrandingLogo,
 ) -> AdminResult<Response> {
-    let tenant = authorize(state, auth, slug, Access::Write).await?;
+    let tenant = authorize(state, auth, slug, &scope, Access::Write).await?;
     let bytes =
         anvil_jose::encoding::b64std_decode(&body.data).map_err(|_| CoreError::Validation {
             field: "data",
@@ -446,7 +460,7 @@ async fn do_delete_logo(
     slug: &str,
     scope: BrandingScope,
 ) -> AdminResult<Response> {
-    let tenant = authorize(state, auth, slug, Access::Write).await?;
+    let tenant = authorize(state, auth, slug, &scope, Access::Write).await?;
     let b = state
         .branding()
         .clear_logo(tenant.id, &scope, auth.actor(), ctx)
@@ -461,7 +475,7 @@ async fn do_preview(
     scope: BrandingScope,
     body: PutBranding,
 ) -> AdminResult<Response> {
-    let tenant = authorize(state, auth, slug, Access::Write).await?;
+    let tenant = authorize(state, auth, slug, &scope, Access::Write).await?;
     let p = state
         .branding()
         .put_draft(tenant.id, &scope, body.into())
@@ -486,7 +500,7 @@ async fn do_publish(
     scope: BrandingScope,
     body: PublishBranding,
 ) -> AdminResult<Response> {
-    let tenant = authorize(state, auth, slug, Access::Write).await?;
+    let tenant = authorize(state, auth, slug, &scope, Access::Write).await?;
     let (b, ws) = state
         .branding()
         .publish(tenant.id, &scope, &body.token, auth.actor(), ctx)
@@ -942,6 +956,249 @@ pub(crate) async fn publish_client_branding(
         body,
     )
     .await
+}
+
+// ---------------------------------------------------------------------------------------------
+// Organization branding (06-17): the same code paths with an org scope. Applies to sign-in
+// pages whose authorization request names the organization (client > org > tenant).
+// ---------------------------------------------------------------------------------------------
+
+/// The org scope of an `{org}` branding route. The org is resolved under the organization
+/// routes' principal rules; the scope's access is checked again by [`authorize`].
+async fn org_scope(
+    state: &AppState,
+    auth: &AdminAuth,
+    slug: &str,
+    org: &str,
+) -> AdminResult<BrandingScope> {
+    let (_, org) = super::organizations::org_for(state, auth, slug, org, Access::Read).await?;
+    Ok(BrandingScope::Org(org.id))
+}
+
+/// Get the organization's branding (`customized: false` when it inherits).
+#[utoipa::path(
+    get,
+    path = "/api/admin/v1/tenants/{slug}/organizations/{org}/branding",
+    tag = "branding",
+    operation_id = "getOrganizationBranding",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("org" = String, Path, description = "Organization id or slug"),
+    ),
+    responses(
+        (status = 200, description = "The branding", body = BrandingView),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope, or an org admin token of another organization", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant or organization", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:organizations:read"]),
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:read"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn get_org_branding(
+    OrgAdminAuth(auth): OrgAdminAuth,
+    State(state): State<AppState>,
+    Path((slug, org)): Path<(String, String)>,
+) -> AdminResult<Response> {
+    let scope = org_scope(&state, &auth, &slug, &org).await?;
+    do_get(&state, &auth, &slug, scope).await
+}
+
+/// Set the organization's theme tokens and custom CSS (the logo is kept). Contrast below 4.5:1 is
+/// returned as warnings, below 3:1 refused.
+#[utoipa::path(
+    put,
+    path = "/api/admin/v1/tenants/{slug}/organizations/{org}/branding",
+    tag = "branding",
+    operation_id = "putOrganizationBranding",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("org" = String, Path, description = "Organization id or slug"),
+    ),
+    request_body = PutBranding,
+    responses(
+        (status = 200, description = "The stored branding with contrast warnings", body = BrandingView),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope, or an org admin token of another organization", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant or organization", body = Problem, content_type = "application/problem+json"),
+        (status = 422, description = "Validation failed", body = Problem, content_type = "application/problem+json"),    ),
+    security(
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn put_org_branding(
+    OrgAdminAuth(auth): OrgAdminAuth,
+    State(state): State<AppState>,
+    AuditContext(ctx): AuditContext,
+    Path((slug, org)): Path<(String, String)>,
+    AdminJson(body): AdminJson<PutBranding>,
+) -> AdminResult<Response> {
+    let scope = org_scope(&state, &auth, &slug, &org).await?;
+    do_put(&state, &auth, &ctx, &slug, scope, body).await
+}
+
+/// Remove the organization's branding (back to the inherited theme).
+#[utoipa::path(
+    delete,
+    path = "/api/admin/v1/tenants/{slug}/organizations/{org}/branding",
+    tag = "branding",
+    operation_id = "deleteOrganizationBranding",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("org" = String, Path, description = "Organization id or slug"),
+    ),
+    responses(
+        (status = 204, description = "Removed"),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope, or an org admin token of another organization", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant or organization", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn delete_org_branding(
+    OrgAdminAuth(auth): OrgAdminAuth,
+    State(state): State<AppState>,
+    AuditContext(ctx): AuditContext,
+    Path((slug, org)): Path<(String, String)>,
+) -> AdminResult<Response> {
+    let scope = org_scope(&state, &auth, &slug, &org).await?;
+    do_delete(&state, &auth, &ctx, &slug, scope).await
+}
+
+/// Upload the organization's logo (PNG, JPEG or WebP, at most 256 KiB; SVG refused).
+#[utoipa::path(
+    put,
+    path = "/api/admin/v1/tenants/{slug}/organizations/{org}/branding/logo",
+    tag = "branding",
+    operation_id = "putOrganizationBrandingLogo",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("org" = String, Path, description = "Organization id or slug"),
+    ),
+    request_body = PutBrandingLogo,
+    responses(
+        (status = 200, description = "The branding with the new logo", body = BrandingView),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope, or an org admin token of another organization", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant or organization", body = Problem, content_type = "application/problem+json"),
+        (status = 422, description = "Validation failed", body = Problem, content_type = "application/problem+json"),    ),
+    security(
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn put_org_branding_logo(
+    OrgAdminAuth(auth): OrgAdminAuth,
+    State(state): State<AppState>,
+    AuditContext(ctx): AuditContext,
+    Path((slug, org)): Path<(String, String)>,
+    AdminJson(body): AdminJson<PutBrandingLogo>,
+) -> AdminResult<Response> {
+    let scope = org_scope(&state, &auth, &slug, &org).await?;
+    do_put_logo(&state, &auth, &ctx, &slug, scope, body).await
+}
+
+/// Remove the organization's logo.
+#[utoipa::path(
+    delete,
+    path = "/api/admin/v1/tenants/{slug}/organizations/{org}/branding/logo",
+    tag = "branding",
+    operation_id = "deleteOrganizationBrandingLogo",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("org" = String, Path, description = "Organization id or slug"),
+    ),
+    responses(
+        (status = 200, description = "The branding without logo", body = BrandingView),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope, or an org admin token of another organization", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant or organization", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn delete_org_branding_logo(
+    OrgAdminAuth(auth): OrgAdminAuth,
+    State(state): State<AppState>,
+    AuditContext(ctx): AuditContext,
+    Path((slug, org)): Path<(String, String)>,
+) -> AdminResult<Response> {
+    let scope = org_scope(&state, &auth, &slug, &org).await?;
+    do_delete_logo(&state, &auth, &ctx, &slug, scope).await
+}
+
+/// Store a preview draft of the organization's branding and return its preview token and URL.
+#[utoipa::path(
+    post,
+    path = "/api/admin/v1/tenants/{slug}/organizations/{org}/branding/preview",
+    tag = "branding",
+    operation_id = "previewOrganizationBranding",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("org" = String, Path, description = "Organization id or slug"),
+    ),
+    request_body = PutBranding,
+    responses(
+        (status = 200, description = "The preview token and URL", body = BrandingPreview),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope, or an org admin token of another organization", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant or organization", body = Problem, content_type = "application/problem+json"),
+        (status = 422, description = "Validation failed", body = Problem, content_type = "application/problem+json"),    ),
+    security(
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn preview_org_branding(
+    OrgAdminAuth(auth): OrgAdminAuth,
+    State(state): State<AppState>,
+    Path((slug, org)): Path<(String, String)>,
+    AdminJson(body): AdminJson<PutBranding>,
+) -> AdminResult<Response> {
+    let scope = org_scope(&state, &auth, &slug, &org).await?;
+    do_preview(&state, &auth, &slug, scope, body).await
+}
+
+/// Publish a preview draft of the organization's branding.
+#[utoipa::path(
+    post,
+    path = "/api/admin/v1/tenants/{slug}/organizations/{org}/branding/publish",
+    tag = "branding",
+    operation_id = "publishOrganizationBranding",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("org" = String, Path, description = "Organization id or slug"),
+    ),
+    request_body = PublishBranding,
+    responses(
+        (status = 200, description = "The published branding", body = BrandingView),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope, or an org admin token of another organization", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant or organization", body = Problem, content_type = "application/problem+json"),
+        (status = 422, description = "Validation failed", body = Problem, content_type = "application/problem+json"),    ),
+    security(
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn publish_org_branding(
+    OrgAdminAuth(auth): OrgAdminAuth,
+    State(state): State<AppState>,
+    AuditContext(ctx): AuditContext,
+    Path((slug, org)): Path<(String, String)>,
+    AdminJson(body): AdminJson<PublishBranding>,
+) -> AdminResult<Response> {
+    let scope = org_scope(&state, &auth, &slug, &org).await?;
+    do_publish(&state, &auth, &ctx, &slug, scope, body).await
 }
 
 #[cfg(test)]

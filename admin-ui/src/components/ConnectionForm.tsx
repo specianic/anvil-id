@@ -154,6 +154,8 @@ export function valuesFromConnection(c: ConnectionView): ConnectionFormValues {
     trust_email_verified: c.trust_email_verified,
   };
   const config = c.config;
+  // SAML connections belong to organizations and are not edited with this form.
+  if (config.type === "saml") return v;
   v.client_id = config.client_id;
   v.scopes = (config.scopes ?? []).join(" ");
   if (config.type === "social") {

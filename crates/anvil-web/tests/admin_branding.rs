@@ -1,9 +1,13 @@
 //! Branding management API end to end (UI-03): CRUD for the tenant and client scopes, contrast
 //! warnings, validation errors with field and CSS line, logo upload, the preview/publish flow and
-//! the `branding_updated` audit rows. Selected backend via `ANVILID_TEST_DB`.
+//! the `branding_updated` audit rows. Organization branding (06-17): its API (also for the org's own
+//! admin), and the sign-in page theme with precedence client > org > tenant when the authorization
+//! request names the organization. Selected backend via `ANVILID_TEST_DB`.
 
 mod admin_support;
+mod authz;
 mod support;
+mod token_support;
 
 use admin_support::*;
 use anvil_cache::limiter::RateQuota;
@@ -370,4 +374,297 @@ async fn preview_then_publish() {
     )
     .await;
     assert_field_error(&resp, "custom_css");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Organization branding (06-17)
+// ---------------------------------------------------------------------------------------------
+
+const O: &str = "/api/admin/v1/tenants/default/organizations/acme/branding";
+
+#[tokio::test]
+async fn org_branding_put_get_delete() {
+    let app = app().await;
+    let t = full(&app).await;
+    let tenant = default_tenant(&app).await;
+    let org = create_org(&app, tenant.id, "acme").await;
+
+    let v = body_json(&req(&app, &t, Method::GET, O, None).await);
+    assert_eq!(v["scope"], "org");
+    assert_eq!(v["org_id"], org.id.to_string());
+    assert_eq!(v["customized"], false);
+
+    let resp = req(
+        &app,
+        &t,
+        Method::PUT,
+        O,
+        Some(json!({"tokens": {"colors": {"primary": "#0F766E"}}, "custom_css": ".acme { font-weight: 700; }"})),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let v = body_json(&resp);
+    assert_eq!(v["customized"], true);
+    assert_eq!(v["tokens"]["colors"]["primary"], "#0F766E");
+    // The same validation as the other scopes.
+    let resp = req(
+        &app,
+        &t,
+        Method::PUT,
+        O,
+        Some(json!({"custom_css": ".a{}\n@import \"x.css\";"})),
+    )
+    .await;
+    assert_field_error(&resp, "custom_css");
+
+    // Logo with the same limits.
+    let data = anvil_jose::encoding::b64std(PNG);
+    let resp = req(
+        &app,
+        &t,
+        Method::PUT,
+        &format!("{O}/logo"),
+        Some(json!({"data": data})),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert!(
+        body_json(&resp)["logo_url"]
+            .as_str()
+            .unwrap()
+            .starts_with("/t/default/theme/logo/")
+    );
+    let svg = anvil_jose::encoding::b64std(b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>");
+    let resp = req(
+        &app,
+        &t,
+        Method::PUT,
+        &format!("{O}/logo"),
+        Some(json!({"data": svg})),
+    )
+    .await;
+    assert_problem(&resp, 422);
+    let resp = req(&app, &t, Method::DELETE, &format!("{O}/logo"), None).await;
+    assert_eq!(body_json(&resp)["logo_url"], Value::Null);
+
+    // Preview, then publish.
+    let resp = req(
+        &app,
+        &t,
+        Method::POST,
+        &format!("{O}/preview"),
+        Some(json!({"tokens": {"colors": {"primary": "#7C2D12"}}})),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let token = body_json(&resp)["token"].as_str().unwrap().to_owned();
+    let preview = app
+        .get(&format!("/theme/theme.css?preview={token}"))
+        .await
+        .text();
+    assert!(preview.contains("--anvil-primary:#7c2d12"), "{preview}");
+    // A draft of another scope cannot be published here.
+    let resp = req(
+        &app,
+        &t,
+        Method::POST,
+        &format!("{T}/publish"),
+        Some(json!({"token": token})),
+    )
+    .await;
+    assert_problem(&resp, 404);
+    let resp = req(
+        &app,
+        &t,
+        Method::POST,
+        &format!("{O}/publish"),
+        Some(json!({"token": token})),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_eq!(body_json(&resp)["tokens"]["colors"]["primary"], "#7C2D12");
+
+    let resp = req(&app, &t, Method::DELETE, O, None).await;
+    assert_eq!(resp.status, 204);
+    assert_eq!(
+        body_json(&req(&app, &t, Method::GET, O, None).await)["customized"],
+        false
+    );
+    // Unknown org.
+    let resp = req(
+        &app,
+        &t,
+        Method::GET,
+        "/api/admin/v1/tenants/default/organizations/nope/branding",
+        None,
+    )
+    .await;
+    assert_problem(&resp, 404);
+
+    // Audited with the org scope as target.
+    let events = app
+        .storage()
+        .audit()
+        .query(
+            tenant.id,
+            &AuditQuery {
+                action: Some(AuditAction::BrandingUpdated),
+                limit: 50,
+                ..AuditQuery::default()
+            },
+        )
+        .await
+        .unwrap()
+        .items;
+    let target = format!("org:{}", org.id);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| e.target.as_deref() == Some(target.as_str()))
+            .count(),
+        5
+    );
+}
+
+/// Starts an authorization request of `client_id` (optionally naming an organization) and
+/// returns the theme stylesheet the sign-in page links.
+async fn sign_in_theme(app: &TestApp, client_id: &str, organization: Option<&str>) -> String {
+    let mut params = authz::pkce_params(client_id);
+    if let Some(o) = organization {
+        params.push(("organization", o));
+    }
+    let resp = authz::get(app, &authz::authorize_path("", &params), None).await;
+    let request = authz::assert_login_redirect(&resp, &app.issuer(None));
+    let page = authz::get(app, &format!("/ui/login?request={request}"), None).await;
+    assert_eq!(page.status, 200, "{}", page.text());
+    let html = page.html();
+    let marker = "href=\"/theme/theme.css?flow=";
+    let start = html.find(marker).expect("the page links the theme") + "href=\"".len();
+    let link = &html[start..];
+    let link = link[..link.find('"').unwrap()].replace("&amp;", "&");
+    let css = app.get(&link).await;
+    assert_eq!(css.status, 200, "{}", css.text());
+    css.text()
+}
+
+async fn org_client(app: &TestApp, t: &str) -> String {
+    let client_id = new_client(app, t).await;
+    let resp = req(
+        app,
+        t,
+        Method::PATCH,
+        &format!("/api/admin/v1/tenants/default/clients/{client_id}"),
+        Some(json!({"organization": "optional", "scopes": ["openid", "profile", "email"]})),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    client_id
+}
+
+#[tokio::test]
+async fn sign_in_page_uses_org_branding_when_request_names_org() {
+    let app = app().await;
+    let t = full(&app).await;
+    let tenant = default_tenant(&app).await;
+    let org = create_org(&app, tenant.id, "acme").await;
+    let client_id = org_client(&app, &t).await;
+    let put = |path: &'static str, color: &'static str, css: &'static str| {
+        let app = &app;
+        let t = &t;
+        async move {
+            let resp = req(
+                app,
+                t,
+                Method::PUT,
+                path,
+                Some(json!({"tokens": {"colors": {"primary": color}}, "custom_css": css})),
+            )
+            .await;
+            assert_eq!(resp.status, 200, "{}", resp.text());
+        }
+    };
+    put(T, "#111111", ".tenant-rule{color:red}").await;
+    put(O, "#222222", ".org-rule{color:red}").await;
+
+    // By slug and by id: the org layer wins over the tenant, both custom CSS in order.
+    for name in ["acme".to_owned(), org.id.to_string()] {
+        let css = sign_in_theme(&app, &client_id, Some(&name)).await;
+        assert!(css.contains("--anvil-primary:#222222"), "{name}: {css}");
+        let (a, b) = (
+            css.find(".tenant-rule").unwrap(),
+            css.find(".org-rule").unwrap(),
+        );
+        assert!(a < b, "{css}");
+    }
+    // No org named, or an unknown one: the tenant theme.
+    for org_param in [None, Some("globex")] {
+        let css = sign_in_theme(&app, &client_id, org_param).await;
+        assert!(
+            css.contains("--anvil-primary:#111111"),
+            "{org_param:?}: {css}"
+        );
+        assert!(!css.contains(".org-rule"), "{css}");
+    }
+
+    // Client branding still wins over the org's.
+    let client_path = format!("/api/admin/v1/tenants/default/clients/{client_id}/branding");
+    let resp = req(&app, &t, Method::PUT, &client_path, Some(json!({"tokens": {"colors": {"primary": "#333333"}}, "custom_css": ".client-rule{color:red}"}))).await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let css = sign_in_theme(&app, &client_id, Some("acme")).await;
+    assert!(css.contains("--anvil-primary:#333333"), "{css}");
+    let (a, b, c) = (
+        css.find(".tenant-rule").unwrap(),
+        css.find(".org-rule").unwrap(),
+        css.find(".client-rule").unwrap(),
+    );
+    assert!(a < b && b < c, "{css}");
+}
+
+#[tokio::test]
+async fn org_admin_can_brand_own_org_only() {
+    let app = TestApp::with(|c| c.rate_limits.enabled = false).await;
+    let tenant = default_tenant(&app).await;
+    let acme = create_org(&app, tenant.id, "acme").await;
+    let globex = create_org(&app, tenant.id, "globex").await;
+    let role = create_role(&app, tenant.id, Some(acme.id), "org-admins", &["org:admin"]).await;
+    let admin = token_support::seed_user(&app, tenant.id, "ada@example.test").await;
+    add_member(&app, tenant.id, acme.id, admin.id, &[role.id]).await;
+    let token = org_admin_token(&app, &tenant, acme.id, admin.id)
+        .await
+        .token;
+    let body = json!({"tokens": {"colors": {"primary": "#0F766E"}}});
+
+    let resp = req(&app, &token, Method::PUT, O, Some(body.clone())).await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let resp = req(&app, &token, Method::GET, O, None).await;
+    assert_eq!(resp.status, 200);
+
+    let g = "/api/admin/v1/tenants/default/organizations/globex/branding";
+    for (m, path, b) in [
+        (Method::GET, g.to_owned(), None),
+        (Method::PUT, g.to_owned(), Some(body.clone())),
+        (Method::DELETE, g.to_owned(), None),
+        (
+            Method::PUT,
+            format!("{g}/logo"),
+            Some(json!({"data": anvil_jose::encoding::b64std(PNG)})),
+        ),
+        (Method::POST, format!("{g}/preview"), Some(body.clone())),
+    ] {
+        let resp = req(&app, &token, m, &path, b).await;
+        assert_problem(&resp, 403);
+    }
+    // Tenant and client branding stay closed to org admins.
+    let resp = req(&app, &token, Method::PUT, T, Some(body.clone())).await;
+    assert_problem(&resp, 401);
+    let globex_branding = app
+        .storage()
+        .branding()
+        .get(
+            tenant.id,
+            &anvil_core::model::BrandingScope::Org(globex.id).scope_key(),
+        )
+        .await
+        .unwrap();
+    assert!(globex_branding.is_none());
 }
