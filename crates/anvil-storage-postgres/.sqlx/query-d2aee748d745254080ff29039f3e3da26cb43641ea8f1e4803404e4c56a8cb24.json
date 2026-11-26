@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE client SET registration_access_token_hash = $3, updated_at = $4\n              WHERE tenant_id = $1 AND client_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Bytea",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d2aee748d745254080ff29039f3e3da26cb43641ea8f1e4803404e4c56a8cb24"
+}

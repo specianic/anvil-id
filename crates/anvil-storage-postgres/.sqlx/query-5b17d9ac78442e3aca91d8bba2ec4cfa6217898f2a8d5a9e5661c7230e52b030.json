@@ -1,0 +1,88 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT name, schema, required, user_editable, claim, position\n               FROM attribute_definition\n              WHERE tenant_id = $1\n              ORDER BY position, name COLLATE \"C\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "attribute_definition",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "schema",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "attribute_definition",
+            "name": "schema"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "required",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "attribute_definition",
+            "name": "required"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "user_editable",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "attribute_definition",
+            "name": "user_editable"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "claim",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "attribute_definition",
+            "name": "claim"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "position",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "attribute_definition",
+            "name": "position"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "5b17d9ac78442e3aca91d8bba2ec4cfa6217898f2a8d5a9e5661c7230e52b030"
+}

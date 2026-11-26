@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO role_assignment (tenant_id, role_id, user_id, created_at)\n         SELECT $1, $2, $3, $4\n          WHERE EXISTS (SELECT 1 FROM role WHERE tenant_id = $1 AND id = $2)\n            AND EXISTS (SELECT 1 FROM \"user\" WHERE tenant_id = $1 AND id = $3)\n         ON CONFLICT (tenant_id, role_id, user_id) DO UPDATE\n            SET created_at = role_assignment.created_at\n      RETURNING user_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "role_assignment",
+            "name": "user_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "79a3a6c4cbdb56efdc1062c5a5bc906a0c58f8159fd9e9b43c5122068eaded11"
+}

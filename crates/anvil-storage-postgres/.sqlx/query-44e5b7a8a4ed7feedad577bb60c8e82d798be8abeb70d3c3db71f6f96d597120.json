@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM attribute_definition WHERE tenant_id = $1 AND name = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "44e5b7a8a4ed7feedad577bb60c8e82d798be8abeb70d3c3db71f6f96d597120"
+}

@@ -23,16 +23,16 @@ pub(crate) struct PgUsers {
 }
 
 pub(crate) struct UserRow {
-    id: Uuid,
-    tenant_id: Uuid,
-    email: String,
-    email_verified: bool,
-    username: Option<String>,
-    claims: serde_json::Value,
-    status: String,
-    created_at: OffsetDateTime,
-    updated_at: OffsetDateTime,
-    last_login_at: Option<OffsetDateTime>,
+    pub(crate) id: Uuid,
+    pub(crate) tenant_id: Uuid,
+    pub(crate) email: String,
+    pub(crate) email_verified: bool,
+    pub(crate) username: Option<String>,
+    pub(crate) claims: serde_json::Value,
+    pub(crate) status: String,
+    pub(crate) created_at: OffsetDateTime,
+    pub(crate) updated_at: OffsetDateTime,
+    pub(crate) last_login_at: Option<OffsetDateTime>,
 }
 
 impl UserRow {

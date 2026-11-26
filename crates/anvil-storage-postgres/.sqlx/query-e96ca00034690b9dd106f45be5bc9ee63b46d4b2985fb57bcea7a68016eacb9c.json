@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, tenant_id, client_id, name, client_type, application_type, auth_method,\n                    secret_hash, jwks, redirect_uris, grant_types, scopes, require_pkce,\n                    token_format, consent_mode, id_token_signed_response_alg, can_introspect,\n                    created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,\n                    backchannel_logout_session_required, allowed_resources, mfa_policy\n               FROM client\n              WHERE tenant_id = $1 AND ($2::uuid IS NULL OR id > $2)\n              ORDER BY id\n              LIMIT $3",
+  "query": "SELECT id, tenant_id, client_id, name, client_type, application_type, auth_method,\n                    secret_hash, jwks, redirect_uris, grant_types, scopes, require_pkce,\n                    token_format, consent_mode, id_token_signed_response_alg, can_introspect,\n                    created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,\n                    backchannel_logout_session_required, allowed_resources, mfa_policy,\n                    registration_source, metadata_expires_at, registration_access_token_hash\n               FROM client\n              WHERE tenant_id = $1 AND ($2::uuid IS NULL OR id > $2)\n              ORDER BY id\n              LIMIT $3",
   "describe": {
     "columns": [
       {
@@ -266,6 +266,39 @@
             "name": "mfa_policy"
           }
         }
+      },
+      {
+        "ordinal": 24,
+        "name": "registration_source",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "registration_source"
+          }
+        }
+      },
+      {
+        "ordinal": 25,
+        "name": "metadata_expires_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "metadata_expires_at"
+          }
+        }
+      },
+      {
+        "ordinal": 26,
+        "name": "registration_access_token_hash",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "registration_access_token_hash"
+          }
+        }
       }
     ],
     "parameters": {
@@ -299,8 +332,11 @@
       true,
       false,
       false,
+      true,
+      false,
+      true,
       true
     ]
   },
-  "hash": "708a647799a140fd8f5d050947c0d601c59d41c973856a7554e67306b4e4e141"
+  "hash": "e96ca00034690b9dd106f45be5bc9ee63b46d4b2985fb57bcea7a68016eacb9c"
 }

@@ -1,4 +1,5 @@
-//! `AuditRepo` on Postgres: append-only events, newest-first keyset queries, retention.
+//! `AuditRepo` on Postgres: append-only events (with the webhook fan-out in the same
+//! transaction), newest-first keyset queries, retention.
 
 use std::net::IpAddr;
 
@@ -13,6 +14,7 @@ use uuid::Uuid;
 
 use crate::PURGE_BATCH;
 use crate::convert::{enum_from, fetch_limit, map_err};
+use crate::webhooks::enqueue_for_event;
 
 #[derive(Debug, Clone)]
 pub(crate) struct PgAudit {
@@ -74,13 +76,8 @@ impl AuditRow {
 #[async_trait::async_trait]
 impl AuditRepo for PgAudit {
     async fn append(&self, tenant: TenantId, e: &NewAuditEvent) -> Result<(), StorageError> {
-        // TRANSITIONAL(05-07): webhook fan-out is not stored yet; refuse instead of dropping the event.
-        if e.webhook.is_some() {
-            return Err(StorageError::Unsupported(
-                "webhook events are not stored by this backend yet",
-            ));
-        }
         let details = serde_json::Value::Object(e.details.as_map().clone());
+        let mut tx = self.pool.begin().await.map_err(map_err)?;
         sqlx::query!(
             "INSERT INTO audit_event
                  (id, tenant_id, at, actor_kind, actor_id, action, target, outcome, ip,
@@ -99,9 +96,15 @@ impl AuditRepo for PgAudit {
             e.ctx.trace_id,
             details,
         )
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(map_err)?;
+        // Webhook fan-out in the same transaction: a rejected append (e.g. a duplicate id)
+        // enqueues nothing, and an enqueued delivery always has its audit event.
+        if let Some(webhook) = &e.webhook {
+            enqueue_for_event(&mut tx, tenant, webhook, e.at).await?;
+        }
+        tx.commit().await.map_err(map_err)?;
         Ok(())
     }
 
@@ -154,8 +157,27 @@ impl AuditRepo for PgAudit {
         Ok(Page { items, next_cursor })
     }
 
+    /// Also applies the audit retention to the webhook delivery log: delivered and failed
+    /// deliveries completed before `cutoff` are deleted (pending ones never are). The returned
+    /// count is the number of audit events deleted.
     async fn purge_before(&self, cutoff: OffsetDateTime) -> Result<u64, StorageError> {
         // Batched like `purge_expired`, so a large backlog never holds long locks.
+        loop {
+            let done = sqlx::query!(
+                "DELETE FROM webhook_delivery WHERE ctid IN
+                   (SELECT ctid FROM webhook_delivery
+                     WHERE status IN ('delivered', 'failed') AND completed_at < $1
+                     LIMIT $2)",
+                cutoff,
+                PURGE_BATCH,
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(map_err)?;
+            if done.rows_affected() < PURGE_BATCH as u64 {
+                break;
+            }
+        }
         let mut deleted = 0u64;
         loop {
             let done = sqlx::query!(

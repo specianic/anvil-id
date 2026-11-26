@@ -1,0 +1,160 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, tenant_id, name, url, events, enabled, secret_enc, previous_secret_enc,\n                    previous_secret_expires_at, disabled_reason, created_at, updated_at\n               FROM webhook_endpoint\n              WHERE tenant_id = $1\n              ORDER BY name COLLATE \"C\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "webhook_endpoint",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "tenant_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "webhook_endpoint",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "webhook_endpoint",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "url",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "webhook_endpoint",
+            "name": "url"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "events",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "webhook_endpoint",
+            "name": "events"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "enabled",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "webhook_endpoint",
+            "name": "enabled"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "secret_enc",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "webhook_endpoint",
+            "name": "secret_enc"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "previous_secret_enc",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "webhook_endpoint",
+            "name": "previous_secret_enc"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "previous_secret_expires_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "webhook_endpoint",
+            "name": "previous_secret_expires_at"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "disabled_reason",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "webhook_endpoint",
+            "name": "disabled_reason"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "webhook_endpoint",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "webhook_endpoint",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "227a9b9a5a06329abb4d8d1dc9b7758b9bacbd14835d5bdeb94b30177ccccd0e"
+}

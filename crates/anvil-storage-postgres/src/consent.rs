@@ -4,9 +4,11 @@
 //! `upsert_consent` is one `INSERT … ON CONFLICT DO UPDATE`: concurrent first grants for the same
 //! (user, client) serialise on the unique index and the loser merges into the winner's row, so
 //! no granted scope is ever lost. Scopes are stored as a sorted, de-duplicated jsonb array
-//! (byte order, `COLLATE "C"`, matching Rust's `str` ordering).
+//! (byte order, `COLLATE "C"`, matching Rust's `str` ordering); RFC 8707 resources the same way.
 
-use anvil_core::model::{ConsentGrant, ConsentId, NewConsent, RevokeReason, TenantId, UserId};
+use anvil_core::model::{
+    ConsentGrant, ConsentId, NewConsent, RevokeReason, TenantId, UserId, normalize_resources,
+};
 use anvil_core::ports::StorageError;
 use sqlx::PgPool;
 use time::OffsetDateTime;
@@ -22,6 +24,7 @@ struct ConsentRow {
     created_at: OffsetDateTime,
     updated_at: OffsetDateTime,
     revoked_at: Option<OffsetDateTime>,
+    resources: serde_json::Value,
 }
 
 impl ConsentRow {
@@ -34,8 +37,7 @@ impl ConsentRow {
             created_at: self.created_at,
             updated_at: self.updated_at,
             revoked_at: self.revoked_at,
-            // TRANSITIONAL(05-07): no resources column yet.
-            resources: Vec::new(),
+            resources: from_json("consent_grant.resources", self.resources)?,
         })
     }
 }
@@ -48,7 +50,7 @@ pub(crate) async fn consent(
 ) -> Result<Option<ConsentGrant>, StorageError> {
     sqlx::query_as!(
         ConsentRow,
-        "SELECT id, user_id, client_id, scopes, created_at, updated_at, revoked_at
+        "SELECT id, user_id, client_id, scopes, created_at, updated_at, revoked_at, resources
            FROM consent_grant
           WHERE tenant_id = $1 AND user_id = $2 AND client_id = $3 AND revoked_at IS NULL",
         tenant.0,
@@ -69,7 +71,7 @@ pub(crate) async fn list_consents(
 ) -> Result<Vec<ConsentGrant>, StorageError> {
     sqlx::query_as!(
         ConsentRow,
-        "SELECT id, user_id, client_id, scopes, created_at, updated_at, revoked_at
+        "SELECT id, user_id, client_id, scopes, created_at, updated_at, revoked_at, resources
            FROM consent_grant
           WHERE tenant_id = $1 AND user_id = $2 AND revoked_at IS NULL
           ORDER BY client_id COLLATE \"C\"",
@@ -90,24 +92,22 @@ pub(crate) async fn upsert_consent(
     c: &NewConsent,
     now: OffsetDateTime,
 ) -> Result<ConsentGrant, StorageError> {
-    // TRANSITIONAL(05-07): consent resources are not stored yet; refuse instead of dropping them.
-    if !c.resources.is_empty() {
-        return Err(StorageError::Unsupported(
-            "consent resources are not stored by this backend yet",
-        ));
-    }
     let mut scopes = c.scopes.clone();
     scopes.sort();
     scopes.dedup();
     let scopes = to_json("consent_grant.scopes", &scopes)?;
+    let resources = to_json(
+        "consent_grant.resources",
+        &normalize_resources(&c.resources),
+    )?;
     // Active grant: union of stored and new scopes. Revoked grant: re-activated with exactly the
     // new scopes. The user must belong to the tenant: the composite (tenant_id, user_id) FK
     // enforces it in the schema; the EXISTS pre-check is defense in depth with a clearer error.
     sqlx::query_as!(
         ConsentRow,
         "INSERT INTO consent_grant
-             (id, tenant_id, user_id, client_id, scopes, created_at, updated_at)
-         SELECT $1, $2, $3, $4, $5, $6, $7
+             (id, tenant_id, user_id, client_id, scopes, created_at, updated_at, resources)
+         SELECT $1, $2, $3, $4, $5, $6, $7, $8
           WHERE EXISTS (SELECT 1 FROM \"user\" WHERE tenant_id = $2 AND id = $3)
          ON CONFLICT (tenant_id, user_id, client_id) DO UPDATE
             SET scopes = CASE
@@ -119,9 +119,18 @@ pub(crate) async fn upsert_consent(
                     '[]'::jsonb)
                   ELSE EXCLUDED.scopes
                 END,
+                resources = CASE
+                  WHEN consent_grant.revoked_at IS NULL THEN COALESCE(
+                    (SELECT jsonb_agg(u.r ORDER BY u.r)
+                       FROM (SELECT DISTINCT e COLLATE \"C\" AS r
+                               FROM jsonb_array_elements_text(
+                                      consent_grant.resources || EXCLUDED.resources) AS e) AS u),
+                    '[]'::jsonb)
+                  ELSE EXCLUDED.resources
+                END,
                 updated_at = EXCLUDED.updated_at,
                 revoked_at = NULL
-      RETURNING id, user_id, client_id, scopes, created_at, updated_at, revoked_at",
+      RETURNING id, user_id, client_id, scopes, created_at, updated_at, revoked_at, resources",
         c.id.0,
         tenant.0,
         c.user_id.0,
@@ -129,6 +138,7 @@ pub(crate) async fn upsert_consent(
         scopes,
         c.created_at,
         now,
+        resources,
     )
     .fetch_optional(pool)
     .await

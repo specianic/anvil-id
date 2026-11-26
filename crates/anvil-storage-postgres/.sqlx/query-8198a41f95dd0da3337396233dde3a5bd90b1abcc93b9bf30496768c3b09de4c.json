@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO webhook_delivery\n             (id, tenant_id, endpoint_id, event_type, payload_json, attempts, next_attempt_at,\n              status, created_at)\n         SELECT d.id, $3, d.endpoint_id, $4, $5, 0, $6, 'pending', $6\n           FROM unnest($1::uuid[], $2::uuid[]) AS d (id, endpoint_id)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "UuidArray",
+        "UuidArray",
+        "Uuid",
+        "Text",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8198a41f95dd0da3337396233dde3a5bd90b1abcc93b9bf30496768c3b09de4c"
+}

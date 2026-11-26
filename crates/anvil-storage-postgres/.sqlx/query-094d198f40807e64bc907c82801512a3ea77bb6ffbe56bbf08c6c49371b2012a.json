@@ -1,0 +1,282 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH claimed AS (\n               UPDATE webhook_delivery\n                  SET next_attempt_at = $1\n                WHERE id IN (SELECT d.id\n                               FROM webhook_delivery d\n                               JOIN webhook_endpoint e\n                                 ON e.tenant_id = d.tenant_id AND e.id = d.endpoint_id\n                              WHERE d.status = 'pending' AND d.next_attempt_at <= $2\n                                AND e.enabled\n                              ORDER BY d.next_attempt_at, d.id\n                              LIMIT $3\n                                FOR UPDATE OF d SKIP LOCKED)\n            RETURNING id, tenant_id, endpoint_id, event_type, payload_json, attempts,\n                      next_attempt_at, status, last_http_status, last_error, created_at,\n                      completed_at)\n             SELECT c.id AS \"id!\", c.tenant_id AS \"tenant_id!\",\n                    c.endpoint_id AS \"endpoint_id!\", c.event_type AS \"event_type!\",\n                    c.payload_json AS \"payload_json!\", c.attempts AS \"attempts!\",\n                    c.next_attempt_at AS \"next_attempt_at!\", c.status AS \"status!\",\n                    c.last_http_status, c.last_error, c.created_at AS \"created_at!\",\n                    c.completed_at,\n                    e.name AS \"e_name!\", e.url AS \"e_url!\", e.events AS \"e_events!\",\n                    e.enabled AS \"e_enabled!\", e.secret_enc AS \"e_secret_enc!\",\n                    e.previous_secret_enc AS e_previous_secret_enc,\n                    e.previous_secret_expires_at AS e_previous_secret_expires_at,\n                    e.disabled_reason AS e_disabled_reason,\n                    e.created_at AS \"e_created_at!\", e.updated_at AS \"e_updated_at!\"\n               FROM claimed c\n               JOIN webhook_endpoint e ON e.tenant_id = c.tenant_id AND e.id = c.endpoint_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "webhook_delivery",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "tenant_id!",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "webhook_delivery",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "endpoint_id!",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "webhook_delivery",
+            "name": "endpoint_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "event_type!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "webhook_delivery",
+            "name": "event_type"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "payload_json!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "webhook_delivery",
+            "name": "payload_json"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "attempts!",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "webhook_delivery",
+            "name": "attempts"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "next_attempt_at!",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "webhook_delivery",
+            "name": "next_attempt_at"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "status!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "webhook_delivery",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "last_http_status",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "webhook_delivery",
+            "name": "last_http_status"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "last_error",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "webhook_delivery",
+            "name": "last_error"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "created_at!",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "webhook_delivery",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "completed_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "webhook_delivery",
+            "name": "completed_at"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "e_name!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "webhook_endpoint",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "e_url!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "webhook_endpoint",
+            "name": "url"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "e_events!",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "webhook_endpoint",
+            "name": "events"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "e_enabled!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "webhook_endpoint",
+            "name": "enabled"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "e_secret_enc!",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "webhook_endpoint",
+            "name": "secret_enc"
+          }
+        }
+      },
+      {
+        "ordinal": 17,
+        "name": "e_previous_secret_enc",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "webhook_endpoint",
+            "name": "previous_secret_enc"
+          }
+        }
+      },
+      {
+        "ordinal": 18,
+        "name": "e_previous_secret_expires_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "webhook_endpoint",
+            "name": "previous_secret_expires_at"
+          }
+        }
+      },
+      {
+        "ordinal": 19,
+        "name": "e_disabled_reason",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "webhook_endpoint",
+            "name": "disabled_reason"
+          }
+        }
+      },
+      {
+        "ordinal": 20,
+        "name": "e_created_at!",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "webhook_endpoint",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 21,
+        "name": "e_updated_at!",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "webhook_endpoint",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Timestamptz",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "094d198f40807e64bc907c82801512a3ea77bb6ffbe56bbf08c6c49371b2012a"
+}

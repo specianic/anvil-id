@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, user_id, client_id, scopes, created_at, updated_at, revoked_at\n           FROM consent_grant\n          WHERE tenant_id = $1 AND user_id = $2 AND client_id = $3 AND revoked_at IS NULL",
+  "query": "SELECT id, user_id, client_id, scopes, created_at, updated_at, revoked_at, resources\n           FROM consent_grant\n          WHERE tenant_id = $1 AND user_id = $2 AND client_id = $3 AND revoked_at IS NULL",
   "describe": {
     "columns": [
       {
@@ -79,6 +79,17 @@
             "name": "revoked_at"
           }
         }
+      },
+      {
+        "ordinal": 7,
+        "name": "resources",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "consent_grant",
+            "name": "resources"
+          }
+        }
       }
     ],
     "parameters": {
@@ -95,8 +106,9 @@
       false,
       false,
       false,
-      true
+      true,
+      false
     ]
   },
-  "hash": "81fbcd53f4a0c1b2f83d26bb92630ba069407024e30a66e8682333650b33c056"
+  "hash": "54fab5d3a0b30593f5fdc77e94ecca6984aeb6aabb04ca2b6e7ada41fc24a23d"
 }

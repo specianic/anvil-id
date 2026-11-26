@@ -1,0 +1,95 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO attribute_definition\n                 (tenant_id, name, schema, required, user_editable, claim, position, created_at,\n                  updated_at)\n             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)\n             ON CONFLICT (tenant_id, name) DO UPDATE\n                SET schema = EXCLUDED.schema,\n                    required = EXCLUDED.required,\n                    user_editable = EXCLUDED.user_editable,\n                    claim = EXCLUDED.claim,\n                    position = EXCLUDED.position,\n                    updated_at = EXCLUDED.updated_at\n          RETURNING name, schema, required, user_editable, claim, position",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "attribute_definition",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "schema",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "attribute_definition",
+            "name": "schema"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "required",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "attribute_definition",
+            "name": "required"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "user_editable",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "attribute_definition",
+            "name": "user_editable"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "claim",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "attribute_definition",
+            "name": "claim"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "position",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "attribute_definition",
+            "name": "position"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Jsonb",
+        "Bool",
+        "Bool",
+        "Jsonb",
+        "Int8",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "15cb1b1c48f5d4c977f5b524122b82bc0a9dc996af75a92c1c7eed2692e3fbe0"
+}

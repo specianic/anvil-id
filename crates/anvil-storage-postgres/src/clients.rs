@@ -45,6 +45,9 @@ pub(crate) struct ClientRow {
     backchannel_logout_session_required: bool,
     allowed_resources: serde_json::Value,
     mfa_policy: Option<String>,
+    registration_source: String,
+    metadata_expires_at: Option<OffsetDateTime>,
+    registration_access_token_hash: Option<Vec<u8>>,
 }
 
 impl ClientRow {
@@ -97,10 +100,16 @@ impl ClientRow {
                 .as_deref()
                 .map(|m| enum_from("client.mfa_policy", m, MfaPolicy::parse))
                 .transpose()?,
-            // TRANSITIONAL(05-07): no registration columns yet; every stored client is static.
-            metadata_expires_at: None,
-            registration_access_token_hash: None,
-            registration_source: ClientSource::Static,
+            metadata_expires_at: self.metadata_expires_at,
+            registration_access_token_hash: opt_hash(
+                "client.registration_access_token_hash",
+                self.registration_access_token_hash.as_deref(),
+            )?,
+            registration_source: enum_from(
+                "client.registration_source",
+                &self.registration_source,
+                ClientSource::parse,
+            )?,
         })
     }
 }
@@ -132,10 +141,9 @@ pub(crate) fn client_from_new(tenant: TenantId, c: &NewClient) -> Client {
         backchannel_logout_session_required: c.backchannel_logout_session_required,
         allowed_resources: c.allowed_resources.clone(),
         mfa_policy: c.mfa_policy,
-        // TRANSITIONAL(05-07): refuse_registration_fields guarantees the defaults.
-        metadata_expires_at: None,
-        registration_access_token_hash: None,
-        registration_source: ClientSource::Static,
+        metadata_expires_at: c.metadata_expires_at,
+        registration_access_token_hash: c.registration_access_token_hash,
+        registration_source: c.registration_source,
     }
 }
 
@@ -148,7 +156,6 @@ pub(crate) async fn insert_client<'e, E>(
 where
     E: sqlx::PgExecutor<'e>,
 {
-    refuse_registration_fields(c)?;
     let post_logout = to_json(
         "client.post_logout_redirect_uris",
         &c.post_logout_redirect_uris,
@@ -162,9 +169,10 @@ where
               secret_hash, jwks, redirect_uris, grant_types, scopes, require_pkce,
               token_format, consent_mode, id_token_signed_response_alg, can_introspect,
               created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,
-              backchannel_logout_session_required, allowed_resources, mfa_policy)
+              backchannel_logout_session_required, allowed_resources, mfa_policy,
+              registration_source, metadata_expires_at, registration_access_token_hash)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-                 $18, $18, $19, $20, $21, $22, $23)",
+                 $18, $18, $19, $20, $21, $22, $23, $24, $25, $26)",
         c.id.0,
         tenant.0,
         c.client_id,
@@ -188,6 +196,11 @@ where
         c.backchannel_logout_session_required,
         resources,
         c.mfa_policy.map(|m| m.as_str()),
+        c.registration_source.as_str(),
+        c.metadata_expires_at,
+        c.registration_access_token_hash
+            .as_ref()
+            .map(|h| h.as_bytes().as_slice()),
     )
     .execute(exec)
     .await
@@ -209,7 +222,8 @@ impl ClientRepo for PgClients {
                     secret_hash, jwks, redirect_uris, grant_types, scopes, require_pkce,
                     token_format, consent_mode, id_token_signed_response_alg, can_introspect,
                     created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,
-                    backchannel_logout_session_required, allowed_resources, mfa_policy
+                    backchannel_logout_session_required, allowed_resources, mfa_policy,
+                    registration_source, metadata_expires_at, registration_access_token_hash
                FROM client
               WHERE tenant_id = $1 AND client_id = $2",
             tenant.0,
@@ -234,7 +248,8 @@ impl ClientRepo for PgClients {
                     secret_hash, jwks, redirect_uris, grant_types, scopes, require_pkce,
                     token_format, consent_mode, id_token_signed_response_alg, can_introspect,
                     created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,
-                    backchannel_logout_session_required, allowed_resources, mfa_policy
+                    backchannel_logout_session_required, allowed_resources, mfa_policy,
+                    registration_source, metadata_expires_at, registration_access_token_hash
                FROM client
               WHERE tenant_id = $1 AND ($2::uuid IS NULL OR id > $2)
               ORDER BY id
@@ -260,7 +275,6 @@ impl ClientRepo for PgClients {
         update: &ClientUpdate,
         now: OffsetDateTime,
     ) -> Result<Option<Client>, StorageError> {
-        refuse_registration_update(update)?;
         let post_logout = update
             .post_logout_redirect_uris
             .as_ref()
@@ -291,6 +305,14 @@ impl ClientRepo for PgClients {
             Some(a) => (true, a.clone()),
             None => (false, None),
         };
+        let (set_expiry, expiry) = match update.metadata_expires_at {
+            Some(e) => (true, e),
+            None => (false, None),
+        };
+        let (set_rat, rat) = match &update.registration_access_token_hash {
+            Some(h) => (true, h.as_ref().map(|h| h.as_bytes().to_vec())),
+            None => (false, None),
+        };
         sqlx::query_as!(
             ClientRow,
             "UPDATE client
@@ -312,13 +334,17 @@ impl ClientRepo for PgClients {
                       COALESCE($19, backchannel_logout_session_required),
                     allowed_resources = COALESCE($20, allowed_resources),
                     mfa_policy = CASE WHEN $21 THEN $22 ELSE mfa_policy END,
+                    metadata_expires_at = CASE WHEN $23 THEN $24 ELSE metadata_expires_at END,
+                    registration_access_token_hash =
+                      CASE WHEN $25 THEN $26 ELSE registration_access_token_hash END,
                     updated_at = $10
               WHERE tenant_id = $1 AND client_id = $2
           RETURNING id, tenant_id, client_id, name, client_type, application_type, auth_method,
                     secret_hash, jwks, redirect_uris, grant_types, scopes, require_pkce,
                     token_format, consent_mode, id_token_signed_response_alg, can_introspect,
                     created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,
-                    backchannel_logout_session_required, allowed_resources, mfa_policy",
+                    backchannel_logout_session_required, allowed_resources, mfa_policy,
+                    registration_source, metadata_expires_at, registration_access_token_hash",
             tenant.0,
             client_id,
             update.name,
@@ -341,6 +367,10 @@ impl ClientRepo for PgClients {
             resources,
             set_mfa,
             mfa,
+            set_expiry,
+            expiry,
+            set_rat,
+            rat,
         )
         .fetch_optional(&self.pool)
         .await
@@ -420,65 +450,152 @@ impl ClientRepo for PgClients {
         Ok(true)
     }
 
-    // TRANSITIONAL(05-07): the registration columns do not exist yet; refused, never a success.
     async fn upsert_cimd(
         &self,
-        _tenant: TenantId,
-        _client: &NewClient,
-        _metadata_expires_at: OffsetDateTime,
-        _now: OffsetDateTime,
+        tenant: TenantId,
+        c: &NewClient,
+        metadata_expires_at: OffsetDateTime,
+        now: OffsetDateTime,
     ) -> Result<Client, StorageError> {
-        Err(StorageError::Unsupported("CIMD clients (plan 05-07)"))
+        // One statement: insert, or replace the metadata of an existing CIMD client. The
+        // conflict update only applies to CIMD rows; for a static or dynamic client holding the
+        // `client_id` the WHERE fails, nothing changes and no row comes back (`Conflict`).
+        let post_logout = to_json(
+            "client.post_logout_redirect_uris",
+            &c.post_logout_redirect_uris,
+        )?;
+        let resources = to_json("client.allowed_resources", &c.allowed_resources)?;
+        let secret_hash = c.secret_hash.as_ref().map(|h| h.as_bytes().as_slice());
+        let grant_types = enum_names(&c.grant_types, GrantType::as_str);
+        let rat = c
+            .registration_access_token_hash
+            .as_ref()
+            .map(|h| h.as_bytes().as_slice());
+        sqlx::query_as!(
+            ClientRow,
+            "INSERT INTO client
+                 (id, tenant_id, client_id, name, client_type, application_type, auth_method,
+                  secret_hash, jwks, redirect_uris, grant_types, scopes, require_pkce,
+                  token_format, consent_mode, id_token_signed_response_alg, can_introspect,
+                  created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,
+                  backchannel_logout_session_required, allowed_resources, mfa_policy,
+                  registration_source, metadata_expires_at, registration_access_token_hash)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
+                     $18, $18, $19, $20, $21, $22, $23, 'cimd', $24, $25)
+             ON CONFLICT (tenant_id, client_id) DO UPDATE
+                SET name = EXCLUDED.name,
+                    client_type = EXCLUDED.client_type,
+                    application_type = EXCLUDED.application_type,
+                    auth_method = EXCLUDED.auth_method,
+                    secret_hash = EXCLUDED.secret_hash,
+                    jwks = EXCLUDED.jwks,
+                    redirect_uris = EXCLUDED.redirect_uris,
+                    grant_types = EXCLUDED.grant_types,
+                    scopes = EXCLUDED.scopes,
+                    require_pkce = EXCLUDED.require_pkce,
+                    token_format = EXCLUDED.token_format,
+                    consent_mode = EXCLUDED.consent_mode,
+                    id_token_signed_response_alg = EXCLUDED.id_token_signed_response_alg,
+                    can_introspect = EXCLUDED.can_introspect,
+                    updated_at = EXCLUDED.updated_at,
+                    post_logout_redirect_uris = EXCLUDED.post_logout_redirect_uris,
+                    backchannel_logout_uri = EXCLUDED.backchannel_logout_uri,
+                    backchannel_logout_session_required =
+                      EXCLUDED.backchannel_logout_session_required,
+                    allowed_resources = EXCLUDED.allowed_resources,
+                    mfa_policy = EXCLUDED.mfa_policy,
+                    metadata_expires_at = EXCLUDED.metadata_expires_at,
+                    registration_access_token_hash = EXCLUDED.registration_access_token_hash
+              WHERE client.registration_source = 'cimd'
+          RETURNING id, tenant_id, client_id, name, client_type, application_type, auth_method,
+                    secret_hash, jwks, redirect_uris, grant_types, scopes, require_pkce,
+                    token_format, consent_mode, id_token_signed_response_alg, can_introspect,
+                    created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,
+                    backchannel_logout_session_required, allowed_resources, mfa_policy,
+                    registration_source, metadata_expires_at, registration_access_token_hash",
+            c.id.0,
+            tenant.0,
+            c.client_id,
+            c.name,
+            c.client_type.as_str(),
+            c.application_type.as_str(),
+            c.auth_method.as_str(),
+            secret_hash,
+            c.jwks,
+            &c.redirect_uris,
+            &grant_types,
+            &c.scopes,
+            c.require_pkce,
+            c.token_format.as_str(),
+            c.consent_mode.as_str(),
+            c.id_token_signed_response_alg,
+            c.can_introspect,
+            now,
+            post_logout,
+            c.backchannel_logout_uri,
+            c.backchannel_logout_session_required,
+            resources,
+            c.mfa_policy.map(|m| m.as_str()),
+            metadata_expires_at,
+            rat,
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_err)?
+        .ok_or_else(|| {
+            StorageError::Conflict(
+                "client_id is held by a registered (static or dynamic) client".to_owned(),
+            )
+        })?
+        .into_model()
     }
 
-    // TRANSITIONAL(05-07)
     async fn get_by_registration_token(
         &self,
-        _tenant: TenantId,
-        _client_id: &str,
-        _token_hash: &SecretHash,
+        tenant: TenantId,
+        client_id: &str,
+        token_hash: &SecretHash,
     ) -> Result<Option<Client>, StorageError> {
-        Err(StorageError::Unsupported(
-            "registration access tokens (plan 05-07)",
-        ))
+        sqlx::query_as!(
+            ClientRow,
+            "SELECT id, tenant_id, client_id, name, client_type, application_type, auth_method,
+                    secret_hash, jwks, redirect_uris, grant_types, scopes, require_pkce,
+                    token_format, consent_mode, id_token_signed_response_alg, can_introspect,
+                    created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,
+                    backchannel_logout_session_required, allowed_resources, mfa_policy,
+                    registration_source, metadata_expires_at, registration_access_token_hash
+               FROM client
+              WHERE tenant_id = $1 AND client_id = $2 AND registration_source = 'dynamic'
+                AND registration_access_token_hash = $3",
+            tenant.0,
+            client_id,
+            token_hash.as_bytes().as_slice(),
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_err)?
+        .map(ClientRow::into_model)
+        .transpose()
     }
 
-    // TRANSITIONAL(05-07)
     async fn set_registration_token(
         &self,
-        _tenant: TenantId,
-        _client_id: &str,
-        _token_hash: Option<&SecretHash>,
-        _now: OffsetDateTime,
+        tenant: TenantId,
+        client_id: &str,
+        token_hash: Option<&SecretHash>,
+        now: OffsetDateTime,
     ) -> Result<bool, StorageError> {
-        Err(StorageError::Unsupported(
-            "registration access tokens (plan 05-07)",
-        ))
+        let done = sqlx::query!(
+            "UPDATE client SET registration_access_token_hash = $3, updated_at = $4
+              WHERE tenant_id = $1 AND client_id = $2",
+            tenant.0,
+            client_id,
+            token_hash.map(|h| h.as_bytes().as_slice()),
+            now,
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(map_err)?;
+        Ok(done.rows_affected() > 0)
     }
-}
-
-/// TRANSITIONAL(05-07): the 0.4 registration columns do not exist yet on this backend. Non-default values are
-/// refused explicitly instead of being dropped silently.
-fn refuse_registration_fields(c: &NewClient) -> Result<(), StorageError> {
-    // TRANSITIONAL(05-07)
-    if c.registration_source != ClientSource::Static
-        || c.metadata_expires_at.is_some()
-        || c.registration_access_token_hash.is_some()
-    {
-        return Err(StorageError::Unsupported(
-            "client registration fields are not stored by this backend yet",
-        ));
-    }
-    Ok(())
-}
-
-/// TRANSITIONAL(05-07): see [`refuse_registration_fields`].
-fn refuse_registration_update(u: &ClientUpdate) -> Result<(), StorageError> {
-    // TRANSITIONAL(05-07)
-    if u.metadata_expires_at.is_some() || u.registration_access_token_hash.is_some() {
-        return Err(StorageError::Unsupported(
-            "client registration fields are not stored by this backend yet",
-        ));
-    }
-    Ok(())
 }

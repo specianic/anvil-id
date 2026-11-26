@@ -1,0 +1,364 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO client\n                 (id, tenant_id, client_id, name, client_type, application_type, auth_method,\n                  secret_hash, jwks, redirect_uris, grant_types, scopes, require_pkce,\n                  token_format, consent_mode, id_token_signed_response_alg, can_introspect,\n                  created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,\n                  backchannel_logout_session_required, allowed_resources, mfa_policy,\n                  registration_source, metadata_expires_at, registration_access_token_hash)\n             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,\n                     $18, $18, $19, $20, $21, $22, $23, 'cimd', $24, $25)\n             ON CONFLICT (tenant_id, client_id) DO UPDATE\n                SET name = EXCLUDED.name,\n                    client_type = EXCLUDED.client_type,\n                    application_type = EXCLUDED.application_type,\n                    auth_method = EXCLUDED.auth_method,\n                    secret_hash = EXCLUDED.secret_hash,\n                    jwks = EXCLUDED.jwks,\n                    redirect_uris = EXCLUDED.redirect_uris,\n                    grant_types = EXCLUDED.grant_types,\n                    scopes = EXCLUDED.scopes,\n                    require_pkce = EXCLUDED.require_pkce,\n                    token_format = EXCLUDED.token_format,\n                    consent_mode = EXCLUDED.consent_mode,\n                    id_token_signed_response_alg = EXCLUDED.id_token_signed_response_alg,\n                    can_introspect = EXCLUDED.can_introspect,\n                    updated_at = EXCLUDED.updated_at,\n                    post_logout_redirect_uris = EXCLUDED.post_logout_redirect_uris,\n                    backchannel_logout_uri = EXCLUDED.backchannel_logout_uri,\n                    backchannel_logout_session_required =\n                      EXCLUDED.backchannel_logout_session_required,\n                    allowed_resources = EXCLUDED.allowed_resources,\n                    mfa_policy = EXCLUDED.mfa_policy,\n                    metadata_expires_at = EXCLUDED.metadata_expires_at,\n                    registration_access_token_hash = EXCLUDED.registration_access_token_hash\n              WHERE client.registration_source = 'cimd'\n          RETURNING id, tenant_id, client_id, name, client_type, application_type, auth_method,\n                    secret_hash, jwks, redirect_uris, grant_types, scopes, require_pkce,\n                    token_format, consent_mode, id_token_signed_response_alg, can_introspect,\n                    created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,\n                    backchannel_logout_session_required, allowed_resources, mfa_policy,\n                    registration_source, metadata_expires_at, registration_access_token_hash",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "tenant_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "client_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "client_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "client_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "client_type"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "application_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "application_type"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "auth_method",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "auth_method"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "secret_hash",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "secret_hash"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "jwks",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "jwks"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "redirect_uris",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "redirect_uris"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "grant_types",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "grant_types"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "scopes",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "scopes"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "require_pkce",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "require_pkce"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "token_format",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "token_format"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "consent_mode",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "consent_mode"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "id_token_signed_response_alg",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "id_token_signed_response_alg"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "can_introspect",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "can_introspect"
+          }
+        }
+      },
+      {
+        "ordinal": 17,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 18,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "updated_at"
+          }
+        }
+      },
+      {
+        "ordinal": 19,
+        "name": "post_logout_redirect_uris",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "post_logout_redirect_uris"
+          }
+        }
+      },
+      {
+        "ordinal": 20,
+        "name": "backchannel_logout_uri",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "backchannel_logout_uri"
+          }
+        }
+      },
+      {
+        "ordinal": 21,
+        "name": "backchannel_logout_session_required",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "backchannel_logout_session_required"
+          }
+        }
+      },
+      {
+        "ordinal": 22,
+        "name": "allowed_resources",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "allowed_resources"
+          }
+        }
+      },
+      {
+        "ordinal": 23,
+        "name": "mfa_policy",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "mfa_policy"
+          }
+        }
+      },
+      {
+        "ordinal": 24,
+        "name": "registration_source",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "registration_source"
+          }
+        }
+      },
+      {
+        "ordinal": 25,
+        "name": "metadata_expires_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "metadata_expires_at"
+          }
+        }
+      },
+      {
+        "ordinal": 26,
+        "name": "registration_access_token_hash",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "registration_access_token_hash"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Bytea",
+        "Text",
+        "TextArray",
+        "TextArray",
+        "TextArray",
+        "Bool",
+        "Text",
+        "Text",
+        "Text",
+        "Bool",
+        "Timestamptz",
+        "Jsonb",
+        "Text",
+        "Bool",
+        "Jsonb",
+        "Text",
+        "Timestamptz",
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "3da1dfe632fa2d552a426f8b1cecec7a4349cf2167b1ea2e7d4b5fc3bf0f56c7"
+}

@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT attributes FROM \"user\" WHERE tenant_id = $1 AND id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "attributes",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"user\"",
+            "name": "attributes"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "7d9c8f5f82495310591a270edeb2a33161258fef15d9a40dfaebc60dfacbf3aa"
+}

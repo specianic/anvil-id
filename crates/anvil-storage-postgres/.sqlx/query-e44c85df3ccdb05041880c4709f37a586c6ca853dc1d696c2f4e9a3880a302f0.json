@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM initial_access_token WHERE ctid IN\n               (SELECT ctid FROM initial_access_token\n                 WHERE (expires_at IS NOT NULL AND expires_at <= $1::timestamptz - interval '7 days')\n                    OR (revoked_at IS NOT NULL AND revoked_at <= $1::timestamptz - interval '7 days')\n                 LIMIT $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e44c85df3ccdb05041880c4709f37a586c6ca853dc1d696c2f4e9a3880a302f0"
+}

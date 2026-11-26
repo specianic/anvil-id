@@ -11,6 +11,7 @@ use time::OffsetDateTime;
 use crate::clients::{client_from_new, insert_client};
 use crate::convert::map_err;
 use crate::keys::insert_key;
+use crate::roles::{assign_admin_role, insert_admin_role};
 use crate::tenants::insert_tenant;
 use crate::users::{insert_password, insert_user, user_from_new};
 
@@ -40,6 +41,9 @@ impl PgSetup {
         let mut tx = self.pool.begin().await.map_err(map_err)?;
         for tenant in &plan.tenants {
             insert_tenant(&mut *tx, tenant).await?;
+            if tenant.slug == SYSTEM_TENANT_SLUG {
+                insert_admin_role(&mut tx, tenant.id, tenant.created_at).await?;
+            }
         }
         for (tenant, key) in &plan.keys {
             insert_key(&mut *tx, *tenant, key).await?;
@@ -131,6 +135,7 @@ impl SetupRepo for PgSetup {
         // Any error below drops `tx`, rolling back the token consumption too.
         insert_user(&mut *tx, admin_tenant, admin).await?;
         insert_password(&mut *tx, admin_tenant, admin.id, password).await?;
+        assign_admin_role(&mut tx, admin_tenant, admin.id, now).await?;
         insert_client(&mut *tx, client_tenant, client).await?;
         tx.commit().await.map_err(map_err)?;
         Ok(SetupOutcome::Completed {

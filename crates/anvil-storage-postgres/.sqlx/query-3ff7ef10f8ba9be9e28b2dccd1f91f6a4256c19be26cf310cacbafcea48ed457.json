@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM webhook_delivery WHERE ctid IN\n                   (SELECT ctid FROM webhook_delivery\n                     WHERE status IN ('delivered', 'failed') AND completed_at < $1\n                     LIMIT $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3ff7ef10f8ba9be9e28b2dccd1f91f6a4256c19be26cf310cacbafcea48ed457"
+}

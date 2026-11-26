@@ -5,6 +5,7 @@
 //! one transaction (READ COMMITTED); races are decided by row-level conditional
 //! `UPDATE … RETURNING` / `INSERT … ON CONFLICT`, never by check-then-act.
 
+mod attributes;
 mod audit;
 mod branding;
 mod clients;
@@ -20,12 +21,13 @@ mod logout;
 mod mail_settings;
 pub mod migrate;
 mod outbox;
-// TRANSITIONAL(05-07): Phase 5 repositories refused with `Unsupported` until implemented.
-mod pending;
+mod registration;
+mod roles;
 mod sessions;
 mod setup;
 mod tenants;
 mod users;
+mod webhooks;
 
 use anvil_core::ports::{
     AttributeRepo, AuditRepo, BrandingRepo, ClientRepo, ConnectionRepo, FlowRepo, GrantRepo,
@@ -35,6 +37,7 @@ use anvil_core::ports::{
 use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
 
+use crate::attributes::PgAttributes;
 use crate::audit::PgAudit;
 use crate::branding::PgBranding;
 use crate::clients::PgClients;
@@ -47,11 +50,13 @@ use crate::keys::PgKeys;
 use crate::logout::PgLogout;
 use crate::mail_settings::PgMailSettings;
 use crate::outbox::PgOutbox;
-use crate::pending::PostgresPending;
+use crate::registration::PgRegistration;
+use crate::roles::PgRoles;
 use crate::sessions::PgSessions;
 use crate::setup::PgSetup;
 use crate::tenants::PgTenants;
 use crate::users::PgUsers;
+use crate::webhooks::PgWebhooks;
 
 pub use crate::migrate::{MigrateError, MigrateOptions, PendingMigration};
 
@@ -77,8 +82,10 @@ pub struct PostgresStorage {
     connections: PgConnections,
     branding: PgBranding,
     logout: PgLogout,
-    /// TRANSITIONAL(05-07): roles, attributes, webhooks and registration.
-    pending: PostgresPending,
+    roles: PgRoles,
+    attributes: PgAttributes,
+    webhooks: PgWebhooks,
+    registration: PgRegistration,
 }
 
 impl PostgresStorage {
@@ -109,7 +116,10 @@ impl PostgresStorage {
             connections: PgConnections { pool: pool.clone() },
             branding: PgBranding { pool: pool.clone() },
             logout: PgLogout { pool: pool.clone() },
-            pending: PostgresPending,
+            roles: PgRoles { pool: pool.clone() },
+            attributes: PgAttributes { pool: pool.clone() },
+            webhooks: PgWebhooks { pool: pool.clone() },
+            registration: PgRegistration { pool: pool.clone() },
             pool,
         }
     }
@@ -163,16 +173,16 @@ impl Storage for PostgresStorage {
         &self.logout
     }
     fn roles(&self) -> &dyn RoleRepo {
-        &self.pending
+        &self.roles
     }
     fn attributes(&self) -> &dyn AttributeRepo {
-        &self.pending
+        &self.attributes
     }
     fn webhooks(&self) -> &dyn WebhookRepo {
-        &self.pending
+        &self.webhooks
     }
     fn registration(&self) -> &dyn RegistrationRepo {
-        &self.pending
+        &self.registration
     }
 
     async fn purge_expired(&self, now: time::OffsetDateTime) -> Result<u64, StorageError> {
@@ -243,6 +253,15 @@ impl Storage for PostgresStorage {
         total += purge!(
             "DELETE FROM branding_draft WHERE ctid IN
                (SELECT ctid FROM branding_draft WHERE preview_expires_at <= $1 LIMIT $2)"
+        );
+        // Initial access tokens stay listed for 7 days after they expire or are revoked, so the
+        // console can show why a registration was refused (same rule as SQLite).
+        total += purge!(
+            "DELETE FROM initial_access_token WHERE ctid IN
+               (SELECT ctid FROM initial_access_token
+                 WHERE (expires_at IS NOT NULL AND expires_at <= $1::timestamptz - interval '7 days')
+                    OR (revoked_at IS NOT NULL AND revoked_at <= $1::timestamptz - interval '7 days')
+                 LIMIT $2)"
         );
         // Families past their absolute lifetime can never issue tokens again; keep any that a
         // still-valid code references. Their codes, refresh tokens and access tokens go by
@@ -542,6 +561,7 @@ mod tests {
 
         let (a, b, user_b) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
         let family = Uuid::now_v7();
+        let role_b = Uuid::now_v7();
         exec(
             &mut conn,
             &format!(
@@ -553,7 +573,10 @@ mod tests {
                  INSERT INTO token_family (id, tenant_id, client_id, user_id, scope, amr,
                                            created_at, absolute_expires_at)
                       VALUES ('{family}', '{b}', 'web', '{user_b}', 'openid', ARRAY['pwd'], now(),
-                              now() + interval '30 days');"
+                              now() + interval '30 days');
+                 INSERT INTO role (id, tenant_id, name, description, permissions, created_at,
+                                   updated_at)
+                      VALUES ('{role_b}', '{b}', 'r', '', ARRAY['p'], now(), now());"
             ),
         )
         .await
@@ -561,7 +584,7 @@ mod tests {
 
         // One insert per user-owned table; `{t}` is the tenant written on the row.
         type InsertFor = Box<dyn Fn(Uuid) -> String>;
-        let rows: [(&str, InsertFor); 6] = [
+        let rows: [(&str, InsertFor); 7] = [
             (
                 "credential",
                 Box::new(move |t| {
@@ -633,6 +656,15 @@ mod tests {
                                       '{family}', '{user_b}', '{}', now(), 'urn:anvilid:acr:pwd',
                                       ARRAY['pwd'], now() + interval '1 minute', now())",
                         Uuid::now_v7()
+                    )
+                }),
+            ),
+            (
+                "role_assignment",
+                Box::new(move |t| {
+                    format!(
+                        "INSERT INTO role_assignment (tenant_id, role_id, user_id, created_at)
+                              VALUES ('{t}', '{role_b}', '{user_b}', now())"
                     )
                 }),
             ),

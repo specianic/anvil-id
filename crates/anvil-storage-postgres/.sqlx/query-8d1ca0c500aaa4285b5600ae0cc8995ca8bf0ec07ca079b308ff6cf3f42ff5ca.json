@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO consent_grant\n             (id, tenant_id, user_id, client_id, scopes, created_at, updated_at)\n         SELECT $1, $2, $3, $4, $5, $6, $7\n          WHERE EXISTS (SELECT 1 FROM \"user\" WHERE tenant_id = $2 AND id = $3)\n         ON CONFLICT (tenant_id, user_id, client_id) DO UPDATE\n            SET scopes = CASE\n                  WHEN consent_grant.revoked_at IS NULL THEN COALESCE(\n                    (SELECT jsonb_agg(u.s ORDER BY u.s)\n                       FROM (SELECT DISTINCT e COLLATE \"C\" AS s\n                               FROM jsonb_array_elements_text(\n                                      consent_grant.scopes || EXCLUDED.scopes) AS e) AS u),\n                    '[]'::jsonb)\n                  ELSE EXCLUDED.scopes\n                END,\n                updated_at = EXCLUDED.updated_at,\n                revoked_at = NULL\n      RETURNING id, user_id, client_id, scopes, created_at, updated_at, revoked_at",
+  "query": "INSERT INTO consent_grant\n             (id, tenant_id, user_id, client_id, scopes, created_at, updated_at, resources)\n         SELECT $1, $2, $3, $4, $5, $6, $7, $8\n          WHERE EXISTS (SELECT 1 FROM \"user\" WHERE tenant_id = $2 AND id = $3)\n         ON CONFLICT (tenant_id, user_id, client_id) DO UPDATE\n            SET scopes = CASE\n                  WHEN consent_grant.revoked_at IS NULL THEN COALESCE(\n                    (SELECT jsonb_agg(u.s ORDER BY u.s)\n                       FROM (SELECT DISTINCT e COLLATE \"C\" AS s\n                               FROM jsonb_array_elements_text(\n                                      consent_grant.scopes || EXCLUDED.scopes) AS e) AS u),\n                    '[]'::jsonb)\n                  ELSE EXCLUDED.scopes\n                END,\n                resources = CASE\n                  WHEN consent_grant.revoked_at IS NULL THEN COALESCE(\n                    (SELECT jsonb_agg(u.r ORDER BY u.r)\n                       FROM (SELECT DISTINCT e COLLATE \"C\" AS r\n                               FROM jsonb_array_elements_text(\n                                      consent_grant.resources || EXCLUDED.resources) AS e) AS u),\n                    '[]'::jsonb)\n                  ELSE EXCLUDED.resources\n                END,\n                updated_at = EXCLUDED.updated_at,\n                revoked_at = NULL\n      RETURNING id, user_id, client_id, scopes, created_at, updated_at, revoked_at, resources",
   "describe": {
     "columns": [
       {
@@ -79,6 +79,17 @@
             "name": "revoked_at"
           }
         }
+      },
+      {
+        "ordinal": 7,
+        "name": "resources",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "consent_grant",
+            "name": "resources"
+          }
+        }
       }
     ],
     "parameters": {
@@ -89,7 +100,8 @@
         "Text",
         "Jsonb",
         "Timestamptz",
-        "Timestamptz"
+        "Timestamptz",
+        "Jsonb"
       ]
     },
     "nullable": [
@@ -99,8 +111,9 @@
       false,
       false,
       false,
-      true
+      true,
+      false
     ]
   },
-  "hash": "d674b2ab007c7713ba8386f0013cc6ccdfd3b6cc3e392b183f84a73d6906ee9a"
+  "hash": "8d1ca0c500aaa4285b5600ae0cc8995ca8bf0ec07ca079b308ff6cf3f42ff5ca"
 }

@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE webhook_endpoint SET enabled = false, disabled_reason = $3, updated_at = $4\n                  WHERE tenant_id = $1 AND id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b0cb4d2fecef9cefe66b78b09e0f41656ad7a5391524a6ca9f31b9ae5ce75550"
+}
