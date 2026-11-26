@@ -5,7 +5,8 @@
 //! user.
 
 use anvil_core::model::{
-    NewRole, Page, PageRequest, Role, RoleId, RoleUpdate, SYSTEM_ADMIN_ROLE, TenantId, User, UserId,
+    NewRole, OrgId, Page, PageRequest, Role, RoleId, RoleUpdate, SYSTEM_ADMIN_ROLE, TenantId, User,
+    UserId,
 };
 use anvil_core::ports::{RoleRepo, StorageError};
 use sqlx::{SqliteConnection, SqlitePool};
@@ -41,7 +42,7 @@ impl TryFrom<RoleRow> for Role {
         Ok(Role {
             id: RoleId(r.id),
             tenant_id: TenantId(r.tenant_id),
-            org_id: r.org_id,
+            org_id: r.org_id.map(OrgId),
             name: r.name,
             description: r.description,
             permissions: from_json(&r.permissions, "role.permissions")?,
@@ -58,6 +59,12 @@ pub(crate) async fn insert_role(
     tenant: TenantId,
     role: &NewRole,
 ) -> Result<Role, StorageError> {
+    // TRANSITIONAL(06-07): org-owned roles need the 1.0 schema (composite FK to organization,
+    // per-org name index); refused until 06-07 migrates it.
+    if role.org_id.is_some() {
+        return Err(StorageError::Unsupported("org-owned roles (06-07)"));
+    }
+    let org_id: Option<uuid::Uuid> = None;
     let permissions = to_json(&role.permissions, "role.permissions")?;
     let created_at = odt_to_ms(role.created_at);
     sqlx::query!(
@@ -66,7 +73,7 @@ pub(crate) async fn insert_role(
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
         role.id.0,
         tenant.0,
-        role.org_id,
+        org_id,
         role.name,
         role.description,
         permissions,

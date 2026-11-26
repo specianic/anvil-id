@@ -78,6 +78,12 @@ impl MailSettingsRepo for SqliteMailSettings {
         tenant: TenantId,
         template: &EmailTemplate,
     ) -> Result<(), StorageError> {
+        // TRANSITIONAL(06-07): `org_invitation` is not in the email_template kind CHECK yet.
+        if template.kind == EmailKind::OrgInvitation {
+            return Err(StorageError::Unsupported(
+                "org_invitation templates (06-07)",
+            ));
+        }
         let kind = template.kind.as_str();
         let updated_at = odt_to_ms(template.updated_at);
         sqlx::query!(

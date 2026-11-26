@@ -66,6 +66,7 @@ impl TryFrom<FamilyRow> for TokenFamily {
                 .map(|s| parse_enum(s, RevokeReason::parse, "revoked_reason"))
                 .transpose()?,
             resource: from_json(&r.resource, "token_family.resource")?,
+            org_id: None,
         })
     }
 }
@@ -130,12 +131,23 @@ async fn revoke_family_on(
     Ok(row.exists)
 }
 
+/// TRANSITIONAL(06-07): org-bound codes and token families need the 1.0 columns
+/// (`authorization_code.org_id`, `token_family.org_id`); refused until 06-07 adds them, never
+/// stored without their org.
+fn refuse_org_grant(org_id: Option<anvil_core::model::OrgId>) -> Result<(), StorageError> {
+    if org_id.is_some() {
+        return Err(StorageError::Unsupported("org-bound grants (06-07)"));
+    }
+    Ok(())
+}
+
 /// Inserts a token family on `conn`. `Conflict` on a duplicate id.
 async fn insert_family(
     conn: &mut SqliteConnection,
     tenant: TenantId,
     family: &NewTokenFamily,
 ) -> Result<(), StorageError> {
+    refuse_org_grant(family.org_id)?;
     let amr = to_json(&family.amr, "token_family.amr")?;
     let resource = to_json(&family.resource, "token_family.resource")?;
     let claims = family
@@ -284,6 +296,7 @@ impl GrantRepo for SqliteGrants {
         code: &NewAuthorizationCode,
         family: &NewTokenFamily,
     ) -> Result<(), StorageError> {
+        refuse_org_grant(code.org_id)?;
         if code.token_family_id != family.id {
             return Err(StorageError::Conflict(
                 "authorization code token_family_id does not match the family".to_owned(),
@@ -396,6 +409,7 @@ impl GrantRepo for SqliteGrants {
                 expires_at: ms_to_odt(r.expires_at)?,
                 created_at: ms_to_odt(r.created_at)?,
                 resource: from_json(&r.resource, "authorization_code.resource")?,
+                org_id: None,
             }));
         }
 
@@ -577,6 +591,12 @@ impl GrantRepo for SqliteGrants {
         expires_at: OffsetDateTime,
         now: OffsetDateTime,
     ) -> Result<JtiOutcome, StorageError> {
+        // TRANSITIONAL(06-07): `saml_assertion_id` is not in the replay_guard kind CHECK yet.
+        if kind == ReplayKind::SamlAssertionId {
+            return Err(StorageError::Unsupported(
+                "saml assertion replay guard (06-07)",
+            ));
+        }
         let kind = kind.as_str();
         let value = hash.as_bytes().as_slice();
         let expires_ms = odt_to_ms(expires_at);
@@ -744,5 +764,19 @@ impl GrantRepo for SqliteGrants {
         now: OffsetDateTime,
     ) -> Result<bool, StorageError> {
         consent::revoke(&self.writer, tenant, user, client_id, now).await
+    }
+}
+
+#[cfg(test)]
+mod transitional_tests {
+    use super::*;
+
+    #[test]
+    fn org_bound_grants_are_refused() {
+        assert!(matches!(
+            refuse_org_grant(Some(anvil_core::model::OrgId::new_v7())),
+            Err(StorageError::Unsupported(_))
+        ));
+        assert!(refuse_org_grant(None).is_ok());
     }
 }

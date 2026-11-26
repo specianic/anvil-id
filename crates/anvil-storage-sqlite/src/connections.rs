@@ -9,6 +9,24 @@ use anvil_core::model::{
     NewConnection, NewEmail, NewIdentityLink, NewSelfServiceToken, NewUser, TenantId, User, UserId,
 };
 use anvil_core::ports::{ConnectionRepo, DeleteLinkOutcome, StorageError};
+
+/// TRANSITIONAL(06-07): organization connections and SAML configs need the 1.0 schema
+/// (`connection.org_id`, `saml` in the kind CHECK). Until 06-07 migrates it they are refused,
+/// never silently stored without their org or kind.
+fn refuse_unmigrated(
+    org_id: Option<anvil_core::model::OrgId>,
+    config: Option<&ConnectionConfig>,
+) -> Result<(), StorageError> {
+    if org_id.is_some() {
+        return Err(StorageError::Unsupported(
+            "organization connections (06-07)",
+        ));
+    }
+    if matches!(config, Some(ConnectionConfig::Saml(_))) {
+        return Err(StorageError::Unsupported("saml connections (06-07)"));
+    }
+    Ok(())
+}
 use sqlx::{SqliteConnection, SqlitePool};
 use time::OffsetDateTime;
 
@@ -50,6 +68,7 @@ impl TryFrom<ConnectionRow> for Connection {
             trust_email_verified: r.trust_email_verified,
             created_at: ms_to_odt(r.created_at)?,
             updated_at: ms_to_odt(r.updated_at)?,
+            org_id: None,
         })
     }
 }
@@ -135,6 +154,7 @@ impl ConnectionRepo for SqliteConnections {
         tenant: TenantId,
         connection: &NewConnection,
     ) -> Result<Connection, StorageError> {
+        refuse_unmigrated(connection.org_id, Some(&connection.config))?;
         let kind = connection.config.kind().as_str();
         let config = to_json(&connection.config, "connection.config")?;
         let created_at = odt_to_ms(connection.created_at);
@@ -168,6 +188,7 @@ impl ConnectionRepo for SqliteConnections {
             trust_email_verified: connection.trust_email_verified,
             created_at: connection.created_at,
             updated_at: connection.created_at,
+            org_id: None,
         })
     }
 
@@ -246,6 +267,7 @@ impl ConnectionRepo for SqliteConnections {
         update: &ConnectionUpdate,
         now: OffsetDateTime,
     ) -> Result<Option<Connection>, StorageError> {
+        refuse_unmigrated(None, update.config.as_ref())?;
         let kind = update.config.as_ref().map(|c| c.kind().as_str());
         let config = update
             .config
@@ -475,5 +497,32 @@ impl ConnectionRepo for SqliteConnections {
         }
         tx.commit().await.map_err(map_err)?;
         Ok(created)
+    }
+}
+
+#[cfg(test)]
+mod transitional_tests {
+    use super::*;
+
+    #[test]
+    fn org_and_saml_connections_are_refused() {
+        let org = Some(anvil_core::model::OrgId::new_v7());
+        assert!(matches!(
+            refuse_unmigrated(org, None),
+            Err(StorageError::Unsupported(_))
+        ));
+        let saml = ConnectionConfig::Saml(anvil_core::model::SamlConfig {
+            idp_entity_id: "e".into(),
+            sso_url: "https://idp.example.test/sso".into(),
+            signing_certs: vec![],
+            name_id_format: Default::default(),
+            attributes: Default::default(),
+            metadata_url: None,
+        });
+        assert!(matches!(
+            refuse_unmigrated(None, Some(&saml)),
+            Err(StorageError::Unsupported(_))
+        ));
+        assert!(refuse_unmigrated(None, None).is_ok());
     }
 }

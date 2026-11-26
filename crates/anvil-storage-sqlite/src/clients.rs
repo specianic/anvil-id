@@ -100,8 +100,22 @@ impl TryFrom<ClientRow> for Client {
                 r.registration_access_token_hash.as_deref(),
                 "client.registration_access_token_hash",
             )?,
+            organization: anvil_core::model::OrgClientPolicy::Off,
         })
     }
+}
+
+/// TRANSITIONAL(06-07): the client organization policy needs the 1.0 `client.organization`
+/// column; any value but `off` is refused until 06-07 adds it, never silently dropped.
+fn refuse_org_policy(
+    policy: Option<anvil_core::model::OrgClientPolicy>,
+) -> Result<(), StorageError> {
+    if policy.is_some_and(|p| p != anvil_core::model::OrgClientPolicy::Off) {
+        return Err(StorageError::Unsupported(
+            "client organization policy (06-07)",
+        ));
+    }
+    Ok(())
 }
 
 /// Inserts a client on `conn` and returns the stored record. `Conflict` on a duplicate
@@ -111,6 +125,7 @@ pub(crate) async fn insert_client(
     tenant: TenantId,
     client: &NewClient,
 ) -> Result<Client, StorageError> {
+    refuse_org_policy(Some(client.organization))?;
     let client_type = client.client_type.as_str();
     let application_type = client.application_type.as_str();
     let auth_method = client.auth_method.as_str();
@@ -201,6 +216,7 @@ pub(crate) async fn insert_client(
         registration_source: client.registration_source,
         metadata_expires_at: client.metadata_expires_at,
         registration_access_token_hash: client.registration_access_token_hash,
+        organization: client.organization,
     })
 }
 
@@ -297,6 +313,7 @@ impl ClientRepo for SqliteClients {
         update: &ClientUpdate,
         now: OffsetDateTime,
     ) -> Result<Option<Client>, StorageError> {
+        refuse_org_policy(update.organization)?;
         let redirect_uris = update
             .redirect_uris
             .as_ref()
@@ -492,6 +509,7 @@ impl ClientRepo for SqliteClients {
         metadata_expires_at: OffsetDateTime,
         now: OffsetDateTime,
     ) -> Result<Client, StorageError> {
+        refuse_org_policy(Some(client.organization))?;
         let client_type = client.client_type.as_str();
         let application_type = client.application_type.as_str();
         let auth_method = client.auth_method.as_str();
@@ -672,5 +690,23 @@ impl ClientRepo for SqliteClients {
         .await
         .map_err(map_err)?;
         Ok(done.rows_affected() > 0)
+    }
+}
+
+#[cfg(test)]
+mod transitional_tests {
+    use super::*;
+    use anvil_core::model::OrgClientPolicy;
+
+    #[test]
+    fn non_default_org_policy_is_refused() {
+        for p in [OrgClientPolicy::Optional, OrgClientPolicy::Required] {
+            assert!(matches!(
+                refuse_org_policy(Some(p)),
+                Err(StorageError::Unsupported(_))
+            ));
+        }
+        assert!(refuse_org_policy(Some(OrgClientPolicy::Off)).is_ok());
+        assert!(refuse_org_policy(None).is_ok());
     }
 }
