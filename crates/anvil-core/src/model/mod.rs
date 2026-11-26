@@ -29,6 +29,10 @@ mod tenant;
 mod user;
 mod webhook;
 
+/// Stable string names for enums, shared with core modules outside `model` (e.g.
+/// `saml::validate::SamlReject`).
+pub(crate) use ids::str_enum;
+
 pub use attribute::*;
 pub use audit::*;
 pub use branding::*;

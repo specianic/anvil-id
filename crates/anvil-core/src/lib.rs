@@ -14,5 +14,6 @@ pub mod model;
 pub mod oauth;
 pub mod policy;
 pub mod ports;
+pub mod saml;
 pub mod service;
 pub mod upstream;

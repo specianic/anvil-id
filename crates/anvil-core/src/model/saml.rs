@@ -195,6 +195,8 @@ pub struct SamlAssertionData {
     pub name_id: String,
     pub name_id_format: Option<String>,
     pub subject_confirmation: Option<SamlSubjectConfirmation>,
+    /// Whether the assertion has a `Conditions` element (required by this SP profile).
+    pub has_conditions: bool,
     pub not_before: Option<OffsetDateTime>,
     pub not_on_or_after: Option<OffsetDateTime>,
     /// One entry per `AudienceRestriction`; every restriction must contain the SP entity ID.

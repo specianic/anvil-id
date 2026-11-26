@@ -186,7 +186,7 @@ mod tests {
     fn off_with_request_is_refused() {
         let a = org("a");
         assert_eq!(
-            resolve_active_org(Off, Some("a"), &[a.clone()]),
+            resolve_active_org(Off, Some("a"), std::slice::from_ref(&a)),
             ActiveOrg::Refused
         );
         assert_eq!(resolve_active_org(Off, Some("x"), &[]), ActiveOrg::Refused);
@@ -227,11 +227,11 @@ mod tests {
         let other = org("other");
         for p in [Optional, Required] {
             assert_eq!(
-                resolve_active_org(p, Some("other"), &[a.clone()]),
+                resolve_active_org(p, Some("other"), std::slice::from_ref(&a)),
                 ActiveOrg::Denied
             );
             assert_eq!(
-                resolve_active_org(p, Some(&other.id.to_string()), &[a.clone()]),
+                resolve_active_org(p, Some(&other.id.to_string()), std::slice::from_ref(&a)),
                 ActiveOrg::Denied
             );
             assert_eq!(resolve_active_org(p, Some("a"), &[]), ActiveOrg::Denied);
@@ -274,7 +274,7 @@ mod tests {
         let (a, b) = (org("a"), org("b"));
         assert_eq!(resolve_active_org(Required, None, &[]), ActiveOrg::Denied);
         assert_eq!(
-            resolve_active_org(Required, None, &[a.clone()]),
+            resolve_active_org(Required, None, std::slice::from_ref(&a)),
             ActiveOrg::Selected(a.clone())
         );
         assert_eq!(
