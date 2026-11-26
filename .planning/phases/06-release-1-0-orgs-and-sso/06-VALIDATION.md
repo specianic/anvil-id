@@ -41,16 +41,17 @@ created: 2026-11-26
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command |
 |---------|------|------|-------------|-----------|-------------------|
-| 6-01-01 | 01 | 1 | ORG-03, ORG-04 | auto | `cargo build --workspace --all-targets --locked && cargo deny --locked check && scripts/check-deps.sh && scripts/check-deps.sh --self-test...` |
-| 6-01-02 | 01 | 1 | ORG-03, ORG-04 | auto | `cargo test -p anvil-web --test saml_dsig_spike && grep -q "tsp-ltv" docs/ARCHITECTURE.md && ! grep -q "PRIVATE KEY-----" crates/anvil-web...` |
-| 6-02-01 | 02 | 1 | ORG-02, ORG-03, ORG-04, ADM-02 | auto | `cargo build -p anvil-core --lib && cargo test -p anvil-core --lib model:: && cargo test -p anvil-core --lib error` |
-| 6-02-02 | 02 | 1 | ORG-02, ORG-03, ORG-04, ADM-02 | auto | `cargo test -p anvil-core --lib model::audit && cargo test -p anvil-core --lib policy::webhook_event && cargo test -p anvil-core --lib pol...` |
-| 6-02-03 | 02 | 1 | ORG-02, ORG-03, ORG-04, ADM-02 | auto | `cargo build --workspace --all-targets --locked && cargo test -p anvil-core --lib && cargo test -p anvil-mail && cargo test -p anvil-web -...` |
-| 6-03-01 | 03 | 1 | ORG-03, ORG-04 | auto | `cd tests/e2e && npm ci && npx tsc --noEmit -p . && npx playwright test specs/mock-saml-idp.spec.ts --project=chromium` |
-| 6-03-02 | 03 | 1 | ORG-03, ORG-04 | auto | `cd tests/e2e && npx tsc --noEmit -p . && npx playwright test specs/mock-dns.spec.ts --project=chromium` |
-| 6-04-01 | 04 | 2 | ORG-02, ORG-03, ORG-04, ADM-02 | auto | `cargo build -p anvil-core -p anvil-storage-sqlite -p anvil-storage-postgres --all-targets && cargo test -p anvil-core --lib ports && carg...` |
-| 6-04-02 | 04 | 2 | ORG-02, ORG-03, ORG-04, ADM-02 | auto | `cargo build --workspace --all-targets --locked && cargo test -p anvil-web --test shell --test openapi_drift --test admin_connections && c...` |
-| 6-04-03 | 04 | 2 | ORG-02, ORG-03, ORG-04, ADM-02 | auto | `cargo test -p anvil-storage-sqlite --test contract --no-run && cargo test -p anvil-storage-sqlite --test contract -- tenants outbox logou...` |
+| 6-01-01 | 01 | 1 | ORG-03 | auto | `cargo build --workspace --all-targets --locked && cargo deny --locked check && scripts/check-deps.sh && scripts/check-deps.sh --self-test...` |
+| 6-01-02 | 01 | 1 | ORG-03 | auto | `cargo test -p anvil-web --test saml_dsig_spike && grep -q "tsp-ltv" docs/ARCHITECTURE.md && ! grep -q "PRIVATE KEY-----" crates/anvil-web...` |
+| 6-02-01 | 02 | 1 | ORG-02 | auto | `cargo build -p anvil-core --all-targets && cargo test -p anvil-core --lib -- model:: error` |
+| 6-02-02 | 02 | 1 | ORG-02 | auto | `cargo build -p anvil-core --all-targets && cargo test -p anvil-core --lib -- model::audit policy::webhook_event policy::claims_mapping se...` |
+| 6-02-03 | 02 | 1 | ORG-02 | auto | `cargo build --workspace --all-targets --locked && cargo test -p anvil-core --lib && cargo test -p anvil-mail && cargo test -p anvil-stora...` |
+| 6-02-04 | 02 | 1 | ORG-02 | auto | `cargo test -p anvil-web --test openapi_drift && (cd admin-ui && npm run check:api && npm run typecheck)` |
+| 6-03-01 | 03 | 1 | ORG-03 | auto | `cd tests/e2e && npm ci && npx tsc --noEmit -p . && npx playwright test specs/mock-saml-idp.spec.ts --project=chromium` |
+| 6-03-02 | 03 | 1 | ORG-03 | auto | `cd tests/e2e && npx tsc --noEmit -p . && npx playwright test specs/mock-dns.spec.ts --project=chromium` |
+| 6-04-01 | 04 | 2 | ORG-02 | auto | `cargo build -p anvil-core -p anvil-storage -p anvil-storage-sqlite -p anvil-storage-postgres --all-targets && cargo test -p anvil-core --...` |
+| 6-04-02 | 04 | 2 | ORG-02 | auto | `cargo build --workspace --all-targets --locked && cargo test -p anvil-web --test shell --test openapi_drift --test admin_connections && c...` |
+| 6-04-03 | 04 | 2 | ORG-02 | auto | `cargo test -p anvil-storage-sqlite --test contract --no-run && cargo test -p anvil-storage-sqlite --test contract -- tenants outbox logou...` |
 | 6-05-01 | 05 | 2 | ORG-02, ORG-03, ORG-04 | auto | `cargo test -p anvil-core --lib -- policy::home_realm policy::domain_verification` |
 | 6-05-02 | 05 | 2 | ORG-02, ORG-03, ORG-04 | auto | `cargo test -p anvil-core --lib -- policy::org_claims policy::mfa policy::claims_mapping` |
 | 6-05-03 | 05 | 2 | ORG-02, ORG-03, ORG-04 | auto | `cargo test -p anvil-core --lib saml:: && cargo clippy -p anvil-core --all-targets -- -D warnings` |
@@ -61,7 +62,7 @@ created: 2026-11-26
 | 6-08-02 | 08 | 3 | ORG-02, ORG-03, ORG-04 | auto | `cargo test -p anvil-storage-postgres --test contract && cargo test -p anvil-storage-postgres --test upgrade && ! grep -rn "TRANSITIONAL(0...` |
 | 6-09-01 | 09 | 3 | ORG-03, ORG-04 | auto | `cargo test -p anvil-web --test saml_xml_adapter && cargo clippy -p anvil-web --all-targets -- -D warnings` |
 | 6-09-02 | 09 | 3 | ORG-03, ORG-04 | auto | `cargo test -p anvil-web --test security_saml && test ! -f crates/anvil-web/tests/saml_dsig_spike.rs` |
-| 6-09-03 | 09 | 3 | ORG-03, ORG-04 | auto | `just fuzz-check && scripts/fuzz.sh list \| grep -q saml_response_parse && grep -q org_domain_parse .github/workflows/fuzz.yml` |
+| 6-09-03 | 09 | 3 | ORG-03, ORG-04 | auto | `just fuzz-check && grep -q 'name = "saml_response_parse"' fuzz/Cargo.toml && grep -q 'name = "org_domain_parse"' fuzz/Cargo.toml && grep ...` |
 | 6-10-01 | 10 | 3 | ORG-04 | auto | `cargo test -p anvil-core --lib service::domain_check && cargo test -p anvil-web --test dns_txt_adapter && ! grep -rn "TRANSITIONAL(06-10)...` |
 | 6-11-01 | 11 | 3 | ADM-02 | auto | `cargo test -p anvil-web --test admin_keys --test openapi_drift && (cd admin-ui && npm run check:api && npm run typecheck)` |
 | 6-12-01 | 12 | 4 | ORG-02, ORG-03 | auto | `cargo build -p anvil-core --all-targets && cargo test -p anvil-core --lib && cargo clippy -p anvil-core --all-targets -- -D warnings` |
@@ -76,7 +77,7 @@ created: 2026-11-26
 | 6-16-01 | 16 | 4 | ADM-02 | auto | `cd admin-ui && npm run check:api && npm run typecheck && npm run build && grep -q 'keys' src/routeTree.gen.ts` |
 | 6-16-02 | 16 | 4 | ADM-02 | auto | `cd tests/e2e && npx tsc --noEmit -p . && ./run.sh sqlite specs/console-keys.spec.ts` |
 | 6-17-01 | 17 | 5 | ORG-03, ORG-04, ADM-02 | auto | `cargo test -p anvil-web --test admin_org_sso --test admin_connections && ! grep -rn "TRANSITIONAL(06-17)" crates/` |
-| 6-17-02 | 17 | 5 | ORG-03, ORG-04, ADM-02 | auto | `cargo test -p anvil-web --test security_domains --test admin_org_sso` |
+| 6-17-02 | 17 | 5 | ORG-03, ORG-04, ADM-02 | auto | `cargo test -p anvil-web --test security_domains --test admin_org_sso --test security_admin_v10` |
 | 6-17-03 | 17 | 5 | ORG-03, ORG-04, ADM-02 | auto | `cargo test -p anvil-web --test admin_branding --test theme --test openapi_drift && (cd admin-ui && npm run check:api && npm run typecheck...` |
 | 6-18-01 | 18 | 5 | ORG-03 | auto | `cargo test -p anvil-core --lib -- service::saml flow::login && cargo clippy -p anvil-core --all-targets -- -D warnings` |
 | 6-18-02 | 18 | 5 | ORG-03 | auto | `cargo test -p anvil-web --test saml_login --test i18n_catalogs --test security_body_limit && cargo clippy -p anvil-web --all-targets -- -...` |
@@ -95,12 +96,14 @@ created: 2026-11-26
 | 6-25-01 | 25 | 7 | ORG-02, ORG-03, ORG-04, ADM-02 | auto | `test -s docs/ORGANIZATIONS.md && test -s docs/SAML.md && grep -q "saml_experimental" docs/SAML.md && grep -q "allow_local_password" docs/...` |
 | 6-25-02 | 25 | 7 | ORG-02, ORG-03, ORG-04, ADM-02 | auto | `grep -q "organization" docs/ARCHITECTURE.md && grep -q "domain_verification_resolvers" docs/OPERATIONS.md && grep -q "organization.domain...` |
 | 6-26-01 | 26 | 8 | ORG-02, ORG-03, ORG-04, ADM-02 | auto | `scripts/check-security-tests.sh && scripts/check-security-tests.sh --self-test && scripts/check-migrations.sh && scripts/check-release-gr...` |
-| 6-26-02 | 26 | 8 | ORG-02, ORG-03, ORG-04, ADM-02 | auto | `test "$(gh run list --branch main --limit 40 --json headSha,conclusion -q "[.[] \| select(.headSha==\"$(git rev-parse HEAD)\")] \| map(.c...` |
+| 6-26-02 | 26 | 8 | ORG-02, ORG-03, ORG-04, ADM-02 | checkpoint:decision | `manual: Owner's decision (or the recorded standing authorization) and the tag list recorded verbatim in the summary` |
+| 6-26-03 | 26 | 8 | ORG-02, ORG-03, ORG-04, ADM-02 | auto | `test "$(gh run list --branch main --limit 40 --json headSha,conclusion -q "[.[] \| select(.headSha==\"$(git rev-parse HEAD)\")] \| map(.c...` |
 | 6-27-01 | 27 | 9 | ORG-02, ORG-03, ORG-04, ADM-02 | checkpoint:human-verify | `manual: Owner's resume signal recorded verbatim in the summary` |
 | 6-27-02 | 27 | 9 | ORG-02, ORG-03, ORG-04, ADM-02 | auto | `gh release view v1.0.0-beta.1 --json assets,isPrerelease -q '(.assets \| length == 8) and .isPrerelease' \| grep -qx true` |
 
 Every `auto` task creates the test files it verifies with (test-first where the task is marked `tdd="true"`); the contract tests for
-storage are written in 06-04 and turn green in 06-07/06-08. The single checkpoint (6-27-01) is the owner's publish decision.
+storage are written in 06-04 and turn green in 06-07/06-08. The two checkpoints are owner decisions: push authorization + Q8 tags
+(6-26-02) and publishing the prerelease (6-27-01).
 
 ---
 
@@ -108,7 +111,7 @@ storage are written in 06-04 and turn green in 06-07/06-08. The single checkpoin
 
 | Req | Behaviour | Tests (owning plan) |
 |-----|-----------|---------------------|
-| ORG-02 | org CRUD, members, org roles, invitations admin, org-admin principal | `admin_orgs`, `security_admin_v10` (06-12); contract `orgs`, `roles`, `org_invitations` (06-04, green in 06-07/06-08) |
+| ORG-02 | org CRUD, members, org roles, invitations admin, org-admin principal (audience, re-check, SystemAdmin-only direct add, last-org:admin lockout) | `admin_orgs`, `security_admin_v10` (06-12); contract `orgs`, `roles`, `org_invitations` (06-04, green in 06-07/06-08) |
 | ORG-02 | `organization` param, org claims in every token surface, refresh re-check, org:admin bounding, opaque/introspection claims | `policy::org_claims` (06-05), `org_claims` (06-13), `security_org_scopes` (06-15) |
 | ORG-02 | switcher, switching, org MFA | `org_switch` (06-19), `specs/org-switch.spec.ts` (06-24) |
 | ORG-02 | invitation acceptance, single use, enumeration, registration modes | `org_invitations` (06-20), `specs/invitations.spec.ts` (06-24) |
@@ -119,7 +122,7 @@ storage are written in 06-04 and turn green in 06-07/06-08. The single checkpoin
 | ORG-03 | org connection admin (OIDC/SAML, metadata import, flag off refusal) | `admin_org_sso` (06-17) |
 | ORG-04 | domain rules, record format, routing decision | `policy::home_realm`, `policy::domain_verification` (06-05), fuzz `org_domain_parse` (06-09) |
 | ORG-04 | hickory adapter, uniform outcome | `service::domain_check`, `dns_txt_adapter` (06-10) |
-| ORG-04 | domain admin, one verified org per domain, routing guards | `security_domains` (06-17); contract `org_domains` |
+| ORG-04 | domain admin, one verified org per domain, routing guards (proven connection before routing / forcing SSO) | `security_domains` (06-17); contract `org_domains`, `connections` (`has_links`) |
 | ORG-04 | re-check job | `anvilid --test jobs` (06-20) |
 | ORG-04 | identifier-first routing, enumeration | `hrd_login`, `security_enumeration` (06-22), `specs/hrd.spec.ts`, `specs/nojs-hrd.spec.ts` (06-24) |
 | ADM-02 | keys API | `admin_keys` (06-11) |
@@ -139,7 +142,7 @@ Phase 6 has no separate wave 0: the test scaffolds are created by the foundation
 - [ ] `crates/anvil-web/tests/saml_support/` test-time signer, builder, mutators (06-09)
 - [ ] `crates/anvil-web/tests/support`: `FakeTxt` + `TestApp::txt()` (06-04); `admin_support` org helpers and org-admin token minting (06-12); `upstream_flow` org helpers (06-14)
 - [ ] `crates/anvil-web/tests/dns_support/` UDP DNS stub (06-10)
-- [ ] `tests/e2e/lib/mock-saml-idp.ts`, `tests/e2e/lib/mock-dns.ts` + self-tests, xml-crypto devDependency (06-03); `lib/console-v10.ts` (06-16); `lib/org.ts` (06-24); run.sh env for SAML flag and DNS resolvers (06-23)
+- [ ] `tests/e2e/lib/mock-saml-idp.ts`, `tests/e2e/lib/mock-dns.ts` + self-tests, xml-crypto devDependency (06-03); `lib/console-v10.ts` (06-16); `lib/mock-dns-cli.ts` + control channel (06-03); `lib/org.ts` (06-24); run.sh starts one suite-wide mock DNS and sets the SAML flag and resolvers (06-23); specs that verify domains, route or rotate keys use fresh tenants
 - [ ] Fuzz targets `saml_response_parse`, `saml_metadata_parse`, `org_domain_parse` (06-09)
 - [ ] `scripts/check-security-tests.sh` entries for every new control (06-26)
 - [ ] Framework installs: bergshamra-dsig/-keys/-xml, uppsala, hickory-resolver (+ hickory-proto dev), psl, idna (core), flate2 (06-01); xml-crypto (06-03)
@@ -150,6 +153,7 @@ Phase 6 has no separate wave 0: the test scaffolds are created by the foundation
 
 | Behavior | Requirement | Why Manual | Test Instructions |
 |----------|-------------|------------|-------------------|
+| Push authorization and Q8 tag status | all | Owner decision | 06-26 Task 2 checkpoint |
 | Publishing the prerelease | all | Owner decision (release, chrono deny exception, SAML experimental status) | 06-27 Task 1 checkpoint |
 | SAML against real IdPs (Entra ID, Okta, Google Workspace, Keycloak) | ORG-03 | Needs real tenant accounts; required before lifting the experimental flag (Q3), scheduled for Phase 7 | Checklist template in docs/SAML.md (06-25) |
 | macOS release binaries with bergshamra on aws-lc | ORG-03 | Cannot build macOS targets locally | release-build workflow at the gate (06-26) |

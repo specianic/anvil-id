@@ -188,7 +188,7 @@ Plans:
 - [x] 04-36-PLAN.md — Gap closure: back-channel wake on every revocation path, upstream buttons on lock/CAPTCHA/passkey pages, console client card, body-limit regression test (wave 8)
 - [x] 04-37-PLAN.md — Gap closure: require_verified_email for upstream accounts, binding-cookie clear rule, link redirect, docs for the closed gaps (wave 9)
 - [x] 04-32-PLAN.md — Phase gate: security-test map, `just ci`, version 0.3.0 + migration pins, push main, all workflows green (wave 10)
-- [ ] 04-33-PLAN.md — Release: manual real-provider checklist sign-off (checkpoint), tag + verify v0.3.0 (wave 11)
+- [ ] 04-33-PLAN.md — Release: manual real-provider checklist sign-off (checkpoint), tag v0.3.0 at the recorded release commit 9f88363 + verify (wave 11)
 
 ### Phase 5: Release 0.4 "Operate it"
 **Goal**: Operators can run AnvilID for many tenants in production with high availability, and integrators can automate and extend it (RBAC, webhooks, declarative config, DCR, MCP clients)
@@ -235,7 +235,7 @@ Plans:
 - [x] 05-32-PLAN.md — Gap: no admin scopes on non-system static clients, 1 MiB config document limit, schema bounds, OIDC path-insertion discovery (wave 8)
 - [x] 05-33-PLAN.md — Gap: Attributes nav on every account page, CIMD consent CSS, console client secrets shown once (wave 8)
 - [x] 05-28-PLAN.md — Phase gate: security map (incl. gap-plan tests), plaintext scan of 0.4 secrets, just ci, version 0.4.0 + migration pins, requirements, all workflows green incl. deploy + load; owner checkpoint after 3 failed perf runs (wave 9)
-- [ ] 05-29-PLAN.md — Release v0.4.0 after owner sign-off (v0.3.0 tagged first) (wave 10)
+- [ ] 05-29-PLAN.md — Release v0.4.0 after owner sign-off, tagged at the recorded release commit f80dcb4 (v0.3.0 tagged first; `latest` = 0.4.0) (wave 10)
 
 ### Phase 6: Release 1.0 "Credible for business" (Organizations and SSO)
 **Goal**: SaaS builders can serve business customers: organizations with members and roles, each able to bring its own SAML or OIDC identity provider, with users routed automatically by email domain
@@ -251,7 +251,7 @@ Plans:
 Plans:
 - [ ] 06-01-PLAN.md — Dependencies (bergshamra-dsig on aws-lc, uppsala, hickory, psl, flate2), scoped chrono deny exception (Q2), D4 spike, ARCHITECTURE verdict (wave 1)
 - [ ] 06-02-PLAN.md — Foundation A: org/SAML model, org_id fields, errors, audit actions + webhook events, reserved org claims, compile fixes, TRANSITIONAL converters, OpenAPI (wave 1)
-- [ ] 06-03-PLAN.md — E2E infra: mock SAML IdP (xml-crypto) and mock DNS with self-tests (wave 1)
+- [ ] 06-03-PLAN.md — E2E infra: mock SAML IdP (xml-crypto) and a suite-wide mock DNS with an HTTP control channel, self-tests (wave 1)
 - [ ] 06-04-PLAN.md — Foundation B: ports (OrgRepo, DomainTxtLookup, SamlXml), shims, AppDeps/AppConfig + operator keys, module/route skeletons, contract suite (wave 2)
 - [ ] 06-05-PLAN.md — Pure core: domain rules + routing, TXT record format, active-org resolution + org claims + org:admin bounding, org MFA, SAML request/validation (TDD) (wave 2)
 - [ ] 06-06-PLAN.md — Carry-over: passkey picker narrowed to the step user at the second factor (wave 2)
@@ -260,7 +260,7 @@ Plans:
 - [ ] 06-09-PLAN.md — SAML XML adapter (one parser, strict pre-check, verify-then-read), D4 attack corpus, fuzz targets (wave 3)
 - [ ] 06-10-PLAN.md — DNS TXT adapter (hickory, FQDN, bounded, uncached) + single domain check, UDP stub tests (wave 3)
 - [ ] 06-11-PLAN.md — Signing keys admin API (list, rotate) (wave 3)
-- [ ] 06-12-PLAN.md — Org admin API: orgs, members, org roles, invitations; org-admin principal (Q1) (wave 4)
+- [ ] 06-12-PLAN.md — Org admin API: orgs, members, org roles, invitations; org-admin principal (Q1: audience, per-request org:admin re-check, last-admin lockout) (wave 4)
 - [ ] 06-13-PLAN.md — Org in the grant: organization parameter, org claims in all token surfaces, refresh re-check, opaque/introspection claims (wave 4)
 - [ ] 06-14-PLAN.md — Enterprise OIDC per org: shared completion path, domain-bound email trust, JIT membership (wave 4)
 - [ ] 06-15-PLAN.md — org:admin reservation (DCR/CIMD/system tenant), client org policy rules, tenant YAML excludes org objects (wave 4)
@@ -274,7 +274,7 @@ Plans:
 - [ ] 06-23-PLAN.md — Console: org SSO tabs (connections incl. SAML, domains, branding), e2e runner env + e2e (wave 6)
 - [ ] 06-24-PLAN.md — E2E: org switch, invitations, SAML, HRD (+ no-JS) (wave 7)
 - [ ] 06-25-PLAN.md — Docs: ORGANIZATIONS, SAML (experimental profile, interop checklist), UPGRADING 0.4 -> 1.0, ARCHITECTURE/OPERATIONS/CONFIG/WEBHOOKS/theme (wave 7)
-- [ ] 06-26-PLAN.md — Phase gate: security map, plaintext scan, just ci, version 1.0.0-beta.1 + migration pins, requirements, all workflows green (wave 8)
+- [ ] 06-26-PLAN.md — Phase gate: security map, plaintext scan, just ci, version 1.0.0-beta.1 + migration pins, requirements; owner checkpoint (push + Q8 tags); all workflows green (wave 8)
 - [ ] 06-27-PLAN.md — Prerelease v1.0.0-beta.1 after owner sign-off (v0.3.0/v0.4.0 tagged first; 1.0.0 ships in Phase 7) (wave 9)
 
 ### Phase 7: Release 1.0 "Credible for business" (Certification and release)
