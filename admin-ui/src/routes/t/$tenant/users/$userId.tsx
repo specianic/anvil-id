@@ -1,12 +1,22 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
-import { type KeyboardEvent, type ReactNode, useRef, useState } from "react";
-import { type UserView, api, unwrap } from "@/api/client";
+import { type FormEvent, type KeyboardEvent, type ReactNode, useRef, useState } from "react";
+import { ApiError, type UserView, api, unwrap } from "@/api/client";
 import { useTenant } from "@/lib/tenant";
 import type { components } from "@/api/schema";
+import {
+  type AttributeDefinition,
+  AttributeValueInput,
+  attributeShape,
+  pointerAttribute,
+  textToValue,
+  toApiJson,
+  valueToText,
+} from "@/components/AttributeForm";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ProblemAlert } from "@/components/ProblemAlert";
-import { StatusMessage } from "@/components/form";
+import { type RoleDto, RoleProblem } from "@/components/RoleForm";
+import { type FieldErrors, SelectField, StatusMessage } from "@/components/form";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -21,6 +31,8 @@ const TABS = [
   { id: "overview", label: "Overview" },
   { id: "sessions", label: "Sessions" },
   { id: "credentials", label: "Credentials" },
+  { id: "roles", label: "Roles" },
+  { id: "attributes", label: "Attributes" },
 ] as const;
 type TabId = (typeof TABS)[number]["id"];
 
@@ -341,6 +353,308 @@ function UserCredentials({ userId }: { userId: string }) {
   );
 }
 
+function UserRoles({ userId }: { userId: string }) {
+  const tenant = useTenant();
+  const queryClient = useQueryClient();
+  const [selected, setSelected] = useState("");
+  const [target, setTarget] = useState<RoleDto | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
+  const held = useQuery({
+    queryKey: ["user-roles", tenant, userId],
+    queryFn: async ({ signal }) =>
+      unwrap(
+        await api.GET("/api/admin/v1/tenants/{slug}/users/{user_id}/roles", {
+          params: { path: { slug: tenant, user_id: userId } },
+          signal,
+        }),
+      ),
+  });
+  const all = useQuery({
+    queryKey: ["roles", tenant],
+    queryFn: async ({ signal }) =>
+      unwrap(await api.GET("/api/admin/v1/tenants/{slug}/roles", { params: { path: { slug: tenant } }, signal })),
+  });
+  const refresh = async () => {
+    await queryClient.invalidateQueries({ queryKey: ["user-roles", tenant, userId] });
+    await queryClient.invalidateQueries({ queryKey: ["role-users", tenant] });
+  };
+
+  const assign = useMutation({
+    mutationFn: async (name: string) =>
+      unwrap(
+        await api.PUT("/api/admin/v1/tenants/{slug}/users/{user_id}/roles/{name}", {
+          params: { path: { slug: tenant, user_id: userId, name } },
+        }),
+      ),
+    onMutate: () => setStatus(null),
+    onSuccess: async (a) => {
+      setSelected("");
+      setStatus(`Role ${a.role.name} assigned.`);
+      await refresh();
+    },
+  });
+  const unassign = useMutation({
+    mutationFn: async (role: RoleDto) => {
+      await api.DELETE("/api/admin/v1/tenants/{slug}/users/{user_id}/roles/{name}", {
+        params: { path: { slug: tenant, user_id: userId, name: role.name } },
+      });
+      return role;
+    },
+    onMutate: () => setStatus(null),
+    onSuccess: async (role) => {
+      setTarget(null);
+      setStatus(`Role ${role.name} removed.`);
+      await refresh();
+    },
+  });
+
+  if (held.isError) return <ProblemAlert error={held.error} />;
+  const items = held.data?.items ?? [];
+  const available = (all.data?.items ?? []).filter((r) => !items.some((h) => h.id === r.id));
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    if (selected) assign.mutate(selected);
+  };
+
+  return (
+    <div className="space-y-3">
+      <StatusMessage message={status} />
+      {assign.error ? <RoleProblem error={assign.error} /> : null}
+      <form onSubmit={submit} className="flex flex-wrap items-end gap-2" aria-label="Assign role">
+        <div className="min-w-56">
+          <SelectField
+            label="Role"
+            value={selected}
+            onChange={(e) => setSelected(e.target.value)}
+            options={[
+              { value: "", label: available.length ? "Choose a role" : "No other roles" },
+              ...available.map((r) => ({ value: r.name, label: r.name })),
+            ]}
+            data-testid="assign-role-select"
+          />
+        </div>
+        <Button type="submit" disabled={!selected || assign.isPending} data-testid="assign-role">
+          {assign.isPending ? "Assigning…" : "Assign role"}
+        </Button>
+        <Link to="/t/$tenant/roles" params={{ tenant }} className="text-sm underline underline-offset-4">
+          Manage roles
+        </Link>
+      </form>
+      {all.isError ? <ProblemAlert error={all.error} /> : null}
+      <div className="rounded-md border">
+        <Table aria-busy={held.isFetching}>
+          <TableCaption className="sr-only">Roles of this user</TableCaption>
+          <TableHeader>
+            <TableRow>
+              <TableHead scope="col">Role</TableHead>
+              <TableHead scope="col">Permissions</TableHead>
+              <TableHead scope="col">
+                <span className="sr-only">Actions</span>
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {held.isPending ? (
+              <TableRow>
+                <TableCell colSpan={3}>
+                  <Skeleton className="h-5 w-full" />
+                </TableCell>
+              </TableRow>
+            ) : items.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={3} className="text-muted-foreground h-20 text-center">
+                  No roles assigned.
+                </TableCell>
+              </TableRow>
+            ) : (
+              items.map((r) => (
+                <TableRow key={r.id} data-testid={`user-role-${r.name}`}>
+                  <TableCell>
+                    <Link
+                      to="/t/$tenant/roles/$roleName"
+                      params={{ tenant, roleName: r.name }}
+                      className="font-mono underline-offset-4 hover:underline"
+                    >
+                      {r.name}
+                    </Link>
+                  </TableCell>
+                  <TableCell>
+                    <code className="text-xs break-all">{r.permissions.join(" ") || "—"}</code>
+                  </TableCell>
+                  <TableCell>
+                    <Button variant="outline" size="sm" onClick={() => setTarget(r)} aria-label={`Remove role ${r.name}`}>
+                      Remove
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </div>
+      <ConfirmDialog
+        open={target !== null}
+        title="Remove role?"
+        description={
+          <div className="space-y-3">
+            <p>{`Tokens issued from now on no longer carry ${target?.name ?? "the role"}.`}</p>
+            {unassign.error ? <RoleProblem error={unassign.error} /> : null}
+          </div>
+        }
+        confirmLabel="Remove role"
+        onConfirm={() => target && unassign.mutate(target)}
+        onCancel={() => {
+          unassign.reset();
+          setTarget(null);
+        }}
+        pending={unassign.isPending}
+      />
+    </div>
+  );
+}
+
+function UserAttributesForm({
+  userId,
+  definitions,
+  stored,
+}: {
+  userId: string;
+  definitions: AttributeDefinition[];
+  stored: Record<string, unknown>;
+}) {
+  const tenant = useTenant();
+  const queryClient = useQueryClient();
+  const initial = () =>
+    Object.fromEntries(definitions.map((d) => [d.name, valueToText(attributeShape(d.schema), stored[d.name])]));
+  const [texts, setTexts] = useState<Record<string, string>>(initial);
+  const [local, setLocal] = useState<FieldErrors>({});
+  const [status, setStatus] = useState<string | null>(null);
+  const orphans = Object.entries(stored).filter(([k]) => !definitions.some((d) => d.name === k));
+
+  const save = useMutation({
+    mutationFn: async (values: Record<string, unknown>) =>
+      unwrap(
+        await api.PUT("/api/admin/v1/tenants/{slug}/users/{user_id}/attributes", {
+          params: { path: { slug: tenant, user_id: userId } },
+          body: { values: toApiJson(values) },
+        }),
+      ),
+    onMutate: () => setStatus(null),
+    onSuccess: (saved) => {
+      queryClient.setQueryData(["user-attributes", tenant, userId], saved);
+      setStatus("Attributes saved.");
+    },
+  });
+
+  // Field errors of a 422 name JSON pointers (`/department`, `/tags/0`); group them by attribute.
+  const server: FieldErrors = {};
+  if (save.error instanceof ApiError) {
+    for (const e of save.error.problem.errors) {
+      if (e.field.startsWith("/")) (server[pointerAttribute(e.field)] ??= []).push({ message: e.message });
+    }
+  }
+  const otherError = save.error && Object.keys(server).length === 0 ? save.error : null;
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    const issues: FieldErrors = {};
+    const values: Record<string, unknown> = {};
+    for (const d of definitions) {
+      const parsed = textToValue(attributeShape(d.schema), texts[d.name] ?? "");
+      if (parsed.error) issues[d.name] = [{ message: parsed.error }];
+      else if (parsed.value !== undefined) values[d.name] = parsed.value;
+      else if (d.required) issues[d.name] = [{ message: "A value is required." }];
+    }
+    setLocal(issues);
+    if (Object.keys(issues).length > 0) return;
+    save.mutate(values);
+  };
+
+  return (
+    <form onSubmit={submit} className="space-y-4" noValidate aria-label="User attributes" data-testid="user-attributes-form">
+      {save.error instanceof ApiError && Object.keys(server).length > 0 && (
+        <p role="alert" className="text-destructive text-sm">
+          The values were not saved. Fix the marked attributes.
+        </p>
+      )}
+      {otherError ? <ProblemAlert error={otherError} /> : null}
+      {definitions.map((d) => (
+        <AttributeValueInput
+          key={d.name}
+          definition={d}
+          text={texts[d.name] ?? ""}
+          onChange={(text) => setTexts((t) => ({ ...t, [d.name]: text }))}
+          errors={local[d.name] ?? server[d.name]}
+        />
+      ))}
+      {orphans.length > 0 && (
+        <div className="space-y-1 text-sm">
+          <p className="font-medium">Stored values without a definition</p>
+          <p className="text-muted-foreground text-xs">Kept as they are; they cannot be edited here.</p>
+          <dl className="divide-y">
+            {orphans.map(([k, v]) => (
+              <Field key={k} label={k}>
+                <code className="text-xs">{JSON.stringify(v)}</code>
+              </Field>
+            ))}
+          </dl>
+        </div>
+      )}
+      <Button type="submit" disabled={save.isPending} data-testid="save-user-attributes">
+        {save.isPending ? "Saving…" : "Save attributes"}
+      </Button>
+      <StatusMessage message={status} />
+    </form>
+  );
+}
+
+function UserAttributes({ userId }: { userId: string }) {
+  const tenant = useTenant();
+  const definitions = useQuery({
+    queryKey: ["attributes", tenant],
+    queryFn: async ({ signal }) =>
+      unwrap(await api.GET("/api/admin/v1/tenants/{slug}/attributes", { params: { path: { slug: tenant } }, signal })),
+  });
+  const values = useQuery({
+    queryKey: ["user-attributes", tenant, userId],
+    queryFn: async ({ signal }) =>
+      unwrap(
+        await api.GET("/api/admin/v1/tenants/{slug}/users/{user_id}/attributes", {
+          params: { path: { slug: tenant, user_id: userId } },
+          signal,
+        }),
+      ),
+  });
+  if (definitions.isError) return <ProblemAlert error={definitions.error} />;
+  if (values.isError) return <ProblemAlert error={values.error} />;
+  if (definitions.isPending || values.isPending) {
+    return (
+      <div role="status" aria-label="Loading attributes" className="space-y-2">
+        <Skeleton className="h-6 w-1/2" />
+        <Skeleton className="h-6 w-2/3" />
+      </div>
+    );
+  }
+  if (definitions.data.items.length === 0) {
+    return (
+      <p className="text-muted-foreground text-sm">
+        This tenant defines no attributes.{" "}
+        <Link to="/t/$tenant/attributes" params={{ tenant }} className="underline underline-offset-4">
+          Define attributes
+        </Link>
+      </p>
+    );
+  }
+  return (
+    <UserAttributesForm
+      userId={userId}
+      definitions={definitions.data.items}
+      stored={values.data.values as unknown as Record<string, unknown>}
+    />
+  );
+}
+
 /** WAI-ARIA tabs (manual activation is not needed: panels are cheap, arrows select directly). */
 function Tabs({ active, onSelect }: { active: TabId; onSelect: (tab: TabId) => void }) {
   const refs = useRef<Record<string, HTMLButtonElement | null>>({});
@@ -431,6 +745,8 @@ function UserPage() {
             {tab === "overview" && <UserDetails user={query.data} />}
             {tab === "sessions" && <UserSessions userId={userId} />}
             {tab === "credentials" && <UserCredentials userId={userId} />}
+            {tab === "roles" && <UserRoles userId={userId} />}
+            {tab === "attributes" && <UserAttributes userId={userId} />}
           </div>
         </>
       )}

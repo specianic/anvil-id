@@ -67,24 +67,9 @@ export function discoveryPath(slug: string): string {
   return `/t/${encodeURIComponent(slug)}/.well-known/openid-configuration`;
 }
 
-/** Absolute discovery URL to copy into a relying party's configuration. */
-export function discoveryUrl(slug: string): string {
-  return `${window.location.origin}${discoveryPath(slug)}`;
-}
-
 /**
- * The issuer a host-based tenant uses on its custom host: the public URL's scheme + `://` + host
- * (anvil_core::model::issuer, TenantBase::Host). The scheme is taken from the tenant's path issuer,
- * which the server computed from the public URL.
- */
-export function hostIssuer(pathIssuer: string, host: string): string {
-  const scheme = pathIssuer.startsWith("http://") ? "http" : "https";
-  return `${scheme}://${host.replace(/\/+$/, "")}`;
-}
-
-/**
- * The OpenID discovery document of a tenant. The admin API's tenant view has no issuer field
- * (yet), so the issuer shown in the console is the one the server publishes in discovery.
+ * The OpenID discovery document of a tenant (read for `ui_locales_supported`). The issuer and the
+ * discovery URL shown in the console come from the tenant view (`issuer`, `discovery_url`, 05-23).
  */
 export interface Discovery {
   issuer: string;
@@ -132,6 +117,8 @@ export const TENANT_PAGES = [
   { to: "/t/$tenant/clients", label: "Clients" },
   { to: "/t/$tenant/connections", label: "Connections" },
   { to: "/t/$tenant/sessions", label: "Sessions" },
+  { to: "/t/$tenant/roles", label: "Roles" },
+  { to: "/t/$tenant/attributes", label: "Attributes" },
   { to: "/t/$tenant/audit", label: "Audit log" },
   { to: "/t/$tenant/email", label: "Email" },
   { to: "/t/$tenant/branding", label: "Branding" },

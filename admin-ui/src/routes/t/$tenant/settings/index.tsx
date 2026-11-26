@@ -1,6 +1,7 @@
 // Tenant login settings (0.3): MFA policy, passwordless email sign-in, automatic account linking,
 // registration through upstream connections and the default page language. Saved with a
-// field-wise PATCH of the tenant: only changed fields are sent.
+// field-wise PATCH of the tenant: only changed fields are sent. Since 0.4 also the token claim
+// mapping of roles and permissions, and links to the registration, configuration and webhook pages.
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { type FormEvent, useState } from "react";
@@ -16,7 +17,8 @@ import {
 import type { components } from "@/api/schema";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ProblemAlert } from "@/components/ProblemAlert";
-import { CheckboxField, type FieldErrors, SelectField, StatusMessage } from "@/components/form";
+import { TOKEN_TARGETS } from "@/components/AttributeForm";
+import { CheckboxField, CheckboxGroup, type FieldErrors, SelectField, StatusMessage, TextField } from "@/components/form";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -24,6 +26,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 type TenantView = components["schemas"]["TenantView"];
 type TenantSettingsPatch = components["schemas"]["TenantSettingsPatch"];
 type MfaPolicy = components["schemas"]["MfaPolicy"];
+type TokenClaimRule = components["schemas"]["TokenClaimRule"];
+type TokenTarget = components["schemas"]["TokenTarget"];
 
 const MFA_OPTIONS: readonly { value: MfaPolicy; label: string }[] = [
   { value: "off", label: "Off" },
@@ -300,6 +304,139 @@ function SettingsForm({ tenant }: { tenant: TenantView }) {
   );
 }
 
+interface RuleValues {
+  enabled: boolean;
+  claim: string;
+  tokens: TokenTarget[];
+  scope: string;
+}
+
+function ruleValues(rule: TokenClaimRule | null | undefined, fallbackClaim: string): RuleValues {
+  return {
+    enabled: Boolean(rule),
+    claim: rule?.claim ?? fallbackClaim,
+    tokens: rule?.tokens ?? ["access_token"],
+    scope: rule?.scope ?? "",
+  };
+}
+
+function ruleBody(v: RuleValues): TokenClaimRule | null {
+  return v.enabled ? { claim: v.claim.trim(), tokens: v.tokens, scope: v.scope.trim() || null } : null;
+}
+
+const CLAIM_RULES = [
+  { key: "roles", title: "Roles", hint: "The names of the user's roles." },
+  { key: "permissions", title: "Permissions", hint: "The union of the permissions of the user's roles." },
+] as const;
+
+/** Mapping of roles and permissions into tokens (`settings.claims`, ORG-05). */
+function ClaimMapping({ tenant }: { tenant: TenantView }) {
+  const slug = tenant.slug;
+  const queryClient = useQueryClient();
+  const initial = {
+    roles: ruleValues(tenant.settings.claims.roles, "roles"),
+    permissions: ruleValues(tenant.settings.claims.permissions, "permissions"),
+  };
+  const [values, setValues] = useState(initial);
+  const [status, setStatus] = useState<string | null>(null);
+  const set = (key: "roles" | "permissions", patch: Partial<RuleValues>) =>
+    setValues((v) => ({ ...v, [key]: { ...v[key], ...patch } }));
+
+  const save = useMutation({
+    mutationFn: async () =>
+      unwrap(
+        await api.PATCH("/api/admin/v1/tenants/{slug}", {
+          params: { path: { slug } },
+          body: { settings: { claims: { roles: ruleBody(values.roles), permissions: ruleBody(values.permissions) } } },
+        }),
+      ),
+    onMutate: () => setStatus(null),
+    onSuccess: async (updated) => {
+      queryClient.setQueryData(tenantQueryKey(slug), updated);
+      setStatus("Token claims saved.");
+      await queryClient.invalidateQueries({ queryKey: ["tenant"] });
+    },
+  });
+  const errors = settingsErrors(save.error);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>
+          <h2>Token claims</h2>
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <form
+          className="space-y-4"
+          aria-label="Token claims"
+          noValidate
+          data-testid="claim-mapping-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            save.mutate();
+          }}
+        >
+          <p className="text-muted-foreground text-sm">
+            Which tokens carry the user's roles and permissions. A claim with a required scope appears only when the
+            client was granted that scope. Attribute claims are set on each{" "}
+            <Link to="/t/$tenant/attributes" params={{ tenant: slug }} className="underline underline-offset-4">
+              attribute
+            </Link>
+            .
+          </p>
+          {save.error ? <ProblemAlert error={save.error} /> : null}
+          {CLAIM_RULES.map(({ key, title, hint }) => {
+            const v = values[key];
+            return (
+              <fieldset key={key} className="space-y-3 rounded-md border p-4" data-testid={`claim-rule-${key}`}>
+                <legend className="px-1 text-sm font-medium">{title}</legend>
+                <CheckboxField
+                  label={`Put ${key} into tokens`}
+                  checked={v.enabled}
+                  onChange={(e) => set(key, { enabled: e.target.checked })}
+                  hint={hint}
+                />
+                {v.enabled && (
+                  <>
+                    <TextField
+                      label="Claim name"
+                      value={v.claim}
+                      onChange={(e) => set(key, { claim: e.target.value })}
+                      errors={errors[`claims.${key}.claim`] ?? errors[`claims.${key}`]}
+                      autoComplete="off"
+                    />
+                    <CheckboxGroup
+                      legend="Tokens"
+                      options={TOKEN_TARGETS}
+                      value={v.tokens}
+                      onChange={(next) => set(key, { tokens: next })}
+                      errors={errors[`claims.${key}.tokens`]}
+                    />
+                    <TextField
+                      label="Required scope"
+                      optional
+                      value={v.scope}
+                      onChange={(e) => set(key, { scope: e.target.value })}
+                      hint="Empty = always included."
+                      errors={errors[`claims.${key}.scope`]}
+                      autoComplete="off"
+                    />
+                  </>
+                )}
+              </fieldset>
+            );
+          })}
+          <Button type="submit" disabled={save.isPending} data-testid="save-claim-mapping">
+            {save.isPending ? "Saving…" : "Save token claims"}
+          </Button>
+          <StatusMessage message={status} />
+        </form>
+      </CardContent>
+    </Card>
+  );
+}
+
 /** Deleting the tenant removes all its data. `system` and `default` cannot be deleted (the API answers 403). */
 function DeleteTenant({ tenant }: { tenant: TenantView }) {
   const queryClient = useQueryClient();
@@ -378,6 +515,7 @@ function LoginSettingsPage() {
         // The form keeps local edits; it is keyed by tenant so another tenant starts fresh.
         <>
           <SettingsForm key={query.data.id} tenant={query.data} />
+          <ClaimMapping key={`claims-${query.data.id}`} tenant={query.data} />
           <DeleteTenant tenant={query.data} />
         </>
       )}
