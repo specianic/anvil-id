@@ -117,7 +117,7 @@ use std::sync::Arc;
 
 use anvil_jose::Kek;
 use anvil_jose::email_code::generate_email_code;
-use anvil_jose::encoding::{b64url, ct_eq, random_token, secret_hash};
+use anvil_jose::encoding::{b64url, b64url_decode, ct_eq, random_token, secret_hash};
 use anvil_jose::otp::{TotpSecret, check_code};
 use anvil_jose::recovery_code::{normalize_recovery_code, recovery_code_hash};
 use secrecy::{ExposeSecret as _, SecretString};
@@ -149,6 +149,7 @@ use crate::flow::login::{
     take_second_factor_passkey, with_passkey_enrolment, with_second_factor_passkey,
 };
 use crate::flow::settings::DEFAULT_PASSKEY_LABEL;
+use crate::flow::upstream::upstream_aad;
 use crate::model::{
     ActorKind, AuditAction, AuditActor, AuditDetails, AuditOutcome, AuthRequestId, BrowserSession,
     Connection, ConnectionKind, CounterOutcome, CredentialId, CredentialKind, Flow, FlowId,
@@ -161,6 +162,7 @@ use crate::oauth::decision::{SessionDecision, decide};
 use crate::policy::PasswordPolicy;
 use crate::policy::home_realm::{self, Route, RoutedDomain};
 use crate::policy::mfa::{AcrRequest, MfaRequirement, mfa_requirement};
+use crate::policy::return_to::{ReturnTarget, parse_return_target};
 use crate::ports::{
     AssertionIdentity, BreachChecker, Clock, PasskeyCeremonies, PasskeyError, PasskeyUser,
     PasswordCheck, PasswordHasher, RelyingParty, Storage, StorageError, VerifiedAssertion,
@@ -224,18 +226,19 @@ pub enum FlowOutcome {
         form: FormDescription,
         totp: TotpEnrolment,
     },
-    /// The user signed in: set the session cookie and continue the authorization request (or go
-    /// to the default page). `recovery_codes` is non-empty when a second factor was enrolled in
-    /// this flow: show them once before continuing.
+    /// The user signed in: set the session cookie and continue (the authorization request, the
+    /// login's return target, or the default page when `None`; see [`Continue`]).
+    /// `recovery_codes` is non-empty when a second factor was enrolled in this flow: show them
+    /// once before continuing.
     SignedIn {
         cookie: NewSessionCookie,
-        continue_to: Option<AuthRequestId>,
+        continue_to: Option<Continue>,
         recovery_codes: Vec<SecretString>,
     },
     /// Step-up completed: the caller's session was upgraded in place (no new cookie). Continue
     /// as for `SignedIn`.
     SteppedUp {
-        continue_to: Option<AuthRequestId>,
+        continue_to: Option<Continue>,
         recovery_codes: Vec<SecretString>,
     },
     /// Show a message page. The flow is finished.
@@ -314,13 +317,66 @@ impl SubmitResult {
     }
 }
 
+/// Where a finished sign-in continues ([`FlowService::continuation`]: the authorization request
+/// bound to the flow always wins over a return target).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Continue {
+    /// Continue the authorization request (`{issuer}/authorize/continue?request=`).
+    Authorize(AuthRequestId),
+    /// Return to this allowlisted tenant-relative page (the invitation page).
+    Return(ReturnTarget),
+}
+
+/// KEK purpose of the login's sealed return target ([`LoginState::return_to_sealed`]; AAD: the
+/// tenant and flow ids, as for the other values sealed into flow state).
+pub const RETURN_TO_PURPOSE: &str = "anvilid/login-return-to/v1";
+
+/// Seals `target` into the login flow `flow` of `tenant` (base64url).
+fn seal_return_target(
+    kek: &Kek,
+    tenant: TenantId,
+    flow: FlowId,
+    target: &ReturnTarget,
+) -> Result<String, CoreError> {
+    kek.seal(
+        RETURN_TO_PURPOSE,
+        &upstream_aad(tenant, flow),
+        target.as_path().as_bytes(),
+    )
+    .map(|s| b64url(&s))
+    .map_err(|_| CoreError::Internal("sealing the return target failed".into()))
+}
+
+/// The return target sealed into the stored login flow `flow` of `tenant`. `None` if there is
+/// none, or it does not open (another flow or tenant, tampered) or is no longer allowlisted: the
+/// sign-in then ends on the signed-in page. The value is never logged.
+fn return_target_of(kek: &Kek, tenant: TenantId, flow: &Flow) -> Option<ReturnTarget> {
+    let Ok(FlowState::Login(state)) = serde_json::from_str::<FlowState>(&flow.state) else {
+        return None;
+    };
+    let raw = b64url_decode(state.return_to_sealed.as_deref()?).ok()?;
+    let plain = kek
+        .open(RETURN_TO_PURPOSE, &upstream_aad(tenant, flow.id), &raw)
+        .ok()?;
+    parse_return_target(std::str::from_utf8(&plain).ok()?)
+}
+
+/// Where a sign-in finishing in the stored flow `flow` continues: its authorization request
+/// first, otherwise its return target (see [`return_target_of`]).
+fn continuation_of(kek: &Kek, tenant: TenantId, flow: &Flow) -> Option<Continue> {
+    if let Some(request) = flow.auth_request_id {
+        return Some(Continue::Authorize(request));
+    }
+    return_target_of(kek, tenant, flow).map(Continue::Return)
+}
+
 /// Result of [`FlowService::upstream_primary`].
 #[derive(Debug)]
 pub(crate) enum UpstreamPrimary {
     /// Signed in: set the session cookie and continue.
     SignedIn {
         cookie: NewSessionCookie,
-        continue_to: Option<AuthRequestId>,
+        continue_to: Option<Continue>,
     },
     /// A second factor or enrolment is needed: set the new flow's cookie and render its form.
     Continue(StartedFlow),
@@ -1581,12 +1637,20 @@ impl FlowService {
     /// ([`LoginStart::Idp`]). In a tenant with a routed domain, a `login_hint` that is an email
     /// skips the email page and is routed at once (to the IdP, the single-sign-on choice or the
     /// password step).
+    ///
+    /// `return_to` (an allowlisted [`ReturnTarget`], the invitation page) is kept only for a login
+    /// without an authorization request (the request always wins): it is sealed into the flow
+    /// state ([`LoginState::return_to_sealed`]) and every sign-in that finishes the login returns
+    /// there ([`Continue::Return`]). A flow restarted after it expired starts without it.
     pub async fn start_login(
         &self,
         cx: &FlowContext<'_>,
         auth_request: Option<AuthRequestId>,
         current: Option<&BrowserSession>,
+        return_to: Option<ReturnTarget>,
     ) -> Result<LoginStart, CoreError> {
+        let return_to = return_to.filter(|_| auth_request.is_none());
+        let return_to = return_to.as_ref();
         if let (Some(request_id), Some(session)) = (auth_request, current)
             && let Some(started) = self.start_step_up(cx, request_id, session).await?
         {
@@ -1614,7 +1678,9 @@ impl FlowService {
         }
         if !self.email_first_enabled(tenant).await? {
             let (state, form) = FlowState::initial(FlowKind::Login, None, &self.env(cx))?;
-            let started = self.create_flow(cx, &state, form, auth_request).await?;
+            let started = self
+                .create_login_flow(cx, state, form, auth_request, return_to)
+                .await?;
             return Ok(LoginStart::Form(started));
         }
         let (mut state, form) = email_first();
@@ -1623,7 +1689,7 @@ impl FlowService {
             .and_then(|h| normalize_email(h.trim()).ok());
         let Some(email) = hint else {
             let started = self
-                .create_flow(cx, &FlowState::Login(state), form, auth_request)
+                .create_login_flow(cx, FlowState::Login(state), form, auth_request, return_to)
                 .await?;
             return Ok(LoginStart::Form(started));
         };
@@ -1631,12 +1697,12 @@ impl FlowService {
         let (route, idp) = self.hrd_route(tenant, &email).await?;
         Ok(match (routed(state.clone(), route, false), idp) {
             (Identified::Render(b), _) => LoginStart::Form(
-                self.create_flow(cx, &FlowState::Login(b.0), b.1, auth_request)
+                self.create_login_flow(cx, FlowState::Login(b.0), b.1, auth_request, return_to)
                     .await?,
             ),
             (Identified::StartIdp(_), Some(idp)) => LoginStart::Idp {
                 started: self
-                    .create_flow(cx, &FlowState::Login(state), form, auth_request)
+                    .create_login_flow(cx, FlowState::Login(state), form, auth_request, return_to)
                     .await?,
                 idp,
             },
@@ -1646,6 +1712,37 @@ impl FlowService {
                 ));
             }
         })
+    }
+
+    /// [`Self::create_flow`] for a fresh login: with `return_to` (only without an authorization
+    /// request and outside a step-up), the target is sealed under the new flow id first.
+    async fn create_login_flow(
+        &self,
+        cx: &FlowContext<'_>,
+        state: FlowState,
+        form: FormDescription,
+        auth_request: Option<AuthRequestId>,
+        return_to: Option<&ReturnTarget>,
+    ) -> Result<StartedFlow, CoreError> {
+        let id = FlowId::new_v7();
+        let state = match (state, return_to) {
+            (FlowState::Login(mut s), Some(target))
+                if auth_request.is_none() && s.step_up_session.is_none() =>
+            {
+                s.return_to_sealed = Some(seal_return_target(&self.kek, cx.tenant.id, id, target)?);
+                FlowState::Login(s)
+            }
+            (state, _) => state,
+        };
+        self.create_flow_with_id(cx, id, &state, form, auth_request)
+            .await
+    }
+
+    /// Where a sign-in finishing in the stored flow `flow` continues: the authorization request
+    /// bound to the flow, else the login's sealed return target, else `None` (the signed-in
+    /// page). The one place every sign-in and step-up outcome takes its `continue_to` from.
+    fn continuation(&self, cx: &FlowContext<'_>, flow: &Flow) -> Option<Continue> {
+        continuation_of(&self.kek, cx.tenant.id, flow)
     }
 
     async fn start_step_up(
@@ -1729,7 +1826,8 @@ impl FlowService {
     }
 
     /// Continues a login in a fresh flow `id` (new flow cookie and CSRF token) holding `state`,
-    /// bound to the old flow's authorization request; the old flow is deleted. Used after an
+    /// bound to the old flow's authorization request and carrying its return target (resealed
+    /// under `id`); the old flow is deleted. Used after an
     /// upstream callback, which arrives without the flow cookie and the CSRF token.
     pub(crate) async fn continue_login(
         &self,
@@ -1740,6 +1838,20 @@ impl FlowService {
         form: FormDescription,
     ) -> Result<StartedFlow, CoreError> {
         let auth_request = old.and_then(|f| f.auth_request_id);
+        // A login's return target moves with it: opened under the old flow, sealed under the new.
+        let carried;
+        let state = match (old, state) {
+            (Some(old), FlowState::Login(s)) => {
+                let mut s = s.clone();
+                s.return_to_sealed = match return_target_of(&self.kek, cx.tenant.id, old) {
+                    Some(target) => Some(seal_return_target(&self.kek, cx.tenant.id, id, &target)?),
+                    None => None,
+                };
+                carried = FlowState::Login(s);
+                &carried
+            }
+            _ => state,
+        };
         let started = self
             .create_flow_with_id(cx, id, state, form, auth_request)
             .await?;
@@ -1831,28 +1943,13 @@ impl FlowService {
         let (policy, acr) = self.flow_mfa(cx, flow).await?;
         match after_primary_auth(policy, acr, methods) {
             AfterPrimary::SignIn => {
-                let (acr, amr) = session_acr_amr(auth, false);
-                let replaces = self.switch_session(cx, current_session, user.id).await?;
                 let cookie = self
-                    .sessions()
-                    .create(tenant, user.id, acr, &amr, replaces, cx.ctx)
-                    .await?;
-                self.storage
-                    .users()
-                    .record_login(tenant, user.id, self.clock.now())
+                    .create_signed_in_session(cx, user.id, auth, false, current_session, method)
                     .await?;
                 self.storage.flows().delete(tenant, flow.id).await?;
-                self.audit_user(
-                    cx,
-                    AuditAction::LoginSucceeded,
-                    user.id,
-                    AuditOutcome::Success,
-                    AuditDetails::login(method),
-                )
-                .await?;
                 Ok(UpstreamPrimary::SignedIn {
                     cookie,
-                    continue_to: flow.auth_request_id,
+                    continue_to: self.continuation(cx, flow),
                 })
             }
             AfterPrimary::SecondFactor(methods) => {
@@ -2486,29 +2583,20 @@ impl FlowService {
                     )
                     .await?;
                 }
-                let (acr, amr) = session_acr_amr(*auth, exec.passkey_backup_eligible);
-                let replaces = self
-                    .switch_session(cx, exec.current_session, user.id)
-                    .await?;
                 let cookie = self
-                    .sessions()
-                    .create(tenant, user.id, acr, &amr, replaces, cx.ctx)
-                    .await?;
-                users
-                    .record_login(tenant, user.id, self.clock.now())
+                    .create_signed_in_session(
+                        cx,
+                        user.id,
+                        *auth,
+                        exec.passkey_backup_eligible,
+                        exec.current_session,
+                        exec.method,
+                    )
                     .await?;
                 self.storage.flows().delete(tenant, exec.flow.id).await?;
-                self.audit_user(
-                    cx,
-                    AuditAction::LoginSucceeded,
-                    user.id,
-                    AuditOutcome::Success,
-                    AuditDetails::login(exec.method),
-                )
-                .await?;
                 Ok(Step::Done(Box::new(FlowOutcome::SignedIn {
                     cookie,
-                    continue_to: exec.flow.auth_request_id,
+                    continue_to: self.continuation(cx, exec.flow),
                     recovery_codes: std::mem::take(&mut exec.recovery_codes),
                 })))
             }
@@ -2600,6 +2688,76 @@ impl FlowService {
     /// Session switch (module docs): the session `CreateSession` should rotate. A current session
     /// of the same user is returned (rotated by `SessionService::create`); one of another user
     /// is revoked here with its token families (back-channel deliveries enqueued) and audited.
+    /// The one way a sign-in creates its browser session: replaces another user's session in this
+    /// browser ([`Self::switch_session`]), creates the session with the acr/amr of `auth`, records
+    /// the login and audits `login_succeeded` with `method`. The caller deletes its flow.
+    async fn create_signed_in_session(
+        &self,
+        cx: &FlowContext<'_>,
+        user: UserId,
+        auth: SessionAuth,
+        passkey_backup_eligible: bool,
+        current_session: Option<SessionId>,
+        method: &'static str,
+    ) -> Result<NewSessionCookie, CoreError> {
+        let tenant = cx.tenant.id;
+        let (acr, amr) = session_acr_amr(auth, passkey_backup_eligible);
+        let replaces = self.switch_session(cx, current_session, user).await?;
+        let cookie = self
+            .sessions()
+            .create(tenant, user, acr, &amr, replaces, cx.ctx)
+            .await?;
+        self.storage
+            .users()
+            .record_login(tenant, user, self.clock.now())
+            .await?;
+        self.audit_user(
+            cx,
+            AuditAction::LoginSucceeded,
+            user,
+            AuditOutcome::Success,
+            AuditDetails::login(method),
+        )
+        .await?;
+        Ok(cookie)
+    }
+
+    /// Signs in `user`, just created through an organization invitation
+    /// (`OrgInvitationService::accept_with_registration`, which checked the password): a session
+    /// as after a password sign-in (`acr`/`amr` of [`SessionAuth::Password`]), through the same
+    /// code as every flow sign-in, so another user's session in this browser (`current`) is
+    /// replaced and `login_succeeded` is audited (method `invitation_registration`). There is no
+    /// flow. Refused (`InvalidRequest`) unless the user exists in this tenant, is active and has
+    /// a verified email.
+    pub async fn sign_in_registered_user(
+        &self,
+        cx: &FlowContext<'_>,
+        user: UserId,
+        current: Option<&BrowserSession>,
+    ) -> Result<NewSessionCookie, CoreError> {
+        let tenant = cx.tenant.id;
+        match self.storage.users().get(tenant, user).await? {
+            Some(u) if u.status == UserStatus::Active && u.email_verified => {}
+            _ => {
+                return Err(CoreError::InvalidRequest(
+                    "the user cannot be signed in".into(),
+                ));
+            }
+        }
+        let current = current
+            .filter(|s| s.tenant_id == tenant && s.revoked_at.is_none())
+            .map(|s| s.id);
+        self.create_signed_in_session(
+            cx,
+            user,
+            SessionAuth::Password,
+            false,
+            current,
+            "invitation_registration",
+        )
+        .await
+    }
+
     async fn switch_session(
         &self,
         cx: &FlowContext<'_>,
@@ -2743,7 +2901,7 @@ impl FlowService {
         )
         .await?;
         Ok(Step::Done(Box::new(FlowOutcome::SteppedUp {
-            continue_to: exec.flow.auth_request_id,
+            continue_to: self.continuation(cx, exec.flow),
             recovery_codes: std::mem::take(&mut exec.recovery_codes),
         })))
     }
@@ -3606,6 +3764,118 @@ mod tests {
         c.rp = err;
         assert!(matches!(c.relying_party(), Err(CoreError::Internal(_))));
         assert!(cx(&tenant).relying_party().is_ok());
+    }
+
+    fn login_flow(tenant: TenantId, state: &LoginState) -> Flow {
+        let mut f = flow("cookie", "csrf", NOW + FLOW_LIFETIME);
+        f.tenant_id = tenant;
+        f.state = encode_state(&FlowState::Login(state.clone())).unwrap();
+        f
+    }
+
+    const TOKEN: &str = "invitation-token-AbCdEfGhIjKlMnOpQrStUvWxYz0";
+
+    fn target() -> ReturnTarget {
+        parse_return_target(&format!("/ui/invitation?token={TOKEN}")).unwrap()
+    }
+
+    /// A login flow holding `target` sealed for itself.
+    fn flow_with_target(kek: &Kek, tenant: TenantId) -> Flow {
+        let mut f = login_flow(tenant, &LoginState::default());
+        let sealed = seal_return_target(kek, tenant, f.id, &target()).unwrap();
+        f.state = encode_state(&FlowState::Login(LoginState {
+            return_to_sealed: Some(sealed),
+            ..LoginState::default()
+        }))
+        .unwrap();
+        f
+    }
+
+    #[test]
+    fn continuation_prefers_the_authorization_request() {
+        let kek = Kek::generate();
+        let tenant = TenantId::new_v7();
+        let mut f = flow_with_target(&kek, tenant);
+        assert_eq!(
+            continuation_of(&kek, tenant, &f),
+            Some(Continue::Return(target()))
+        );
+        let request = AuthRequestId::new_v7();
+        f.auth_request_id = Some(request);
+        assert_eq!(
+            continuation_of(&kek, tenant, &f),
+            Some(Continue::Authorize(request))
+        );
+        // No target, no request: the signed-in page.
+        let plain = login_flow(tenant, &LoginState::default());
+        assert_eq!(continuation_of(&kek, tenant, &plain), None);
+    }
+
+    #[test]
+    fn return_target_is_sealed_never_plaintext() {
+        let kek = Kek::generate();
+        let f = flow_with_target(&kek, TenantId::new_v7());
+        assert!(f.state.contains("return_to_sealed"));
+        assert!(!f.state.contains(TOKEN), "{}", f.state);
+        assert!(!f.state.contains("/ui/invitation"), "{}", f.state);
+    }
+
+    #[test]
+    fn return_target_does_not_open_elsewhere_or_tampered() {
+        let kek = Kek::generate();
+        let tenant = TenantId::new_v7();
+        let f = flow_with_target(&kek, tenant);
+        // Moved to another flow id (another flow's row), another tenant or another KEK.
+        let mut moved = f.clone();
+        moved.id = FlowId::new_v7();
+        assert_eq!(continuation_of(&kek, tenant, &moved), None);
+        assert_eq!(continuation_of(&kek, TenantId::new_v7(), &f), None);
+        assert_eq!(continuation_of(&Kek::generate(), tenant, &f), None);
+        // A tampered or garbage sealed value.
+        let FlowState::Login(s) = serde_json::from_str::<FlowState>(&f.state).unwrap() else {
+            panic!("login state");
+        };
+        let sealed = s.return_to_sealed.clone().unwrap();
+        let mut raw = b64url_decode(&sealed).unwrap();
+        let last = raw.len() - 1;
+        raw[last] ^= 1;
+        for bad in [b64url(&raw), "not base64 !".into(), String::new()] {
+            let tampered = login_flow(
+                tenant,
+                &LoginState {
+                    return_to_sealed: Some(bad.clone()),
+                    ..s.clone()
+                },
+            );
+            let tampered = Flow {
+                id: f.id,
+                ..tampered
+            };
+            assert_eq!(continuation_of(&kek, tenant, &tampered), None, "{bad:?}");
+        }
+        // A sealed value that is not an allowlisted target (defence in depth on open).
+        let evil = kek
+            .seal(
+                RETURN_TO_PURPOSE,
+                &upstream_aad(tenant, f.id),
+                b"https://evil.example/ui/invitation?token=a",
+            )
+            .unwrap();
+        let evil_flow = Flow {
+            id: f.id,
+            ..login_flow(
+                tenant,
+                &LoginState {
+                    return_to_sealed: Some(b64url(&evil)),
+                    ..LoginState::default()
+                },
+            )
+        };
+        assert_eq!(continuation_of(&kek, tenant, &evil_flow), None);
+        // Not a login flow.
+        let mut other = f.clone();
+        other.state = "{}".into();
+        assert_eq!(continuation_of(&kek, tenant, &other), None);
     }
 
     #[test]

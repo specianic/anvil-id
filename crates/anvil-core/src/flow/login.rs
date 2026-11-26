@@ -168,6 +168,13 @@ pub struct LoginState {
     /// carries it in a hidden field and shows it read-only with a way back to the email page.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub email_first: bool,
+    /// Where the sign-in returns when it is not bound to an authorization request (an allowlisted
+    /// `policy::return_to::ReturnTarget`, the invitation page): sealed with the KEK under the
+    /// tenant and the flow id (base64url), because it carries the invitation token. Set only by a
+    /// fresh login started without an authorization request; resealed when the login continues
+    /// in a new flow (`FlowService::continue_login`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub return_to_sealed: Option<String>,
 }
 
 /// Where the login stands.
@@ -1998,6 +2005,53 @@ mod tests {
         assert!(p.is_fresh(at(1_000)));
         assert!(p.is_fresh(at(1_000 + 599)));
         assert!(!p.is_fresh(at(1_000 + 600)));
+    }
+
+    #[test]
+    fn return_to_sealed_is_optional_and_survives_the_steps() {
+        // Flow rows written before 06-31 (no field) still decode; `None` is not written.
+        let old: FlowState =
+            serde_json::from_str(r#"{"kind":"login","identifier":null}"#).expect("old json");
+        assert!(matches!(old, FlowState::Login(ref s) if s.return_to_sealed.is_none()));
+        let json = serde_json::to_string(&FlowState::Login(LoginState::default())).unwrap();
+        assert!(!json.contains("return_to_sealed"), "{json}");
+        let state = LoginState {
+            return_to_sealed: Some("c2VhbGVk".into()),
+            ..LoginState::default()
+        };
+        let json = serde_json::to_string(&FlowState::Login(state.clone())).unwrap();
+        let FlowState::Login(decoded) = serde_json::from_str(&json).unwrap() else {
+            panic!("login state");
+        };
+        assert_eq!(decoded, state);
+        // The steps of a login keep it (it is read from the stored state at sign-in).
+        let (first, _) = email_first();
+        let first = LoginState {
+            return_to_sealed: state.return_to_sealed.clone(),
+            ..first
+        };
+        let IdentifyStep::Route {
+            state: routed_state,
+            ..
+        } = identify_input(first, IdentifyInput::Email("alice@example.com".into()))
+        else {
+            panic!("route");
+        };
+        let Identified::Render(b) = routed(routed_state, HrdRoute::Local, false) else {
+            panic!("password step");
+        };
+        assert_eq!(b.0.return_to_sealed, state.return_to_sealed);
+        let (FlowState::Login(second), _) = second_factor_required(
+            b.0,
+            UserId::new_v7(),
+            SecondFactorMethods {
+                totp: true,
+                ..SecondFactorMethods::default()
+            },
+        ) else {
+            panic!("login state");
+        };
+        assert_eq!(second.return_to_sealed, state.return_to_sealed);
     }
 
     // -----------------------------------------------------------------------------------------

@@ -93,12 +93,13 @@ use anvil_core::model::{
     CaptchaSettings, FlowId, FlowKind, RegistrationMode, RequestContext, SessionId, UserId,
     normalize_email,
 };
+use anvil_core::policy::return_to::{ReturnTarget, parse_return_target};
 use anvil_core::ports::RelyingParty;
 use anvil_core::service::account::{SettingsBinding, TotpEnrolment};
 use anvil_core::service::audit::AuditService;
 use anvil_core::service::flow::{
-    AuthAttempt, FlowContext, FlowOutcome, FlowService, IdentifyOutcome, IdpStart, LoginStart,
-    StartedFlow, SubmitResult, bind_form, email_code_enabled, start_idp,
+    AuthAttempt, Continue, FlowContext, FlowOutcome, FlowService, IdentifyOutcome, IdpStart,
+    LoginStart, StartedFlow, SubmitResult, bind_form, email_code_enabled, start_idp,
 };
 use anvil_core::service::saml::SamlService;
 use anvil_core::service::session::SessionService;
@@ -211,7 +212,7 @@ async fn show(
     };
     let mut started = match state
         .ui_flow_service()
-        .start_login(&cx, request, current.as_ref())
+        .start_login(&cx, request, current.as_ref(), q.return_target())
         .await
     {
         Ok(LoginStart::Form(s)) => s,
@@ -1220,6 +1221,9 @@ pub(super) struct UiQuery {
     pub(super) token: Option<String>,
     /// Flow id on form POSTs.
     pub(super) flow: Option<String>,
+    /// Where the sign-in returns without an authorization request (`/ui/login?return_to=`).
+    /// Only an allowlisted target is used ([`parse_return_target`]); anything else is ignored.
+    pub(super) return_to: Option<String>,
 }
 
 /// A malformed query value: the page answers with an error page instead of a form.
@@ -1267,6 +1271,12 @@ impl UiQuery {
     /// The emailed token, if present and non-empty.
     pub(super) fn token(&self) -> Option<String> {
         self.token.clone().filter(|t| !t.is_empty())
+    }
+
+    /// The `return_to` parameter if it is an allowlisted target; anything else is ignored
+    /// silently (no error page, the value is never logged).
+    pub(super) fn return_target(&self) -> Option<ReturnTarget> {
+        self.return_to.as_deref().and_then(parse_return_target)
     }
 }
 
@@ -1970,14 +1980,15 @@ pub(super) async fn submit_flow(
     }
 }
 
-/// After a sign-in or step-up: continue the authorization request (303) or show the signed-in
-/// page. Recovery codes of a second factor enrolled in the flow are shown once first, with a
-/// link that continues.
+/// After a sign-in or step-up: continue the authorization request (303), return to the login's
+/// allowlisted return target on the tenant's own UI origin (303), or show the signed-in page.
+/// Recovery codes of a second factor enrolled in the flow are shown once first, with a link that
+/// continues.
 pub(super) fn signed_in_response(
     state: &AppState,
     tenant: &ResolvedTenant,
     loc: &Locale,
-    continue_to: Option<AuthRequestId>,
+    continue_to: Option<Continue>,
     recovery_codes: &[SecretString],
     jar: CookieJar,
 ) -> Response {
@@ -1985,8 +1996,13 @@ pub(super) fn signed_in_response(
     // revokes it and enqueues its back-channel logouts). Waking on each sign-in is cheaper than
     // threading a "revoked" flag out of the flow engine.
     state.wake_logout_worker();
-    let continue_url = continue_to
-        .map(|request| format!("{}/authorize/continue?request={request}", tenant.issuer));
+    let continue_url = continue_to.map(|next| match next {
+        Continue::Authorize(request) => {
+            format!("{}/authorize/continue?request={request}", tenant.issuer)
+        }
+        // The tenant's own origin and the allowlisted path: nothing from the request.
+        Continue::Return(target) => carry_ui_locales(&tenant.ui_url(target.as_path()), loc),
+    });
     if !recovery_codes.is_empty() {
         let codes: Vec<String> = recovery_codes
             .iter()

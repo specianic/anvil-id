@@ -99,7 +99,7 @@ use super::account::{AccountError, AccountService, SettingsBinding};
 use super::audit::AuditService;
 use super::connection::ConnectionService;
 use super::flow::{
-    BindingError, FlowContext, FlowService, StartedFlow, UpstreamPrimary, check_binding,
+    BindingError, Continue, FlowContext, FlowService, StartedFlow, UpstreamPrimary, check_binding,
     self_service_email,
 };
 use super::session::NewSessionCookie;
@@ -162,11 +162,11 @@ pub enum StartResult {
 /// Result of an upstream callback.
 #[derive(Debug)]
 pub enum UpstreamOutcome {
-    /// Signed in: set the session cookie and continue the authorization request (or show the
-    /// signed-in page).
+    /// Signed in: set the session cookie and continue the authorization request or the login's
+    /// return target (or show the signed-in page), as for `FlowOutcome::SignedIn`.
     SignedIn {
         cookie: NewSessionCookie,
-        continue_to: Option<AuthRequestId>,
+        continue_to: Option<Continue>,
     },
     /// Continue in a fresh login flow (set its cookie, render its form): the second-factor
     /// step (`factor_user` set), the enrolment step (`totp` set), the link confirmation

@@ -14,6 +14,8 @@ pub mod webhook_event;
 pub mod domain_verification;
 pub mod home_realm;
 pub mod org_claims;
+// Phase 6 gap closure (plan 06-31)
+pub mod return_to;
 
 /// Length limits in characters (not bytes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
