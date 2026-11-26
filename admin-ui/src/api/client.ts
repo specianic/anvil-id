@@ -6,9 +6,7 @@ import type { components, paths } from "./schema";
 export type Problem = components["schemas"]["Problem"];
 export type UserView = components["schemas"]["UserView"];
 export type ClientView = components["schemas"]["ClientView"];
-
-/** The console manages this tenant; the tenant switcher arrives with the multi-tenant console (0.4). */
-export const CONSOLE_TENANT = "default";
+export type TenantView = components["schemas"]["TenantView"];
 
 /** An RFC 9457 problem returned by the API (or synthesised for a non-problem error response). */
 export class ApiError extends Error {

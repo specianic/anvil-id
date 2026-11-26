@@ -25,8 +25,26 @@ import { Route as EmailKindRouteImport } from './routes/email/$kind'
 import { Route as EmailSmtpRouteImport } from './routes/email/smtp'
 import { Route as SessionsIndexRouteImport } from './routes/sessions/index'
 import { Route as SettingsIndexRouteImport } from './routes/settings/index'
+import { Route as TTenantRouteImport } from './routes/t/$tenant'
 import { Route as UsersIndexRouteImport } from './routes/users/index'
 import { Route as UsersUserIdRouteImport } from './routes/users/$userId'
+import { Route as TTenantIndexRouteImport } from './routes/t/$tenant/index'
+import { Route as TTenantAuditIndexRouteImport } from './routes/t/$tenant/audit/index'
+import { Route as TTenantBrandingIndexRouteImport } from './routes/t/$tenant/branding/index'
+import { Route as TTenantBrandingClientIdRouteImport } from './routes/t/$tenant/branding/$clientId'
+import { Route as TTenantClientsIndexRouteImport } from './routes/t/$tenant/clients/index'
+import { Route as TTenantClientsClientIdRouteImport } from './routes/t/$tenant/clients/$clientId'
+import { Route as TTenantClientsNewRouteImport } from './routes/t/$tenant/clients/new'
+import { Route as TTenantConnectionsIndexRouteImport } from './routes/t/$tenant/connections/index'
+import { Route as TTenantConnectionsConnectionIdRouteImport } from './routes/t/$tenant/connections/$connectionId'
+import { Route as TTenantConnectionsNewRouteImport } from './routes/t/$tenant/connections/new'
+import { Route as TTenantEmailIndexRouteImport } from './routes/t/$tenant/email/index'
+import { Route as TTenantEmailKindRouteImport } from './routes/t/$tenant/email/$kind'
+import { Route as TTenantEmailSmtpRouteImport } from './routes/t/$tenant/email/smtp'
+import { Route as TTenantSessionsIndexRouteImport } from './routes/t/$tenant/sessions/index'
+import { Route as TTenantSettingsIndexRouteImport } from './routes/t/$tenant/settings/index'
+import { Route as TTenantUsersIndexRouteImport } from './routes/t/$tenant/users/index'
+import { Route as TTenantUsersUserIdRouteImport } from './routes/t/$tenant/users/$userId'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -108,6 +126,11 @@ const SettingsIndexRoute = SettingsIndexRouteImport.update({
   path: '/settings/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const TTenantRoute = TTenantRouteImport.update({
+  id: '/t/$tenant',
+  path: '/t/$tenant',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const UsersIndexRoute = UsersIndexRouteImport.update({
   id: '/users/',
   path: '/users/',
@@ -117,6 +140,92 @@ const UsersUserIdRoute = UsersUserIdRouteImport.update({
   id: '/users/$userId',
   path: '/users/$userId',
   getParentRoute: () => rootRouteImport,
+} as any)
+const TTenantIndexRoute = TTenantIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => TTenantRoute,
+} as any)
+const TTenantAuditIndexRoute = TTenantAuditIndexRouteImport.update({
+  id: '/audit/',
+  path: '/audit/',
+  getParentRoute: () => TTenantRoute,
+} as any)
+const TTenantBrandingIndexRoute = TTenantBrandingIndexRouteImport.update({
+  id: '/branding/',
+  path: '/branding/',
+  getParentRoute: () => TTenantRoute,
+} as any)
+const TTenantBrandingClientIdRoute = TTenantBrandingClientIdRouteImport.update({
+  id: '/branding/$clientId',
+  path: '/branding/$clientId',
+  getParentRoute: () => TTenantRoute,
+} as any)
+const TTenantClientsIndexRoute = TTenantClientsIndexRouteImport.update({
+  id: '/clients/',
+  path: '/clients/',
+  getParentRoute: () => TTenantRoute,
+} as any)
+const TTenantClientsClientIdRoute = TTenantClientsClientIdRouteImport.update({
+  id: '/clients/$clientId',
+  path: '/clients/$clientId',
+  getParentRoute: () => TTenantRoute,
+} as any)
+const TTenantClientsNewRoute = TTenantClientsNewRouteImport.update({
+  id: '/clients/new',
+  path: '/clients/new',
+  getParentRoute: () => TTenantRoute,
+} as any)
+const TTenantConnectionsIndexRoute = TTenantConnectionsIndexRouteImport.update({
+  id: '/connections/',
+  path: '/connections/',
+  getParentRoute: () => TTenantRoute,
+} as any)
+const TTenantConnectionsConnectionIdRoute =
+  TTenantConnectionsConnectionIdRouteImport.update({
+    id: '/connections/$connectionId',
+    path: '/connections/$connectionId',
+    getParentRoute: () => TTenantRoute,
+  } as any)
+const TTenantConnectionsNewRoute = TTenantConnectionsNewRouteImport.update({
+  id: '/connections/new',
+  path: '/connections/new',
+  getParentRoute: () => TTenantRoute,
+} as any)
+const TTenantEmailIndexRoute = TTenantEmailIndexRouteImport.update({
+  id: '/email/',
+  path: '/email/',
+  getParentRoute: () => TTenantRoute,
+} as any)
+const TTenantEmailKindRoute = TTenantEmailKindRouteImport.update({
+  id: '/email/$kind',
+  path: '/email/$kind',
+  getParentRoute: () => TTenantRoute,
+} as any)
+const TTenantEmailSmtpRoute = TTenantEmailSmtpRouteImport.update({
+  id: '/email/smtp',
+  path: '/email/smtp',
+  getParentRoute: () => TTenantRoute,
+} as any)
+const TTenantSessionsIndexRoute = TTenantSessionsIndexRouteImport.update({
+  id: '/sessions/',
+  path: '/sessions/',
+  getParentRoute: () => TTenantRoute,
+} as any)
+const TTenantSettingsIndexRoute = TTenantSettingsIndexRouteImport.update({
+  id: '/settings/',
+  path: '/settings/',
+  getParentRoute: () => TTenantRoute,
+} as any)
+const TTenantUsersIndexRoute = TTenantUsersIndexRouteImport.update({
+  id: '/users/',
+  path: '/users/',
+  getParentRoute: () => TTenantRoute,
+} as any)
+const TTenantUsersUserIdRoute = TTenantUsersUserIdRouteImport.update({
+  id: '/users/$userId',
+  path: '/users/$userId',
+  getParentRoute: () => TTenantRoute,
 } as any)
 
 export interface FileRoutesByFullPath {
@@ -129,6 +238,7 @@ export interface FileRoutesByFullPath {
   '/connections/new': typeof ConnectionsNewRoute
   '/email/$kind': typeof EmailKindRoute
   '/email/smtp': typeof EmailSmtpRoute
+  '/t/$tenant': typeof TTenantRouteWithChildren
   '/users/$userId': typeof UsersUserIdRoute
   '/audit/': typeof AuditIndexRoute
   '/branding/': typeof BrandingIndexRoute
@@ -138,6 +248,23 @@ export interface FileRoutesByFullPath {
   '/sessions/': typeof SessionsIndexRoute
   '/settings/': typeof SettingsIndexRoute
   '/users/': typeof UsersIndexRoute
+  '/t/$tenant/': typeof TTenantIndexRoute
+  '/t/$tenant/branding/$clientId': typeof TTenantBrandingClientIdRoute
+  '/t/$tenant/clients/$clientId': typeof TTenantClientsClientIdRoute
+  '/t/$tenant/clients/new': typeof TTenantClientsNewRoute
+  '/t/$tenant/connections/$connectionId': typeof TTenantConnectionsConnectionIdRoute
+  '/t/$tenant/connections/new': typeof TTenantConnectionsNewRoute
+  '/t/$tenant/email/$kind': typeof TTenantEmailKindRoute
+  '/t/$tenant/email/smtp': typeof TTenantEmailSmtpRoute
+  '/t/$tenant/users/$userId': typeof TTenantUsersUserIdRoute
+  '/t/$tenant/audit/': typeof TTenantAuditIndexRoute
+  '/t/$tenant/branding/': typeof TTenantBrandingIndexRoute
+  '/t/$tenant/clients/': typeof TTenantClientsIndexRoute
+  '/t/$tenant/connections/': typeof TTenantConnectionsIndexRoute
+  '/t/$tenant/email/': typeof TTenantEmailIndexRoute
+  '/t/$tenant/sessions/': typeof TTenantSessionsIndexRoute
+  '/t/$tenant/settings/': typeof TTenantSettingsIndexRoute
+  '/t/$tenant/users/': typeof TTenantUsersIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -158,6 +285,23 @@ export interface FileRoutesByTo {
   '/sessions': typeof SessionsIndexRoute
   '/settings': typeof SettingsIndexRoute
   '/users': typeof UsersIndexRoute
+  '/t/$tenant': typeof TTenantIndexRoute
+  '/t/$tenant/branding/$clientId': typeof TTenantBrandingClientIdRoute
+  '/t/$tenant/clients/$clientId': typeof TTenantClientsClientIdRoute
+  '/t/$tenant/clients/new': typeof TTenantClientsNewRoute
+  '/t/$tenant/connections/$connectionId': typeof TTenantConnectionsConnectionIdRoute
+  '/t/$tenant/connections/new': typeof TTenantConnectionsNewRoute
+  '/t/$tenant/email/$kind': typeof TTenantEmailKindRoute
+  '/t/$tenant/email/smtp': typeof TTenantEmailSmtpRoute
+  '/t/$tenant/users/$userId': typeof TTenantUsersUserIdRoute
+  '/t/$tenant/audit': typeof TTenantAuditIndexRoute
+  '/t/$tenant/branding': typeof TTenantBrandingIndexRoute
+  '/t/$tenant/clients': typeof TTenantClientsIndexRoute
+  '/t/$tenant/connections': typeof TTenantConnectionsIndexRoute
+  '/t/$tenant/email': typeof TTenantEmailIndexRoute
+  '/t/$tenant/sessions': typeof TTenantSessionsIndexRoute
+  '/t/$tenant/settings': typeof TTenantSettingsIndexRoute
+  '/t/$tenant/users': typeof TTenantUsersIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -170,6 +314,7 @@ export interface FileRoutesById {
   '/connections/new': typeof ConnectionsNewRoute
   '/email/$kind': typeof EmailKindRoute
   '/email/smtp': typeof EmailSmtpRoute
+  '/t/$tenant': typeof TTenantRouteWithChildren
   '/users/$userId': typeof UsersUserIdRoute
   '/audit/': typeof AuditIndexRoute
   '/branding/': typeof BrandingIndexRoute
@@ -179,6 +324,23 @@ export interface FileRoutesById {
   '/sessions/': typeof SessionsIndexRoute
   '/settings/': typeof SettingsIndexRoute
   '/users/': typeof UsersIndexRoute
+  '/t/$tenant/': typeof TTenantIndexRoute
+  '/t/$tenant/branding/$clientId': typeof TTenantBrandingClientIdRoute
+  '/t/$tenant/clients/$clientId': typeof TTenantClientsClientIdRoute
+  '/t/$tenant/clients/new': typeof TTenantClientsNewRoute
+  '/t/$tenant/connections/$connectionId': typeof TTenantConnectionsConnectionIdRoute
+  '/t/$tenant/connections/new': typeof TTenantConnectionsNewRoute
+  '/t/$tenant/email/$kind': typeof TTenantEmailKindRoute
+  '/t/$tenant/email/smtp': typeof TTenantEmailSmtpRoute
+  '/t/$tenant/users/$userId': typeof TTenantUsersUserIdRoute
+  '/t/$tenant/audit/': typeof TTenantAuditIndexRoute
+  '/t/$tenant/branding/': typeof TTenantBrandingIndexRoute
+  '/t/$tenant/clients/': typeof TTenantClientsIndexRoute
+  '/t/$tenant/connections/': typeof TTenantConnectionsIndexRoute
+  '/t/$tenant/email/': typeof TTenantEmailIndexRoute
+  '/t/$tenant/sessions/': typeof TTenantSessionsIndexRoute
+  '/t/$tenant/settings/': typeof TTenantSettingsIndexRoute
+  '/t/$tenant/users/': typeof TTenantUsersIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -192,6 +354,7 @@ export interface FileRouteTypes {
     | '/connections/new'
     | '/email/$kind'
     | '/email/smtp'
+    | '/t/$tenant'
     | '/users/$userId'
     | '/audit/'
     | '/branding/'
@@ -201,6 +364,23 @@ export interface FileRouteTypes {
     | '/sessions/'
     | '/settings/'
     | '/users/'
+    | '/t/$tenant/'
+    | '/t/$tenant/branding/$clientId'
+    | '/t/$tenant/clients/$clientId'
+    | '/t/$tenant/clients/new'
+    | '/t/$tenant/connections/$connectionId'
+    | '/t/$tenant/connections/new'
+    | '/t/$tenant/email/$kind'
+    | '/t/$tenant/email/smtp'
+    | '/t/$tenant/users/$userId'
+    | '/t/$tenant/audit/'
+    | '/t/$tenant/branding/'
+    | '/t/$tenant/clients/'
+    | '/t/$tenant/connections/'
+    | '/t/$tenant/email/'
+    | '/t/$tenant/sessions/'
+    | '/t/$tenant/settings/'
+    | '/t/$tenant/users/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -221,6 +401,23 @@ export interface FileRouteTypes {
     | '/sessions'
     | '/settings'
     | '/users'
+    | '/t/$tenant'
+    | '/t/$tenant/branding/$clientId'
+    | '/t/$tenant/clients/$clientId'
+    | '/t/$tenant/clients/new'
+    | '/t/$tenant/connections/$connectionId'
+    | '/t/$tenant/connections/new'
+    | '/t/$tenant/email/$kind'
+    | '/t/$tenant/email/smtp'
+    | '/t/$tenant/users/$userId'
+    | '/t/$tenant/audit'
+    | '/t/$tenant/branding'
+    | '/t/$tenant/clients'
+    | '/t/$tenant/connections'
+    | '/t/$tenant/email'
+    | '/t/$tenant/sessions'
+    | '/t/$tenant/settings'
+    | '/t/$tenant/users'
   id:
     | '__root__'
     | '/'
@@ -232,6 +429,7 @@ export interface FileRouteTypes {
     | '/connections/new'
     | '/email/$kind'
     | '/email/smtp'
+    | '/t/$tenant'
     | '/users/$userId'
     | '/audit/'
     | '/branding/'
@@ -241,6 +439,23 @@ export interface FileRouteTypes {
     | '/sessions/'
     | '/settings/'
     | '/users/'
+    | '/t/$tenant/'
+    | '/t/$tenant/branding/$clientId'
+    | '/t/$tenant/clients/$clientId'
+    | '/t/$tenant/clients/new'
+    | '/t/$tenant/connections/$connectionId'
+    | '/t/$tenant/connections/new'
+    | '/t/$tenant/email/$kind'
+    | '/t/$tenant/email/smtp'
+    | '/t/$tenant/users/$userId'
+    | '/t/$tenant/audit/'
+    | '/t/$tenant/branding/'
+    | '/t/$tenant/clients/'
+    | '/t/$tenant/connections/'
+    | '/t/$tenant/email/'
+    | '/t/$tenant/sessions/'
+    | '/t/$tenant/settings/'
+    | '/t/$tenant/users/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -253,6 +468,7 @@ export interface RootRouteChildren {
   ConnectionsNewRoute: typeof ConnectionsNewRoute
   EmailKindRoute: typeof EmailKindRoute
   EmailSmtpRoute: typeof EmailSmtpRoute
+  TTenantRoute: typeof TTenantRouteWithChildren
   UsersUserIdRoute: typeof UsersUserIdRoute
   AuditIndexRoute: typeof AuditIndexRoute
   BrandingIndexRoute: typeof BrandingIndexRoute
@@ -378,6 +594,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/t/$tenant': {
+      id: '/t/$tenant'
+      path: '/t/$tenant'
+      fullPath: '/t/$tenant'
+      preLoaderRoute: typeof TTenantRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/users/': {
       id: '/users/'
       path: '/users'
@@ -392,8 +615,170 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof UsersUserIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/t/$tenant/': {
+      id: '/t/$tenant/'
+      path: '/'
+      fullPath: '/t/$tenant/'
+      preLoaderRoute: typeof TTenantIndexRouteImport
+      parentRoute: typeof TTenantRoute
+    }
+    '/t/$tenant/audit/': {
+      id: '/t/$tenant/audit/'
+      path: '/audit'
+      fullPath: '/t/$tenant/audit/'
+      preLoaderRoute: typeof TTenantAuditIndexRouteImport
+      parentRoute: typeof TTenantRoute
+    }
+    '/t/$tenant/branding/': {
+      id: '/t/$tenant/branding/'
+      path: '/branding'
+      fullPath: '/t/$tenant/branding/'
+      preLoaderRoute: typeof TTenantBrandingIndexRouteImport
+      parentRoute: typeof TTenantRoute
+    }
+    '/t/$tenant/branding/$clientId': {
+      id: '/t/$tenant/branding/$clientId'
+      path: '/branding/$clientId'
+      fullPath: '/t/$tenant/branding/$clientId'
+      preLoaderRoute: typeof TTenantBrandingClientIdRouteImport
+      parentRoute: typeof TTenantRoute
+    }
+    '/t/$tenant/clients/': {
+      id: '/t/$tenant/clients/'
+      path: '/clients'
+      fullPath: '/t/$tenant/clients/'
+      preLoaderRoute: typeof TTenantClientsIndexRouteImport
+      parentRoute: typeof TTenantRoute
+    }
+    '/t/$tenant/clients/$clientId': {
+      id: '/t/$tenant/clients/$clientId'
+      path: '/clients/$clientId'
+      fullPath: '/t/$tenant/clients/$clientId'
+      preLoaderRoute: typeof TTenantClientsClientIdRouteImport
+      parentRoute: typeof TTenantRoute
+    }
+    '/t/$tenant/clients/new': {
+      id: '/t/$tenant/clients/new'
+      path: '/clients/new'
+      fullPath: '/t/$tenant/clients/new'
+      preLoaderRoute: typeof TTenantClientsNewRouteImport
+      parentRoute: typeof TTenantRoute
+    }
+    '/t/$tenant/connections/': {
+      id: '/t/$tenant/connections/'
+      path: '/connections'
+      fullPath: '/t/$tenant/connections/'
+      preLoaderRoute: typeof TTenantConnectionsIndexRouteImport
+      parentRoute: typeof TTenantRoute
+    }
+    '/t/$tenant/connections/$connectionId': {
+      id: '/t/$tenant/connections/$connectionId'
+      path: '/connections/$connectionId'
+      fullPath: '/t/$tenant/connections/$connectionId'
+      preLoaderRoute: typeof TTenantConnectionsConnectionIdRouteImport
+      parentRoute: typeof TTenantRoute
+    }
+    '/t/$tenant/connections/new': {
+      id: '/t/$tenant/connections/new'
+      path: '/connections/new'
+      fullPath: '/t/$tenant/connections/new'
+      preLoaderRoute: typeof TTenantConnectionsNewRouteImport
+      parentRoute: typeof TTenantRoute
+    }
+    '/t/$tenant/email/': {
+      id: '/t/$tenant/email/'
+      path: '/email'
+      fullPath: '/t/$tenant/email/'
+      preLoaderRoute: typeof TTenantEmailIndexRouteImport
+      parentRoute: typeof TTenantRoute
+    }
+    '/t/$tenant/email/$kind': {
+      id: '/t/$tenant/email/$kind'
+      path: '/email/$kind'
+      fullPath: '/t/$tenant/email/$kind'
+      preLoaderRoute: typeof TTenantEmailKindRouteImport
+      parentRoute: typeof TTenantRoute
+    }
+    '/t/$tenant/email/smtp': {
+      id: '/t/$tenant/email/smtp'
+      path: '/email/smtp'
+      fullPath: '/t/$tenant/email/smtp'
+      preLoaderRoute: typeof TTenantEmailSmtpRouteImport
+      parentRoute: typeof TTenantRoute
+    }
+    '/t/$tenant/sessions/': {
+      id: '/t/$tenant/sessions/'
+      path: '/sessions'
+      fullPath: '/t/$tenant/sessions/'
+      preLoaderRoute: typeof TTenantSessionsIndexRouteImport
+      parentRoute: typeof TTenantRoute
+    }
+    '/t/$tenant/settings/': {
+      id: '/t/$tenant/settings/'
+      path: '/settings'
+      fullPath: '/t/$tenant/settings/'
+      preLoaderRoute: typeof TTenantSettingsIndexRouteImport
+      parentRoute: typeof TTenantRoute
+    }
+    '/t/$tenant/users/': {
+      id: '/t/$tenant/users/'
+      path: '/users'
+      fullPath: '/t/$tenant/users/'
+      preLoaderRoute: typeof TTenantUsersIndexRouteImport
+      parentRoute: typeof TTenantRoute
+    }
+    '/t/$tenant/users/$userId': {
+      id: '/t/$tenant/users/$userId'
+      path: '/users/$userId'
+      fullPath: '/t/$tenant/users/$userId'
+      preLoaderRoute: typeof TTenantUsersUserIdRouteImport
+      parentRoute: typeof TTenantRoute
+    }
   }
 }
+
+interface TTenantRouteChildren {
+  TTenantIndexRoute: typeof TTenantIndexRoute
+  TTenantBrandingClientIdRoute: typeof TTenantBrandingClientIdRoute
+  TTenantClientsClientIdRoute: typeof TTenantClientsClientIdRoute
+  TTenantClientsNewRoute: typeof TTenantClientsNewRoute
+  TTenantConnectionsConnectionIdRoute: typeof TTenantConnectionsConnectionIdRoute
+  TTenantConnectionsNewRoute: typeof TTenantConnectionsNewRoute
+  TTenantEmailKindRoute: typeof TTenantEmailKindRoute
+  TTenantEmailSmtpRoute: typeof TTenantEmailSmtpRoute
+  TTenantUsersUserIdRoute: typeof TTenantUsersUserIdRoute
+  TTenantAuditIndexRoute: typeof TTenantAuditIndexRoute
+  TTenantBrandingIndexRoute: typeof TTenantBrandingIndexRoute
+  TTenantClientsIndexRoute: typeof TTenantClientsIndexRoute
+  TTenantConnectionsIndexRoute: typeof TTenantConnectionsIndexRoute
+  TTenantEmailIndexRoute: typeof TTenantEmailIndexRoute
+  TTenantSessionsIndexRoute: typeof TTenantSessionsIndexRoute
+  TTenantSettingsIndexRoute: typeof TTenantSettingsIndexRoute
+  TTenantUsersIndexRoute: typeof TTenantUsersIndexRoute
+}
+
+const TTenantRouteChildren: TTenantRouteChildren = {
+  TTenantIndexRoute: TTenantIndexRoute,
+  TTenantBrandingClientIdRoute: TTenantBrandingClientIdRoute,
+  TTenantClientsClientIdRoute: TTenantClientsClientIdRoute,
+  TTenantClientsNewRoute: TTenantClientsNewRoute,
+  TTenantConnectionsConnectionIdRoute: TTenantConnectionsConnectionIdRoute,
+  TTenantConnectionsNewRoute: TTenantConnectionsNewRoute,
+  TTenantEmailKindRoute: TTenantEmailKindRoute,
+  TTenantEmailSmtpRoute: TTenantEmailSmtpRoute,
+  TTenantUsersUserIdRoute: TTenantUsersUserIdRoute,
+  TTenantAuditIndexRoute: TTenantAuditIndexRoute,
+  TTenantBrandingIndexRoute: TTenantBrandingIndexRoute,
+  TTenantClientsIndexRoute: TTenantClientsIndexRoute,
+  TTenantConnectionsIndexRoute: TTenantConnectionsIndexRoute,
+  TTenantEmailIndexRoute: TTenantEmailIndexRoute,
+  TTenantSessionsIndexRoute: TTenantSessionsIndexRoute,
+  TTenantSettingsIndexRoute: TTenantSettingsIndexRoute,
+  TTenantUsersIndexRoute: TTenantUsersIndexRoute,
+}
+
+const TTenantRouteWithChildren =
+  TTenantRoute._addFileChildren(TTenantRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
@@ -405,6 +790,7 @@ const rootRouteChildren: RootRouteChildren = {
   ConnectionsNewRoute: ConnectionsNewRoute,
   EmailKindRoute: EmailKindRoute,
   EmailSmtpRoute: EmailSmtpRoute,
+  TTenantRoute: TTenantRouteWithChildren,
   UsersUserIdRoute: UsersUserIdRoute,
   AuditIndexRoute: AuditIndexRoute,
   BrandingIndexRoute: BrandingIndexRoute,

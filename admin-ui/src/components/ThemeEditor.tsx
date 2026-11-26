@@ -6,7 +6,7 @@
 // elements (value attribute only) next to a hex text field; both edit the same token.
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { type ChangeEvent, type ReactNode, useId, useMemo, useRef, useState } from "react";
-import { ApiError, CONSOLE_TENANT, api, unwrap } from "@/api/client";
+import { ApiError, api, unwrap } from "@/api/client";
 import type { components } from "@/api/schema";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ProblemAlert } from "@/components/ProblemAlert";
@@ -270,10 +270,10 @@ function Section({ title, children, testId }: { title: string; children: ReactNo
 
 async function deleteBranding(scope: BrandingScope) {
   if (scope.kind === "tenant") {
-    await api.DELETE("/api/admin/v1/tenants/{slug}/branding", { params: { path: { slug: CONSOLE_TENANT } } });
+    await api.DELETE("/api/admin/v1/tenants/{slug}/branding", { params: { path: { slug: scope.tenant } } });
   } else {
     await api.DELETE("/api/admin/v1/tenants/{slug}/clients/{client_id}/branding", {
-      params: { path: { slug: CONSOLE_TENANT, client_id: scope.clientId } },
+      params: { path: { slug: scope.tenant, client_id: scope.clientId } },
     });
   }
 }
@@ -282,14 +282,14 @@ async function putLogo(scope: BrandingScope, data: string) {
   if (scope.kind === "tenant") {
     return unwrap(
       await api.PUT("/api/admin/v1/tenants/{slug}/branding/logo", {
-        params: { path: { slug: CONSOLE_TENANT } },
+        params: { path: { slug: scope.tenant } },
         body: { data },
       }),
     );
   }
   return unwrap(
     await api.PUT("/api/admin/v1/tenants/{slug}/clients/{client_id}/branding/logo", {
-      params: { path: { slug: CONSOLE_TENANT, client_id: scope.clientId } },
+      params: { path: { slug: scope.tenant, client_id: scope.clientId } },
       body: { data },
     }),
   );
@@ -298,12 +298,12 @@ async function putLogo(scope: BrandingScope, data: string) {
 async function deleteLogo(scope: BrandingScope) {
   if (scope.kind === "tenant") {
     return unwrap(
-      await api.DELETE("/api/admin/v1/tenants/{slug}/branding/logo", { params: { path: { slug: CONSOLE_TENANT } } }),
+      await api.DELETE("/api/admin/v1/tenants/{slug}/branding/logo", { params: { path: { slug: scope.tenant } } }),
     );
   }
   return unwrap(
     await api.DELETE("/api/admin/v1/tenants/{slug}/clients/{client_id}/branding/logo", {
-      params: { path: { slug: CONSOLE_TENANT, client_id: scope.clientId } },
+      params: { path: { slug: scope.tenant, client_id: scope.clientId } },
     }),
   );
 }
@@ -596,12 +596,12 @@ export function ThemeEditor({ scope, view: initialView }: ThemeEditorProps) {
         queryFn: async () => {
           if (scope.kind === "tenant") {
             return unwrap(
-              await api.GET("/api/admin/v1/tenants/{slug}/branding", { params: { path: { slug: CONSOLE_TENANT } } }),
+              await api.GET("/api/admin/v1/tenants/{slug}/branding", { params: { path: { slug: scope.tenant } } }),
             );
           }
           return unwrap(
             await api.GET("/api/admin/v1/tenants/{slug}/clients/{client_id}/branding", {
-              params: { path: { slug: CONSOLE_TENANT, client_id: scope.clientId } },
+              params: { path: { slug: scope.tenant, client_id: scope.clientId } },
             }),
           );
         },

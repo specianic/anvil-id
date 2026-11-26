@@ -3,7 +3,7 @@
 // superseded drafts are ignored (request counter + abort). The preview page is the only page of
 // anvilid that may be framed, and only by the same origin (frame-ancestors 'self').
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError, CONSOLE_TENANT, api, unwrap } from "@/api/client";
+import { ApiError, api, unwrap } from "@/api/client";
 import type { components } from "@/api/schema";
 import { ProblemAlert } from "@/components/ProblemAlert";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -14,7 +14,7 @@ export type BrandingPreview = components["schemas"]["BrandingPreview"];
 export type ThemeWarning = components["schemas"]["ThemeWarningDto"];
 
 /** Which branding is edited: the tenant's own, or one client's (overrides the tenant per field). */
-export type BrandingScope = { kind: "tenant" } | { kind: "client"; clientId: string };
+export type BrandingScope = { kind: "tenant"; tenant: string } | { kind: "client"; tenant: string; clientId: string };
 
 /** Debounce between the last edit and the preview request. */
 export const PREVIEW_DEBOUNCE_MS = 300;
@@ -24,8 +24,8 @@ const EXPIRY_MARGIN_MS = 15_000;
 
 export function brandingQueryKey(scope: BrandingScope) {
   return scope.kind === "tenant"
-    ? (["branding", CONSOLE_TENANT, "tenant"] as const)
-    : (["branding", CONSOLE_TENANT, "client", scope.clientId] as const);
+    ? (["branding", scope.tenant, "tenant"] as const)
+    : (["branding", scope.tenant, "client", scope.clientId] as const);
 }
 
 /** Store the scope's draft and get a 15-minute preview URL and token. */
@@ -33,7 +33,7 @@ export async function postPreview(scope: BrandingScope, body: PutBranding, signa
   if (scope.kind === "tenant") {
     return unwrap(
       await api.POST("/api/admin/v1/tenants/{slug}/branding/preview", {
-        params: { path: { slug: CONSOLE_TENANT } },
+        params: { path: { slug: scope.tenant } },
         body,
         signal,
       }),
@@ -41,7 +41,7 @@ export async function postPreview(scope: BrandingScope, body: PutBranding, signa
   }
   return unwrap(
     await api.POST("/api/admin/v1/tenants/{slug}/clients/{client_id}/branding/preview", {
-      params: { path: { slug: CONSOLE_TENANT, client_id: scope.clientId } },
+      params: { path: { slug: scope.tenant, client_id: scope.clientId } },
       body,
       signal,
     }),
@@ -53,14 +53,14 @@ export async function postPublish(scope: BrandingScope, token: string) {
   if (scope.kind === "tenant") {
     return unwrap(
       await api.POST("/api/admin/v1/tenants/{slug}/branding/publish", {
-        params: { path: { slug: CONSOLE_TENANT } },
+        params: { path: { slug: scope.tenant } },
         body: { token },
       }),
     );
   }
   return unwrap(
     await api.POST("/api/admin/v1/tenants/{slug}/clients/{client_id}/branding/publish", {
-      params: { path: { slug: CONSOLE_TENANT, client_id: scope.clientId } },
+      params: { path: { slug: scope.tenant, client_id: scope.clientId } },
       body: { token },
     }),
   );

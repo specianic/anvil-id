@@ -2,16 +2,18 @@ import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { useAuth } from "@/auth/AuthProvider";
 import { Button } from "@/components/ui/button";
+import { lastTenant, useOptionalTenant } from "@/lib/tenant";
 
+// Tenant-scoped pages; the tenant comes from the route (or the last used one on the tenant list pages).
 const NAV = [
-  { to: "/users", label: "Users" },
-  { to: "/clients", label: "Clients" },
-  { to: "/connections", label: "Connections" },
-  { to: "/sessions", label: "Sessions" },
-  { to: "/audit", label: "Audit log" },
-  { to: "/email", label: "Email" },
-  { to: "/branding", label: "Branding" },
-  { to: "/settings", label: "Login settings" },
+  { to: "/t/$tenant/users", label: "Users" },
+  { to: "/t/$tenant/clients", label: "Clients" },
+  { to: "/t/$tenant/connections", label: "Connections" },
+  { to: "/t/$tenant/sessions", label: "Sessions" },
+  { to: "/t/$tenant/audit", label: "Audit log" },
+  { to: "/t/$tenant/email", label: "Email" },
+  { to: "/t/$tenant/branding", label: "Branding" },
+  { to: "/t/$tenant/settings", label: "Login settings" },
 ] as const;
 
 const focusRing = "focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none";
@@ -19,6 +21,7 @@ const focusRing = "focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-vis
 export function AppShell({ children }: { children: ReactNode }) {
   const { user, signOut } = useAuth();
   const who = user.profile.email ?? user.profile.preferred_username ?? user.profile.sub;
+  const tenant = useOptionalTenant() ?? lastTenant();
 
   return (
     <div className="min-h-screen">
@@ -37,6 +40,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <li key={item.to}>
                   <Link
                     to={item.to}
+                    params={{ tenant }}
                     className={`text-muted-foreground hover:text-foreground rounded-md px-3 py-1.5 text-sm ${focusRing}`}
                     activeProps={{ className: "bg-accent text-foreground", "aria-current": "page" }}
                   >

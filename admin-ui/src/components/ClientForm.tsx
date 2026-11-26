@@ -1,7 +1,8 @@
 // Create/edit form for OAuth clients, shared by /clients/new and /clients/$clientId.
 import { useQuery } from "@tanstack/react-query";
 import { type FormEvent, useState } from "react";
-import { ApiError, CONSOLE_TENANT, api, unwrap } from "@/api/client";
+import { ApiError, api, unwrap } from "@/api/client";
+import { useTenant } from "@/lib/tenant";
 import type { components } from "@/api/schema";
 import { ProblemAlert } from "@/components/ProblemAlert";
 import {
@@ -202,10 +203,11 @@ const MFA_OPTIONS: readonly { value: MfaPolicy | "inherit"; label: string }[] = 
 
 /** The tenant's enabled ID-token signing algorithms (RS256 first). */
 function useSigningAlgs(): string[] {
+  const tenant = useTenant();
   const query = useQuery({
-    queryKey: ["tenant", CONSOLE_TENANT],
+    queryKey: ["tenant", tenant],
     queryFn: async ({ signal }) =>
-      unwrap(await api.GET("/api/admin/v1/tenants/{slug}", { params: { path: { slug: CONSOLE_TENANT } }, signal })),
+      unwrap(await api.GET("/api/admin/v1/tenants/{slug}", { params: { path: { slug: tenant } }, signal })),
   });
   return query.data?.settings.signing_algs ?? ["RS256"];
 }
