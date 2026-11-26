@@ -478,6 +478,39 @@ mod tests {
         assert!(serde_json::from_str::<ClientSection>(&unknown).is_err());
     }
 
+    // Compatibility policy (docs/COMPATIBILITY.md): version 1 is the only document version
+    // in 1.x; another version or a missing one is refused, never guessed.
+    #[test]
+    fn config_doc_version_1_accepted() {
+        let d: TenantConfigDocument = serde_json::from_str(minimal()).unwrap();
+        assert_eq!(d.version, TENANT_CONFIG_VERSION);
+        assert_eq!(TENANT_CONFIG_VERSION, 1);
+        d.check_header().unwrap();
+    }
+
+    #[test]
+    fn config_doc_unknown_version_refused() {
+        for v in ["0", "2", "99"] {
+            let doc = minimal().replace("\"version\":1", &format!("\"version\":{v}"));
+            let d: TenantConfigDocument = serde_json::from_str(&doc).unwrap();
+            match d.check_header() {
+                Err(CoreError::Validation { field, message }) => {
+                    assert_eq!(field, "version");
+                    assert!(
+                        message.contains(&format!("unsupported document version {v}")),
+                        "{message}"
+                    );
+                }
+                other => panic!("version {v} accepted: {other:?}"),
+            }
+        }
+        let missing = minimal().replace("\"version\":1,", "");
+        let err = serde_json::from_str::<TenantConfigDocument>(&missing).unwrap_err();
+        assert!(err.to_string().contains("missing field `version`"), "{err}");
+        let negative = minimal().replace("\"version\":1", "\"version\":-1");
+        assert!(serde_json::from_str::<TenantConfigDocument>(&negative).is_err());
+    }
+
     #[test]
     fn plan_is_empty() {
         let mut p = ConfigPlan::default();
