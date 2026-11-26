@@ -14,9 +14,10 @@ use anvil_core::model::{
     ConsentMode as CoreConsentMode, CredentialKind as CoreCredentialKind, CredentialSummary,
     DEFAULT_SIGNING_ALG, DcrPolicy as CoreDcrPolicy, DcrSettings as CoreDcrSettings,
     EmailKind as CoreEmailKind, EndpointOverrides as CoreEndpointOverrides,
-    GrantType as CoreGrantType, MfaPolicy as CoreMfaPolicy, OAuth2Config as CoreOAuth2Config,
-    OidcConfig as CoreOidcConfig, Page, RegistrationMode as CoreRegistrationMode,
-    SmtpTls as CoreSmtpTls, SocialConfig as CoreSocialConfig, SocialProvider as CoreSocialProvider,
+    GrantType as CoreGrantType, KeyState as CoreKeyState, MfaPolicy as CoreMfaPolicy,
+    OAuth2Config as CoreOAuth2Config, OidcConfig as CoreOidcConfig, Page,
+    RegistrationMode as CoreRegistrationMode, SigningKey as CoreSigningKey, SmtpTls as CoreSmtpTls,
+    SocialConfig as CoreSocialConfig, SocialProvider as CoreSocialProvider,
     StandardClaims as CoreStandardClaims, Tenant, TenantSettings as CoreTenantSettings,
     TokenFormat as CoreTokenFormat, User, UserStatus as CoreUserStatus,
 };
@@ -2158,4 +2159,89 @@ impl std::fmt::Debug for PutConnectionSecret {
             )
             .finish()
     }
+}
+
+wire_enum!(
+    /// Lifecycle state of a signing key: `next` (published in the JWKS, not yet signing),
+    /// `active` (signs, one per algorithm) or `retired` (published until `expires_at`).
+    KeyState => CoreKeyState { Next, Active, Retired }
+);
+
+/// A signing algorithm that a tenant key can use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub enum SigningAlg {
+    RS256,
+    ES256,
+    Ed25519,
+}
+
+impl From<SigningAlg> for anvil_jose::keys::Alg {
+    fn from(a: SigningAlg) -> Self {
+        match a {
+            SigningAlg::RS256 => Self::RS256,
+            SigningAlg::ES256 => Self::ES256,
+            SigningAlg::Ed25519 => Self::Ed25519,
+        }
+    }
+}
+
+/// A signing key of a tenant: identification, lifecycle and timestamps only. The private key
+/// (sealed or not) and the JWK are never part of this view; the public keys are served by the
+/// tenant's `/jwks`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct KeyView {
+    /// The JWS `kid`.
+    pub kid: String,
+    /// The JWS `alg` (`RS256`, `ES256`, `Ed25519`).
+    pub alg: String,
+    pub state: KeyState,
+    #[schema(format = DateTime)]
+    pub created_at: String,
+    /// When the key started signing (absent while `next`).
+    #[schema(format = DateTime)]
+    pub activated_at: Option<String>,
+    #[schema(format = DateTime)]
+    pub retired_at: Option<String>,
+    /// When a retired key leaves the JWKS.
+    #[schema(format = DateTime)]
+    pub expires_at: Option<String>,
+}
+
+impl From<CoreSigningKey> for KeyView {
+    fn from(k: CoreSigningKey) -> Self {
+        Self {
+            kid: k.kid,
+            alg: k.alg,
+            state: k.state.into(),
+            created_at: ts(k.created_at),
+            activated_at: k.activated_at.map(ts),
+            retired_at: k.retired_at.map(ts),
+            expires_at: k.expires_at.map(ts),
+        }
+    }
+}
+
+/// Every signing key of a tenant, newest first.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct KeyList {
+    pub items: Vec<KeyView>,
+}
+
+/// Body of `POST /tenants/{slug}/keys/rotate`.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RotateKeyRequest {
+    /// The algorithm to rotate; it must be enabled for the tenant.
+    pub alg: SigningAlg,
+    /// `false` (default): publish a next key now; the scheduled job activates it after the
+    /// prepublish period. `true` (key compromise): activate a new key at once and drop the old
+    /// one from the JWKS, so tokens it signed stop verifying.
+    #[serde(default)]
+    pub immediate: bool,
+}
+
+/// Result of a rotation: the kid of the key that signs next.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RotateKeyResponse {
+    pub kid: String,
 }

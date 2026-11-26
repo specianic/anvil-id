@@ -4232,6 +4232,194 @@
         ]
       }
     },
+    "/api/admin/v1/tenants/{slug}/keys": {
+      "get": {
+        "tags": [
+          "keys"
+        ],
+        "summary": "List the signing keys of a tenant (never any private key material).",
+        "operationId": "listKeys",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every signing key of the tenant, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:settings:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:settings:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/keys/rotate": {
+      "post": {
+        "tags": [
+          "keys"
+        ],
+        "summary": "Rotate a signing key of a tenant. Without `immediate`, a next key is published now and the\nscheduled job activates it after the prepublish period (an existing next key is kept). With\n`immediate` (key compromise), a new key signs at once and the old one leaves the JWKS, so\ntokens it signed stop verifying.",
+        "operationId": "rotateKey",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotateKeyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The kid of the key that signs next",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RotateKeyResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The active key changed during rotation; retry",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The algorithm is not enabled for the tenant",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:settings:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
     "/api/admin/v1/tenants/{slug}/roles": {
       "get": {
         "tags": [
@@ -9407,6 +9595,80 @@
           }
         }
       },
+      "KeyList": {
+        "type": "object",
+        "description": "Every signing key of a tenant, newest first.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KeyView"
+            }
+          }
+        }
+      },
+      "KeyState": {
+        "type": "string",
+        "description": "Lifecycle state of a signing key: `next` (published in the JWKS, not yet signing),\n`active` (signs, one per algorithm) or `retired` (published until `expires_at`).",
+        "enum": [
+          "next",
+          "active",
+          "retired"
+        ]
+      },
+      "KeyView": {
+        "type": "object",
+        "description": "A signing key of a tenant: identification, lifecycle and timestamps only. The private key\n(sealed or not) and the JWK are never part of this view; the public keys are served by the\ntenant's `/jwks`.",
+        "required": [
+          "kid",
+          "alg",
+          "state",
+          "created_at"
+        ],
+        "properties": {
+          "activated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the key started signing (absent while `next`)."
+          },
+          "alg": {
+            "type": "string",
+            "description": "The JWS `alg` (`RS256`, `ES256`, `Ed25519`)."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When a retired key leaves the JWKS."
+          },
+          "kid": {
+            "type": "string",
+            "description": "The JWS `kid`."
+          },
+          "retired_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "state": {
+            "$ref": "#/components/schemas/KeyState"
+          }
+        }
+      },
       "MfaPolicy": {
         "type": "string",
         "description": "Whether sign-in needs a second factor: `off`, `optional` (users who enrolled one) or\n`required` (users without one enrol first). Across tenant and client the strictest wins.",
@@ -9992,6 +10254,36 @@
         },
         "additionalProperties": false
       },
+      "RotateKeyRequest": {
+        "type": "object",
+        "description": "Body of `POST /tenants/{slug}/keys/rotate`.",
+        "required": [
+          "alg"
+        ],
+        "properties": {
+          "alg": {
+            "$ref": "#/components/schemas/SigningAlg",
+            "description": "The algorithm to rotate; it must be enabled for the tenant."
+          },
+          "immediate": {
+            "type": "boolean",
+            "description": "`false` (default): publish a next key now; the scheduled job activates it after the\nprepublish period. `true` (key compromise): activate a new key at once and drop the old\none from the JWKS, so tokens it signed stop verifying."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RotateKeyResponse": {
+        "type": "object",
+        "description": "Result of a rotation: the kid of the key that signs next.",
+        "required": [
+          "kid"
+        ],
+        "properties": {
+          "kid": {
+            "type": "string"
+          }
+        }
+      },
       "SessionList": {
         "type": "object",
         "description": "A list of sessions (tenant lists are paged; a user's sessions come in one page).",
@@ -10084,6 +10376,15 @@
             "format": "uuid"
           }
         }
+      },
+      "SigningAlg": {
+        "type": "string",
+        "description": "A signing algorithm that a tenant key can use.",
+        "enum": [
+          "RS256",
+          "ES256",
+          "Ed25519"
+        ]
       },
       "SmtpSettingsView": {
         "type": "object",

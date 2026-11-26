@@ -508,6 +508,45 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/tenants/{slug}/keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the signing keys of a tenant (never any private key material). */
+        get: operations["listKeys"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/keys/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rotate a signing key of a tenant. Without `immediate`, a next key is published now and the
+         *     scheduled job activates it after the prepublish period (an existing next key is kept). With
+         *     `immediate` (key compromise), a new key signs at once and the old one leaves the JWKS, so
+         *     tokens it signed stop verifying.
+         */
+        post: operations["rotateKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/tenants/{slug}/roles": {
         parameters: {
             query?: never;
@@ -1557,6 +1596,42 @@ export interface components {
              */
             value: string;
         };
+        /** @description Every signing key of a tenant, newest first. */
+        KeyList: {
+            items: components["schemas"]["KeyView"][];
+        };
+        /**
+         * @description Lifecycle state of a signing key: `next` (published in the JWKS, not yet signing),
+         *     `active` (signs, one per algorithm) or `retired` (published until `expires_at`).
+         * @enum {string}
+         */
+        KeyState: "next" | "active" | "retired";
+        /**
+         * @description A signing key of a tenant: identification, lifecycle and timestamps only. The private key
+         *     (sealed or not) and the JWK are never part of this view; the public keys are served by the
+         *     tenant's `/jwks`.
+         */
+        KeyView: {
+            /**
+             * Format: date-time
+             * @description When the key started signing (absent while `next`).
+             */
+            activated_at?: string | null;
+            /** @description The JWS `alg` (`RS256`, `ES256`, `Ed25519`). */
+            alg: string;
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description When a retired key leaves the JWKS.
+             */
+            expires_at?: string | null;
+            /** @description The JWS `kid`. */
+            kid: string;
+            /** Format: date-time */
+            retired_at?: string | null;
+            state: components["schemas"]["KeyState"];
+        };
         /**
          * @description Whether sign-in needs a second factor: `off`, `optional` (users who enrolled one) or
          *     `required` (users without one enrol first). Across tenant and client the strictest wins.
@@ -1839,6 +1914,21 @@ export interface components {
             name?: string | null;
             permissions?: string[] | null;
         };
+        /** @description Body of `POST /tenants/{slug}/keys/rotate`. */
+        RotateKeyRequest: {
+            /** @description The algorithm to rotate; it must be enabled for the tenant. */
+            alg: components["schemas"]["SigningAlg"];
+            /**
+             * @description `false` (default): publish a next key now; the scheduled job activates it after the
+             *     prepublish period. `true` (key compromise): activate a new key at once and drop the old
+             *     one from the JWKS, so tokens it signed stop verifying.
+             */
+            immediate?: boolean;
+        };
+        /** @description Result of a rotation: the kid of the key that signs next. */
+        RotateKeyResponse: {
+            kid: string;
+        };
         /** @description A list of sessions (tenant lists are paged; a user's sessions come in one page). */
         SessionList: {
             items: components["schemas"]["SessionView"][];
@@ -1877,6 +1967,11 @@ export interface components {
             /** Format: uuid */
             user_id: string;
         };
+        /**
+         * @description A signing algorithm that a tenant key can use.
+         * @enum {string}
+         */
+        SigningAlg: "RS256" | "ES256" | "Ed25519";
         /** @description A tenant's SMTP settings. The password is never returned. */
         SmtpSettingsView: {
             from: string;
@@ -5012,6 +5107,128 @@ export interface operations {
             };
             /** @description Unknown tenant or token, or already revoked */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listKeys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every signing key of the tenant, newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeyList"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    rotateKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RotateKeyRequest"];
+            };
+        };
+        responses: {
+            /** @description The kid of the key that signs next */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RotateKeyResponse"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The active key changed during rotation; retry */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The algorithm is not enabled for the tenant */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
