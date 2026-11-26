@@ -7,14 +7,14 @@ current_phase_name: release 0 3 real world logins
 current_plan: 37
 status: executing
 stopped_at: "04-33 Task 1 checkpoint: awaiting owner real-provider checklist (approved / waive) before tagging v0.3.0 from 9c2bdd2"
-last_updated: "2026-11-26T02:38:40.491Z"
+last_updated: "2026-11-26T02:55:44.365Z"
 last_activity: 2026-11-26
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 131
-  completed_plans: 104
-  percent: 79
+  completed_plans: 105
+  percent: 80
 ---
 
 # Project State
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 **Status:** Ready to execute
 **Last Activity:** 2026-11-26
 **Last Activity Description:** 04-32 phase gate complete (430-pair security map, anvilid 0.3.0, 0.3 migrations pinned, every workflow green on 9f88363)
-**Progress:** [████████░░] 79%
+**Progress:** [████████░░] 80%
 
 Phase 4 has 37 plans (04-01 through 04-37). Every plan except 04-33 (manual real-provider checklist, then tag
 v0.3.0) has a SUMMARY. Current Plan counts plans in execution order: 04-33 is the 37th and last.
@@ -160,6 +160,7 @@ v0.3.0) has a SUMMARY. Current Plan counts plans in execution order: 04-33 is th
 | Phase 05 P03 | 80min | 2 tasks | 31 files |
 | Phase 05 P04 | 75min | 2 tasks | 60 files |
 | Phase 05 P01 | 45min | 2 tasks | 46 files |
+| Phase 05 P08 | 50min | 2 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -364,6 +365,9 @@ Recent decisions affecting current work:
 - [Phase 05]: 05-03: load harness provisions through the real setup page + admin API; load.yml dispatch-only until 05-26; median-of-3 by p99 decides perf
 - [Phase 05]: 05-04: console issuer comes from tenant discovery (TenantView has no issuer); 05-23 should expose it
 - [Phase 05]: 05-04: console tenant pages under /console/t/$tenant; old links redirect to default until 0.5
+- [Phase 05]: 05-08: Limiter KeyHasher is Arc<dyn Fn(&[u8])->[u8;32]> over canonical(LimitKey); anvilid supplies HMAC under the KEK-derived ratelimit key
+- [Phase 05]: 05-08: Redis down -> Auth check and brute_force_gate Deny{rest of 5 s breaker cool-down} (Closed) or local (Local); other classes and backoff bookkeeping use the embedded InProcessLimiter
+- [Phase 05]: 05-08: Redis-backed tests have redis in the name and are #[ignore]d; just test-redis runs them with --include-ignored (CI postgres job)
 
 ### Pending Todos
 
@@ -376,6 +380,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-26T02:38:40.489Z
-Stopped at: 04-33 Task 1 checkpoint: awaiting owner real-provider checklist (approved / waive) before tagging v0.3.0 from 9c2bdd2 (Phase 5 wave 1 in progress; 05-01, 05-03 and 05-04 complete)
+Last session: 2026-11-26T02:55:44.363Z
+Stopped at: 04-33 Task 1 checkpoint: awaiting owner real-provider checklist (approved / waive) before tagging v0.3.0 from 9c2bdd2 (Phase 5 wave 2 in progress; 05-01, 05-03, 05-04 and 05-08 complete)
 Resume file: .planning/phases/04-release-0-3-real-world-logins/04-33-PLAN.md
