@@ -38,31 +38,31 @@ created: 2026-11-26
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 7-01-01 | 01 | 1 | ADM-08 | lint/graph | `cargo deny --locked check && just deps` + cargo-tree checks | ✅ | ⬜ pending |
+| 7-01-01 | 01 | 1 | ADM-08 | lint/graph | `cargo build --workspace --all-targets --locked && just fuzz-check && cargo deny --locked check && just deps` + cargo-tree checks | ✅ | ⬜ pending |
 | 7-01-02 | 01 | 1 | ADM-08 | unit (KAT) | `cargo test -p anvil-web --lib adapters::password` | ❌ W1 creates | ⬜ pending |
 | 7-01-03 | 01 | 1 | ADM-08 | owner checkpoint | n/a: crypto exception approval | n/a | ⬜ pending |
 | 7-02-01 | 02 | 1 | ADM-08 | unit + proptest | `cargo test -p anvil-core --lib policy::password_import` | ❌ W1 creates | ⬜ pending |
 | 7-02-02 | 02 | 1 | ADM-08 | unit + fuzz build | `cargo test -p anvil-core --lib policy::password_import && just fuzz-check` | ❌ W1 creates | ⬜ pending |
-| 7-03-01 | 03 | 1 | OIDC-18, UI-05, AGT-03, ADM-08, ADM-09 | unit | `cargo test -p anvil-core --lib model:: service::admin_scope policy::webhook_event` | ✅ extend | ⬜ pending |
-| 7-03-02 | 03 | 1 | same | full + contract | `cargo test --workspace --locked && cargo test -p anvil-storage-sqlite --test contract client_new_fields` | ✅ extend | ⬜ pending |
+| 7-03-01 | 03 | 1 | OIDC-18, UI-05, AGT-03, ADM-08, ADM-09 | unit | `cargo test -p anvil-core --lib model:: service::admin_scope service::role policy::webhook_event` (incl. `role_escalation_users_write_cannot_grant_export`) | ✅ extend | ⬜ pending |
+| 7-03-02 | 03 | 1 | same | full + contract + console | `cargo test --workspace --locked && cargo test -p anvil-storage-sqlite --test contract client_new_fields && just console-check` (audit page action keys) | ✅ extend | ⬜ pending |
 | 7-04-01 | 04 | 1 | OIDC-18, UI-05, ADM-08, ADM-09 | unit + integration | `cargo test -p anvil-web --lib layers::ratelimit && cargo test -p anvil-web --test skeleton_v10` | ❌ W1 creates | ⬜ pending |
 | 7-04-02 | 04 | 1 | same | binary | `cargo test -p anvilid --test users_import_skeleton --test users_export_skeleton` | ❌ W1 creates | ⬜ pending |
 | 7-05-01 | 05 | 1 | UI-05 | unit + integration | `cargo test -p anvil-web --lib ui::flow_driver` + login/bruteforce/captcha/HRD tests | ✅ extend | ⬜ pending |
 | 7-05-02 | 05 | 1 | UI-05 | regression + grep | `cargo test -p anvil-web --locked` + single-call-site grep | ✅ | ⬜ pending |
 | 7-06-01 | 06 | 1 | SEC-08 | lint (grep) | SECURITY.md / scope / threat-model greps + no-email grep | ❌ W1 creates | ⬜ pending |
 | 7-06-02 | 06 | 1 | SEC-08 | owner checkpoint | n/a: enable private vulnerability reporting | n/a | ⬜ pending |
-| 7-07-01 | 07 | 1 | QUAL-03 | script self-test + build | `scripts/check-docs-site.sh --self-test` + scratch mdBook build + check | ❌ W1 creates | ⬜ pending |
+| 7-07-01 | 07 | 1 | QUAL-03 | script self-test + build | `scripts/check-docs-site.sh --self-test` + no `](../` links in docs/*.md + scratch mdBook build + check | ❌ W1 creates | ⬜ pending |
 | 7-07-02 | 07 | 1 | QUAL-03 | workflow lint | YAML parse + greps on docs.yml | ❌ W1 creates | ⬜ pending |
-| 7-08-01 | 08 | 2 | OIDC-18, ADM-08, ADM-09, QUAL-03 | build | `cargo build --workspace --all-targets --locked` | ✅ | ⬜ pending |
+| 7-08-01 | 08 | 2 | OIDC-18, ADM-08, ADM-09, QUAL-03 | preflight + build | 06-26 SUMMARY exists, newest migrations SQLite 0009 / Postgres 0007, then `cargo build --workspace --all-targets --locked` | ✅ | ⬜ pending |
 | 7-08-02 | 08 | 2 | same | contract | `cargo test -p anvil-storage-sqlite --test contract && scripts/check-migrations.sh && just sqlx-check crate=crates/anvil-storage-sqlite` | ❌ W2 creates par/password_profiles | ⬜ pending |
 | 7-08-03 | 08 | 2 | QUAL-03 | upgrade | `cargo test -p anvil-storage-sqlite --test upgrade` | ✅ extend | ⬜ pending |
 | 7-09-01 | 09 | 2 | ADM-08 | unit | `cargo test -p anvil-web --lib adapters::password adapters::argon2` | ✅ extend | ⬜ pending |
 | 7-09-02 | 09 | 2 | ADM-08 | regression | `cargo test -p anvil-web -p anvilid --locked` | ✅ | ⬜ pending |
 | 7-10-01 | 10 | 2 | UI-05 | unit | `cargo test -p anvil-web --lib layers::cors layers::csrf api_flows` | ✅ extend | ⬜ pending |
 | 7-10-02 | 10 | 2 | UI-05 | integration (security) + drift | `cargo test -p anvil-web --test headless_flows --test security_headless --test openapi_flows_drift` | ❌ W2 creates | ⬜ pending |
-| 7-10-03 | 10 | 2 | UI-05 | e2e | `tests/e2e/run.sh sqlite specs/headless.spec.ts` (local or CI) + tsc | ❌ W2 creates | ⬜ pending |
-| 7-11-01 | 11 | 3 | OIDC-18, ADM-08, ADM-09, QUAL-03 | contract (PG) | `cargo test -p anvil-storage-postgres --test contract` (PG14/Docker, else CI) | ✅ extend | ⬜ pending |
-| 7-11-02 | 11 | 3 | QUAL-03 | upgrade (PG) | `cargo test -p anvil-storage-postgres --test upgrade` (PG14/Docker, else CI) | ✅ extend | ⬜ pending |
+| 7-10-03 | 10 | 2 | UI-05 | e2e | tsc; then, if Docker or local Mailpit is available, `tests/e2e/run.sh sqlite specs/headless.spec.ts` (no fallback), else CI | ❌ W2 creates | ⬜ pending |
+| 7-11-01 | 11 | 3 | OIDC-18, ADM-08, ADM-09, QUAL-03 | preflight + contract (PG) | 06-26 SUMMARY exists; if `docker info` or `ANVILID_PG_LOCAL=1`: `cargo test -p anvil-storage-postgres --test contract` (no fallback), else CI | ✅ extend | ⬜ pending |
+| 7-11-02 | 11 | 3 | QUAL-03 | upgrade (PG) | if a database is available: `cargo test -p anvil-storage-postgres --test upgrade` (no fallback), else CI | ✅ extend | ⬜ pending |
 | 7-12-01 | 12 | 3 | OIDC-18, UI-05, AGT-03 | unit + integration (security) | `cargo test -p anvil-web --test security_registration --test security_cimd --test registration_dcr` | ✅ extend | ⬜ pending |
 | 7-12-02 | 12 | 3 | same | integration + binary + drift | `cargo test -p anvil-web --test admin_client_fields_v10 --test openapi_drift && cargo test -p anvilid --test tenant_config` | ❌ W3 creates | ⬜ pending |
 | 7-13-01 | 13 | 3 | OIDC-18 | unit | `cargo test -p anvil-core --lib oauth::par service::par oauth::authorize_request service::authorize` | ❌ W3 creates | ⬜ pending |
@@ -78,10 +78,10 @@ created: 2026-11-26
 | 7-17-02 | 17 | 4 | ADM-09 | integration (security) + drift | `cargo test -p anvil-web --test admin_user_export --test security_export --test openapi_drift` | ❌ W4 creates | ⬜ pending |
 | 7-18-01 | 18 | 4 | UI-05 | unit + regression | `cargo test -p anvil-core --lib service::flow service::authorize && cargo test -p anvil-web --lib ui::flow_driver` | ✅ extend | ⬜ pending |
 | 7-18-02 | 18 | 4 | UI-05 | integration (security) | `cargo test -p anvil-web --test headless_native --test security_headless --test openapi_flows_drift` | ❌ W4 creates | ⬜ pending |
-| 7-19-01 | 19 | 4 | OIDC-23 | script lint + conformance | `bash -n tests/conformance/setup.sh` + workflow parse; `tests/conformance/run.sh all` (Docker, else CI) | ✅ extend | ⬜ pending |
+| 7-19-01 | 19 | 4 | OIDC-23 | script lint + conformance | `bash -n tests/conformance/setup.sh` + workflow parse; if Docker is available, `tests/conformance/run.sh all` (no fallback), else CI | ✅ extend | ⬜ pending |
 | 7-19-02 | 19 | 4 | OIDC-23 | doc lint | greps on docs/CERTIFICATION.md (no fees, plan names present) | ❌ W4 creates | ⬜ pending |
 | 7-20-01 | 20 | 5 | ADM-08, ADM-09, OIDC-18, AGT-03, UI-05 | console check + build | `just console-check && (cd admin-ui && npm run build)` | ✅ extend | ⬜ pending |
-| 7-20-02 | 20 | 5 | same | e2e | `tests/e2e/run.sh sqlite specs/console-users-import.spec.ts specs/console-clients-v10.spec.ts` (local or CI) | ❌ W5 creates | ⬜ pending |
+| 7-20-02 | 20 | 5 | same | e2e | if Docker or local Mailpit is available, `tests/e2e/run.sh sqlite specs/console-users-import.spec.ts specs/console-clients-v10.spec.ts` (no fallback), else CI | ❌ W5 creates | ⬜ pending |
 | 7-21-01 | 21 | 5 | QUAL-03 | compat test + unit | `cargo test -p anvil-web --test api_compat && cargo test -p anvil-core --lib model::config_doc` | ❌ W5 creates | ⬜ pending |
 | 7-21-02 | 21 | 5 | QUAL-03 | doc lint | greps on COMPATIBILITY.md and UPGRADING.md | ❌ W5 creates | ⬜ pending |
 | 7-22-01 | 22 | 6 | QUAL-03, ADM-08 | owner checkpoint | n/a: vendor list for migration guides (Q12) | n/a | ⬜ pending |
@@ -89,7 +89,7 @@ created: 2026-11-26
 | 7-22-03 | 22 | 6 | QUAL-03, SEC-08 | site build + check | `scripts/check-docs-site.sh --self-test` + scratch mdBook build + check | ✅ extend | ⬜ pending |
 | 7-23-01 | 23 | 7 | all | gate | `scripts/check-security-tests.sh (+ --self-test) && scripts/check-migrations.sh && cargo test --workspace --locked` + version/pin/tick greps | ✅ extend | ⬜ pending |
 | 7-23-02 | 23 | 7 | all | owner checkpoint | n/a: push + rc tag authorization | n/a | ⬜ pending |
-| 7-23-03 | 23 | 7 | all | CI | every workflow `success` for HEAD (`gh run list ...`) | ✅ | ⬜ pending |
+| 7-23-03 | 23 | 7 | all | CI + tag precondition | every workflow `success` for HEAD (`gh run list ...`); before the rc tag, three Phase 6 tags or a recorded `Q9 waiver:` | ✅ | ⬜ pending |
 | 7-24-01 | 24 | 8 | OIDC-23 | CI evidence | conformance run `success` for the gate commit (`gh run list --commit`) | ✅ | ⬜ pending |
 | 7-24-02 | 24 | 8 | OIDC-23 | owner checkpoint | n/a: hosted-suite runs + certification submission | n/a | ⬜ pending |
 | 7-25-01 | 25 | 8 | SEC-08 | owner checkpoint | n/a: commission external review | n/a | ⬜ pending |
@@ -97,7 +97,7 @@ created: 2026-11-26
 | 7-26-01 | 26 | 9 | SEC-08 | owner checkpoint | n/a: real-IdP SAML interop checklist | n/a | ⬜ pending |
 | 7-26-02 | 26 | 9 | SEC-08 | owner checkpoint | n/a: SAML flag + chrono decision | n/a | ⬜ pending |
 | 7-27-01 | 27 | 10 | all | owner checkpoint | n/a: 1.0.0 sign-off | n/a | ⬜ pending |
-| 7-27-02 | 27 | 10 | all | release gate | version/pin/tick greps + every workflow `success` for HEAD | ✅ | ⬜ pending |
+| 7-27-02 | 27 | 10 | all | release gate | v0.3.0/v0.4.0/v1.0.0-beta.1 present or `Q9 waiver:` recorded; version/pin/tick greps; every workflow `success` for HEAD | ✅ | ⬜ pending |
 | 7-27-03 | 27 | 10 | all | release verify | `gh release view v1.0.0` (not prerelease, assets) + STATE record | ✅ | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
