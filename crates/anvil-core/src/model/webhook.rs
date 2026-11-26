@@ -321,7 +321,8 @@ mod tests {
             updated_at: now,
         };
         let d = format!("{e:?}");
-        assert!(!d.contains("171") && !d.contains("205"), "{d}");
+        // Leaked secrets would print as byte lists; bare digits can occur in random ids.
+        assert!(!d.contains("171, 171") && !d.contains("205, 205"), "{d}");
         assert!(d.contains("<redacted>"));
     }
 }

@@ -163,6 +163,7 @@ mod tests {
         };
         let dbg = format!("{t:?}");
         assert!(dbg.contains("<redacted>"));
-        assert!(!dbg.contains("171"), "{dbg}");
+        // A leaked seed would print as the byte list `[171, 171, ...]`; a bare "171" can occur in random ids.
+        assert!(!dbg.contains("171, 171"), "{dbg}");
     }
 }
