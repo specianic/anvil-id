@@ -265,3 +265,41 @@ pub async fn audit_purge_before_deletes_only_older(s: &TestStorage) {
             .is_empty()
     );
 }
+
+pub async fn audit_append_without_webhook_enqueues_nothing(s: &TestStorage) {
+    use anvil_core::model::{PageRequest, WebhookEventType};
+
+    let tenant = seed_tenant(s).await;
+    let endpoint = seed_endpoint(
+        s,
+        tenant,
+        &[WebhookEventType::UserCreated, WebhookEventType::UserUpdated],
+    )
+    .await;
+    let events = seed_events(s, tenant, 4, now_ms() - Duration::minutes(1)).await;
+    assert!(events.iter().all(|e| e.webhook.is_none()));
+    let page = s
+        .storage
+        .audit()
+        .query(tenant, &query(10))
+        .await
+        .expect("query");
+    assert_eq!(page.items.len(), 4, "events are stored as before");
+    assert!(
+        s.storage
+            .webhooks()
+            .deliveries(
+                tenant,
+                endpoint.id,
+                PageRequest {
+                    after: None,
+                    limit: 10
+                }
+            )
+            .await
+            .expect("deliveries")
+            .items
+            .is_empty(),
+        "an event without a webhook payload enqueues nothing"
+    );
+}

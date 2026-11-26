@@ -284,3 +284,130 @@ pub async fn complete_setup_expired_invalid(s: &TestStorage) {
         "an unknown token is invalid"
     );
 }
+
+pub async fn install_creates_system_administrator_role(s: &TestStorage) {
+    use anvil_core::model::SYSTEM_ADMIN_ROLE;
+
+    let (system, default, _plan) = seed_install(s).await;
+    let role = s
+        .storage
+        .roles()
+        .get_by_name(system, SYSTEM_ADMIN_ROLE)
+        .await
+        .expect("get_by_name")
+        .expect("install creates the administrator role");
+    assert_eq!(role.tenant_id, system);
+    assert_eq!(role.org_id, None);
+    assert_eq!(role.permissions, vec!["admin:write".to_owned()]);
+    assert_eq!(
+        s.storage
+            .roles()
+            .get_by_name(default, SYSTEM_ADMIN_ROLE)
+            .await
+            .expect("get_by_name"),
+        None,
+        "only the system tenant gets it"
+    );
+    assert_eq!(
+        s.storage
+            .roles()
+            .holders_of_permission(system, "admin:write")
+            .await
+            .expect("holders"),
+        0,
+        "nobody holds it before setup completes"
+    );
+}
+
+pub async fn complete_setup_assigns_administrator_role(s: &TestStorage) {
+    use anvil_core::model::SYSTEM_ADMIN_ROLE;
+
+    let (system, default, plan) = seed_install(s).await;
+    let setup = s.storage.setup();
+    let roles = s.storage.roles();
+
+    // The first administrator (install-time setup URL).
+    let first = new_user();
+    let outcome = setup
+        .complete_setup(
+            &plan.setup_token.token_hash,
+            now_ms(),
+            system,
+            &first,
+            &new_password(),
+            default,
+            &new_client(),
+        )
+        .await
+        .expect("complete_setup");
+    assert!(matches!(outcome, SetupOutcome::Completed { .. }));
+    let held: Vec<String> = roles
+        .roles_for_user(system, first.id)
+        .await
+        .expect("roles")
+        .into_iter()
+        .map(|r| r.name)
+        .collect();
+    assert_eq!(held, vec![SYSTEM_ADMIN_ROLE.to_owned()]);
+
+    // A later `admin setup-url` token creates another administrator with the role.
+    let token = new_setup_token(Duration::hours(1));
+    setup
+        .create_setup_token(&token)
+        .await
+        .expect("create_setup_token");
+    let second = new_user();
+    let outcome = setup
+        .complete_setup(
+            &token.token_hash,
+            now_ms(),
+            system,
+            &second,
+            &new_password(),
+            default,
+            &new_client(),
+        )
+        .await
+        .expect("complete_setup");
+    assert!(matches!(outcome, SetupOutcome::Completed { .. }));
+    assert_eq!(
+        roles
+            .roles_for_user(system, second.id)
+            .await
+            .expect("roles")
+            .len(),
+        1
+    );
+    assert_eq!(
+        roles
+            .holders_of_permission(system, "admin:write")
+            .await
+            .expect("holders"),
+        2
+    );
+
+    // An invalid token assigns nothing to anybody.
+    let nobody = new_user();
+    assert_eq!(
+        setup
+            .complete_setup(
+                &token.token_hash,
+                now_ms(),
+                system,
+                &nobody,
+                &new_password(),
+                default,
+                &new_client(),
+            )
+            .await
+            .expect("complete_setup"),
+        SetupOutcome::InvalidToken
+    );
+    assert!(
+        roles
+            .roles_for_user(system, nobody.id)
+            .await
+            .expect("roles")
+            .is_empty()
+    );
+}

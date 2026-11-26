@@ -21,6 +21,7 @@ use std::sync::Arc;
 use anvil_core::ports::Storage;
 
 mod access_tokens;
+mod attributes;
 mod audit;
 mod branding;
 mod clients;
@@ -35,12 +36,16 @@ mod keys;
 mod logout;
 mod mail_settings;
 mod outbox;
+mod registration;
+mod roles;
 mod sessions;
 mod setup;
 mod tenants;
 mod users;
+mod webhooks;
 
 pub use access_tokens::*;
+pub use attributes::*;
 pub use audit::*;
 pub use branding::*;
 pub use clients::*;
@@ -55,10 +60,13 @@ pub use keys::*;
 pub use logout::*;
 pub use mail_settings::*;
 pub use outbox::*;
+pub use registration::*;
+pub use roles::*;
 pub use sessions::*;
 pub use setup::*;
 pub use tenants::*;
 pub use users::*;
+pub use webhooks::*;
 
 /// A storage backend under test.
 pub struct TestStorage {
@@ -265,6 +273,50 @@ macro_rules! storage_contract_tests {
             delivery_claim_leases_due_rows,
             delivery_claim_concurrent_each_row_once,
             delivery_complete_semantics,
+            // ---- Phase 5 (plan 05-02); backends implement them in 05-06 / 05-07 and fail with
+            // StorageError::Unsupported from their TRANSITIONAL shims until then ----
+            // roles
+            role_create_get_update_delete,
+            role_list_in_name_order,
+            role_name_conflict_per_tenant,
+            role_assign_idempotent_and_unassign,
+            role_assign_refuses_foreign_tenant,
+            role_delete_cascades_assignments,
+            role_users_with_role_paginates,
+            role_holders_of_permission_counts_active_users,
+            roles_isolated_by_tenant,
+            // custom attributes
+            attribute_upsert_list_get_delete,
+            attribute_user_values_round_trip,
+            attribute_delete_keeps_user_values,
+            attributes_isolated_by_tenant,
+            // webhooks: endpoints, enqueue in append, leased delivery queue
+            webhook_endpoint_crud_and_name_conflict,
+            webhook_rotate_secret_keeps_previous_with_expiry,
+            webhook_disable_and_reenable_endpoint,
+            webhook_append_enqueues_subscribed_endpoints,
+            webhook_claim_leases_due_rows,
+            webhook_claim_concurrent_each_row_once,
+            webhook_complete_semantics,
+            webhook_deliveries_listing_newest_first,
+            webhook_redeliver_and_enqueue_test,
+            webhook_delete_endpoint_cascades_deliveries,
+            webhooks_isolated_by_tenant,
+            audit_append_without_webhook_enqueues_nothing,
+            // dynamic client registration and CIMD clients
+            iat_create_list_revoke,
+            iat_consume_decrements_and_stops_at_zero,
+            iat_expired_or_revoked_not_consumed,
+            iat_single_use_concurrent_single_winner,
+            count_clients_by_source,
+            client_upsert_cimd_inserts_then_replaces,
+            client_upsert_cimd_never_overwrites_registered_clients,
+            client_registration_token_lookup_and_rotation,
+            // consent resources
+            consent_resources_round_trip_and_merge,
+            // setup: the system administrator role
+            install_creates_system_administrator_role,
+            complete_setup_assigns_administrator_role,
         );
     };
     (@each $factory:path; $($name:ident),+ $(,)?) => {

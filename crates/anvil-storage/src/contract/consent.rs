@@ -228,3 +228,85 @@ pub async fn consent_isolated_by_tenant(s: &TestStorage) {
             .is_some()
     );
 }
+
+fn resources(g: &ConsentGrant) -> Vec<&str> {
+    g.resources.iter().map(String::as_str).collect()
+}
+
+pub async fn consent_resources_round_trip_and_merge(s: &TestStorage) {
+    let ctx = seed_grant_ctx(s).await;
+    let grants = s.storage.grants();
+    let client_id = ctx.client.client_id.as_str();
+
+    let mut first = new_consent(ctx.user.id, client_id, &["openid"]);
+    first.resources = vec![
+        "https://b.example".to_owned(),
+        "https://a.example".to_owned(),
+    ];
+    let t1 = now_ms();
+    let created = grants
+        .upsert_consent(ctx.tenant, &first, t1)
+        .await
+        .expect("upsert");
+    assert_eq!(
+        resources(&created),
+        vec!["https://a.example", "https://b.example"],
+        "stored sorted"
+    );
+
+    let mut second = new_consent(ctx.user.id, client_id, &["openid"]);
+    second.resources = vec![
+        "https://c.example".to_owned(),
+        "https://a.example".to_owned(),
+    ];
+    let merged = grants
+        .upsert_consent(ctx.tenant, &second, t1 + Duration::seconds(1))
+        .await
+        .expect("upsert");
+    assert_eq!(merged.id, first.id);
+    assert_eq!(
+        resources(&merged),
+        vec![
+            "https://a.example",
+            "https://b.example",
+            "https://c.example"
+        ],
+        "union, sorted, de-duplicated"
+    );
+    assert_eq!(
+        grants
+            .consent(ctx.tenant, ctx.user.id, client_id)
+            .await
+            .expect("consent"),
+        Some(merged)
+    );
+
+    // A scope-only consent keeps the stored resources.
+    let third = new_consent(ctx.user.id, client_id, &["profile"]);
+    let kept = grants
+        .upsert_consent(ctx.tenant, &third, t1 + Duration::seconds(2))
+        .await
+        .expect("upsert");
+    assert_eq!(resources(&kept).len(), 3);
+
+    // Revoked, then re-granted: exactly the new resources.
+    assert!(
+        grants
+            .revoke_consent(
+                ctx.tenant,
+                ctx.user.id,
+                client_id,
+                t1 + Duration::seconds(3)
+            )
+            .await
+            .expect("revoke")
+    );
+    let mut fresh = new_consent(ctx.user.id, client_id, &["openid"]);
+    fresh.resources = vec!["https://z.example".to_owned()];
+    let reactivated = grants
+        .upsert_consent(ctx.tenant, &fresh, t1 + Duration::seconds(4))
+        .await
+        .expect("upsert");
+    assert_eq!(resources(&reactivated), vec!["https://z.example"]);
+    assert_eq!(reactivated.revoked_at, None);
+}

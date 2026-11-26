@@ -23,6 +23,11 @@ use anvil_core::model::{
     TokenFormat, User, UserId, UserStatus, truncate_to_ms,
 };
 use anvil_core::model::{
+    AttributeDefinition, ClaimRule, ClientSource, InitialAccessToken, InitialAccessTokenId,
+    NewInitialAccessToken, NewRole, NewWebhookEndpoint, Role, RoleId, TokenTarget, WebhookEndpoint,
+    WebhookEndpointId, WebhookEvent, WebhookEventType,
+};
+use anvil_core::model::{
     BrandingDraft, BrandingUpdate, ConnectionConfig, ConnectionId, IdentityLinkId, LogoChange,
     LogoutDelivery, NewConnection, NewIdentityLink, OidcConfig, SocialConfig, SocialProvider,
     ThemeColors, ThemeTokens,
@@ -1026,4 +1031,154 @@ pub async fn deliveries(s: &TestStorage, tenant: TenantId, client_id: &str) -> V
         .expect("deliveries_for_client");
     d.sort_by(|a, b| a.sid.cmp(&b.sid));
     d
+}
+
+// ---------------------------------------------------------------------------------------------
+// Phase 5: roles, attributes, webhooks, dynamic client registration
+
+/// A tenant-level role with a unique name.
+pub fn new_role(permissions: &[&str]) -> NewRole {
+    NewRole {
+        id: RoleId::new_v7(),
+        org_id: None,
+        name: format!("role-{}", short()),
+        description: "Contract role".to_owned(),
+        permissions: permissions.iter().map(|p| (*p).to_owned()).collect(),
+        created_at: now_ms(),
+    }
+}
+
+/// The role record `RoleRepo::create` must return.
+pub fn expected_role(tenant: TenantId, r: &NewRole) -> Role {
+    Role {
+        id: r.id,
+        tenant_id: tenant,
+        org_id: r.org_id,
+        name: r.name.clone(),
+        description: r.description.clone(),
+        permissions: r.permissions.clone(),
+        created_at: r.created_at,
+        updated_at: r.created_at,
+    }
+}
+
+/// Creates a role.
+pub async fn seed_role(s: &TestStorage, tenant: TenantId, permissions: &[&str]) -> Role {
+    s.storage
+        .roles()
+        .create(tenant, &new_role(permissions))
+        .await
+        .expect("creating a seed role must succeed")
+}
+
+/// An attribute definition with every optional field populated.
+pub fn new_attribute(name: &str, position: u32) -> AttributeDefinition {
+    AttributeDefinition {
+        name: name.to_owned(),
+        schema: serde_json::json!({"type": "string", "maxLength": 64}),
+        required: true,
+        user_editable: true,
+        claim: Some(ClaimRule {
+            claim: format!("{name}_claim"),
+            tokens: vec![TokenTarget::IdToken, TokenTarget::Userinfo],
+            scope: Some("profile".to_owned()),
+        }),
+        position,
+    }
+}
+
+/// An enabled webhook endpoint with a unique name, subscribed to `events`.
+pub fn new_endpoint(events: &[WebhookEventType]) -> NewWebhookEndpoint {
+    let tag = short();
+    NewWebhookEndpoint {
+        id: WebhookEndpointId::new_v7(),
+        name: format!("hook-{tag}"),
+        url: format!("https://hooks-{tag}.example.test/anvil"),
+        events: events.to_vec(),
+        enabled: true,
+        secret_enc: Uuid::now_v7().as_bytes().repeat(3),
+        created_at: now_ms(),
+    }
+}
+
+/// The endpoint record `WebhookRepo::create_endpoint` must return.
+pub fn expected_endpoint(tenant: TenantId, e: &NewWebhookEndpoint) -> WebhookEndpoint {
+    WebhookEndpoint {
+        id: e.id,
+        tenant_id: tenant,
+        name: e.name.clone(),
+        url: e.url.clone(),
+        events: e.events.clone(),
+        enabled: e.enabled,
+        secret_enc: e.secret_enc.clone(),
+        previous_secret_enc: None,
+        previous_secret_expires_at: None,
+        disabled_reason: None,
+        created_at: e.created_at,
+        updated_at: e.created_at,
+    }
+}
+
+/// Creates an endpoint.
+pub async fn seed_endpoint(
+    s: &TestStorage,
+    tenant: TenantId,
+    events: &[WebhookEventType],
+) -> WebhookEndpoint {
+    s.storage
+        .webhooks()
+        .create_endpoint(tenant, &new_endpoint(events))
+        .await
+        .expect("creating a seed endpoint must succeed")
+}
+
+/// An ids-only webhook payload of `event_type` with a unique subject id.
+pub fn webhook_event(event_type: WebhookEventType) -> WebhookEvent {
+    WebhookEvent {
+        event_type,
+        payload_json: format!(
+            r#"{{"type":"{}","data":{{"user_id":"{}"}}}}"#,
+            event_type.as_str(),
+            UserId::new_v7().0
+        ),
+    }
+}
+
+/// An initial access token with `uses` remaining (None = unlimited), expiring in `expires_in`.
+pub fn new_iat(uses: Option<u32>, expires_in: Option<Duration>) -> NewInitialAccessToken {
+    let now = now_ms();
+    NewInitialAccessToken {
+        id: InitialAccessTokenId::new_v7(),
+        description: format!("iat {}", short()),
+        token_hash: unique_hash(),
+        expires_at: expires_in.map(|d| now + d),
+        uses_remaining: uses,
+        created_at: now,
+    }
+}
+
+/// The record `RegistrationRepo::create_iat` must return.
+pub fn expected_iat(tenant: TenantId, t: &NewInitialAccessToken) -> InitialAccessToken {
+    InitialAccessToken {
+        id: t.id,
+        tenant_id: tenant,
+        description: t.description.clone(),
+        token_hash: t.token_hash,
+        expires_at: t.expires_at,
+        uses_remaining: t.uses_remaining,
+        created_at: t.created_at,
+        revoked_at: None,
+    }
+}
+
+/// A public CIMD client whose `client_id` is a unique https URL.
+pub fn new_cimd_client() -> NewClient {
+    let mut c = new_client();
+    c.client_id = format!("https://mcp-{}.example.test/client.json", short());
+    c.client_type = ClientType::Public;
+    c.auth_method = ClientAuthMethod::None;
+    c.secret_hash = None;
+    c.jwks = None;
+    c.registration_source = ClientSource::Cimd;
+    c
 }

@@ -518,3 +518,228 @@ pub async fn client_phase5_fields_never_dropped(s: &TestStorage) {
         Err(e) => panic!("audit append: unexpected error {e:?}"),
     }
 }
+
+pub async fn client_upsert_cimd_inserts_then_replaces(s: &TestStorage) {
+    use anvil_core::model::ClientSource;
+
+    let tenant = seed_tenant(s).await;
+    let clients = s.storage.clients();
+    let t1 = now_ms();
+    let expires1 = t1 + Duration::hours(1);
+    // Whatever the input says, the stored row is a CIMD client with the given expiry.
+    let mut new = new_cimd_client();
+    new.registration_source = ClientSource::Static;
+    new.metadata_expires_at = None;
+    let inserted = clients
+        .upsert_cimd(tenant, &new, expires1, t1)
+        .await
+        .expect("upsert_cimd");
+    let mut expected = expected_client(tenant, &new);
+    expected.registration_source = ClientSource::Cimd;
+    expected.metadata_expires_at = Some(expires1);
+    expected.created_at = t1;
+    expected.updated_at = t1;
+    assert_eq!(inserted, expected);
+    assert_eq!(
+        clients.get(tenant, &new.client_id).await.expect("get"),
+        Some(inserted.clone())
+    );
+
+    // A refreshed document replaces the metadata and keeps the row identity.
+    let t2 = t1 + Duration::minutes(10);
+    let expires2 = t2 + Duration::hours(2);
+    let mut refreshed = new_cimd_client();
+    refreshed.client_id = new.client_id.clone();
+    refreshed.name = "Renamed MCP client".to_owned();
+    refreshed.redirect_uris = vec!["http://127.0.0.1:33418/callback".to_owned()];
+    refreshed.scopes = vec!["openid".to_owned()];
+    let replaced = clients
+        .upsert_cimd(tenant, &refreshed, expires2, t2)
+        .await
+        .expect("upsert_cimd");
+    assert_eq!(replaced.id, inserted.id, "the row id is kept");
+    assert_eq!(replaced.created_at, inserted.created_at);
+    assert_eq!(replaced.updated_at, t2);
+    assert_eq!(replaced.name, refreshed.name);
+    assert_eq!(replaced.redirect_uris, refreshed.redirect_uris);
+    assert_eq!(replaced.scopes, refreshed.scopes);
+    assert_eq!(replaced.registration_source, ClientSource::Cimd);
+    assert_eq!(replaced.metadata_expires_at, Some(expires2));
+    assert_eq!(
+        clients.get(tenant, &new.client_id).await.expect("get"),
+        Some(replaced)
+    );
+    let other = seed_tenant(s).await;
+    assert_eq!(
+        clients.get(other, &new.client_id).await.expect("get"),
+        None,
+        "CIMD clients are per tenant"
+    );
+}
+
+pub async fn client_upsert_cimd_never_overwrites_registered_clients(s: &TestStorage) {
+    use anvil_core::model::ClientSource;
+
+    let tenant = seed_tenant(s).await;
+    let clients = s.storage.clients();
+    let now = now_ms();
+    let mut static_client = new_client();
+    static_client.client_id = format!("https://static-{}.example.test/c", static_client.id.0);
+    let existing = clients
+        .create(tenant, &static_client)
+        .await
+        .expect("create static client");
+    let mut doc = new_cimd_client();
+    doc.client_id = static_client.client_id.clone();
+    let refused = clients
+        .upsert_cimd(tenant, &doc, now + Duration::hours(1), now)
+        .await;
+    assert!(
+        matches!(refused, Err(StorageError::Conflict(_))),
+        "a metadata document must not replace a static client: {refused:?}"
+    );
+    assert_eq!(
+        clients
+            .get(tenant, &static_client.client_id)
+            .await
+            .expect("get"),
+        Some(existing)
+    );
+
+    let mut dynamic = new_client();
+    dynamic.registration_source = ClientSource::Dynamic;
+    dynamic.registration_access_token_hash = Some(unique_hash());
+    let registered = clients
+        .create(tenant, &dynamic)
+        .await
+        .expect("create dynamic client");
+    let mut doc = new_cimd_client();
+    doc.client_id = dynamic.client_id.clone();
+    let refused = clients
+        .upsert_cimd(tenant, &doc, now + Duration::hours(1), now)
+        .await;
+    assert!(
+        matches!(refused, Err(StorageError::Conflict(_))),
+        "a metadata document must not replace a dynamic client: {refused:?}"
+    );
+    assert_eq!(
+        clients.get(tenant, &dynamic.client_id).await.expect("get"),
+        Some(registered)
+    );
+}
+
+pub async fn client_registration_token_lookup_and_rotation(s: &TestStorage) {
+    use anvil_core::model::ClientSource;
+
+    let tenant = seed_tenant(s).await;
+    let other = seed_tenant(s).await;
+    let clients = s.storage.clients();
+    let token = unique_hash();
+    let mut dynamic = new_client();
+    dynamic.registration_source = ClientSource::Dynamic;
+    dynamic.registration_access_token_hash = Some(token);
+    let created = clients
+        .create(tenant, &dynamic)
+        .await
+        .expect("create dynamic client");
+    assert_eq!(
+        clients
+            .get_by_registration_token(tenant, &dynamic.client_id, &token)
+            .await
+            .expect("lookup"),
+        Some(created.clone())
+    );
+    assert_eq!(
+        clients
+            .get_by_registration_token(tenant, &dynamic.client_id, &unique_hash())
+            .await
+            .expect("lookup"),
+        None,
+        "wrong token"
+    );
+    assert_eq!(
+        clients
+            .get_by_registration_token(other, &dynamic.client_id, &token)
+            .await
+            .expect("lookup"),
+        None,
+        "other tenant"
+    );
+    assert_eq!(
+        clients
+            .get_by_registration_token(tenant, "no-such-client", &token)
+            .await
+            .expect("lookup"),
+        None
+    );
+
+    // Rotation: the old token stops working, the new one works.
+    let rotated = unique_hash();
+    let later = now_ms() + Duration::seconds(5);
+    assert!(
+        clients
+            .set_registration_token(tenant, &dynamic.client_id, Some(&rotated), later)
+            .await
+            .expect("set")
+    );
+    assert_eq!(
+        clients
+            .get_by_registration_token(tenant, &dynamic.client_id, &token)
+            .await
+            .expect("lookup"),
+        None
+    );
+    let found = clients
+        .get_by_registration_token(tenant, &dynamic.client_id, &rotated)
+        .await
+        .expect("lookup")
+        .expect("rotated token works");
+    assert_eq!(found.registration_access_token_hash, Some(rotated));
+    assert_eq!(found.updated_at, later);
+
+    // Clearing: no token matches any more.
+    assert!(
+        clients
+            .set_registration_token(tenant, &dynamic.client_id, None, later)
+            .await
+            .expect("set")
+    );
+    assert_eq!(
+        clients
+            .get_by_registration_token(tenant, &dynamic.client_id, &rotated)
+            .await
+            .expect("lookup"),
+        None
+    );
+    assert!(
+        !clients
+            .set_registration_token(tenant, "no-such-client", Some(&rotated), later)
+            .await
+            .expect("set")
+    );
+    assert!(
+        !clients
+            .set_registration_token(other, &dynamic.client_id, Some(&rotated), later)
+            .await
+            .expect("set"),
+        "another tenant's client behaves like a missing one"
+    );
+
+    // A static client never matches, even with a stored hash.
+    let static_client = seed_client(s, tenant).await;
+    let hash = unique_hash();
+    assert!(
+        clients
+            .set_registration_token(tenant, &static_client.client_id, Some(&hash), later)
+            .await
+            .expect("set")
+    );
+    assert_eq!(
+        clients
+            .get_by_registration_token(tenant, &static_client.client_id, &hash)
+            .await
+            .expect("lookup"),
+        None,
+        "only dynamic clients have a configuration endpoint"
+    );
+}
