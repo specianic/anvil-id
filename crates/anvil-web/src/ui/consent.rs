@@ -21,10 +21,17 @@
 //! by the host of its `client_id` URL, shows the self-asserted `client_name` as unverified and
 //! renders the name's initials instead of a logo: the page never loads anything from the client's
 //! servers.
+//!
+//! Agents and step-up (AGT-03): a client with `client_kind = agent` carries an "AI agent /
+//! automated client" badge, and every client states its provenance (registered by an
+//! administrator, by dynamic registration, or identified by its metadata document at its host).
+//! With a stored grant only the scopes and resources it does not cover are listed as new; the
+//! already allowed ones are listed in a collapsed `<details>` block. Allow stores the union;
+//! Deny leaves the stored grant as it was.
 
 use anvil_core::error::CoreError;
-use anvil_core::flow::consent::scope_description;
-use anvil_core::model::{AuthRequestId, BrowserSession};
+use anvil_core::flow::consent::{Provenance, scope_description};
+use anvil_core::model::{AuthRequestId, BrowserSession, ClientKind};
 use anvil_core::service::consent::{
     ConsentBinding, ConsentService, ConsentStart, ConsentSubmission,
 };
@@ -239,6 +246,15 @@ fn initials(name: &str, host: &str) -> String {
     }
 }
 
+/// The `data-provenance` value (and message key suffix) of a client's provenance.
+fn provenance_name(p: &Provenance) -> &'static str {
+    match p {
+        Provenance::Static => "static",
+        Provenance::Dynamic => "dynamic",
+        Provenance::Cimd { .. } => "cimd",
+    }
+}
+
 /// Starts a consent flow for `request` (sets its cookie) and renders the screen.
 async fn consent_page(
     state: &AppState,
@@ -263,19 +279,23 @@ async fn consent_page(
             .cookies()
             .flow_cookie(&tenant.tenant, flow.cookie_token.expose_secret()),
     );
-    let scopes = scope_views(state, loc, &page.scopes);
+    let view = &page.view;
+    let new_scopes = scope_views(state, loc, &view.new_scopes);
+    let granted_scopes = scope_views(state, loc, &view.granted_scopes);
+    let cimd_host = view.cimd_host();
     let messages = localized(state, loc, messages);
     let ctx = minijinja::context! {
         page => PageContext::for_tenant(state, tenant, loc, "title.consent").into_value(),
-        client_name => &page.client_name,
+        client_name => &view.client_name,
         client_id => &page.client_id,
-        scopes => minijinja::Value::from(minijinja::value::Serde(&scopes)),
-        resources => &page.resources,
-        cimd_host => &page.cimd_host,
-        client_initials => page
-            .cimd_host
-            .as_deref()
-            .map(|host| initials(&page.client_name, host)),
+        agent => view.client_kind == ClientKind::Agent,
+        provenance => provenance_name(&view.provenance),
+        new_scopes => minijinja::Value::from(minijinja::value::Serde(&new_scopes)),
+        granted_scopes => minijinja::Value::from(minijinja::value::Serde(&granted_scopes)),
+        new_resources => &view.new_resources,
+        granted_resources => &view.granted_resources,
+        cimd_host => cimd_host,
+        client_initials => cimd_host.map(|host| initials(&view.client_name, host)),
         messages => minijinja::Value::from(minijinja::value::Serde(&messages)),
         csrf_token => flow.csrf_token.expose_secret(),
         action => carry_ui_locales(

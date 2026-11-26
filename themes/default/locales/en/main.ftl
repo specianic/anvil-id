@@ -206,6 +206,12 @@ consent-would_like_to = would like to:
 consent-note = You can remove this access at any time under Connected apps in your account.
 consent-allow = Allow
 consent-deny = Deny
+consent-agent_badge = AI agent / automated client
+consent-provenance_static = Registered by your administrator.
+consent-provenance_dynamic = Registered itself through dynamic registration. Its details are not verified.
+consent-provenance_cimd = Identified by its metadata document at { $host }. Its name is not verified.
+consent-new_permissions = New permissions:
+consent-already_allowed = Already allowed
 form_post-heading = Continuing…
 form_post-status = Returning you to the application.
 

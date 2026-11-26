@@ -197,6 +197,12 @@ consent-would_like_to = möchte:
 consent-note = Sie können diesen Zugriff jederzeit in Ihrem Konto unter „Verbundene Apps“ entfernen.
 consent-allow = Erlauben
 consent-deny = Ablehnen
+consent-agent_badge = KI-Agent / automatisierter Client
+consent-provenance_static = Von Ihrer Administration registriert.
+consent-provenance_dynamic = Hat sich selbst über die dynamische Registrierung angemeldet. Seine Angaben sind nicht überprüft.
+consent-provenance_cimd = Identifiziert durch sein Metadatendokument unter { $host }. Sein Name ist nicht überprüft.
+consent-new_permissions = Neue Berechtigungen:
+consent-already_allowed = Bereits erlaubt
 form_post-heading = Weiterleitung…
 form_post-status = Sie werden zur Anwendung zurückgeleitet.
 

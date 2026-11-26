@@ -1,10 +1,17 @@
 {#- Consent screen (plan 03-17). Variables (besides page):
-      client_name, client_id, scopes [{name, description}], resources [string] (RFC 8707,
-      plan 04-12), messages [{level, key, text}], csrf_token, action
-    Selectors: form consent-form, client name consent-client, scope list consent-scopes with
-    items consent-scope-{n} (data-scope = scope name), buttons consent-allow and consent-deny
-    (both name="decision", values allow / deny). Requested resources (only when there are
+      client_name, client_id, agent (bool), provenance ("static" | "dynamic" | "cimd"),
+      new_scopes / granted_scopes [{name, description}], new_resources / granted_resources
+      [string] (RFC 8707, plan 04-12), messages [{level, key, text}], csrf_token, action
+    Selectors: form consent-form, client name consent-client, scope fieldset consent-scopes
+    holding the list of new scopes consent-new-scopes (only when there are any) with items
+    consent-scope-{n} (data-scope = scope name), buttons consent-allow and consent-deny
+    (both name="decision", values allow / deny). New requested resources (only when there are
     any): list consent-resources with items consent-resource-{n} (data-resource = the value).
+    Agents and step-up (plan 07-16): badge consent-agent (client_kind = agent), provenance
+    note consent-provenance (data-provenance = static | dynamic | cimd). Scopes and resources
+    the user already allowed: collapsed block consent-granted-scopes (open when nothing is
+    new) with items consent-granted-scope-{n} and the list consent-granted-resources with items
+    consent-granted-resource-{n}.
     CIMD clients (cimd_host set, plan 05-13): consent-client is the client_id host; block
     consent-cimd holds the initials avatar consent-avatar (never a remote logo), the
     self-asserted name consent-client-name with the note consent-cimd-unverified, and
@@ -20,6 +27,9 @@
 </div>
 <form id="consent-form" method="post" action="{{ action }}">
 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+{% if agent %}
+<p class="anvil-message anvil-message-info" id="consent-agent" role="note"><strong>{{ t("consent.agent_badge") }}</strong></p>
+{% endif %}
 {% if cimd_host %}
 <div class="anvil-consent-cimd" id="consent-cimd">
 <span class="anvil-avatar" id="consent-avatar" aria-hidden="true">{{ client_initials }}</span>
@@ -27,23 +37,46 @@
 <p class="anvil-muted" id="consent-cimd-note">{{ t("consent.cimd_note") }}</p>
 </div>
 {% endif %}
+<p class="anvil-muted" id="consent-provenance" data-provenance="{{ provenance }}">{% if provenance == "cimd" %}{{ t("consent.provenance_cimd", host=cimd_host) }}{% elif provenance == "dynamic" %}{{ t("consent.provenance_dynamic") }}{% else %}{{ t("consent.provenance_static") }}{% endif %}</p>
 <fieldset class="anvil-consent-scopes" id="consent-scopes">
 <legend>{% if cimd_host %}<strong id="consent-client"><bdi>{{ cimd_host }}</bdi></strong>{% else %}<strong id="consent-client">{{ client_name }}</strong>{% endif %} {{ t("consent.would_like_to") }}</legend>
-<ul class="anvil-scope-list">
-{% for s in scopes %}
+{% if new_scopes %}
+{% if granted_scopes %}<p id="consent-new-heading">{{ t("consent.new_permissions") }}</p>{% endif %}
+<ul class="anvil-scope-list" id="consent-new-scopes">
+{% for s in new_scopes %}
 <li id="consent-scope-{{ loop.index }}" data-scope="{{ s.name }}">{% if s.description %}{{ s.description }}{% else %}{{ t("scope.use") }} <code>{{ s.name }}</code>{% endif %}</li>
 {% endfor %}
 </ul>
+{% endif %}
 </fieldset>
-{% if resources %}
+{% if new_resources %}
 <section class="anvil-consent-resources" aria-labelledby="consent-resources-heading">
 <h2 id="consent-resources-heading">{{ t("consent.resources") }}</h2>
 <ul class="anvil-scope-list" id="consent-resources">
-{% for r in resources %}
+{% for r in new_resources %}
 <li id="consent-resource-{{ loop.index }}" data-resource="{{ r }}"><bdi><code>{{ r }}</code></bdi></li>
 {% endfor %}
 </ul>
 </section>
+{% endif %}
+{% if granted_scopes or granted_resources %}
+<details class="anvil-disclosure" id="consent-granted-scopes"{% if not new_scopes and not new_resources %} open{% endif %}>
+<summary>{{ t("consent.already_allowed") }}</summary>
+{% if granted_scopes %}
+<ul class="anvil-scope-list">
+{% for s in granted_scopes %}
+<li id="consent-granted-scope-{{ loop.index }}" data-granted-scope="{{ s.name }}">{% if s.description %}{{ s.description }}{% else %}{{ t("scope.use") }} <code>{{ s.name }}</code>{% endif %}</li>
+{% endfor %}
+</ul>
+{% endif %}
+{% if granted_resources %}
+<ul class="anvil-scope-list" id="consent-granted-resources">
+{% for r in granted_resources %}
+<li id="consent-granted-resource-{{ loop.index }}" data-granted-resource="{{ r }}"><bdi><code>{{ r }}</code></bdi></li>
+{% endfor %}
+</ul>
+{% endif %}
+</details>
 {% endif %}
 <p class="anvil-muted" id="consent-note">{{ t("consent.note") }}</p>
 <div class="anvil-actions">
