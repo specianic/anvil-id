@@ -6,15 +6,15 @@ current_phase: 05
 current_phase_name: release 0 4 operate it
 current_plan: 33
 status: executing
-stopped_at: Completed 06-19-PLAN.md
-last_updated: "2026-11-26T11:58:47.434Z"
+stopped_at: Completed 06-18-PLAN.md
+last_updated: "2026-11-26T12:06:17.625Z"
 last_activity: 2026-11-26
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 162
-  completed_plans: 151
-  percent: 93
+  completed_plans: 152
+  percent: 94
 ---
 
 # Project State
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 **Status:** Ready to execute
 **Last Activity:** 2026-11-26
 **Last Activity Description:** 05-28 phase gate complete (632-pair security map, 0.4 plaintext scan, anvilid 0.4.0, 0.4 migrations pinned, every workflow incl. load and deploy green on f80dcb4)
-**Progress:** [█████████░] 93%
+**Progress:** [█████████░] 94%
 
 Phase 5 has 33 plans (05-01 through 05-33). Every plan except 05-29 (release v0.4.0 after owner sign-off) has a
 SUMMARY. Current Plan counts plans in execution order: 05-29 is the 33rd and last. Phase 4 still has one open plan, 04-33 (manual real-provider checklist, then tag v0.3.0); it must be
@@ -208,6 +208,7 @@ done before 05-29 tags v0.4.0.
 | Phase 06 P12 | 75min | 3 tasks | 11 files |
 | Phase 06 P21 | 45min | 2 tasks | 16 files |
 | Phase 06 P19 | 50min | 2 tasks | 8 files |
+| Phase 06 P18 | 75min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -484,6 +485,8 @@ Recent decisions affecting current work:
 - [Phase 06]: 06-21: console org layout uses route-link section nav (ORG_SECTIONS) so 06-23 adds sibling files; user memberships and add-member-by-email are console-side workarounds for missing API filters (deferred-items)
 - [Phase 06]: 06-19: org switcher choice is written to the stored request by delete + re-create under the same id (CAS without a new GrantRepo method); switcher only for required-policy requests naming no org
 - [Phase 06]: 06-19: effective MFA = strictest(tenant, active org, client) once the session user selects an org; during first password login the org is unknown, so a stricter org adds a step-up before the code
+- [Phase 06]: 06-18: SAML ACS consumes the pending request by CAS once the RelayState hash matches, before any XML; DB replay_guard as defence in depth
+- [Phase 06]: 06-18: SAML ACS 256 KiB limit is a branch of the single body-limit middleware (admin/branding.rs)
 
 ### Pending Todos
 
@@ -496,6 +499,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-26T11:58:30.808Z
-Stopped at: Completed 06-19-PLAN.md
+Last session: 2026-11-26T12:06:17.622Z
+Stopped at: Completed 06-18-PLAN.md
 Resume file: None
