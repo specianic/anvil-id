@@ -2445,6 +2445,267 @@
         ]
       }
     },
+    "/api/admin/v1/tenants/{slug}/config": {
+      "get": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Export a tenant's configuration as a `TenantConfig` document.",
+        "operationId": "getTenantConfig",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tenant's document: static clients, connections, branding, roles, attributes, email templates, SMTP and webhooks by natural key; secrets as {configured: bool}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantConfigJson"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/config/apply": {
+      "post": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Apply a document: validate everything first, then write through the services. Re-applying\nan applied document changes nothing.",
+        "operationId": "applyTenantConfig",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug (must equal tenant.slug of the document; a missing tenant is created)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "prune",
+            "in": "query",
+            "description": "Also delete the objects the document no longer lists (default false).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TenantConfigJson"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Applied (or nothing to do); generated secrets are shown once",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigApplyResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or role changes beyond the caller's admin scopes",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The document would remove the last administrator of the system tenant, or a name is taken",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid document (errors list every issue by path); nothing was changed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/admin/v1/tenants/{slug}/config/plan": {
+      "post": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Validate a document and show the plan against the stored state (nothing is changed).",
+        "operationId": "planTenantConfig",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug (must equal tenant.slug of the document)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TenantConfigJson"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The plan; deletes are applied only with prune",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigPlanDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, or role changes beyond the caller's admin scopes",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The document would remove the last administrator of the system tenant",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid document (errors list every issue by path)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
     "/api/admin/v1/tenants/{slug}/connections": {
       "get": {
         "tags": [
@@ -6324,6 +6585,130 @@
           }
         }
       },
+      "ConfigApplyResult": {
+        "type": "object",
+        "description": "The result of an apply.",
+        "required": [
+          "plan",
+          "applied",
+          "pruned",
+          "generated_secrets"
+        ],
+        "properties": {
+          "applied": {
+            "type": "boolean",
+            "description": "Whether anything was written."
+          },
+          "generated_secrets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GeneratedSecretDto"
+            },
+            "description": "Secrets the server generated (client secrets, webhook signing secrets); never readable\nagain."
+          },
+          "plan": {
+            "$ref": "#/components/schemas/ConfigPlanDto",
+            "description": "The plan that was applied (computed before the changes)."
+          },
+          "pruned": {
+            "type": "boolean",
+            "description": "Whether the plan's deletes were performed."
+          }
+        }
+      },
+      "ConfigChangeDto": {
+        "type": "object",
+        "description": "One object to create, update or delete, by natural key.",
+        "required": [
+          "kind",
+          "key",
+          "fields"
+        ],
+        "properties": {
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConfigFieldDiff"
+            }
+          },
+          "key": {
+            "type": "string",
+            "description": "The natural key (`client_id`, slug, name, template kind, `(tenant)` for tenant-wide\nbranding, `smtp`)."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`tenant`, `client`, `connection`, `branding`, `role`, `attribute`, `email_template`,\n`smtp` or `webhook`."
+          }
+        }
+      },
+      "ConfigFieldDiff": {
+        "type": "object",
+        "description": "One changed field. Secret fields carry no values (`secret: true`).",
+        "required": [
+          "field",
+          "secret"
+        ],
+        "properties": {
+          "after": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "before": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "field": {
+            "type": "string",
+            "description": "Dotted path inside the object (`settings.claims.permissions`)."
+          },
+          "secret": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ConfigPlanDto": {
+        "type": "object",
+        "description": "The plan of a document against the stored state. `deletes` happen only with `prune`.",
+        "required": [
+          "creates",
+          "updates",
+          "deletes",
+          "empty",
+          "text"
+        ],
+        "properties": {
+          "creates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConfigChangeDto"
+            }
+          },
+          "deletes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConfigChangeDto"
+            }
+          },
+          "empty": {
+            "type": "boolean",
+            "description": "Nothing to create, update or delete."
+          },
+          "text": {
+            "type": "string",
+            "description": "The plan as text (the CLI's rendering; secrets print as `(secret changed)`)."
+          },
+          "updates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConfigChangeDto"
+            }
+          }
+        }
+      },
       "ConnectionConfig": {
         "oneOf": [
           {
@@ -6938,6 +7323,30 @@
             "minimum": 0
           },
           "message": {
+            "type": "string"
+          }
+        }
+      },
+      "GeneratedSecretDto": {
+        "type": "object",
+        "description": "A secret generated while applying, shown once.",
+        "required": [
+          "kind",
+          "key",
+          "field",
+          "value"
+        ],
+        "properties": {
+          "field": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "value": {
             "type": "string"
           }
         }
@@ -7770,6 +8179,10 @@
           }
         },
         "additionalProperties": false
+      },
+      "TenantConfigJson": {
+        "type": "object",
+        "description": "A `TenantConfig` document, version 1 (JSON form). The full schema is published as\n`docs/schemas/tenant-config-v1.json`. Secrets: `{configured: bool}` keeps (true) or clears\n(false) a stored secret, `{value: \"…\"}` sets it; exports always carry `{configured: …}`."
       },
       "TenantList": {
         "type": "object",

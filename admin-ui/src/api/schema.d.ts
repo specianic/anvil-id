@@ -263,6 +263,60 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/tenants/{slug}/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Export a tenant's configuration as a `TenantConfig` document. */
+        get: operations["getTenantConfig"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/config/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Apply a document: validate everything first, then write through the services. Re-applying
+         *     an applied document changes nothing.
+         */
+        post: operations["applyTenantConfig"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/tenants/{slug}/config/plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Validate a document and show the plan against the stored state (nothing is changed). */
+        post: operations["planTenantConfig"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/tenants/{slug}/connections": {
         parameters: {
             query?: never;
@@ -844,6 +898,52 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
         };
+        /** @description The result of an apply. */
+        ConfigApplyResult: {
+            /** @description Whether anything was written. */
+            applied: boolean;
+            /**
+             * @description Secrets the server generated (client secrets, webhook signing secrets); never readable
+             *     again.
+             */
+            generated_secrets: components["schemas"]["GeneratedSecretDto"][];
+            /** @description The plan that was applied (computed before the changes). */
+            plan: components["schemas"]["ConfigPlanDto"];
+            /** @description Whether the plan's deletes were performed. */
+            pruned: boolean;
+        };
+        /** @description One object to create, update or delete, by natural key. */
+        ConfigChangeDto: {
+            fields: components["schemas"]["ConfigFieldDiff"][];
+            /**
+             * @description The natural key (`client_id`, slug, name, template kind, `(tenant)` for tenant-wide
+             *     branding, `smtp`).
+             */
+            key: string;
+            /**
+             * @description `tenant`, `client`, `connection`, `branding`, `role`, `attribute`, `email_template`,
+             *     `smtp` or `webhook`.
+             */
+            kind: string;
+        };
+        /** @description One changed field. Secret fields carry no values (`secret: true`). */
+        ConfigFieldDiff: {
+            after?: Record<string, never> | null;
+            before?: Record<string, never> | null;
+            /** @description Dotted path inside the object (`settings.claims.permissions`). */
+            field: string;
+            secret: boolean;
+        };
+        /** @description The plan of a document against the stored state. `deletes` happen only with `prune`. */
+        ConfigPlanDto: {
+            creates: components["schemas"]["ConfigChangeDto"][];
+            deletes: components["schemas"]["ConfigChangeDto"][];
+            /** @description Nothing to create, update or delete. */
+            empty: boolean;
+            /** @description The plan as text (the CLI's rendering; secrets print as `(secret changed)`). */
+            text: string;
+            updates: components["schemas"]["ConfigChangeDto"][];
+        };
         /** @description Connection configuration, tagged by `type`. It never contains the client secret. */
         ConnectionConfig: (components["schemas"]["SocialConnectionConfig"] & {
             /** @enum {string} */
@@ -1046,6 +1146,13 @@ export interface components {
              */
             line?: number | null;
             message: string;
+        };
+        /** @description A secret generated while applying, shown once. */
+        GeneratedSecretDto: {
+            field: string;
+            key: string;
+            kind: string;
+            value: string;
         };
         /**
          * @description OAuth grant type.
@@ -1388,6 +1495,12 @@ export interface components {
             /** @default null */
             zoneinfo: string | null;
         };
+        /**
+         * @description A `TenantConfig` document, version 1 (JSON form). The full schema is published as
+         *     `docs/schemas/tenant-config-v1.json`. Secrets: `{configured: bool}` keeps (true) or clears
+         *     (false) a stored secret, `{value: "…"}` sets it; exports always carry `{configured: …}`.
+         */
+        TenantConfigJson: Record<string, never>;
         /** @description One page of tenants. */
         TenantList: {
             items: components["schemas"]["TenantView"][];
@@ -3181,6 +3294,185 @@ export interface operations {
                 };
             };
             /** @description The client does not use a secret */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getTenantConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The tenant's document: static clients, connections, branding, roles, attributes, email templates, SMTP and webhooks by natural key; secrets as {configured: bool} */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TenantConfigJson"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    applyTenantConfig: {
+        parameters: {
+            query?: {
+                /** @description Also delete the objects the document no longer lists (default false). */
+                prune?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description Tenant slug (must equal tenant.slug of the document; a missing tenant is created) */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TenantConfigJson"];
+            };
+        };
+        responses: {
+            /** @description Applied (or nothing to do); generated secrets are shown once */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigApplyResult"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or role changes beyond the caller's admin scopes */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The document would remove the last administrator of the system tenant, or a name is taken */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid document (errors list every issue by path); nothing was changed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    planTenantConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug (must equal tenant.slug of the document) */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TenantConfigJson"];
+            };
+        };
+        responses: {
+            /** @description The plan; deletes are applied only with prune */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigPlanDto"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope, or role changes beyond the caller's admin scopes */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The document would remove the last administrator of the system tenant */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid document (errors list every issue by path) */
             422: {
                 headers: {
                     [name: string]: unknown;
