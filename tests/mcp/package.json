@@ -1,0 +1,7 @@
+{
+  "name": "anvilid-mcp-mocks",
+  "private": true,
+  "description": "Zero-dependency mock MCP client and resource server (see README.md)",
+  "license": "MIT",
+  "type": "module"
+}
