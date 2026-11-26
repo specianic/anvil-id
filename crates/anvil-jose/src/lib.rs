@@ -14,6 +14,7 @@
 //! - [`jws`]: strict compact-JWS parsing and signature verification against a JWK Set.
 //! - [`client_assertion`]: `private_key_jwt` client assertion rules.
 //! - [`op_token`]: verification of tokens this OP issued (access tokens, `id_token_hint`).
+//! - [`webhook`]: Standard Webhooks v1 signatures and `whsec_` signing secrets.
 //!
 //! Single crypto backend: aws-lc-rs (directly and through jsonwebtoken's `aws_lc_rs` feature).
 //! This crate performs no I/O.
@@ -32,6 +33,7 @@ pub mod otp;
 pub mod pem;
 pub mod pkce;
 pub mod recovery_code;
+pub mod webhook;
 
 pub use client_assertion::{AssertionRules, VerifiedAssertion, verify_client_assertion};
 pub use email_code::{
@@ -49,3 +51,4 @@ pub use op_token::{ExpiryCheck, verify_op_token, verify_op_token_algs};
 pub use otp::{TotpSecret, check_code, otpauth_uri};
 pub use pem::pkcs8_der_from_pem;
 pub use recovery_code::{generate_recovery_codes, normalize_recovery_code, recovery_code_hash};
+pub use webhook::{generate_webhook_secret, parse_webhook_secret, signature_v1};
