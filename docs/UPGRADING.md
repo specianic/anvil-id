@@ -285,7 +285,7 @@ metadata documents (`cimd.policy`) are `disabled` in every tenant, and always in
   accept per-pod rate limits. It also refuses SQLite with more than one replica, and a termination
   grace period not longer than the drain.
 - Compose examples for Postgres and an OpenTelemetry/Prometheus overlay are in `deploy/compose/`;
-  see [deploy/README.md](../deploy/README.md).
+  see [deploy/README.md](https://github.com/specianic/anvil-id/blob/main/deploy/README.md).
 - The container image has a `HEALTHCHECK` that runs `anvilid healthcheck`.
 
 ### What to configure next

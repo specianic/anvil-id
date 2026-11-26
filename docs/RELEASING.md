@@ -1,6 +1,6 @@
 # Releasing AnvilID
 
-Releases are built and published by [`.github/workflows/release.yml`](../.github/workflows/release.yml)
+Releases are built and published by [`.github/workflows/release.yml`](https://github.com/specianic/anvil-id/blob/main/.github/workflows/release.yml)
 when a version tag is pushed. Nothing is built or uploaded from a developer machine.
 
 ## What a release publishes

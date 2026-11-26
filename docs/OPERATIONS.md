@@ -437,9 +437,9 @@ with `invalid_client_metadata`, and a metadata document with `jwks_uri` is treat
 
 ## Deploying with Helm or Compose
 
-- [`deploy/README.md`](../deploy/README.md): overview, zero-config container, Docker Compose with
+- [`deploy/README.md`](https://github.com/specianic/anvil-id/blob/main/deploy/README.md): overview, zero-config container, Docker Compose with
   Postgres, the observability overlay.
-- [`deploy/helm/anvilid/README.md`](../deploy/helm/anvilid/README.md): the Helm chart.
+- [`deploy/helm/anvilid/README.md`](https://github.com/specianic/anvil-id/blob/main/deploy/helm/anvilid/README.md): the Helm chart.
   `database.type` is `sqlite` (one replica, persistent volume) or `postgres` (several replicas,
   database URL and KEK from an existing Secret). The chart refuses to render unsafe combinations:
   SQLite with more than one replica or an HPA, several replicas without `redis.url` (unless

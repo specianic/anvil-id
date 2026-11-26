@@ -307,7 +307,7 @@ Checklist for the MCP server (RFC 9068 §4, OAuth 2.1 §5.2, MCP "Token Handling
 steps against a running AnvilID in development mode. `tests/e2e/specs/mcp.spec.ts` runs the whole
 journey in a browser: discovery, consent, the code exchange with `resource`, the MCP server
 accepting the token, and the error page once the CIMD policy is disabled. See
-[tests/mcp/README.md](../tests/mcp/README.md).
+[tests/mcp/README.md](https://github.com/specianic/anvil-id/blob/main/tests/mcp/README.md).
 
 ## Limits in 0.4
 

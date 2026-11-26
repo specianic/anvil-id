@@ -1,0 +1,25 @@
+# Documentation site (mdBook 0.5.4, pinned in .github/workflows/docs.yml).
+# Build locally: `mdbook build` (output in book/, gitignored), then `scripts/check-docs-site.sh book`.
+# If your checkout has the local-only docs/research/ directory, mdBook copies it into the output and
+# the check fails on purpose: build from a copy of docs/ without research/ (CI checkouts never have it).
+# The site carries no analytics, no external fonts and no CDN assets; the check script enforces that.
+
+[book]
+title = "AnvilID"
+description = "Documentation for AnvilID, a self-hosted open-source identity platform"
+language = "en"
+src = "docs"
+
+[build]
+build-dir = "book"
+# A SUMMARY entry without a file fails the build instead of creating an empty page.
+create-missing = false
+
+[output.html]
+# GitHub Pages project path. Default; the owner confirms it when Pages is enabled (plan 07-27).
+site-url = "/anvil-id/"
+git-repository-url = "https://github.com/specianic/anvil-id"
+# Search uses the index mdBook builds into the site (no external service).
+
+[output.html.search]
+enable = true

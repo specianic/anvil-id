@@ -40,3 +40,6 @@ tests/e2e/playwright-report/
 admin-ui/node_modules/
 admin-ui/dist/
 admin-ui/*.tsbuildinfo
+
+# Documentation site build output (mdbook build)
+/book/
