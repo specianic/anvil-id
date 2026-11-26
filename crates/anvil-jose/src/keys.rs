@@ -394,7 +394,7 @@ mod tests {
         let g = generate_rs256().unwrap();
         let key = SigningKey::from_pkcs8(&g.kid, Alg::RS256, &g.pkcs8).unwrap();
         let message = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0";
-        let pem = crate::pem::pkcs8_pem(&g.pkcs8);
+        let pem = crate::pem::test_support::pkcs8_pem(&g.pkcs8);
         let ek = jsonwebtoken::EncodingKey::from_rsa_pem(pem.as_bytes()).unwrap();
         let expected =
             jsonwebtoken::crypto::sign(message.as_bytes(), &ek, Algorithm::RS256).unwrap();

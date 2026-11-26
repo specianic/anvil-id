@@ -73,22 +73,30 @@ pub fn pkcs8_der_from_pem(pem: &str) -> Result<Zeroizing<Vec<u8>>, JoseError> {
     Ok(der)
 }
 
-/// PKCS#8 DER as a `PRIVATE KEY` PEM with 64-column lines and LF endings. Test-only since
-/// [`SigningKey::from_pkcs8`] loads the DER directly (05-18).
+/// Test-only PEM encoding (05-18: [`SigningKey::from_pkcs8`] loads DER directly, so production
+/// code never encodes PEM).
 #[cfg(test)]
-pub(crate) fn pkcs8_pem(pkcs8: &[u8]) -> Zeroizing<String> {
-    let b64 = Zeroizing::new(crate::encoding::b64std(pkcs8));
-    let mut pem = Zeroizing::new(String::with_capacity(b64.len() + b64.len() / 64 + 64));
-    pem.push_str(BEGIN);
-    pem.push('\n');
-    for chunk in b64.as_bytes().chunks(64) {
-        // base64 output is ASCII.
-        pem.push_str(std::str::from_utf8(chunk).unwrap_or_default());
+pub(crate) mod test_support {
+    use zeroize::Zeroizing;
+
+    use super::{BEGIN, END};
+
+    /// PKCS#8 DER as a `PRIVATE KEY` PEM with 64-column lines and LF endings. Test-only since
+    /// [`SigningKey::from_pkcs8`] loads the DER directly (05-18).
+    pub(crate) fn pkcs8_pem(pkcs8: &[u8]) -> Zeroizing<String> {
+        let b64 = Zeroizing::new(crate::encoding::b64std(pkcs8));
+        let mut pem = Zeroizing::new(String::with_capacity(b64.len() + b64.len() / 64 + 64));
+        pem.push_str(BEGIN);
         pem.push('\n');
+        for chunk in b64.as_bytes().chunks(64) {
+            // base64 output is ASCII.
+            pem.push_str(std::str::from_utf8(chunk).unwrap_or_default());
+            pem.push('\n');
+        }
+        pem.push_str(END);
+        pem.push('\n');
+        pem
     }
-    pem.push_str(END);
-    pem.push('\n');
-    pem
 }
 
 impl SigningKey {
@@ -102,6 +110,7 @@ impl SigningKey {
 
 #[cfg(test)]
 mod tests {
+    use super::test_support::pkcs8_pem;
     use super::*;
     use crate::jwk::Jwks;
     use crate::jws::verify_jwt;
