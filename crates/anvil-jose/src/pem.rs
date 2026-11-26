@@ -15,7 +15,7 @@
 use zeroize::Zeroizing;
 
 use crate::JoseError;
-use crate::encoding::{b64std, b64std_decode};
+use crate::encoding::b64std_decode;
 use crate::keys::{Alg, SigningKey};
 
 /// Largest accepted PEM input in bytes.
@@ -73,9 +73,11 @@ pub fn pkcs8_der_from_pem(pem: &str) -> Result<Zeroizing<Vec<u8>>, JoseError> {
     Ok(der)
 }
 
-/// PKCS#8 DER as a `PRIVATE KEY` PEM with 64-column lines and LF endings.
+/// PKCS#8 DER as a `PRIVATE KEY` PEM with 64-column lines and LF endings. Test-only since
+/// [`SigningKey::from_pkcs8`] loads the DER directly (05-18).
+#[cfg(test)]
 pub(crate) fn pkcs8_pem(pkcs8: &[u8]) -> Zeroizing<String> {
-    let b64 = Zeroizing::new(b64std(pkcs8));
+    let b64 = Zeroizing::new(crate::encoding::b64std(pkcs8));
     let mut pem = Zeroizing::new(String::with_capacity(b64.len() + b64.len() / 64 + 64));
     pem.push_str(BEGIN);
     pem.push('\n');

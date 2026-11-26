@@ -289,6 +289,32 @@ mod tests {
         }
     }
 
+    /// Direct aws-lc signing (05-18) for every algorithm, including PS256 on an RSA key and a
+    /// cloned (shared) signer: the tokens verify with `verify_jwt`, and a signature from one key
+    /// never verifies against another key of the same algorithm.
+    #[test]
+    fn direct_signing_verifies_for_every_alg_and_clone() {
+        for (k, other) in [
+            (rsa(Alg::RS256), rsa(Alg::RS256)),
+            (rsa(Alg::PS256), rsa(Alg::PS256)),
+            (es256(), es256()),
+            (ed25519(), ed25519()),
+        ] {
+            let alg = k.signer.alg();
+            let cloned = k.signer.clone();
+            for signer in [&k.signer, &cloned] {
+                let t = signer
+                    .sign_jwt(Some("at+jwt"), &json!({"sub": "d"}))
+                    .unwrap();
+                let v = verify_jwt(&t, &set(&[&k.jwk]), &[alg]).unwrap();
+                assert_eq!(v.claims["sub"], "d");
+                let mut wrong = other.jwk.clone();
+                wrong.kid.clone_from(&k.jwk.kid);
+                assert!(verify_jwt(&t, &set(&[&wrong]), &[alg]).is_err());
+            }
+        }
+    }
+
     #[test]
     fn ed25519_token_with_eddsa_header_rejected() {
         // Same key, same valid Ed25519 signature bytes, but the polymorphic `EdDSA` header.

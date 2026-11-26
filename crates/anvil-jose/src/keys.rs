@@ -1,32 +1,37 @@
 //! Signing-key generation and JWT signing (RS256, PS256, ES256, Ed25519).
 //!
-//! Keys are generated with aws-lc-rs and kept as PKCS#8. The JOSE header and JWK are built here;
-//! jsonwebtoken (aws-lc-rs backend) only computes the signature (`jsonwebtoken::crypto::sign`).
-//! RSA PKCS#8 is wrapped as a `PRIVATE KEY` PEM and loaded with `EncodingKey::from_rsa_pem`
-//! (`from_rsa_der` expects PKCS#1 and would fail at sign time).
+//! Keys are generated with aws-lc-rs and kept as PKCS#8. The JOSE header and JWK are built here.
+//! A loaded [`SigningKey`] holds the parsed aws-lc-rs key pair and signs with it directly:
+//! `jsonwebtoken::crypto::sign` re-parses the DER key on every RSA signature
+//! (`RsaKeyPair::from_der` per call), which is the dominant cost of a token request (QUAL-05,
+//! 05-18). The signatures are identical (RSASSA-PKCS1-v1_5 is deterministic; PSS, ECDSA and
+//! Ed25519 use the same aws-lc primitives) and verify with [`crate::jws::verify_jwt`] exactly as
+//! before. A `SigningKey` is cheap to clone (the key pair is shared), so callers can cache it.
 //!
 //! Ed25519 uses the fully-specified JOSE name `Ed25519` (RFC 9864) in headers and JWKs. The
 //! polymorphic `EdDSA` is neither emitted nor accepted (`"EdDSA".parse::<Alg>()` fails). jsonwebtoken
-//! cannot express `Ed25519` in a header, which is fine: headers are serialised here and
-//! jsonwebtoken only produces the signature bytes (`Algorithm::EdDSA` on an Ed25519 key).
+//! cannot express `Ed25519` in a header, which is fine: headers are serialised here, signatures
+//! are produced here, and jsonwebtoken only checks signature bytes on verification
+//! (`Algorithm::EdDSA` on an Ed25519 key).
 
 use std::fmt;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use aws_lc_rs::encoding::{AsDer, Pkcs8V1Der};
 use aws_lc_rs::rand::SystemRandom;
 use aws_lc_rs::rsa::{KeyPair as RsaKeyPair, KeySize};
 use aws_lc_rs::signature::{
-    ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, Ed25519KeyPair, KeyPair as _,
+    ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, Ed25519KeyPair, KeyPair as _, RSA_PKCS1_SHA256,
+    RSA_PSS_SHA256,
 };
-use jsonwebtoken::{Algorithm, EncodingKey};
+use jsonwebtoken::Algorithm;
 use serde::Serialize;
 use zeroize::Zeroizing;
 
 use crate::JoseError;
 use crate::encoding::b64url;
 use crate::jwk::{Jwk, thumbprint};
-use crate::pem::pkcs8_pem;
 
 /// Asymmetric JWS algorithms AnvilID supports. `none` and HMAC algorithms do not exist here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -50,8 +55,8 @@ impl Alg {
         }
     }
 
-    /// The jsonwebtoken algorithm used for signature bytes only (Ed25519 → `EdDSA`). Never used
-    /// to build or parse a header.
+    /// The jsonwebtoken algorithm used to verify signature bytes only (Ed25519 → `EdDSA`). Never
+    /// used to build or parse a header.
     pub(crate) fn to_jwt(self) -> Algorithm {
         match self {
             Alg::RS256 => Algorithm::RS256,
@@ -200,11 +205,20 @@ fn finish(alg: Alg, mut jwk: Jwk, pkcs8: Zeroizing<Vec<u8>>) -> Result<Generated
     })
 }
 
-/// A loaded signing key. `Debug` shows only kid and alg.
+/// A loaded signing key. `Debug` shows only kid and alg. Cloning shares the parsed key pair.
+#[derive(Clone)]
 pub struct SigningKey {
     kid: String,
     alg: Alg,
-    key: EncodingKey,
+    key: Arc<KeyPair>,
+}
+
+/// The parsed private key, held for the lifetime of the `SigningKey` (aws-lc-rs frees the key
+/// material when the pair is dropped).
+enum KeyPair {
+    Rsa(RsaKeyPair),
+    Ec(EcdsaKeyPair),
+    Ed(Ed25519KeyPair),
 }
 
 impl fmt::Debug for SigningKey {
@@ -232,28 +246,23 @@ impl SigningKey {
             return Err(JoseError::Malformed("empty kid"));
         }
         let key = match alg {
-            Alg::RS256 | Alg::PS256 => {
+            Alg::RS256 | Alg::PS256 => KeyPair::Rsa(
                 RsaKeyPair::from_pkcs8(pkcs8)
-                    .map_err(|_| JoseError::Crypto("invalid RSA PKCS#8 key"))?;
-                let pem = pkcs8_pem(pkcs8);
-                EncodingKey::from_rsa_pem(pem.as_bytes())
-                    .map_err(|_| JoseError::Crypto("invalid RSA PKCS#8 key"))?
-            }
-            Alg::ES256 => {
+                    .map_err(|_| JoseError::Crypto("invalid RSA PKCS#8 key"))?,
+            ),
+            Alg::ES256 => KeyPair::Ec(
                 EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, pkcs8)
-                    .map_err(|_| JoseError::Crypto("invalid P-256 PKCS#8 key"))?;
-                EncodingKey::from_ec_der(pkcs8)
-            }
-            Alg::Ed25519 => {
+                    .map_err(|_| JoseError::Crypto("invalid P-256 PKCS#8 key"))?,
+            ),
+            Alg::Ed25519 => KeyPair::Ed(
                 Ed25519KeyPair::from_pkcs8(pkcs8)
-                    .map_err(|_| JoseError::Crypto("invalid Ed25519 PKCS#8 key"))?;
-                EncodingKey::from_ed_der(pkcs8)
-            }
+                    .map_err(|_| JoseError::Crypto("invalid Ed25519 PKCS#8 key"))?,
+            ),
         };
         Ok(Self {
             kid: kid.to_owned(),
             alg,
-            key,
+            key: Arc::new(key),
         })
     }
 
@@ -296,8 +305,33 @@ impl SigningKey {
 
     /// Base64url signature over an already-encoded `header.payload` signing input.
     pub(crate) fn sign_message(&self, message: &str) -> Result<String, JoseError> {
-        jsonwebtoken::crypto::sign(message.as_bytes(), &self.key, self.alg.to_jwt())
-            .map_err(|_| JoseError::Crypto("signing failed"))
+        let msg = message.as_bytes();
+        let sig = match (&*self.key, self.alg) {
+            (KeyPair::Rsa(kp), Alg::RS256 | Alg::PS256) => {
+                let encoding = if self.alg == Alg::RS256 {
+                    &RSA_PKCS1_SHA256
+                } else {
+                    &RSA_PSS_SHA256
+                };
+                let mut sig = vec![0; kp.public_modulus_len()];
+                kp.sign(encoding, &SystemRandom::new(), msg, &mut sig)
+                    .map_err(|_| JoseError::Crypto("signing failed"))?;
+                sig
+            }
+            (KeyPair::Ec(kp), Alg::ES256) => kp
+                .sign(&SystemRandom::new(), msg)
+                .map_err(|_| JoseError::Crypto("signing failed"))?
+                .as_ref()
+                .to_vec(),
+            (KeyPair::Ed(kp), Alg::Ed25519) => kp.sign(msg).as_ref().to_vec(),
+            // from_pkcs8 pairs each algorithm with its key family; anything else fails closed.
+            _ => {
+                return Err(JoseError::Crypto(
+                    "signing key does not match its algorithm",
+                ));
+            }
+        };
+        Ok(b64url(&sig))
     }
 }
 
@@ -351,6 +385,20 @@ mod tests {
         );
         // A different message does not verify with that signature.
         assert!(!jsonwebtoken::crypto::verify(&sig, b"x.y", &dk, Algorithm::RS256).unwrap());
+    }
+
+    /// RSASSA-PKCS1-v1_5 is deterministic, so the direct aws-lc signature (05-18) must be
+    /// byte-identical to the one jsonwebtoken produced before.
+    #[test]
+    fn direct_rs256_signature_matches_jsonwebtoken() {
+        let g = generate_rs256().unwrap();
+        let key = SigningKey::from_pkcs8(&g.kid, Alg::RS256, &g.pkcs8).unwrap();
+        let message = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0";
+        let pem = crate::pem::pkcs8_pem(&g.pkcs8);
+        let ek = jsonwebtoken::EncodingKey::from_rsa_pem(pem.as_bytes()).unwrap();
+        let expected =
+            jsonwebtoken::crypto::sign(message.as_bytes(), &ek, Algorithm::RS256).unwrap();
+        assert_eq!(key.sign_message(message).unwrap(), expected);
     }
 
     #[test]
