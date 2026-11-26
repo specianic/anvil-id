@@ -32,10 +32,10 @@ import {
 import { addAuthorizeParams } from '../lib/authorize';
 import { authorizationCodeFlow, jwtClaims } from '../lib/code-flow';
 import { deleteTenant } from '../lib/email-code';
-import { removeTxt } from '../lib/mock-dns';
+import { publishTxt, removeTxt } from '../lib/mock-dns';
 import { mockIdpRedirectUri } from '../lib/mock-idp';
 import {
-  addVerifiedDomain,
+  claimDomain,
   createOrg,
   createOrgClient,
   createOrgOidcConnection,
@@ -47,6 +47,7 @@ import {
   patchDomainRouting,
   randomOrgDomain,
   submitEmailFirst,
+  verifyDomain,
   type OrgTenant,
 } from '../lib/org';
 import { createUpstreamTenant, randomSlug, tenantUsers } from '../lib/upstream';
@@ -89,8 +90,14 @@ test('email-first routing: SSO choice, first sign-in through the connection, the
     secret: upstream.clientSecret,
   });
 
-  const claim = await addVerifiedDomain(token, slug, org.id, domain);
+  // The TXT record is published through the suite's mock DNS; before that, verification stays pending.
+  const claim = await claimDomain(token, slug, org.id, domain);
   recordName = claim.record_name;
+  expect((await verifyDomain(token, slug, org.id, claim.id)).status).toBe('pending');
+  // Routing needs a verified domain (409 while pending).
+  await patchDomainRouting(token, slug, org.id, claim.id, { connection_id: connection.id, routing: true }, 409);
+  await publishTxt(claim.record_name, [claim.record_value]);
+  expect((await verifyDomain(token, slug, org.id, claim.id)).status).toBe('verified');
   const routed = await patchDomainRouting(token, slug, org.id, claim.id, {
     connection_id: connection.id,
     routing: true,

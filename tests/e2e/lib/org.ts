@@ -96,15 +96,26 @@ export function createInvitation(
   return adminCall<InvitationView>(token, 'POST', orgPath(slug, org, '/invitations'), { email, role_ids: roleIds }, 201);
 }
 
+/** Claims `domain` for the org (pending; the response carries the TXT record to publish). */
+export async function claimDomain(token: string, slug: string, org: string, domain: string): Promise<DomainView> {
+  const claim = await adminCall<DomainView>(token, 'POST', orgPath(slug, org, '/domains'), { domain }, 201);
+  expect(claim.status).toBe('pending');
+  return claim;
+}
+
+/** Runs the verification of claim `domainId` and returns the claim (verified or pending). */
+export function verifyDomain(token: string, slug: string, org: string, domainId: string): Promise<DomainView> {
+  return adminCall<DomainView>(token, 'POST', orgPath(slug, org, `/domains/${domainId}/verify`));
+}
+
 /**
  * Claims `domain` for the org, publishes its TXT record through the suite's mock DNS and verifies it.
  * Asserts the claim is verified and returns it (`record_name` is what to removeTxt afterwards).
  */
 export async function addVerifiedDomain(token: string, slug: string, org: string, domain: string): Promise<DomainView> {
-  const claim = await adminCall<DomainView>(token, 'POST', orgPath(slug, org, '/domains'), { domain }, 201);
-  expect(claim.status).toBe('pending');
+  const claim = await claimDomain(token, slug, org, domain);
   await publishTxt(claim.record_name, [claim.record_value]);
-  const verified = await adminCall<DomainView>(token, 'POST', orgPath(slug, org, `/domains/${claim.id}/verify`));
+  const verified = await verifyDomain(token, slug, org, claim.id);
   expect(verified.status).toBe('verified');
   return verified;
 }
