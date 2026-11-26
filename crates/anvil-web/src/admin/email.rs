@@ -60,12 +60,9 @@ async fn authorize(
     Ok(state.admin_tenants().get(slug).await?)
 }
 
-/// A template kind from the path; unknown kinds are 404, and so are kinds without a template
-/// contract yet (TRANSITIONAL(06-20): `org_invitation`).
+/// A template kind from the path; unknown kinds are 404.
 fn kind_of(raw: &str) -> AdminResult<CoreEmailKind> {
-    CoreEmailKind::parse(raw)
-        .filter(|k| anvil_mail::check::has_contract(*k))
-        .ok_or_else(|| CoreError::NotFound.into())
+    CoreEmailKind::parse(raw).ok_or_else(|| CoreError::NotFound.into())
 }
 
 /// One default template file: the operator theme's copy when it has one, else the embedded
@@ -185,11 +182,7 @@ pub(crate) async fn list_email_templates(
         .list_templates(tenant.id)
         .await?;
     let mut items = Vec::with_capacity(CoreEmailKind::ALL.len());
-    // TRANSITIONAL(06-20): kinds without a contract (no default template) are not listed.
-    for kind in CoreEmailKind::ALL
-        .iter()
-        .filter(|k| anvil_mail::check::has_contract(**k))
-    {
+    for kind in CoreEmailKind::ALL {
         let view = match overrides.iter().position(|t| t.kind == *kind) {
             Some(i) => override_view(overrides.swap_remove(i)),
             None => default_view(&state, *kind)?,

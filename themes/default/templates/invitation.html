@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{#- Organization invitation page (ORG-02). Opening the emailed link (GET) shows only the
+    organization name and an accept button: nothing is used until the button is pressed, so link
+    scanners cannot accept. Variables besides `page`:
+    - `view`: `offer`, `invalid`, `signed_out`, `wrong_account`, `verify_email`, `already_member`,
+      `accepted`, `registered`, `email_taken`;
+    - `message_key`: the message of the view (`invitation.*`), shown in `#invitation-message`
+      with `data-message-key`;
+    - `org` (organization display name), `email` (the invited address, signed-out view only);
+    - `action` (accept POST), `register_action` (registration POST), `csrf_token`, `token`;
+    - `registration_allowed`, `password_error` (`{key, text}` or none), `name` (echoed);
+    - `login_url`, `logout_url`.
+    Selectors: `#invitation-message`, form `invitation-accept` / button `invitation-accept-submit`,
+    form `invitation-register-form` (inputs `invitation-email` read-only, `password`, `name`) /
+    button `invitation-register-submit`, `#invitation-password-error`, links
+    `invitation-sign-in` and `invitation-sign-out`. Works without JavaScript. -#}
+{% block heading %}{{ page.title }}{% endblock %}
+{% block content %}
+<p class="anvil-lead" id="invitation-message" data-message-key="{{ message_key }}">{{ t(message_key, org=org | default("")) }}</p>
+{% if view == "offer" %}
+<form id="invitation-accept" method="post" action="{{ action }}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+<input type="hidden" id="token" name="token" value="{{ token }}">
+<button type="submit" id="invitation-accept-submit">{{ t("invitation.accept") }}</button>
+</form>
+{% elif view == "signed_out" or view == "email_taken" %}
+{% if login_url %}
+<p id="invitation-sign-in-hint">{{ t("invitation.sign_in_hint") }}</p>
+<nav class="anvil-links" aria-label="{{ t("nav.other_options") }}">
+<a id="invitation-sign-in" href="{{ login_url }}">{{ t("invitation.sign_in") }}</a>
+</nav>
+{% endif %}
+{% if view == "signed_out" %}
+{% if registration_allowed %}
+<h2 id="invitation-register-heading">{{ t("invitation.register_heading") }}</h2>
+<form id="invitation-register-form" method="post" action="{{ register_action }}" novalidate>
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+<input type="hidden" id="token" name="token" value="{{ token }}">
+<div class="anvil-field">
+<label for="invitation-email">{{ t("invitation.email") }}</label>
+<input id="invitation-email" type="email" value="{{ email }}" readonly aria-readonly="true" autocomplete="username">
+</div>
+{% set invalid = password_error is not none %}
+<div class="anvil-field{% if invalid %} anvil-field-invalid{% endif %}">
+<label for="password">{{ t("invitation.password") }}</label>
+<input id="password" name="password" type="password" required autocomplete="new-password"{% if invalid %} aria-invalid="true" aria-describedby="invitation-password-error"{% endif %}>
+{% if invalid %}<p class="anvil-message anvil-message-error" id="invitation-password-error" data-message-key="{{ password_error.key }}" role="alert">{{ password_error.text }}</p>{% endif %}
+</div>
+<div class="anvil-field">
+<label for="name">{{ t("invitation.name") }} <span class="anvil-optional">{{ t("form.optional") }}</span></label>
+<input id="name" name="name" type="text" autocomplete="name"{% if name %} value="{{ name }}"{% endif %}>
+</div>
+<button type="submit" id="invitation-register-submit">{{ t("invitation.register") }}</button>
+</form>
+{% else %}
+<p id="invitation-registration-disabled" data-message-key="invitation.registration_disabled">{{ t("invitation.registration_disabled") }}</p>
+{% endif %}
+{% endif %}
+{% elif view == "wrong_account" %}
+<nav class="anvil-links" aria-label="{{ t("nav.other_options") }}">
+<a id="invitation-sign-out" href="{{ logout_url }}">{{ t("invitation.sign_out") }}</a>
+</nav>
+{% elif view == "registered" %}
+<nav class="anvil-links" aria-label="{{ t("nav.next_steps") }}">
+<a id="invitation-sign-in" href="{{ login_url }}">{{ t("invitation.sign_in") }}</a>
+</nav>
+{% endif %}
+{% endblock %}

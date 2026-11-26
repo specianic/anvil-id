@@ -100,9 +100,6 @@ impl EmailRenderer {
         kind: EmailKind,
         payload: &BTreeMap<String, String>,
     ) -> Result<(String, String, String), MailError> {
-        if !crate::check::has_contract(kind) {
-            return Err(MailError::Template(crate::check::no_contract_message(kind)));
-        }
         // A kind with optional variables needs at least one of them (`login_code`: the code or
         // the link); an email with neither would sign nobody in.
         let optional = crate::check::optional_variables(kind);
@@ -309,25 +306,38 @@ mod tests {
     }
 
     #[test]
-    fn org_invitation_without_contract_is_an_explicit_error() {
-        // TRANSITIONAL(06-20): no contract yet, so no empty email either.
+    fn org_invitation_renders_from_defaults_and_overrides() {
         let r = EmailRenderer::embedded();
+        let mut p = contract_payload(EmailKind::OrgInvitation);
+        p.insert("org_name".into(), "Globex".into());
+        p.insert("inviter".into(), "ada@example.test".into());
+        p.insert(
+            "link".into(),
+            "https://id.example.test/ui/invitation?token=abc123".into(),
+        );
+        p.insert("expires_in".into(), "7 days".into());
+        let (subject, text, html) = r.render_with(None, EmailKind::OrgInvitation, &p).unwrap();
+        assert!(subject.contains("Globex"), "{subject}");
+        assert!(!text.starts_with(&subject), "subject left in body");
+        for body in [&text, &html] {
+            assert!(body.contains("Globex"));
+            assert!(body.contains("ada@example.test"));
+            assert!(body.contains("7 days"));
+            assert!(body.contains("token=abc123"));
+        }
+        assert!(text.contains("https://id.example.test/ui/invitation?token=abc123"));
         let t = EmailTemplate {
             kind: EmailKind::OrgInvitation,
-            subject: "Join".into(),
-            body_html: "<p>hi</p>".into(),
-            body_text: "hi".into(),
+            subject: "Join {{ org_name }}".into(),
+            body_html: "<p>{{ inviter }}</p>".into(),
+            body_text: "{{ link }}".into(),
             updated_at: time::OffsetDateTime::UNIX_EPOCH,
         };
-        for override_ in [None, Some(&t)] {
-            let err = r
-                .render_with(override_, EmailKind::OrgInvitation, &payload("https://x"))
-                .unwrap_err();
-            assert!(
-                matches!(&err, MailError::Template(m) if m.contains("no template contract")),
-                "{err:?}"
-            );
-        }
+        let (subject, text, _) = r
+            .render_with(Some(&t), EmailKind::OrgInvitation, &p)
+            .unwrap();
+        assert_eq!(subject, "Join Globex");
+        assert_eq!(text, "https://id.example.test/ui/invitation?token=abc123");
     }
 
     #[test]
@@ -418,6 +428,7 @@ mod tests {
             EmailKind::LoginCode,
             EmailKind::EmailChange,
             EmailKind::EmailChanged,
+            EmailKind::OrgInvitation,
         ] {
             r.render_with(None, kind, &contract_payload(kind))
                 .unwrap_or_else(|e| panic!("{kind:?}: {e}"));

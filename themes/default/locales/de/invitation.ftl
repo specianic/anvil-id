@@ -1,0 +1,23 @@
+# Organization invitation page (ORG-02), German.
+title-invitation = Einladung in eine Organisation
+title-invitation_invalid = Einladung ungültig
+title-invitation_accepted = Einladung angenommen
+invitation-offer = Sie wurden eingeladen, { $org } beizutreten.
+invitation-accept = Einladung annehmen
+invitation-invalid = Diese Einladung ist nicht gültig. Sie ist möglicherweise abgelaufen, wurde zurückgezogen oder bereits verwendet. Bitten Sie die Organisation um eine neue Einladung.
+invitation-accepted = Sie sind jetzt Mitglied von { $org }.
+invitation-already_member = Sie sind bereits Mitglied von { $org }.
+invitation-wrong_account = Diese Einladung gilt für ein anderes Konto. Melden Sie sich ab, öffnen Sie den Einladungslink erneut und melden Sie sich mit dem eingeladenen Konto an.
+invitation-sign_out = Mit einem anderen Konto anmelden
+invitation-verify_email = Bestätigen Sie zuerst Ihre E-Mail-Adresse und öffnen Sie dann den Einladungslink erneut.
+invitation-signed_out = Melden Sie sich an oder erstellen Sie ein Konto, um { $org } beizutreten.
+invitation-sign_in_hint = Sie haben bereits ein Konto für diese Adresse? Melden Sie sich an und öffnen Sie dann den Einladungslink erneut.
+invitation-sign_in = Anmelden
+invitation-register_heading = Konto erstellen
+invitation-email = E-Mail-Adresse
+invitation-password = Passwort
+invitation-name = Name
+invitation-register = Konto erstellen und beitreten
+invitation-registration_disabled = Die Kontoerstellung ist hier nicht verfügbar. Melden Sie sich mit einem bestehenden Konto für die eingeladene Adresse an.
+invitation-email_taken = Für diese Adresse existiert bereits ein Konto. Melden Sie sich an und öffnen Sie dann den Einladungslink erneut.
+invitation-registered = Ihr Konto wurde erstellt und Sie sind { $org } beigetreten. Melden Sie sich an, um fortzufahren.

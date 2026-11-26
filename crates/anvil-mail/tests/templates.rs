@@ -6,9 +6,7 @@ use std::time::{Duration, Instant};
 
 use anvil_core::model::{EmailKind, EmailTemplate};
 use anvil_core::ports::EmailTemplateCheck;
-use anvil_mail::check::{
-    has_contract, optional_variables, sample_context, sample_variants, variables,
-};
+use anvil_mail::check::{optional_variables, sample_context, sample_variants, variables};
 use anvil_mail::{EmailRenderer, MailError, TemplateChecker};
 use time::OffsetDateTime;
 
@@ -34,9 +32,7 @@ fn valid_template_passes() {
 
 #[test]
 fn every_kind_accepts_a_template_using_all_its_variables() {
-    // Kinds without a contract yet (TRANSITIONAL(06-20): org_invitation) are refused instead;
-    // see `kinds_without_a_contract_are_refused`.
-    for kind in EmailKind::ALL.iter().filter(|k| has_contract(**k)) {
+    for kind in EmailKind::ALL {
         // Optional variables need a guard (they are absent from some emails).
         let body: String = variables(*kind)
             .iter()
@@ -56,19 +52,56 @@ fn every_kind_accepts_a_template_using_all_its_variables() {
 }
 
 #[test]
-fn kinds_without_a_contract_are_refused() {
-    let without: Vec<EmailKind> = EmailKind::ALL
-        .iter()
-        .copied()
-        .filter(|k| !has_contract(*k))
-        .collect();
-    assert_eq!(without, [EmailKind::OrgInvitation]);
-    for kind in without {
-        let err = TemplateChecker
-            .check(kind, "Subject {{ tenant_name }}", "body", "body")
-            .unwrap_err();
-        assert!(err.message.contains("no template contract"), "{err:?}");
-        assert!(variables(kind).is_empty());
+fn every_kind_has_a_contract_and_default_templates_that_pass_the_check() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../themes/default/emails/");
+    for kind in EmailKind::ALL {
+        assert!(!variables(*kind).is_empty(), "{kind:?}");
+        let name = kind.as_str();
+        let text = std::fs::read_to_string(format!("{root}{name}.txt")).unwrap();
+        let html = std::fs::read_to_string(format!("{root}{name}.html")).unwrap();
+        let (subject, body) = text.split_once('\n').unwrap();
+        TemplateChecker
+            .check(*kind, subject.trim(), &html, body.trim_start())
+            .unwrap_or_else(|e| panic!("{kind:?}: {e:?}"));
+    }
+}
+
+#[test]
+fn org_invitation_contract_is_exact() {
+    assert_eq!(
+        variables(EmailKind::OrgInvitation),
+        [
+            "tenant_name",
+            "org_name",
+            "inviter",
+            "email",
+            "link",
+            "expires_in"
+        ]
+    );
+    // Variables of other kinds are refused (the code of a sign-in email, for instance).
+    let err = TemplateChecker
+        .check(EmailKind::OrgInvitation, "{{ code }}", "x", "x")
+        .unwrap_err();
+    assert!(err.message.starts_with("subject: "), "{err:?}");
+    // The default renders every contract variable.
+    let mut p = sample_context(EmailKind::OrgInvitation);
+    p.insert("org_name".into(), "Globex <Team>".into());
+    let (subject, text, html) = EmailRenderer::embedded()
+        .render_with(None, EmailKind::OrgInvitation, &p)
+        .unwrap();
+    assert!(subject.contains("Globex <Team>"), "{subject}");
+    assert!(text.contains("Globex <Team>") && text.contains(&p["link"]));
+    assert!(html.contains("Globex &lt;Team&gt;") && !html.contains("<Team>"));
+    for var in variables(EmailKind::OrgInvitation) {
+        let mut missing = p.clone();
+        missing.remove(*var);
+        assert!(
+            EmailRenderer::embedded()
+                .render_with(None, EmailKind::OrgInvitation, &missing)
+                .is_err(),
+            "rendering without {var} must fail"
+        );
     }
 }
 

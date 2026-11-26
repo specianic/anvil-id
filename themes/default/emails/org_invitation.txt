@@ -1,0 +1,14 @@
+Join {{ org_name }} at {{ tenant_name }}
+
+Hello,
+
+{{ inviter }} invited {{ email }} to join {{ org_name }} at {{ tenant_name }}. To accept the invitation, open the link below:
+
+{{ link }}
+
+You can sign in with an existing account for this address or create one. The invitation expires in {{ expires_in }} and can be used only once.
+
+If you were not expecting this invitation, you can ignore this email.
+
+-- 
+{{ tenant_name }}

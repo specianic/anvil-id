@@ -1,0 +1,23 @@
+# Organization invitation page (ORG-02).
+title-invitation = Organization invitation
+title-invitation_invalid = Invitation not valid
+title-invitation_accepted = Invitation accepted
+invitation-offer = You have been invited to join { $org }.
+invitation-accept = Accept invitation
+invitation-invalid = This invitation is not valid. It may have expired, been withdrawn or been used already. Ask the organization for a new invitation.
+invitation-accepted = You are now a member of { $org }.
+invitation-already_member = You are already a member of { $org }.
+invitation-wrong_account = This invitation is for a different account. Sign out, then open the invitation link again and sign in with the invited account.
+invitation-sign_out = Sign in with another account
+invitation-verify_email = Confirm your email address first, then open the invitation link again.
+invitation-signed_out = Sign in or create an account to join { $org }.
+invitation-sign_in_hint = Already have an account for this address? Sign in, then open the invitation link again.
+invitation-sign_in = Sign in
+invitation-register_heading = Create an account
+invitation-email = Email address
+invitation-password = Password
+invitation-name = Name
+invitation-register = Create account and join
+invitation-registration_disabled = Creating an account is not available here. Sign in with an existing account for the invited address.
+invitation-email_taken = An account for this address already exists. Sign in, then open the invitation link again.
+invitation-registered = Your account was created and you joined { $org }. Sign in to continue.
