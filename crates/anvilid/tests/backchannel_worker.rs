@@ -189,6 +189,7 @@ async fn signed_in(
         claims: None,
         response_mode: Default::default(),
         resource: vec![],
+        organization: None,
     };
     let (plain, code, family) = build_code(client, &params, &session, issuer, now);
     storage
@@ -253,6 +254,7 @@ async fn logout_wakes_the_worker_and_the_rp_gets_the_token_without_waiting_for_t
                 metadata_expires_at: None,
                 registration_access_token_hash: None,
                 registration_source: anvil_core::model::ClientSource::Static,
+                organization: anvil_core::model::OrgClientPolicy::Off,
             },
         )
         .await
