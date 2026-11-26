@@ -17,8 +17,17 @@
 //!   The token stays usable in all of these cases.
 //! - **Signed out**: a sign-in link and, unless the tenant's registration is `disabled`, a
 //!   registration form whose address is the invited one, shown read-only and never read from the
-//!   form. Registering creates a user with a verified email (password policy and breach check as
-//!   for self-registration) and the membership in one storage intent; it does not sign in.
+//!   form. The sign-in link is `/ui/login?return_to=/ui/invitation?token=…` (percent-encoded):
+//!   the login carries the allowlisted target sealed in its flow state, and every sign-in method
+//!   (password, passkey, email code or link, upstream OIDC or SAML, with or without a second
+//!   factor) ends back on this page, where the user accepts with one click. A login bound to an
+//!   authorization request never returns here (the request wins).
+//! - **Registering** creates a user with a verified email (password policy and breach check as
+//!   for self-registration) and the membership in one storage intent, then signs the new user in
+//!   (`FlowService::sign_in_registered_user`, the same session code as every sign-in: another
+//!   user's session in this browser is replaced, `login_succeeded` is audited with method
+//!   `invitation_registration`). A refused registration (address taken, password refused,
+//!   registration disabled, invalid token, CSRF failure) creates no session.
 //!
 //! # CSRF
 //!
@@ -34,6 +43,7 @@
 
 use anvil_core::error::CoreError;
 use anvil_core::model::{RegistrationMode, TenantId};
+use anvil_core::service::flow::FlowContext;
 use anvil_core::service::org_invitation::{
     AcceptOutcome, MAX_TOKEN_LEN, OrgInvitationService, RegisterOutcome, RegistrationChecks,
 };
@@ -46,9 +56,12 @@ use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
+use secrecy::ExposeSecret as _;
 use serde::{Deserialize, Serialize};
 
-use super::login::{UiQuery, csrf_page, current_browser_session, rejected_form, ui_base};
+use super::login::{
+    UiQuery, csrf_page, current_browser_session, rejected_form, tenant_relying_party, ui_base,
+};
 use crate::errors::core_error_page_in;
 use crate::i18n::{Locale, RequestLocale, carry_ui_locales};
 use crate::render::PageContext;
@@ -255,8 +268,9 @@ fn render(
         registration_allowed => p.registration_allowed,
         password_error => minijinja::Value::from(minijinja::value::Serde(&password_error)),
         name => p.name.unwrap_or_default(),
-        login_url => carry_ui_locales(&format!("{base}/login"), loc),
+        login_url => carry_ui_locales(&login_url(&base, p.token), loc),
         logout_url => carry_ui_locales(&format!("{base}/logout"), loc),
+        continue_url => carry_ui_locales(&format!("{base}/account/profile"), loc),
     };
     let resp = match state.renderer().page("invitation.html", ctx) {
         Ok(html) => (status, jar, html).into_response(),
@@ -271,6 +285,19 @@ fn render(
         }
     };
     private(resp)
+}
+
+/// The sign-in link: with the invitation token, it returns to this page after signing in
+/// (`return_to`, allowlisted by the login page).
+fn login_url(base: &str, token: Option<&str>) -> String {
+    match token {
+        Some(token) => {
+            let target = format!("/ui/invitation?token={token}");
+            let encoded: String = url::form_urlencoded::byte_serialize(target.as_bytes()).collect();
+            format!("{base}/login?return_to={encoded}")
+        }
+        None => format!("{base}/login"),
+    }
 }
 
 /// A view that shows only its message (and its links).
@@ -503,8 +530,48 @@ async fn register(
         Err(e) => return error_page(&state, &tenant, &loc, &e),
     };
     match outcome {
-        RegisterOutcome::Registered { org_name, .. } => {
-            simple(&state, &tenant, &loc, View::Registered, Some(&org_name))
+        RegisterOutcome::Registered { org_name, user } => {
+            let current = match current_browser_session(&state, &tenant, &jar).await {
+                Ok(s) => s,
+                Err(e) => return error_page(&state, &tenant, &loc, &e),
+            };
+            let base = ui_base(&tenant);
+            let rp = tenant_relying_party(&tenant);
+            let cx = FlowContext {
+                tenant: &tenant.tenant,
+                issuer: &tenant.issuer,
+                ui_base: &base,
+                rp: &rp,
+                ctx: &ctx,
+            };
+            let cookie = match state
+                .ui_flow_service()
+                .sign_in_registered_user(&cx, user, current.as_ref())
+                .await
+            {
+                Ok(c) => c,
+                Err(e) => return error_page(&state, &tenant, &loc, &e),
+            };
+            // As after every sign-in: another user's session may have been revoked.
+            state.wake_logout_worker();
+            let jar = CookieJar::new().add(
+                state
+                    .cookies()
+                    .session_cookie(&tenant.tenant, cookie.token.expose_secret()),
+            );
+            let p = Page {
+                org: Some(&org_name),
+                ..Page::default()
+            };
+            render(
+                &state,
+                &tenant,
+                &loc,
+                View::Registered,
+                &p,
+                StatusCode::OK,
+                jar,
+            )
         }
         RegisterOutcome::Invalid => invalid(&state, &tenant, &loc),
         // The signed-out page without the form (registration is disabled), and nothing written.
@@ -521,7 +588,22 @@ async fn register(
             )
             .await
         }
-        RegisterOutcome::EmailTaken => simple(&state, &tenant, &loc, View::EmailTaken, None),
+        // Sign in instead: the link returns here.
+        RegisterOutcome::EmailTaken => {
+            let p = Page {
+                token: Some(&token),
+                ..Page::default()
+            };
+            render(
+                &state,
+                &tenant,
+                &loc,
+                View::EmailTaken,
+                &p,
+                StatusCode::OK,
+                CookieJar::new(),
+            )
+        }
         RegisterOutcome::PasswordRejected(key) => {
             signed_out_page(
                 &state,

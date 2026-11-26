@@ -9,11 +9,15 @@
     - `org` (organization display name), `email` (the invited address, signed-out view only);
     - `action` (accept POST), `register_action` (registration POST), `csrf_token`, `token`;
     - `registration_allowed`, `password_error` (`{key, text}` or none), `name` (echoed);
-    - `login_url`, `logout_url`.
+    - `login_url`: the sign-in page; on the `signed_out` and `email_taken` views it carries
+      `return_to` (this invitation), so signing in comes back here to accept;
+    - `logout_url`; `continue_url` (the account page, `registered` view: the new account is
+      signed in).
     Selectors: `#invitation-message`, form `invitation-accept` / button `invitation-accept-submit`,
     form `invitation-register-form` (inputs `invitation-email` read-only, `password`, `name`) /
     button `invitation-register-submit`, `#invitation-password-error`, links
-    `invitation-sign-in` and `invitation-sign-out`. Works without JavaScript. -#}
+    `invitation-sign-in`, `invitation-sign-out` and `invitation-continue`. Works without
+    JavaScript. -#}
 {% block heading %}{{ page.title }}{% endblock %}
 {% block content %}
 <p class="anvil-lead" id="invitation-message" data-message-key="{{ message_key }}">{{ t(message_key, org=org | default("")) }}</p>
@@ -62,7 +66,7 @@
 </nav>
 {% elif view == "registered" %}
 <nav class="anvil-links" aria-label="{{ t("nav.next_steps") }}">
-<a id="invitation-sign-in" href="{{ login_url }}">{{ t("invitation.sign_in") }}</a>
+<a id="invitation-continue" href="{{ continue_url }}">{{ t("invitation.continue") }}</a>
 </nav>
 {% endif %}
 {% endblock %}

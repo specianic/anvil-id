@@ -2,11 +2,15 @@
 //! the outbox worker, the GET page that consumes nothing, acceptance bound to the signed-in user's
 //! verified email (single use under concurrency), the wrong-account and unverified cases keeping
 //! the token, registration through an invitation (open, invite_only, disabled, existing address),
-//! one page for every invalid token, and the CSRF binding of the forms.
+//! one page for every invalid token, and the CSRF binding of the forms. Plan 06-31: the sign-in
+//! link returns to the invitation (password, second factor, upstream; the allowlist and the
+//! sealed target refuse everything else), and registering through an invitation signs in.
 
 mod admin_support;
 mod support;
 mod ui_helpers;
+mod upstream_flow;
+mod upstream_support;
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -14,25 +18,29 @@ use std::sync::{Arc, Mutex};
 use admin_support::{API, admin_token, call, create_org, create_role};
 use anvil_core::error::CoreError;
 use anvil_core::model::{
-    AuditAction, AuditActor, AuditQuery, NewOrgInvitation, OrgId, OrgInvitationId, Organization,
-    RegistrationMode, RequestContext, RoleId, SecretHash, Tenant, TenantSettings, UserId,
-    UserUpdate,
+    AuditAction, AuditActor, AuditQuery, BrowserSession, CredentialId, FlowId, NewOrgInvitation,
+    NewTotp, OrgId, OrgInvitationId, Organization, RegistrationMode, RequestContext, RoleId,
+    SecretHash, TOTP_SEED_PURPOSE, Tenant, TenantSettings, UserId, UserUpdate, credential_aad,
 };
 use anvil_core::ports::{BreachChecker, Clock as _};
+use anvil_core::service::account::new_recovery_codes;
 use anvil_core::service::org_invitation::{
     OrgInvitationService, RegisterOutcome, RegistrationChecks,
 };
 use anvil_jose::encoding::{random_token, secret_hash};
+use anvil_jose::otp::TotpSecret;
 use anvil_mail::worker::TransportFactory;
 use anvil_mail::{
     EmailRenderer, MailError, MailTransport, OutboxWorker, OutgoingMail, StorageOutbox,
 };
+use aws_lc_rs::hmac;
 use axum::body::Body;
 use axum::http::{Method, Request, header};
 use serde_json::json;
-use support::{TestApp, TestResponse, csrf_from};
+use support::{TestApp, TestResponse, csrf_from, location};
 use time::Duration;
 use ui_helpers::{default_tenant, message_keys, register, set_settings};
+use upstream_support::MOCK_SUBJECT;
 
 const PASSWORD: &str = "correct horse battery staple";
 const INVITED: &str = "invitee@example.test";
@@ -945,4 +953,592 @@ async fn invitation_page_csrf_required() {
     assert!(!is_member(&app, &tenant, &org, invitee).await);
     let resp = post_accept(&app, &inv, &csrf).await;
     assert_eq!(view_key(&resp), "invitation.accepted");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Return to the invitation after signing in (06-31)
+// ---------------------------------------------------------------------------------------------
+
+/// The invitation page as the sign-in returns to it (absolute, on the tenant's own origin).
+fn invitation_url(app: &TestApp, inv: &Invitation) -> String {
+    format!("{}{}", app.issuer(None), page_path(&inv.token))
+}
+
+/// The `href` of the element with `id`, unescaped, as a path on the public origin.
+fn href_of(app: &TestApp, html: &str, id: &str) -> String {
+    let marker = format!("id=\"{id}\" href=\"");
+    let start = html
+        .find(&marker)
+        .unwrap_or_else(|| panic!("#{id} in {html}"))
+        + marker.len();
+    let end = html[start..].find('"').expect("quoted") + start;
+    let href = html[start..end]
+        .replace("&#x2f;", "/")
+        .replace("&amp;", "&");
+    ui_helpers::to_path(app, &href)
+}
+
+/// Signed out: opens the invitation, posts accept and returns the sign-in link of the
+/// signed-out page.
+async fn sign_in_link(app: &TestApp, inv: &Invitation) -> String {
+    let (offer, _) = signed_out_offer(app, inv).await;
+    let link = href_of(app, &offer.html(), "invitation-sign-in");
+    let encoded: String =
+        url::form_urlencoded::byte_serialize(page_path(&inv.token).as_bytes()).collect();
+    assert_eq!(link, format!("/ui/login?return_to={encoded}"));
+    link
+}
+
+/// The login page's flow id (from its form action).
+fn flow_of(app: &TestApp, html: &str) -> FlowId {
+    let action = ui_helpers::form_action(app, html);
+    let id = action
+        .split("flow=")
+        .nth(1)
+        .and_then(|rest| rest.split('&').next())
+        .expect("the form carries the flow");
+    FlowId(uuid::Uuid::parse_str(id).expect("flow id"))
+}
+
+async fn flow_state(app: &TestApp, tenant: &Tenant, flow: FlowId) -> String {
+    app.storage()
+        .flows()
+        .get(tenant.id, flow, app.clock().now())
+        .await
+        .unwrap()
+        .expect("flow stored")
+        .state
+}
+
+/// Back on the invitation page after signing in: the offer, and one click accepts.
+async fn accepts_after_return(app: &TestApp, inv: &Invitation, resp: &TestResponse) {
+    assert_eq!(resp.status, 303, "{}", resp.text());
+    assert_eq!(location(resp), invitation_url(app, inv));
+    let page = app.follow(resp).await;
+    assert_eq!(page.status, 200, "{}", page.text());
+    assert_eq!(view_key(&page), "invitation.offer");
+    let csrf = csrf_from(&page.html());
+    let accepted = post_accept(app, inv, &csrf).await;
+    assert_eq!(view_key(&accepted), "invitation.accepted");
+}
+
+/// The answer is the normal signed-in page (no redirect anywhere).
+fn signed_in_page(resp: &TestResponse, what: &str) {
+    assert_eq!(resp.status, 200, "{what}: {}", resp.text());
+    assert!(resp.header("location").is_none(), "{what}");
+    assert!(
+        message_keys(&resp.html()).contains(&"login.signed_in".to_owned()),
+        "{what}: {}",
+        resp.text()
+    );
+}
+
+/// `true` if the response sets a session cookie.
+fn sets_session(resp: &TestResponse) -> bool {
+    resp.headers
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .any(|v| v.contains("anvil_session_") && !v.contains("Max-Age=0"))
+}
+
+async fn active_session(app: &TestApp, tenant: &Tenant) -> BrowserSession {
+    let (_, value) = ui_helpers::session_cookie(app).expect("session cookie");
+    app.storage()
+        .sessions()
+        .get_active(
+            tenant.id,
+            &SecretHash(secret_hash(&value)),
+            app.clock().now(),
+        )
+        .await
+        .unwrap()
+        .expect("active session")
+}
+
+#[tokio::test]
+async fn invitation_sign_in_returns_to_invitation() {
+    let app = app().await;
+    let tenant = default_tenant(&app);
+    let org = create_org(&app, tenant.id, "globex").await;
+    let invitee = user(&app, &tenant, INVITED, true).await;
+    let inv = invite(&app, &tenant, &org, INVITED, &[]).await;
+
+    let link = sign_in_link(&app, &inv).await;
+    let page = app.get(&link).await;
+    assert_eq!(page.status, 200, "{}", page.text());
+    // The URL carries the token: never sent on as a referrer, never cached.
+    assert_eq!(page.header("referrer-policy"), Some("no-referrer"));
+    assert_eq!(page.header("cache-control"), Some("no-store"));
+    let resp = ui_helpers::submit_form(
+        &app,
+        &link,
+        &[("identifier", INVITED), ("password", PASSWORD)],
+    )
+    .await;
+    accepts_after_return(&app, &inv, &resp).await;
+    assert!(is_member(&app, &tenant, &org, invitee).await);
+}
+
+/// Enrols an authenticator app for `user` (random seed, sealed like production) and returns the
+/// seed.
+async fn enrol_totp(app: &TestApp, tenant: &Tenant, user: UserId) -> Vec<u8> {
+    let id = CredentialId::new_v7();
+    let seed = TotpSecret::generate();
+    let secret_enc = app
+        .kek()
+        .seal(TOTP_SEED_PURPOSE, &credential_aad(id), seed.as_bytes())
+        .expect("seal");
+    let (_, hashes) = new_recovery_codes(app.kek()).expect("codes");
+    let now = app.clock().now();
+    app.storage()
+        .users()
+        .create_totp(
+            tenant.id,
+            user,
+            &NewTotp {
+                id,
+                secret_enc,
+                created_at: now,
+            },
+            &hashes,
+            now,
+        )
+        .await
+        .expect("totp");
+    seed.as_bytes().to_vec()
+}
+
+/// RFC 6238 code (SHA-1, 6 digits, 30 s) of `seed` now (test code).
+fn totp_now(app: &TestApp, seed: &[u8]) -> String {
+    let key = hmac::Key::new(hmac::HMAC_SHA1_FOR_LEGACY_USE_ONLY, seed);
+    let counter = u64::try_from(app.clock().now().unix_timestamp() / 30).expect("time");
+    let tag = hmac::sign(&key, &counter.to_be_bytes());
+    let h = tag.as_ref();
+    let off = usize::from(h[h.len() - 1] & 0x0f);
+    let bin = (u32::from(h[off]) & 0x7f) << 24
+        | u32::from(h[off + 1]) << 16
+        | u32::from(h[off + 2]) << 8
+        | u32::from(h[off + 3]);
+    format!("{:06}", bin % 1_000_000)
+}
+
+/// Submits the second-factor form of `page` with the current TOTP code.
+async fn totp_step(app: &TestApp, page: &TestResponse, seed: &[u8]) -> TestResponse {
+    let html = page.html();
+    assert!(html.contains("id=\"second-factor\""), "{html}");
+    assert!(ui_helpers::session_cookie(app).is_none(), "no session yet");
+    let action = ui_helpers::form_action(app, &html);
+    let csrf = csrf_from(&html);
+    let factor = ui_helpers::hidden_inputs(&html)
+        .into_iter()
+        .find(|(n, _)| n == "factor_token")
+        .map(|(_, v)| v)
+        .expect("factor_token");
+    let code = totp_now(app, seed);
+    app.post_form(
+        &action,
+        &[
+            ("csrf_token", csrf.as_str()),
+            ("factor_token", factor.as_str()),
+            ("code", code.as_str()),
+        ],
+    )
+    .await
+}
+
+#[tokio::test]
+async fn invitation_sign_in_with_second_factor_returns_to_invitation() {
+    let app = app().await;
+    let tenant = default_tenant(&app);
+    let org = create_org(&app, tenant.id, "globex").await;
+    let invitee = user(&app, &tenant, INVITED, true).await;
+    let seed = enrol_totp(&app, &tenant, invitee).await;
+    let inv = invite(&app, &tenant, &org, INVITED, &[]).await;
+
+    let link = sign_in_link(&app, &inv).await;
+    let page = ui_helpers::submit_form(
+        &app,
+        &link,
+        &[("identifier", INVITED), ("password", PASSWORD)],
+    )
+    .await;
+    assert_eq!(page.status, 200, "{}", page.text());
+    let resp = totp_step(&app, &page, &seed).await;
+    accepts_after_return(&app, &inv, &resp).await;
+    assert!(is_member(&app, &tenant, &org, invitee).await);
+}
+
+#[tokio::test]
+async fn invitation_sso_sign_in_returns_to_invitation() {
+    // An account linked to the provider signs in with the upstream button of the login page the
+    // invitation linked to: once directly, once continuing in a fresh flow at the second factor
+    // (the target moves to the new flow, resealed).
+    let u = upstream_flow::setup(true).await;
+    let app = &u.app;
+    let tenant = default_tenant(app);
+    let org = create_org(app, tenant.id, "globex").await;
+    let invitee = user(app, &tenant, INVITED, true).await;
+    let invitee_user = app
+        .storage()
+        .users()
+        .get(tenant.id, invitee)
+        .await
+        .unwrap()
+        .expect("user");
+    upstream_flow::link_identity(app, &invitee_user, &u.conn, MOCK_SUBJECT).await;
+    let inv = invite(app, &tenant, &org, INVITED, &[]).await;
+    let claims = json!({ "email": INVITED, "email_verified": true });
+
+    let sso = |link: String| {
+        let claims = claims.clone();
+        let u = &u;
+        async move {
+            let page = u.app.get(&link).await;
+            assert_eq!(page.status, 200, "{}", page.text());
+            let html = page.html();
+            let action = upstream_flow::button_action(&u.app, &html, upstream_flow::SLUG);
+            let started = upstream_flow::post_start(&u.app, &action, &csrf_from(&html)).await;
+            upstream_flow::reply_for(u, &started, claims);
+            upstream_flow::callback(u, &started).await
+        }
+    };
+
+    let resp = sso(sign_in_link(app, &inv).await).await;
+    assert_eq!(resp.status, 303, "{}", resp.text());
+    assert_eq!(location(&resp), invitation_url(app, &inv));
+    assert_eq!(active_session(app, &tenant).await.user_id, invitee);
+
+    // With a second factor: the callback continues in a new flow.
+    let seed = enrol_totp(app, &tenant, invitee).await;
+    let page = sso(sign_in_link(app, &inv).await).await;
+    let resp = totp_step(app, &page, &seed).await;
+    accepts_after_return(app, &inv, &resp).await;
+    assert!(is_member(app, &tenant, &org, invitee).await);
+}
+
+#[tokio::test]
+async fn return_to_rejects_open_redirects() {
+    let app = app().await;
+    let tenant = default_tenant(&app);
+    user(&app, &tenant, INVITED, true).await;
+    let oversized = format!("/ui/invitation?token={}", "a".repeat(129));
+    let rejected = [
+        "",
+        "https://evil.example/ui/invitation?token=a",
+        "//evil.example/ui/invitation?token=a",
+        "/\\evil.example",
+        "\\\\evil.example",
+        "/ui/invitation",
+        "/ui/invitation?token=",
+        "/ui/invitation?token=a&x=1",
+        "/ui/invitation?x=1&token=a",
+        "/ui/invitation?token=a#f",
+        "/ui/invitation?token=a%2F",
+        "/ui/../ui/invitation?token=a",
+        "/ui/account",
+        "/ui/invitation/register?token=a",
+        "/UI/invitation?token=a",
+        "/ui/invitation?token=a+b",
+        "/ui/invitation?token=a/b",
+        "/ui/invitation?token=a=",
+        "/ui/invitation?token=a b",
+        "/ui/invitation?token=a\r\nLocation: https://evil.example",
+        "/ui/invitation?token=aé",
+        "javascript:alert(1)",
+        oversized.as_str(),
+    ];
+    for raw in rejected {
+        app.clear_cookies();
+        let encoded: String = url::form_urlencoded::byte_serialize(raw.as_bytes()).collect();
+        let path = format!("/ui/login?return_to={encoded}");
+        let page = app.get(&path).await;
+        assert_eq!(page.status, 200, "{raw:?}: ignored, not an error page");
+        let flow = flow_of(&app, &page.html());
+        assert!(
+            !flow_state(&app, &tenant, flow)
+                .await
+                .contains("return_to_sealed"),
+            "{raw:?}: nothing stored"
+        );
+        let resp = ui_helpers::submit_form(
+            &app,
+            &path,
+            &[("identifier", INVITED), ("password", PASSWORD)],
+        )
+        .await;
+        signed_in_page(&resp, raw);
+    }
+}
+
+#[tokio::test]
+async fn return_to_tampered_or_moved_sealed_value_is_ignored() {
+    let app = app().await;
+    let tenant = default_tenant(&app);
+    let org = create_org(&app, tenant.id, "globex").await;
+    user(&app, &tenant, INVITED, true).await;
+    let inv = invite(&app, &tenant, &org, INVITED, &[]).await;
+    let encoded: String =
+        url::form_urlencoded::byte_serialize(page_path(&inv.token).as_bytes()).collect();
+    let path = format!("/ui/login?return_to={encoded}");
+
+    // A sealed value taken from another login flow.
+    app.clear_cookies();
+    let donor = app.get(&path).await;
+    let donor_state = flow_state(&app, &tenant, flow_of(&app, &donor.html())).await;
+    let donor_sealed =
+        serde_json::from_str::<serde_json::Value>(&donor_state).unwrap()["return_to_sealed"]
+            .as_str()
+            .expect("sealed")
+            .to_owned();
+    // The same value with one character changed.
+    let mut tampered = donor_sealed.clone().into_bytes();
+    let i = tampered.len() / 2;
+    tampered[i] = if tampered[i] == b'A' { b'B' } else { b'A' };
+    let tampered = String::from_utf8(tampered).unwrap();
+
+    for (what, sealed) in [("moved", donor_sealed), ("tampered", tampered)] {
+        app.clear_cookies();
+        let page = app.get(&path).await;
+        let html = page.html();
+        let flow = flow_of(&app, &html);
+        let mut state: serde_json::Value =
+            serde_json::from_str(&flow_state(&app, &tenant, flow).await).unwrap();
+        state["return_to_sealed"] = serde_json::Value::String(sealed);
+        assert!(
+            app.storage()
+                .flows()
+                .update_state(tenant.id, flow, &state.to_string(), app.clock().now())
+                .await
+                .unwrap()
+        );
+        let action = ui_helpers::form_action(&app, &html);
+        let resp = app
+            .post_form(
+                &action,
+                &[
+                    ("csrf_token", csrf_from(&html).as_str()),
+                    ("identifier", INVITED),
+                    ("password", PASSWORD),
+                ],
+            )
+            .await;
+        signed_in_page(&resp, what);
+    }
+}
+
+#[tokio::test]
+async fn return_to_ignored_with_authorization_request() {
+    const REQUEST: &str = "0192f0c4-7a1b-7c3d-8e9f-0123456789ab";
+    let app = app().await;
+    let tenant = default_tenant(&app);
+    let org = create_org(&app, tenant.id, "globex").await;
+    user(&app, &tenant, INVITED, true).await;
+    let inv = invite(&app, &tenant, &org, INVITED, &[]).await;
+    let encoded: String =
+        url::form_urlencoded::byte_serialize(page_path(&inv.token).as_bytes()).collect();
+    let path = format!("/ui/login?request={REQUEST}&return_to={encoded}");
+    app.clear_cookies();
+    let page = app.get(&path).await;
+    assert_eq!(page.status, 200, "{}", page.text());
+    let state = flow_state(&app, &tenant, flow_of(&app, &page.html())).await;
+    assert!(!state.contains("return_to_sealed"), "{state}");
+    let resp = ui_helpers::submit_form(
+        &app,
+        &path,
+        &[("identifier", INVITED), ("password", PASSWORD)],
+    )
+    .await;
+    assert_eq!(resp.status, 303, "{}", resp.text());
+    assert_eq!(
+        location(&resp),
+        format!("{}/authorize/continue?request={REQUEST}", app.issuer(None))
+    );
+}
+
+#[tokio::test]
+async fn return_to_token_not_stored_in_plaintext() {
+    let app = app().await;
+    let tenant = default_tenant(&app);
+    let org = create_org(&app, tenant.id, "globex").await;
+    let inv = invite(&app, &tenant, &org, INVITED, &[]).await;
+    let link = sign_in_link(&app, &inv).await;
+    let page = app.get(&link).await;
+    assert_eq!(page.status, 200, "{}", page.text());
+    let state = flow_state(&app, &tenant, flow_of(&app, &page.html())).await;
+    assert!(state.contains("return_to_sealed"), "{state}");
+    assert!(!state.contains(&inv.token), "{state}");
+    assert!(!state.contains("/ui/invitation"), "{state}");
+    // Nor in the page itself (the target lives in the flow, not in a form field).
+    assert!(!page.html().contains(&inv.token));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Signed in after registering through an invitation (06-31)
+// ---------------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn invitation_registration_signs_in() {
+    let app = app().await;
+    let tenant = default_tenant(&app);
+    let org = create_org(&app, tenant.id, "globex").await;
+    let inv = invite(&app, &tenant, &org, INVITED, &[]).await;
+    let (_, csrf) = signed_out_offer(&app, &inv).await;
+    let resp = post_register(&app, &inv, &csrf, &[("password", PASSWORD)]).await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_eq!(view_key(&resp), "invitation.registered");
+    assert!(sets_session(&resp), "the registration signs in");
+    assert_eq!(resp.header("cache-control"), Some("no-store"));
+    let html = resp.html();
+    assert_eq!(
+        href_of(&app, &html, "invitation-continue"),
+        "/ui/account/profile"
+    );
+    assert!(!html.contains("id=\"invitation-sign-in\""));
+
+    let created = app
+        .storage()
+        .users()
+        .get_by_email(tenant.id, INVITED)
+        .await
+        .unwrap()
+        .expect("created");
+    assert!(is_member(&app, &tenant, &org, created.id).await);
+    let session = active_session(&app, &tenant).await;
+    assert_eq!(session.user_id, created.id);
+    assert_eq!(session.amr, vec!["pwd".to_owned()]);
+    // The account page needs no further sign-in.
+    let account = app.get("/ui/account/profile").await;
+    assert_eq!(account.status, 200, "{}", account.text());
+    // Audited as a sign-in with its own method.
+    let events = app
+        .storage()
+        .audit()
+        .query(
+            tenant.id,
+            &AuditQuery {
+                action: Some(AuditAction::LoginSucceeded),
+                limit: 10,
+                ..AuditQuery::default()
+            },
+        )
+        .await
+        .unwrap()
+        .items;
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(
+        events[0].target.as_deref(),
+        Some(created.id.to_string().as_str())
+    );
+    assert_eq!(
+        events[0]
+            .details
+            .as_map()
+            .get("method")
+            .and_then(|v| v.as_str()),
+        Some("invitation_registration")
+    );
+}
+
+#[tokio::test]
+async fn invitation_registration_replaces_other_users_session() {
+    let app = app().await;
+    let tenant = default_tenant(&app);
+    let org = create_org(&app, tenant.id, "globex").await;
+    let other = user(&app, &tenant, OTHER, true).await;
+    sign_in(&app, OTHER).await;
+    let before = active_session(&app, &tenant).await;
+    assert_eq!(before.user_id, other);
+    let inv = invite(&app, &tenant, &org, INVITED, &[]).await;
+    let csrf = open(&app, &inv).await;
+
+    let resp = post_register(&app, &inv, &csrf, &[("password", PASSWORD)]).await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_eq!(view_key(&resp), "invitation.registered");
+    assert!(sets_session(&resp));
+    let created = app
+        .storage()
+        .users()
+        .get_by_email(tenant.id, INVITED)
+        .await
+        .unwrap()
+        .expect("the account is the invited address's");
+    assert_eq!(active_session(&app, &tenant).await.user_id, created.id);
+    assert!(is_member(&app, &tenant, &org, created.id).await);
+    assert!(!is_member(&app, &tenant, &org, other).await);
+    let old = app
+        .storage()
+        .sessions()
+        .get(tenant.id, before.id)
+        .await
+        .unwrap()
+        .expect("old session row");
+    assert!(
+        old.revoked_at.is_some(),
+        "the other user's session is revoked"
+    );
+}
+
+#[tokio::test]
+async fn invitation_registration_failures_set_no_session() {
+    let app = app().await;
+    let tenant = default_tenant(&app);
+    let org = create_org(&app, tenant.id, "globex").await;
+
+    // The address already has an account.
+    user(&app, &tenant, OTHER, true).await;
+    let taken = invite(&app, &tenant, &org, OTHER, &[]).await;
+    let (_, csrf) = signed_out_offer(&app, &taken).await;
+    let resp = post_register(&app, &taken, &csrf, &[("password", PASSWORD)]).await;
+    assert_eq!(view_key(&resp), "invitation.email_taken");
+    assert!(!sets_session(&resp), "email_taken");
+    // Its sign-in link returns to the invitation.
+    let encoded: String =
+        url::form_urlencoded::byte_serialize(page_path(&taken.token).as_bytes()).collect();
+    assert_eq!(
+        href_of(&app, &resp.html(), "invitation-sign-in"),
+        format!("/ui/login?return_to={encoded}")
+    );
+
+    // A refused password, a forged CSRF token.
+    let inv = invite(&app, &tenant, &org, INVITED, &[]).await;
+    let (_, csrf) = signed_out_offer(&app, &inv).await;
+    let resp = post_register(&app, &inv, &csrf, &[("password", "short")]).await;
+    assert_eq!(resp.status, 400, "{}", resp.text());
+    assert!(!sets_session(&resp), "password");
+    let resp = post_register(&app, &inv, "forged", &[("password", PASSWORD)]).await;
+    assert_eq!(resp.status, 403, "{}", resp.text());
+    assert!(!sets_session(&resp), "csrf");
+
+    // Registration disabled.
+    set_settings(
+        &app,
+        tenant.id,
+        TenantSettings {
+            registration: RegistrationMode::Disabled,
+            ..tenant.settings.clone()
+        },
+    )
+    .await;
+    let resp = post_register(&app, &inv, &csrf, &[("password", PASSWORD)]).await;
+    assert_eq!(resp.status, 403, "{}", resp.text());
+    assert!(!sets_session(&resp), "disabled");
+    set_settings(&app, tenant.id, tenant.settings.clone()).await;
+
+    // The invitation expired after the page was opened.
+    app.clock()
+        .advance(std::time::Duration::from_secs(8 * 24 * 3600));
+    let resp = post_register(&app, &inv, &csrf, &[("password", PASSWORD)]).await;
+    assert_eq!(view_key(&resp), "invitation.invalid");
+    assert!(!sets_session(&resp), "invalid");
+
+    assert!(ui_helpers::session_cookie(&app).is_none());
+    assert!(
+        app.storage()
+            .users()
+            .get_by_email(tenant.id, INVITED)
+            .await
+            .unwrap()
+            .is_none()
+    );
 }

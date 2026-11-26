@@ -1,9 +1,9 @@
-//! Login pages (`GET/POST /ui/login[?request=]`) and the helpers shared by every self-service
-//! page (flow start, submission, outcome mapping, rendering).
+//! Login pages (`GET/POST /ui/login[?request=][&return_to=]`) and the helpers shared by every
+//! self-service page (flow start, submission, outcome mapping, rendering).
 //!
 //! Status codes: a form with an error message → 400; message pages → 200; a successful sign-in
-//! → 303 See Other to `{issuer}/authorize/continue?request=…` (or the signed-in message page when
-//! the login is not bound to an authorization request). `CoreError::Forbidden` (wrong or missing
+//! → 303 See Other to `{issuer}/authorize/continue?request=…`, or to the login's return target
+//! (below), or the signed-in message page when the login has neither. `CoreError::Forbidden` (wrong or missing
 //! CSRF token or flow cookie) → the `csrf` error page with 403. Form values are never logged.
 //!
 //! Submissions carry the request context (client IP, user agent, request id; [`AuditContext`])
@@ -13,7 +13,7 @@
 //!
 //! | Route | |
 //! |---|---|
-//! | `GET  /ui/login[?request=]` | password form plus the passkey button (hidden until webauthn.js runs) |
+//! | `GET  /ui/login[?request=][&return_to=]` | password form plus the passkey button (hidden until webauthn.js runs) |
 //! | `POST /ui/login?flow=` | email + password |
 //! | `POST /ui/login/passkey/options?flow=` | discoverable WebAuthn request options (JSON, for webauthn.js) |
 //! | `POST /ui/login/passkey?flow=` | the passkey assertion (`response`) |
@@ -39,6 +39,18 @@
 //! email in a hidden field, shown read-only with a "change" button). `login_hint` and
 //! `organization` can skip the email page (`FlowService::start_login`). Plain form posts and 303s
 //! only: no JavaScript is needed.
+//!
+//! # Return target (`return_to`, ORG-02)
+//!
+//! The invitation page links signed-out users to `/ui/login?return_to=/ui/invitation?token=…`.
+//! `return_to` is an exact allowlist (`policy::return_to::parse_return_target`: that path with one
+//! base64url `token` of at most 128 characters, nothing else); any other value is ignored silently
+//! and never logged. The flow service keeps it sealed in the flow state, only when the login has
+//! no authorization request (the request always wins), and every sign-in that finishes the login
+//! (password, passkey, second factor, email code or link, upstream, SAML) answers 303 to
+//! `{issuer}` + the path, the tenant's own origin; a host is never taken from the request. The
+//! login page is `no-store` and, like every page, `Referrer-Policy: no-referrer` (the URL carries
+//! the token).
 //!
 //! When the tenant enables email sign-in (`email_otp` or `magic_link`) the sign-in form is followed
 //! by the "Email me a sign-in code" form (`email_code` template variable), its address prefilled

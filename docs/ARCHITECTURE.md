@@ -961,7 +961,8 @@ credential changes.
 |---|---|
 | `POST /ui/login/identify?flow=` | Identifier-first sign-in: the email page and the single-sign-on choice (`choice=sso\|password\|change`), §9.6 |
 | `GET /ui/select-organization?request=`, `POST /ui/select-organization?flow=&request=` | Organization switcher (§9.4) |
-| `GET /ui/invitation?token=`, `POST /ui/invitation`, `POST /ui/invitation/register` | Organization invitation: the GET only shows the offer; accept (signed in) or register for the invited address. CSRF: a `__Host-anvil_invitation` nonce cookie (SameSite=Strict, 1 h) plus an HMAC over tenant, nonce and token under a KEK-derived key; `no-store`, `no-referrer` |
+| `GET /ui/invitation?token=`, `POST /ui/invitation`, `POST /ui/invitation/register` | Organization invitation: the GET only shows the offer; accept (signed in) or register for the invited address (registering signs in through the shared session code, `FlowService::sign_in_registered_user`). CSRF: a `__Host-anvil_invitation` nonce cookie (SameSite=Strict, 1 h) plus an HMAC over tenant, nonce and token under a KEK-derived key; `no-store`, `no-referrer` |
+| `GET /ui/login?return_to=` | Where a sign-in without an authorization request returns: an exact allowlist (`policy::return_to`: `/ui/invitation?token=` plus 1-128 base64url characters, nothing else; anything else is ignored). Stored in the login flow state only sealed with the KEK (`return_to_sealed`, AAD tenant and flow id, resealed when the login continues in a new flow); one `FlowService::continuation` helper gives every sign-in outcome its target, and an authorization request bound to the flow always wins |
 | `POST /ui/login/saml/{slug}/start?flow=`, `POST /ui/login/saml/{slug}/acs`, `GET /ui/login/saml/{slug}/continue?state=`, `GET /saml/{slug}/metadata` | SAML SP (§9.5; 404 with the flag off). The ACS is outside the Fetch-Metadata layer |
 
 ### 10.3 Management API
@@ -1018,7 +1019,11 @@ credential changes.
   `admin:settings:*`, never private material); the client field `organization`; tenant settings
   `claims.org_roles|org_permissions`; the tenant view `features.saml`; the `org_invitation`
   email template kind. Tenant-level `connections` lists org connections read-only (`409` on
-  change). 122 operations; `security_admin_v10.rs` proves the scopes.
+  change). Two user-side lookups (06-29): `GET /tenants/{slug}/users/{user_id}/organizations`
+  (`listUserOrganizations`, tag `organizations`: memberships with the user's roles in each org;
+  scopes `admin:users:{read|write}`, `admin:organizations:{read|write}` or `admin:read|write`) and
+  `GET /tenants/{slug}/users?email=` (`listUsers` filter, 0 or 1 users; the users scopes). 123
+  operations; `security_admin_v10.rs` proves the scopes.
 - **Organization admins (1.0, decision Q1).** The `{org}` sub-routes use a second extractor,
   `OrgAdminAuth`, with one `Principal` enum (`SystemAdmin`, `OrgAdmin { tenant, org, user }`). It
   accepts a system-tenant token (scopes checked by the handler) or a JWT access token of tenant
@@ -1420,8 +1425,7 @@ home-realm discovery (ORG-4); organization admins on the management API; the sig
 and console pages for organizations, org SSO and keys (ADM-2). The 0.4 → 1.0 upgrade is tested on
 both backends (`tests/upgrade.rs`). User docs: `docs/ORGANIZATIONS.md`, `docs/SAML.md`,
 `docs/UPGRADING.md`. Open items: **tenant-restricted system admins deferred to Phase 7**; **SAML
-experimental until the Phase 7 external review and interop checklist** (D4); invitation return-to
-after sign-in; the remaining M5 scope (certification, external review, PAR, headless flow API, user
+experimental until the Phase 7 external review and interop checklist** (D4); the remaining M5 scope (certification, external review, PAR, headless flow API, user
 import/export) belongs to Phase 7.
 
 ### Beyond 1.0

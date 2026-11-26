@@ -115,7 +115,7 @@ Other pages receive extra keys:
 | `preview.html` (0.3) | none besides `page` (whose `theme_css` is the draft stylesheet); static sample markup, nothing can be submitted |
 | `login_identify.html` (1.0) | Identifier-first sign-in (home-realm discovery), rendered only for tenants with a verified, routed domain. `form` with id `login-identify` (the email page: one `identifier` field of kind `email`, `autocomplete="username"`) or `login-sso-choice` (the address uses single sign-on and its organization still allows passwords: no fields, the template writes two buttons posting `choice=sso` and `choice=password` to `form.action`); `change_email` (`{ action, email }` or null, as on `login.html`); `upstream` and `passkey` as on `login.html` (email page only) |
 | `select_organization.html` (1.0) | Organization switcher for clients whose organization policy is `required`: `client_name`, `organizations` (`[{ id, slug, display_name }]`, the signed-in user's own memberships only, sorted by display name), `messages` (`[{ level, key, text }]`), `csrf_token`, `action`. The form posts `organization` = the chosen org id |
-| `invitation.html` (1.0) | Organization invitation page. `view`: `offer`, `invalid`, `signed_out`, `wrong_account`, `verify_email`, `already_member`, `accepted`, `registered` or `email_taken`; `message_key` (the `invitation.*` message of the view); `org` (organization display name); `email` (the invited address, signed-out view only; shown read-only, never a form field); `action` (accept POST), `register_action` (registration POST), `csrf_token`, `token` (posted back as a hidden field); `registration_allowed`, `password_error` (`{ key, text }` or null), `name` (echoed); `login_url`, `logout_url`. The GET only shows the offer; nothing is consumed before the button is pressed |
+| `invitation.html` (1.0) | Organization invitation page. `view`: `offer`, `invalid`, `signed_out`, `wrong_account`, `verify_email`, `already_member`, `accepted`, `registered` or `email_taken`; `message_key` (the `invitation.*` message of the view); `org` (organization display name); `email` (the invited address, signed-out view only; shown read-only, never a form field); `action` (accept POST), `register_action` (registration POST), `csrf_token`, `token` (posted back as a hidden field); `registration_allowed`, `password_error` (`{ key, text }` or null), `name` (echoed); `login_url` (on the `signed_out` and `email_taken` views it carries `return_to`, so the sign-in comes back to the invitation), `logout_url`, `continue_url` (the account profile page; the `registered` view links to it because registering signs in). The GET only shows the offer; nothing is consumed before the button is pressed |
 
 Timestamps are rendered in UTC; the `*_iso` variants go into `<time datetime>`.
 
@@ -322,9 +322,13 @@ Release 1.0 pages:
   `invitation-register-form` with inputs `invitation-email` (read-only, not submitted),
   `password` and `name`, button `invitation-register-submit`, and the error
   `invitation-password-error` (`data-message-key` `password.too_short`, `password.too_long`,
-  `password.breached` or `service.overloaded`); links `invitation-sign-in`, `invitation-sign-out`,
-  hint `invitation-sign-in-hint`, notice `invitation-registration-disabled`. Every invalid token
-  renders the same `invitation.invalid` view (status 400).
+  `password.breached` or `service.overloaded`); links `invitation-sign-in` (signed-out and
+  email-taken views; returns here after signing in), `invitation-sign-out`, `invitation-continue`
+  (registered view: the new account is signed in), hint `invitation-sign-in-hint`, notice
+  `invitation-registration-disabled`. Every invalid token renders the same `invitation.invalid`
+  view (status 400). Keys changed in 1.0 (06-31): `invitation-sign_in_hint`,
+  `invitation-email_taken` and `invitation-registered` no longer ask to reopen the link or to sign
+  in; `invitation-continue` is new.
 - SAML sign-in failure (experimental): `error.html` with `error_key` `saml_login_failed`; the
   sentence is `saml.login_failed`. It never shows the NameID, attributes or XML.
 

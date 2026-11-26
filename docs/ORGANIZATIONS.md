@@ -85,6 +85,15 @@ There is one role model with two kinds of roles, both assigned per organization:
 - **Organization roles** are owned by one organization (`?scope=org`). Their names are unique
   within the organization and may repeat across organizations and next to tenant roles.
 
+Two lookups start from the user instead of the organization:
+
+| Route | What it does |
+|---|---|
+| `GET /users/{user_id}/organizations` | The user's memberships, each with the organization and the roles the user holds in it, sorted by organization slug (not paged). `404` for an unknown user or a user of another tenant. Scopes: `admin:users:read` / `admin:users:write`, `admin:organizations:read` / `admin:organizations:write`, or `admin:read` / `admin:write` |
+| `GET /users?email={address}` | Finds one user by address (trimmed and lowercased before comparing): a user list with 0 or 1 items. A malformed address answers `422`; `email` cannot be combined with `after`. Scopes as for listing users: `admin:users:read` / `admin:users:write` or `admin:read` / `admin:write` |
+
+The console's user page and its "add member by email" use these, one request each.
+
 Roles with an `admin:*` permission can never be assigned or offered inside an organization
 (`422`): organization roles never grant access to the management API beyond the organization
 admin routes described below. Removing a member removes their assignments in that organization.
@@ -118,12 +127,21 @@ How invitations behave:
   comes from the invitation). Registration works under `invite_only`. The new account is created
   with a verified email (the invitation proved the address) and joins the organization in the
   same transaction. If an account already exists for the address, the user is asked to sign in.
+- **Sign in and come back:** the sign-in link is `/ui/login?return_to=/ui/invitation?token=…`.
+  Whichever way the user signs in (password, passkey, email code or link, an upstream or SAML
+  provider, with or without a second factor), the sign-in ends back on the invitation page of the
+  same tenant, where one click accepts. The login accepts only exactly this target: the path
+  `/ui/invitation` with a single `token` of 1 to 128 base64url characters. Anything else (another
+  path, an absolute or scheme-relative URL, extra parameters, encoded characters) is ignored and
+  the sign-in ends on the normal signed-in page. The target carries the invitation token, so the
+  login stores it only encrypted with the KEK. A sign-in for an application (an authorization
+  request) always continues to the application instead. If the sign-in page expires before the
+  user signs in, the restarted sign-in ends on the signed-in page.
+- **Registering signs in:** after registering through an invitation the new user is signed in as
+  after a password sign-in (`login_succeeded` is audited with method `invitation_registration`).
+  Another user's session in the same browser is ended, as for any sign-in. A refused registration
+  (address taken, password refused, registration disabled, invalid invitation) signs nobody in.
 - Concurrent acceptances of one invitation have exactly one winner.
-
-**Current limitation:** the invitation page does not carry the user through sign-in. A signed-out
-user who already has an account signs in and then opens the invitation link again, and a user
-who registered through an invitation is not signed in afterwards (the page offers a sign-in link).
-A return-to-invitation after sign-in is planned.
 
 ## Organizations in tokens
 
@@ -461,13 +479,9 @@ organization in their details.
 ## Limitations in 1.0
 
 - **SAML 2.0 is experimental** and off by default ([SAML.md](SAML.md)).
-- **Invitations** do not return the user to the invitation after sign-in, and do not sign in a user
-  who registered through one ([Invitations](#invitations)).
 - **Organization admins use the API.** The admin console is for system administrators; there is no
   organization-admin console or self-service SSO setup portal in 1.0.
 - **Tenant-restricted system administrators** (system roles limited to a list of tenants) are
   deferred to Phase 7.
-- The admin API has no per-user membership list and no email filter on the user list; the console
-  works around both with several requests.
 - Tenant YAML documents do not contain organizations or anything they own
   ([CONFIG-YAML.md](CONFIG-YAML.md#organizations-are-not-part-of-the-document)).
