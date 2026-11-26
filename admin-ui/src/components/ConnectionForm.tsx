@@ -1,10 +1,13 @@
 // Create/edit form for upstream connections (social presets, generic OIDC, generic OAuth2), shared
-// by /connections/new and /connections/$connectionId. Secrets are write-only: they are read from
-// the password field (or the Apple .p8 file) at submit time and never shown again.
+// by /connections/new, /connections/$connectionId and an organization's OIDC connections. Secrets
+// are write-only: they are read from the password field (or the Apple .p8 file) at submit time and
+// never shown again.
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { type FormEvent, type RefObject, useId, useRef, useState } from "react";
-import { ApiError } from "@/api/client";
+import { ApiError, api, unwrap } from "@/api/client";
 import type { components } from "@/api/schema";
 import { ProblemAlert } from "@/components/ProblemAlert";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import {
   CheckboxField,
   type FieldErrors,
@@ -17,6 +20,7 @@ import {
   lines,
   tokens,
 } from "@/components/form";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
 export type ConnectionView = components["schemas"]["ConnectionView"];
@@ -50,6 +54,28 @@ export const KIND_DESCRIPTIONS: Record<ConnectionKind, string> = {
 
 /** The kinds this form can create. SAML connections get their own form with organizations. */
 export const KINDS = (Object.keys(KIND_LABELS) as ConnectionKind[]).filter((k) => k !== "saml");
+
+/** The kinds an organization's (enterprise) connection can have; SAML uses SamlConnectionForm. */
+export const ORG_KINDS = ["oidc", "saml"] as const satisfies readonly ConnectionKind[];
+
+/** Query key of an organization's connections (the tenant list is `["connections", tenant]`). */
+export function orgConnectionsQueryKey(tenant: string, org: string) {
+  return ["org-connections", tenant, org] as const;
+}
+
+/** The connections of one organization (one list, slug order). */
+export function useOrgConnections(tenant: string, org: string) {
+  return useQuery({
+    queryKey: orgConnectionsQueryKey(tenant, org),
+    queryFn: async ({ signal }) =>
+      unwrap(
+        await api.GET("/api/admin/v1/tenants/{slug}/organizations/{org}/connections", {
+          params: { path: { slug: tenant, org } },
+          signal,
+        }),
+      ),
+  });
+}
 
 /** Scopes the server requests when a social connection has none (shown as the starting value). */
 const PRESET_SCOPES: Record<ConnectionKind, string> = {
@@ -793,5 +819,130 @@ export function ConnectionForm({ mode, initial, submitLabel, pending, error, onS
       </Button>
       {status !== undefined && <StatusMessage message={status} />}
     </form>
+  );
+}
+
+/**
+ * Replace or remove the write-only secret of an existing connection. `put` sends it (`null`
+ * removes it); the secret travels through a ref, never through the mutation's variables, so it
+ * does not stay in the query client's mutation cache.
+ */
+export function SecretRotation({
+  kind,
+  configured,
+  put,
+  onSaved,
+}: {
+  kind: ConnectionKind;
+  configured: boolean;
+  put: (secret: string | null) => Promise<ConnectionView>;
+  onSaved: (saved: ConnectionView) => void | Promise<void>;
+}) {
+  const apple = kind === "apple";
+  const [password, setPassword] = useState("");
+  const [localError, setLocalError] = useState<LocalFieldError | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
+  const [confirmClear, setConfirmClear] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const secretRef = useRef<string | null>(null);
+
+  const mutation = useMutation({
+    mutationFn: async (_action: "set" | "clear") => {
+      const secret = secretRef.current;
+      secretRef.current = null;
+      return put(secret);
+    },
+    onMutate: () => setStatus(null),
+    onSuccess: async (saved, action) => {
+      setPassword("");
+      if (fileInput.current) fileInput.current.value = "";
+      setConfirmClear(false);
+      setStatus(action === "clear" ? "Secret removed." : "Secret saved.");
+      await onSaved(saved);
+    },
+  });
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    setLocalError(null);
+    let secret: string | null;
+    try {
+      secret = await readSecret(kind, password, fileInput);
+    } catch (err) {
+      if (err instanceof LocalFieldError) {
+        setLocalError(err);
+        return;
+      }
+      throw err;
+    }
+    if (secret === null) {
+      setLocalError(new LocalFieldError("secret", apple ? "Choose a .p8 key file." : "Enter the new secret."));
+      return;
+    }
+    secretRef.current = secret;
+    mutation.mutate("set");
+  };
+
+  const formError = mutation.variables === "set" ? mutation.error : null;
+  const errors = fieldErrors(formError);
+  if (localError) errors.secret = [{ message: localError.message }];
+  const otherError =
+    formError && !(formError instanceof ApiError && formError.problem.errors.every((e) => e.field === "secret"))
+      ? formError
+      : null;
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm" data-testid="connection-secret-status">
+        {configured ? <Badge variant="secondary">Configured</Badge> : <Badge variant="outline">Not set</Badge>}{" "}
+        <span className="text-muted-foreground">
+          The {apple ? "key" : "secret"} is stored encrypted and never shown. Enter a new one to replace it.
+        </span>
+      </p>
+      <form
+        onSubmit={(e) => void submit(e)}
+        aria-label={apple ? "Replace private key" : "Rotate secret"}
+        className="space-y-4"
+        noValidate
+      >
+        {otherError ? <ProblemAlert error={otherError} /> : null}
+        <SecretInput
+          kind={kind}
+          label={apple ? "New key file (.p8)" : "New client secret"}
+          hint={apple ? "The .p8 key downloaded from Apple." : "Replaces the current secret immediately."}
+          password={password}
+          onPasswordChange={setPassword}
+          fileInput={fileInput}
+          errors={errors.secret}
+        />
+        <div className="flex flex-wrap gap-2">
+          <Button type="submit" disabled={mutation.isPending} data-testid="rotate-connection-secret">
+            {mutation.isPending && mutation.variables === "set" ? "Saving…" : apple ? "Replace key" : "Rotate secret"}
+          </Button>
+          {configured && (
+            <Button type="button" variant="outline" onClick={() => setConfirmClear(true)}>
+              Remove {apple ? "key" : "secret"}
+            </Button>
+          )}
+        </div>
+        <StatusMessage message={status} />
+      </form>
+      <ConfirmDialog
+        open={confirmClear}
+        title={apple ? "Remove the private key?" : "Remove the client secret?"}
+        description={<p>Sign-in through this connection fails until a new one is set.</p>}
+        confirmLabel={apple ? "Remove key" : "Remove secret"}
+        onConfirm={() => {
+          secretRef.current = null;
+          mutation.mutate("clear");
+        }}
+        onCancel={() => {
+          mutation.reset();
+          setConfirmClear(false);
+        }}
+        pending={mutation.isPending}
+        error={mutation.variables === "clear" ? mutation.error : null}
+      />
+    </div>
   );
 }

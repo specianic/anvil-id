@@ -13,8 +13,14 @@ export type BrandingView = components["schemas"]["BrandingView"];
 export type BrandingPreview = components["schemas"]["BrandingPreview"];
 export type ThemeWarning = components["schemas"]["ThemeWarningDto"];
 
-/** Which branding is edited: the tenant's own, or one client's (overrides the tenant per field). */
-export type BrandingScope = { kind: "tenant"; tenant: string } | { kind: "client"; tenant: string; clientId: string };
+/**
+ * Which branding is edited: the tenant's own, one organization's (overrides the tenant per field) or
+ * one client's (overrides both per field).
+ */
+export type BrandingScope =
+  | { kind: "tenant"; tenant: string }
+  | { kind: "org"; tenant: string; orgId: string }
+  | { kind: "client"; tenant: string; clientId: string };
 
 /** Debounce between the last edit and the preview request. */
 export const PREVIEW_DEBOUNCE_MS = 300;
@@ -23,9 +29,9 @@ export const PREVIEW_DEBOUNCE_MS = 300;
 const EXPIRY_MARGIN_MS = 15_000;
 
 export function brandingQueryKey(scope: BrandingScope) {
-  return scope.kind === "tenant"
-    ? (["branding", scope.tenant, "tenant"] as const)
-    : (["branding", scope.tenant, "client", scope.clientId] as const);
+  if (scope.kind === "tenant") return ["branding", scope.tenant, "tenant"] as const;
+  if (scope.kind === "org") return ["branding", scope.tenant, "org", scope.orgId] as const;
+  return ["branding", scope.tenant, "client", scope.clientId] as const;
 }
 
 /** Store the scope's draft and get a 15-minute preview URL and token. */
@@ -34,6 +40,15 @@ export async function postPreview(scope: BrandingScope, body: PutBranding, signa
     return unwrap(
       await api.POST("/api/admin/v1/tenants/{slug}/branding/preview", {
         params: { path: { slug: scope.tenant } },
+        body,
+        signal,
+      }),
+    );
+  }
+  if (scope.kind === "org") {
+    return unwrap(
+      await api.POST("/api/admin/v1/tenants/{slug}/organizations/{org}/branding/preview", {
+        params: { path: { slug: scope.tenant, org: scope.orgId } },
         body,
         signal,
       }),
@@ -54,6 +69,14 @@ export async function postPublish(scope: BrandingScope, token: string) {
     return unwrap(
       await api.POST("/api/admin/v1/tenants/{slug}/branding/publish", {
         params: { path: { slug: scope.tenant } },
+        body: { token },
+      }),
+    );
+  }
+  if (scope.kind === "org") {
+    return unwrap(
+      await api.POST("/api/admin/v1/tenants/{slug}/organizations/{org}/branding/publish", {
+        params: { path: { slug: scope.tenant, org: scope.orgId } },
         body: { token },
       }),
     );

@@ -1,4 +1,4 @@
-// Theme editor for one branding scope (the tenant, or one client): colour tokens with an optional
+// Theme editor for one branding scope (the tenant, one organization or one client): colour tokens with an optional
 // dark set, font family, corner radius, custom CSS and the logo. Every change is previewed live
 // (ThemePreview); "Publish" makes the previewed draft live and "Reset" deletes the scope's branding.
 //
@@ -268,9 +268,36 @@ function Section({ title, children, testId }: { title: string; children: ReactNo
 // ---------------------------------------------------------------------------------------------
 // Scope operations other than preview/publish (those live with the preview).
 
+/** The scope's stored branding (GET); also used by the scope pages to load the editor's start. */
+export async function getBranding(scope: BrandingScope, signal?: AbortSignal): Promise<BrandingView> {
+  if (scope.kind === "tenant") {
+    return unwrap(
+      await api.GET("/api/admin/v1/tenants/{slug}/branding", { params: { path: { slug: scope.tenant } }, signal }),
+    );
+  }
+  if (scope.kind === "org") {
+    return unwrap(
+      await api.GET("/api/admin/v1/tenants/{slug}/organizations/{org}/branding", {
+        params: { path: { slug: scope.tenant, org: scope.orgId } },
+        signal,
+      }),
+    );
+  }
+  return unwrap(
+    await api.GET("/api/admin/v1/tenants/{slug}/clients/{client_id}/branding", {
+      params: { path: { slug: scope.tenant, client_id: scope.clientId } },
+      signal,
+    }),
+  );
+}
+
 async function deleteBranding(scope: BrandingScope) {
   if (scope.kind === "tenant") {
     await api.DELETE("/api/admin/v1/tenants/{slug}/branding", { params: { path: { slug: scope.tenant } } });
+  } else if (scope.kind === "org") {
+    await api.DELETE("/api/admin/v1/tenants/{slug}/organizations/{org}/branding", {
+      params: { path: { slug: scope.tenant, org: scope.orgId } },
+    });
   } else {
     await api.DELETE("/api/admin/v1/tenants/{slug}/clients/{client_id}/branding", {
       params: { path: { slug: scope.tenant, client_id: scope.clientId } },
@@ -283,6 +310,14 @@ async function putLogo(scope: BrandingScope, data: string) {
     return unwrap(
       await api.PUT("/api/admin/v1/tenants/{slug}/branding/logo", {
         params: { path: { slug: scope.tenant } },
+        body: { data },
+      }),
+    );
+  }
+  if (scope.kind === "org") {
+    return unwrap(
+      await api.PUT("/api/admin/v1/tenants/{slug}/organizations/{org}/branding/logo", {
+        params: { path: { slug: scope.tenant, org: scope.orgId } },
         body: { data },
       }),
     );
@@ -301,12 +336,41 @@ async function deleteLogo(scope: BrandingScope) {
       await api.DELETE("/api/admin/v1/tenants/{slug}/branding/logo", { params: { path: { slug: scope.tenant } } }),
     );
   }
+  if (scope.kind === "org") {
+    return unwrap(
+      await api.DELETE("/api/admin/v1/tenants/{slug}/organizations/{org}/branding/logo", {
+        params: { path: { slug: scope.tenant, org: scope.orgId } },
+      }),
+    );
+  }
   return unwrap(
     await api.DELETE("/api/admin/v1/tenants/{slug}/clients/{client_id}/branding/logo", {
       params: { path: { slug: scope.tenant, client_id: scope.clientId } },
     }),
   );
 }
+
+/** Human wording per scope: what the scope is called and what it falls back to. */
+const SCOPE_TEXT: Record<BrandingScope["kind"], { name: string; fallback: string; noLogo: string; inherit: string }> = {
+  tenant: {
+    name: "tenant",
+    fallback: "default theme",
+    noLogo: "No logo.",
+    inherit: "Empty fields use the default theme.",
+  },
+  org: {
+    name: "organization",
+    fallback: "tenant theme",
+    noLogo: "No organization logo (the tenant logo is used).",
+    inherit: "Empty fields inherit the tenant theme; the organization's custom CSS follows the tenant's.",
+  },
+  client: {
+    name: "client",
+    fallback: "tenant theme",
+    noLogo: "No client logo (the tenant logo is used).",
+    inherit: "Empty fields inherit the tenant theme; the client's custom CSS follows the tenant's.",
+  },
+};
 
 /** A file read as a data URL: `data` is its standard base64 payload. */
 interface PickedLogo {
@@ -416,7 +480,7 @@ function LogoSection({
           />
         ) : (
           <p className="text-muted-foreground text-sm" data-testid="logo-none">
-            {scope.kind === "client" ? "No client logo (the tenant logo is used)." : "No logo."}
+            {SCOPE_TEXT[scope.kind].noLogo}
           </p>
         )}
         {picked && (
@@ -593,18 +657,7 @@ export function ThemeEditor({ scope, view: initialView }: ThemeEditorProps) {
       await deleteBranding(scope);
       return queryClient.fetchQuery({
         queryKey: brandingQueryKey(scope),
-        queryFn: async () => {
-          if (scope.kind === "tenant") {
-            return unwrap(
-              await api.GET("/api/admin/v1/tenants/{slug}/branding", { params: { path: { slug: scope.tenant } } }),
-            );
-          }
-          return unwrap(
-            await api.GET("/api/admin/v1/tenants/{slug}/clients/{client_id}/branding", {
-              params: { path: { slug: scope.tenant, client_id: scope.clientId } },
-            }),
-          );
-        },
+        queryFn: ({ signal }) => getBranding(scope, signal),
         staleTime: 0,
       });
     },
@@ -615,9 +668,9 @@ export function ThemeEditor({ scope, view: initialView }: ThemeEditorProps) {
       setValues(valuesFromView(fresh));
       setRefreshKey((k) => k + 1);
       setStatus(
-        scope.kind === "client"
-          ? "Branding removed. This client uses the tenant theme again."
-          : "Branding removed. The sign-in pages use the default theme again.",
+        scope.kind === "tenant"
+          ? "Branding removed. The sign-in pages use the default theme again."
+          : `Branding removed. This ${SCOPE_TEXT[scope.kind].name} uses the tenant theme again.`,
       );
     },
   });
@@ -625,10 +678,7 @@ export function ThemeEditor({ scope, view: initialView }: ThemeEditorProps) {
   const lightWarnings = preview.preview ? warningsFor(preview.preview.warnings, "light") : warningsFor(view.warnings, "light");
   const darkWarnings = preview.preview ? warningsFor(preview.preview.warnings, "dark") : warningsFor(view.warnings, "dark");
   const radiusShown = values.radius ?? DEFAULT_RADIUS;
-  const inheritNote =
-    scope.kind === "client"
-      ? "Empty fields inherit the tenant theme; the client's custom CSS follows the tenant's."
-      : "Empty fields use the default theme.";
+  const inheritNote = SCOPE_TEXT[scope.kind].inherit;
 
   return (
     <div className="grid gap-6 lg:grid-cols-2" data-testid="theme-editor">
@@ -637,8 +687,8 @@ export function ThemeEditor({ scope, view: initialView }: ThemeEditorProps) {
           <p data-testid="branding-state">
             {view.customized ? (
               <>Customised; last published {formatDateTime(view.updated_at)}.</>
-            ) : scope.kind === "client" ? (
-              <>Not customised: this client uses the tenant theme.</>
+            ) : scope.kind !== "tenant" ? (
+              <>Not customised: this {SCOPE_TEXT[scope.kind].name} uses the tenant theme.</>
             ) : (
               <>Not customised: the default theme is used.</>
             )}
@@ -808,12 +858,13 @@ export function ThemeEditor({ scope, view: initialView }: ThemeEditorProps) {
 
       <ConfirmDialog
         open={confirmReset}
-        title={scope.kind === "client" ? "Remove this client's branding?" : "Remove the tenant's branding?"}
+        title={
+          scope.kind === "tenant" ? "Remove the tenant's branding?" : `Remove this ${SCOPE_TEXT[scope.kind].name}'s branding?`
+        }
         description={
           <p>
-            Colours, fonts, custom CSS and the logo of this {scope.kind === "client" ? "client" : "tenant"} are deleted
-            and the sign-in pages fall back to the{" "}
-            {scope.kind === "client" ? "tenant theme" : "default theme"} immediately. Unpublished changes are lost.
+            Colours, fonts, custom CSS and the logo of this {SCOPE_TEXT[scope.kind].name} are deleted and the sign-in
+            pages fall back to the {SCOPE_TEXT[scope.kind].fallback} immediately. Unpublished changes are lost.
           </p>
         }
         confirmLabel="Remove branding"

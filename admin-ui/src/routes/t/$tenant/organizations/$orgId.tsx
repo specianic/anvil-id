@@ -1,6 +1,6 @@
 // Layout of one organization: heading and the section navigation (Overview, Members, Invitations,
-// Roles); the sections render in the Outlet. Later sections (connections, domains, branding) add
-// sibling route files and an entry to ORG_SECTIONS.
+// Roles, Connections, Domains, Branding); the sections render in the Outlet. A new section adds a
+// sibling route file and an entry to ORG_SECTIONS.
 import { Link, Outlet, createFileRoute } from "@tanstack/react-router";
 import { ApiError } from "@/api/client";
 import { useOrganization } from "@/components/OrgForm";
@@ -13,6 +13,9 @@ const ORG_SECTIONS = [
   { to: "/t/$tenant/organizations/$orgId/members", label: "Members", exact: false },
   { to: "/t/$tenant/organizations/$orgId/invitations", label: "Invitations", exact: false },
   { to: "/t/$tenant/organizations/$orgId/roles", label: "Roles", exact: false },
+  { to: "/t/$tenant/organizations/$orgId/connections", label: "Connections", exact: false },
+  { to: "/t/$tenant/organizations/$orgId/domains", label: "Domains", exact: false },
+  { to: "/t/$tenant/organizations/$orgId/branding", label: "Branding", exact: false },
 ] as const;
 
 const focusRing = "focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none";

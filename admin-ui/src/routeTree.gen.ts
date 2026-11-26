@@ -62,6 +62,9 @@ import { Route as TTenantWebhooksIndexRouteImport } from './routes/t/$tenant/web
 import { Route as TTenantWebhooksWebhookIdRouteImport } from './routes/t/$tenant/webhooks/$webhookId'
 import { Route as TTenantWebhooksNewRouteImport } from './routes/t/$tenant/webhooks/new'
 import { Route as TTenantOrganizationsOrgIdIndexRouteImport } from './routes/t/$tenant/organizations/$orgId/index'
+import { Route as TTenantOrganizationsOrgIdBrandingRouteImport } from './routes/t/$tenant/organizations/$orgId/branding'
+import { Route as TTenantOrganizationsOrgIdConnectionsRouteImport } from './routes/t/$tenant/organizations/$orgId/connections'
+import { Route as TTenantOrganizationsOrgIdDomainsRouteImport } from './routes/t/$tenant/organizations/$orgId/domains'
 import { Route as TTenantOrganizationsOrgIdInvitationsRouteImport } from './routes/t/$tenant/organizations/$orgId/invitations'
 import { Route as TTenantOrganizationsOrgIdMembersRouteImport } from './routes/t/$tenant/organizations/$orgId/members'
 import { Route as TTenantOrganizationsOrgIdRolesRouteImport } from './routes/t/$tenant/organizations/$orgId/roles'
@@ -338,6 +341,24 @@ const TTenantOrganizationsOrgIdIndexRoute =
     path: '/',
     getParentRoute: () => TTenantOrganizationsOrgIdRoute,
   } as any)
+const TTenantOrganizationsOrgIdBrandingRoute =
+  TTenantOrganizationsOrgIdBrandingRouteImport.update({
+    id: '/branding',
+    path: '/branding',
+    getParentRoute: () => TTenantOrganizationsOrgIdRoute,
+  } as any)
+const TTenantOrganizationsOrgIdConnectionsRoute =
+  TTenantOrganizationsOrgIdConnectionsRouteImport.update({
+    id: '/connections',
+    path: '/connections',
+    getParentRoute: () => TTenantOrganizationsOrgIdRoute,
+  } as any)
+const TTenantOrganizationsOrgIdDomainsRoute =
+  TTenantOrganizationsOrgIdDomainsRouteImport.update({
+    id: '/domains',
+    path: '/domains',
+    getParentRoute: () => TTenantOrganizationsOrgIdRoute,
+  } as any)
 const TTenantOrganizationsOrgIdInvitationsRoute =
   TTenantOrganizationsOrgIdInvitationsRouteImport.update({
     id: '/invitations',
@@ -410,6 +431,9 @@ export interface FileRoutesByFullPath {
   '/t/$tenant/settings/': typeof TTenantSettingsIndexRoute
   '/t/$tenant/users/': typeof TTenantUsersIndexRoute
   '/t/$tenant/webhooks/': typeof TTenantWebhooksIndexRoute
+  '/t/$tenant/organizations/$orgId/branding': typeof TTenantOrganizationsOrgIdBrandingRoute
+  '/t/$tenant/organizations/$orgId/connections': typeof TTenantOrganizationsOrgIdConnectionsRoute
+  '/t/$tenant/organizations/$orgId/domains': typeof TTenantOrganizationsOrgIdDomainsRoute
   '/t/$tenant/organizations/$orgId/invitations': typeof TTenantOrganizationsOrgIdInvitationsRoute
   '/t/$tenant/organizations/$orgId/members': typeof TTenantOrganizationsOrgIdMembersRoute
   '/t/$tenant/organizations/$orgId/roles': typeof TTenantOrganizationsOrgIdRolesRoute
@@ -466,6 +490,9 @@ export interface FileRoutesByTo {
   '/t/$tenant/settings': typeof TTenantSettingsIndexRoute
   '/t/$tenant/users': typeof TTenantUsersIndexRoute
   '/t/$tenant/webhooks': typeof TTenantWebhooksIndexRoute
+  '/t/$tenant/organizations/$orgId/branding': typeof TTenantOrganizationsOrgIdBrandingRoute
+  '/t/$tenant/organizations/$orgId/connections': typeof TTenantOrganizationsOrgIdConnectionsRoute
+  '/t/$tenant/organizations/$orgId/domains': typeof TTenantOrganizationsOrgIdDomainsRoute
   '/t/$tenant/organizations/$orgId/invitations': typeof TTenantOrganizationsOrgIdInvitationsRoute
   '/t/$tenant/organizations/$orgId/members': typeof TTenantOrganizationsOrgIdMembersRoute
   '/t/$tenant/organizations/$orgId/roles': typeof TTenantOrganizationsOrgIdRolesRoute
@@ -525,6 +552,9 @@ export interface FileRoutesById {
   '/t/$tenant/settings/': typeof TTenantSettingsIndexRoute
   '/t/$tenant/users/': typeof TTenantUsersIndexRoute
   '/t/$tenant/webhooks/': typeof TTenantWebhooksIndexRoute
+  '/t/$tenant/organizations/$orgId/branding': typeof TTenantOrganizationsOrgIdBrandingRoute
+  '/t/$tenant/organizations/$orgId/connections': typeof TTenantOrganizationsOrgIdConnectionsRoute
+  '/t/$tenant/organizations/$orgId/domains': typeof TTenantOrganizationsOrgIdDomainsRoute
   '/t/$tenant/organizations/$orgId/invitations': typeof TTenantOrganizationsOrgIdInvitationsRoute
   '/t/$tenant/organizations/$orgId/members': typeof TTenantOrganizationsOrgIdMembersRoute
   '/t/$tenant/organizations/$orgId/roles': typeof TTenantOrganizationsOrgIdRolesRoute
@@ -585,6 +615,9 @@ export interface FileRouteTypes {
     | '/t/$tenant/settings/'
     | '/t/$tenant/users/'
     | '/t/$tenant/webhooks/'
+    | '/t/$tenant/organizations/$orgId/branding'
+    | '/t/$tenant/organizations/$orgId/connections'
+    | '/t/$tenant/organizations/$orgId/domains'
     | '/t/$tenant/organizations/$orgId/invitations'
     | '/t/$tenant/organizations/$orgId/members'
     | '/t/$tenant/organizations/$orgId/roles'
@@ -641,6 +674,9 @@ export interface FileRouteTypes {
     | '/t/$tenant/settings'
     | '/t/$tenant/users'
     | '/t/$tenant/webhooks'
+    | '/t/$tenant/organizations/$orgId/branding'
+    | '/t/$tenant/organizations/$orgId/connections'
+    | '/t/$tenant/organizations/$orgId/domains'
     | '/t/$tenant/organizations/$orgId/invitations'
     | '/t/$tenant/organizations/$orgId/members'
     | '/t/$tenant/organizations/$orgId/roles'
@@ -699,6 +735,9 @@ export interface FileRouteTypes {
     | '/t/$tenant/settings/'
     | '/t/$tenant/users/'
     | '/t/$tenant/webhooks/'
+    | '/t/$tenant/organizations/$orgId/branding'
+    | '/t/$tenant/organizations/$orgId/connections'
+    | '/t/$tenant/organizations/$orgId/domains'
     | '/t/$tenant/organizations/$orgId/invitations'
     | '/t/$tenant/organizations/$orgId/members'
     | '/t/$tenant/organizations/$orgId/roles'
@@ -1102,6 +1141,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof TTenantOrganizationsOrgIdIndexRouteImport
       parentRoute: typeof TTenantOrganizationsOrgIdRoute
     }
+    '/t/$tenant/organizations/$orgId/branding': {
+      id: '/t/$tenant/organizations/$orgId/branding'
+      path: '/branding'
+      fullPath: '/t/$tenant/organizations/$orgId/branding'
+      preLoaderRoute: typeof TTenantOrganizationsOrgIdBrandingRouteImport
+      parentRoute: typeof TTenantOrganizationsOrgIdRoute
+    }
+    '/t/$tenant/organizations/$orgId/connections': {
+      id: '/t/$tenant/organizations/$orgId/connections'
+      path: '/connections'
+      fullPath: '/t/$tenant/organizations/$orgId/connections'
+      preLoaderRoute: typeof TTenantOrganizationsOrgIdConnectionsRouteImport
+      parentRoute: typeof TTenantOrganizationsOrgIdRoute
+    }
+    '/t/$tenant/organizations/$orgId/domains': {
+      id: '/t/$tenant/organizations/$orgId/domains'
+      path: '/domains'
+      fullPath: '/t/$tenant/organizations/$orgId/domains'
+      preLoaderRoute: typeof TTenantOrganizationsOrgIdDomainsRouteImport
+      parentRoute: typeof TTenantOrganizationsOrgIdRoute
+    }
     '/t/$tenant/organizations/$orgId/invitations': {
       id: '/t/$tenant/organizations/$orgId/invitations'
       path: '/invitations'
@@ -1127,6 +1187,9 @@ declare module '@tanstack/react-router' {
 }
 
 interface TTenantOrganizationsOrgIdRouteChildren {
+  TTenantOrganizationsOrgIdBrandingRoute: typeof TTenantOrganizationsOrgIdBrandingRoute
+  TTenantOrganizationsOrgIdConnectionsRoute: typeof TTenantOrganizationsOrgIdConnectionsRoute
+  TTenantOrganizationsOrgIdDomainsRoute: typeof TTenantOrganizationsOrgIdDomainsRoute
   TTenantOrganizationsOrgIdInvitationsRoute: typeof TTenantOrganizationsOrgIdInvitationsRoute
   TTenantOrganizationsOrgIdMembersRoute: typeof TTenantOrganizationsOrgIdMembersRoute
   TTenantOrganizationsOrgIdRolesRoute: typeof TTenantOrganizationsOrgIdRolesRoute
@@ -1135,6 +1198,12 @@ interface TTenantOrganizationsOrgIdRouteChildren {
 
 const TTenantOrganizationsOrgIdRouteChildren: TTenantOrganizationsOrgIdRouteChildren =
   {
+    TTenantOrganizationsOrgIdBrandingRoute:
+      TTenantOrganizationsOrgIdBrandingRoute,
+    TTenantOrganizationsOrgIdConnectionsRoute:
+      TTenantOrganizationsOrgIdConnectionsRoute,
+    TTenantOrganizationsOrgIdDomainsRoute:
+      TTenantOrganizationsOrgIdDomainsRoute,
     TTenantOrganizationsOrgIdInvitationsRoute:
       TTenantOrganizationsOrgIdInvitationsRoute,
     TTenantOrganizationsOrgIdMembersRoute:
