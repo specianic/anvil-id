@@ -767,7 +767,7 @@ saml corpus (D4): comment and markup injection in text nodes|$W/security_saml.rs
 saml corpus (D4): algorithm and transform allow-list|$W/security_saml.rs|saml_rejects_sha1_signature_method
 saml corpus (D4): algorithm and transform allow-list|$W/security_saml.rs|saml_rejects_sha1_digest
 saml corpus (D4): algorithm and transform allow-list|$W/security_saml.rs|saml_rejects_hmac_signature_method
-saml corpus (D4): comment and markup injection in text nodes|$W/security_saml.rs|saml_rejects_c14n_with_comments
+saml corpus (D4): algorithm and transform allow-list|$W/security_saml.rs|saml_rejects_c14n_with_comments
 saml corpus (D4): algorithm and transform allow-list|$W/security_saml.rs|saml_rejects_inclusive_c14n
 saml corpus (D4): algorithm and transform allow-list|$W/security_saml.rs|saml_rejects_xpath_transform
 saml corpus (D4): algorithm and transform allow-list|$W/security_saml.rs|saml_rejects_xslt_transform
