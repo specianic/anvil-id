@@ -2,25 +2,32 @@
 //! backend (`ANVILID_TEST_DB`): the effective policy (strictest of tenant and client) against users
 //! with and without a second factor, in-flow enrolment of an authenticator app when the policy is
 //! `required` (QR code and key, wrong code, recovery codes shown once, `[pwd, otp, mfa]`), its
-//! binding (CSRF) and single use of the confirming code.
+//! binding (CSRF) and single use of the confirming code; the passkey choice of the enrolment page
+//! (a software authenticator, test code only): `[hwk, user, mfa]` and MFA `acr`, the stored
+//! passkey, step-up into a passkey enrolment, and refusal of abandoned, replayed, cross-flow and
+//! never-requested registrations, and of unbound requests.
 //!
 //! The route-class limit for auth POSTs is raised so several sign-ins from the one test peer are
 //! not cut off by it (tested in `security_ratelimit.rs`); the brute-force limits stay on.
 
 mod authz;
+mod passkey_support;
 mod support;
 mod ui_helpers;
 
 use anvil_cache::limiter::RateQuota;
 use anvil_core::model::{
-    ACR_MFA, ACR_PWD, AMR_MFA, AMR_OTP, AMR_PWD, BrowserSession, ClientUpdate, CredentialId,
-    MfaPolicy, NewTotp, SecretHash, TOTP_SEED_PURPOSE, TenantSettings, UserId, credential_aad,
+    ACR_MFA, ACR_PWD, AMR_HWK, AMR_MFA, AMR_OTP, AMR_PWD, AMR_USER, AuditAction, AuditEvent,
+    AuditQuery, BrowserSession, ClientUpdate, CredentialId, MfaPolicy, NewTotp, SecretHash,
+    TOTP_SEED_PURPOSE, TenantSettings, UserId, credential_aad,
 };
-use anvil_core::ports::Clock as _;
+use anvil_core::ports::{Clock as _, PasskeyCeremonies as _, PasskeyUser};
 use anvil_core::service::account::new_recovery_codes;
 use anvil_jose::otp::TotpSecret;
+use anvil_web::adapters::{WebauthnPasskeys, relying_party};
 use aws_lc_rs::hmac;
-use support::{TestApp, TestResponse, csrf_from, location};
+use passkey_support::{FLAG_AT, FLAG_UP, FLAG_UV, SoftAuthenticator};
+use support::{TestApp, TestResponse, csrf_from, json, location};
 use ui_helpers::*;
 
 const ALICE: &str = "alice@example.com";
@@ -470,4 +477,542 @@ fn attribute_of(html: &str, id: &str, attr: &str) -> String {
     let i = tag.find(&marker).expect("attribute") + marker.len();
     let end = tag[i..].find('"').expect("quoted") + i;
     tag[i..end].replace("&amp;", "&")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Passkey enrolment (the passkey choice of the enrolment page)
+// ---------------------------------------------------------------------------------------------
+
+const PASSKEY_FAILED: &str = "mfa_enroll.passkey_failed";
+
+fn rp_id() -> &'static str {
+    "op.test"
+}
+
+fn origin() -> &'static str {
+    "https://op.test"
+}
+
+/// The passkey form of an enrolment page: (options path, finish path, csrf token, factor token).
+fn passkey_enrol_form(app: &TestApp, page: &TestResponse) -> (String, String, String, String) {
+    let html = page.html();
+    (
+        to_path(
+            app,
+            &attribute_of(&html, "mfa-enroll-passkey-form", "data-options-url"),
+        ),
+        to_path(
+            app,
+            &attribute_of(&html, "mfa-enroll-passkey-form", "action"),
+        ),
+        csrf_from(&html),
+        hidden(&html, "factor_token"),
+    )
+}
+
+/// POSTs the options request like webauthn.js and returns the creation options.
+async fn creation_options(app: &TestApp, options: &str, csrf: &str) -> serde_json::Value {
+    let resp = app.post_form(options, &[("csrf_token", csrf)]).await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_eq!(resp.header("cache-control"), Some("no-store"));
+    json(&resp)
+}
+
+fn challenge_of(options: &serde_json::Value) -> String {
+    options["publicKey"]["challenge"]
+        .as_str()
+        .expect("challenge")
+        .to_owned()
+}
+
+fn authenticator(user: UserId) -> SoftAuthenticator {
+    SoftAuthenticator::new(&PasskeyUser {
+        id: user,
+        name: BOB.to_owned(),
+        display_name: BOB.to_owned(),
+    })
+}
+
+/// A registration response of `auth` for `challenge`.
+fn registration(auth: &SoftAuthenticator, challenge: &str) -> String {
+    auth.register(challenge, rp_id(), origin(), FLAG_UP | FLAG_UV | FLAG_AT)
+}
+
+/// Posts a registration response to the finish route, like webauthn.js.
+async fn finish(
+    app: &TestApp,
+    action: &str,
+    csrf: &str,
+    factor: &str,
+    response: &str,
+) -> TestResponse {
+    app.post_form(
+        action,
+        &[
+            ("csrf_token", csrf),
+            ("factor_token", factor),
+            ("response", response),
+        ],
+    )
+    .await
+}
+
+async fn passkey_count(app: &TestApp, email: &str) -> usize {
+    let user = user_id(app, email).await;
+    app.storage()
+        .users()
+        .passkeys(default_tenant(app).id, user)
+        .await
+        .expect("passkeys")
+        .len()
+}
+
+async fn audit(app: &TestApp, action: AuditAction) -> Vec<AuditEvent> {
+    app.storage()
+        .audit()
+        .query(
+            default_tenant(app).id,
+            &AuditQuery {
+                action: Some(action),
+                limit: 100,
+                ..AuditQuery::default()
+            },
+        )
+        .await
+        .expect("audit query")
+        .items
+}
+
+/// A refused passkey enrolment: the enrolment page again (400) with `mfa_enroll.passkey_failed`
+/// in the passkey section, both choices still offered, nobody signed in.
+fn assert_refused(app: &TestApp, resp: &TestResponse) {
+    assert_eq!(resp.status, 400, "{}", resp.text());
+    let html = resp.html();
+    assert_eq!(message_keys(&html), vec![PASSKEY_FAILED.to_owned()]);
+    assert!(html.contains("id=\"mfa-enroll-passkey-msg-1\""), "{html}");
+    assert!(html.contains("id=\"mfa-enroll-passkey-form\""), "{html}");
+    assert!(html.contains("id=\"mfa-enroll\""), "{html}");
+    assert!(html.contains("id=\"totp-secret\""), "{html}");
+    assert!(session_cookie(app).is_none(), "nobody signed in");
+}
+
+#[tokio::test]
+async fn required_enrolment_offers_a_passkey_and_an_authenticator_app() {
+    let app = app().await;
+    set_policy(&app, MfaPolicy::Required).await;
+    let page = password(&app, "/ui/login", BOB).await;
+    assert!(is_enrolment(&page), "{}", page.text());
+    let html = page.html();
+    for needle in [
+        "id=\"mfa-enroll-passkey\"",
+        "id=\"mfa-enroll-passkey-form\"",
+        "data-webauthn=\"register\"",
+        "id=\"mfa-enroll-passkey-submit\" data-webauthn-trigger hidden",
+        "data-webauthn-status aria-live=\"polite\"",
+        "id=\"mfa-enroll-passkey-nojs\"",
+        "<input type=\"hidden\" name=\"response\" value=\"\">",
+        "<script src=\"/assets/webauthn.js\" defer></script>",
+        "id=\"mfa-enroll-totp\"",
+        "id=\"totp-secret\"",
+        "Add a passkey or an authenticator app",
+    ] {
+        assert!(html.contains(needle), "{needle} in {html}");
+    }
+    // The authenticator-app form (no JavaScript needed) is the page's first form; the passkey
+    // choice follows it.
+    assert!(
+        html.find("id=\"mfa-enroll\"").unwrap()
+            < html.find("id=\"mfa-enroll-passkey-form\"").unwrap()
+    );
+    let (options, action, _, factor) = passkey_enrol_form(&app, &page);
+    assert!(
+        options.starts_with("/ui/login/enroll/passkey/start?flow="),
+        "{options}"
+    );
+    assert!(
+        action.starts_with("/ui/login/enroll/passkey/finish?flow="),
+        "{action}"
+    );
+    assert!(!factor.is_empty());
+    let csp = page.header("content-security-policy").expect("csp");
+    assert!(csp.contains("script-src 'self'"), "{csp}");
+    assert!(csp.contains("connect-src 'self'"), "{csp}");
+    assert!(!csp.contains("unsafe"), "{csp}");
+}
+
+#[tokio::test]
+async fn passkey_enrolment_signs_in_with_passkey_amr_and_stores_the_passkey() {
+    let app = app().await;
+    set_policy(&app, MfaPolicy::Required).await;
+    let bob = user_id(&app, BOB).await;
+    let page = password(&app, "/ui/login", BOB).await;
+    assert!(is_enrolment(&page), "{}", page.text());
+    let (options, action, csrf, factor) = passkey_enrol_form(&app, &page);
+
+    let opts = creation_options(&app, &options, &csrf).await;
+    assert_eq!(opts["publicKey"]["rp"]["id"], rp_id());
+    assert_eq!(opts["publicKey"]["user"]["name"], BOB);
+    let auth = authenticator(bob);
+    let resp = finish(
+        &app,
+        &action,
+        &csrf,
+        &factor,
+        &registration(&auth, &challenge_of(&opts)),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_eq!(
+        message_keys(&resp.html()),
+        vec!["login.signed_in".to_owned()]
+    );
+    let s = session(&app).await;
+    assert_eq!(s.user_id, bob);
+    assert_eq!(s.amr, amr(&[AMR_HWK, AMR_USER, AMR_MFA]));
+    assert_eq!(s.acr, ACR_MFA);
+    assert!(flow_cookie(&app).is_none(), "flow finished");
+    assert_eq!(passkey_count(&app, BOB).await, 1);
+    assert!(
+        app.storage()
+            .users()
+            .totp(default_tenant(&app).id, bob)
+            .await
+            .expect("totp")
+            .is_none(),
+        "the authenticator app was not enrolled"
+    );
+    let registered = audit(&app, AuditAction::PasskeyRegistered).await;
+    assert_eq!(registered.len(), 1);
+    let signed_in = audit(&app, AuditAction::LoginSucceeded).await;
+    assert!(
+        signed_in
+            .iter()
+            .any(|e| e.target.as_deref() == Some(bob.to_string().as_str())),
+        "login_succeeded for bob"
+    );
+
+    // The new passkey signs bob in on the next visit (a passkey sign-in satisfies `required`).
+    app.clear_cookies();
+    let login = app.get("/ui/login").await;
+    let html = login.html();
+    let options = to_path(
+        &app,
+        &attribute_of(&html, "login-passkey", "data-options-url"),
+    );
+    let action = to_path(&app, &attribute_of(&html, "login-passkey", "action"));
+    let csrf = csrf_from(&html);
+    let resp = app.post_form(&options, &[("csrf_token", &csrf)]).await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let challenge = challenge_of(&json(&resp));
+    let assertion = auth.assert(&challenge, rp_id(), origin(), FLAG_UP | FLAG_UV, 1);
+    let resp = app
+        .post_form(&action, &[("csrf_token", &csrf), ("response", &assertion)])
+        .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let s = session(&app).await;
+    assert_eq!(s.user_id, bob);
+    assert_eq!(s.amr, amr(&[AMR_HWK, AMR_USER, AMR_MFA]));
+}
+
+#[tokio::test]
+async fn passkey_enrolment_continues_the_authorization_request() {
+    let app = app().await;
+    set_policy(&app, MfaPolicy::Required).await;
+    let path = login_path_for_client(&app, None).await;
+    let page = password(&app, &path, BOB).await;
+    assert!(is_enrolment(&page), "{}", page.text());
+    let (options, action, csrf, factor) = passkey_enrol_form(&app, &page);
+    let opts = creation_options(&app, &options, &csrf).await;
+    let auth = authenticator(user_id(&app, BOB).await);
+    let resp = finish(
+        &app,
+        &action,
+        &csrf,
+        &factor,
+        &registration(&auth, &challenge_of(&opts)),
+    )
+    .await;
+    assert_eq!(resp.status, 303, "{}", resp.text());
+    let continue_to = location(&resp);
+    assert!(
+        continue_to.contains("/authorize/continue?request="),
+        "{continue_to}"
+    );
+    let resp = app.get(&to_path(&app, &continue_to)).await;
+    assert_eq!(resp.status, 303, "{}", resp.text());
+    assert!(
+        location(&resp).starts_with(authz::RP),
+        "{}",
+        location(&resp)
+    );
+    assert!(location(&resp).contains("code="));
+}
+
+#[tokio::test]
+async fn step_up_into_enrolment_can_be_satisfied_with_a_passkey_in_place() {
+    // Tenant off: bob signs in with the password alone; a client that requires MFA then steps
+    // the same session up through the enrolment page, here with a passkey.
+    let app = app().await;
+    set_policy(&app, MfaPolicy::Off).await;
+    let resp = password(&app, "/ui/login", BOB).await;
+    assert_signed_in_single_factor(&app, &resp).await;
+    let before = session(&app).await;
+
+    let path = login_path_for_client(&app, Some(MfaPolicy::Required)).await;
+    let page = app.get(&path).await;
+    assert!(is_enrolment(&page), "{}", page.text());
+    assert!(
+        !page.html().contains("id=\"password\""),
+        "no password again"
+    );
+    let (options, action, csrf, factor) = passkey_enrol_form(&app, &page);
+    let opts = creation_options(&app, &options, &csrf).await;
+    let auth = authenticator(before.user_id);
+    let resp = finish(
+        &app,
+        &action,
+        &csrf,
+        &factor,
+        &registration(&auth, &challenge_of(&opts)),
+    )
+    .await;
+    assert_eq!(resp.status, 303, "{}", resp.text());
+    assert!(location(&resp).contains("/authorize/continue?request="));
+    let after = session(&app).await;
+    assert_eq!(after.id, before.id, "upgraded in place");
+    assert_eq!(after.amr, amr(&[AMR_PWD, AMR_HWK, AMR_USER, AMR_MFA]));
+    assert_eq!(after.acr, ACR_MFA);
+    assert_eq!(audit(&app, AuditAction::StepUpCompleted).await.len(), 1);
+}
+
+#[tokio::test]
+async fn a_replayed_passkey_enrolment_challenge_is_refused() {
+    let app = app().await;
+    set_policy(&app, MfaPolicy::Required).await;
+    let page = password(&app, "/ui/login", BOB).await;
+    let (options, action, csrf, factor) = passkey_enrol_form(&app, &page);
+    let opts = creation_options(&app, &options, &csrf).await;
+    let auth = authenticator(user_id(&app, BOB).await);
+    let valid = registration(&auth, &challenge_of(&opts));
+
+    // A failed finish consumes the challenge: the valid response for it is now a replay.
+    let resp = finish(&app, &action, &csrf, &factor, "garbage").await;
+    assert_refused(&app, &resp);
+    let resp = finish(&app, &action, &csrf, &factor, &valid).await;
+    assert_refused(&app, &resp);
+    assert_eq!(passkey_count(&app, BOB).await, 0);
+
+    // The user stays at the enrolment step: the authenticator app still works.
+    let code = code_for_page(&app, &resp.html());
+    let done = post_code(&app, &resp, &code).await;
+    assert_eq!(done.status, 200, "{}", done.text());
+    assert!(done.html().contains("id=\"recovery-codes\""));
+    assert_eq!(session(&app).await.amr, amr(&[AMR_PWD, AMR_OTP, AMR_MFA]));
+
+    // After the sign-in the flow is gone: replaying the response signs nobody in again.
+    app.clear_cookies();
+    let resp = finish(&app, &action, &csrf, &factor, &valid).await;
+    assert!(resp.status == 403 || resp.status == 400, "{}", resp.status);
+    assert!(session_cookie(&app).is_none());
+    assert_eq!(passkey_count(&app, BOB).await, 0);
+}
+
+#[tokio::test]
+async fn a_successful_passkey_enrolment_cannot_be_replayed() {
+    let app = app().await;
+    set_policy(&app, MfaPolicy::Required).await;
+    let page = password(&app, "/ui/login", BOB).await;
+    let (options, action, csrf, factor) = passkey_enrol_form(&app, &page);
+    let opts = creation_options(&app, &options, &csrf).await;
+    let auth = authenticator(user_id(&app, BOB).await);
+    let valid = registration(&auth, &challenge_of(&opts));
+    let resp = finish(&app, &action, &csrf, &factor, &valid).await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+
+    // The same POST again, with or without the session: the flow is finished.
+    let resp = finish(&app, &action, &csrf, &factor, &valid).await;
+    assert!(resp.status == 403 || resp.status == 400, "{}", resp.status);
+    app.clear_cookies();
+    let resp = finish(&app, &action, &csrf, &factor, &valid).await;
+    assert!(resp.status == 403 || resp.status == 400, "{}", resp.status);
+    assert!(session_cookie(&app).is_none());
+    assert_eq!(passkey_count(&app, BOB).await, 1);
+    assert_eq!(audit(&app, AuditAction::PasskeyRegistered).await.len(), 1);
+}
+
+#[tokio::test]
+async fn an_abandoned_passkey_enrolment_challenge_is_refused() {
+    let app = app().await;
+    set_policy(&app, MfaPolicy::Required).await;
+    let page = password(&app, "/ui/login", BOB).await;
+    let (options, action, csrf, factor) = passkey_enrol_form(&app, &page);
+    let auth = authenticator(user_id(&app, BOB).await);
+    // The first ceremony is abandoned and a second one started: the first challenge is gone.
+    let first = creation_options(&app, &options, &csrf).await;
+    let second = creation_options(&app, &options, &csrf).await;
+    assert_ne!(challenge_of(&first), challenge_of(&second));
+    let resp = finish(
+        &app,
+        &action,
+        &csrf,
+        &factor,
+        &registration(&auth, &challenge_of(&first)),
+    )
+    .await;
+    assert_refused(&app, &resp);
+    assert_eq!(passkey_count(&app, BOB).await, 0);
+    // The refusal used up the pending challenge too; a fresh ceremony succeeds.
+    let resp = finish(
+        &app,
+        &action,
+        &csrf,
+        &factor,
+        &registration(&auth, &challenge_of(&second)),
+    )
+    .await;
+    assert_refused(&app, &resp);
+    let third = creation_options(&app, &options, &csrf).await;
+    let resp = finish(
+        &app,
+        &action,
+        &csrf,
+        &factor,
+        &registration(&auth, &challenge_of(&third)),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_eq!(passkey_count(&app, BOB).await, 1);
+    let failures = audit(&app, AuditAction::LoginFailed).await;
+    // Only the response that was actually checked is audited (the second had nothing pending).
+    assert_eq!(failures.len(), 1, "{failures:?}");
+}
+
+#[tokio::test]
+async fn a_passkey_enrolment_challenge_from_another_flow_is_refused() {
+    let app = app().await;
+    set_policy(&app, MfaPolicy::Required).await;
+    let auth = authenticator(user_id(&app, BOB).await);
+    // Flow A: a challenge whose response is never posted there.
+    let page_a = password(&app, "/ui/login", BOB).await;
+    let (options_a, _, csrf_a, _) = passkey_enrol_form(&app, &page_a);
+    let from_a = registration(
+        &auth,
+        &challenge_of(&creation_options(&app, &options_a, &csrf_a).await),
+    );
+    // Flow B (another browser): its own challenge pending, A's response posted.
+    app.clear_cookies();
+    let page_b = password(&app, "/ui/login", BOB).await;
+    let (options_b, action_b, csrf_b, factor_b) = passkey_enrol_form(&app, &page_b);
+    creation_options(&app, &options_b, &csrf_b).await;
+    let resp = finish(&app, &action_b, &csrf_b, &factor_b, &from_a).await;
+    assert_refused(&app, &resp);
+    assert_eq!(passkey_count(&app, BOB).await, 0);
+}
+
+#[tokio::test]
+async fn a_passkey_finish_without_a_pending_challenge_is_refused() {
+    // The user went the authenticator-app way (never asked for passkey options): a registration
+    // made for a challenge this flow never issued is refused.
+    let app = app().await;
+    set_policy(&app, MfaPolicy::Required).await;
+    let bob = user_id(&app, BOB).await;
+    let page = password(&app, "/ui/login", BOB).await;
+    let (_, action, csrf, factor) = passkey_enrol_form(&app, &page);
+    let rp = relying_party(&default_tenant(&app), &app.issuer(None)).expect("relying party");
+    let foreign = WebauthnPasskeys
+        .start_registration(
+            &rp,
+            &PasskeyUser {
+                id: bob,
+                name: BOB.into(),
+                display_name: BOB.into(),
+            },
+            &[],
+        )
+        .expect("start");
+    let foreign: serde_json::Value = serde_json::from_str(&foreign.options_json).expect("json");
+    let auth = authenticator(bob);
+    let resp = finish(
+        &app,
+        &action,
+        &csrf,
+        &factor,
+        &registration(&auth, &challenge_of(&foreign)),
+    )
+    .await;
+    assert_refused(&app, &resp);
+    assert_eq!(passkey_count(&app, BOB).await, 0);
+    // The authenticator-app choice still works afterwards.
+    let code = code_for_page(&app, &resp.html());
+    let done = post_code(&app, &resp, &code).await;
+    assert_eq!(done.status, 200, "{}", done.text());
+}
+
+#[tokio::test]
+async fn passkey_enrolment_routes_are_bound_to_the_flow_and_its_enrolment_step() {
+    let app = app().await;
+    set_policy(&app, MfaPolicy::Required).await;
+    let page = password(&app, "/ui/login", BOB).await;
+    let (options, action, csrf, factor) = passkey_enrol_form(&app, &page);
+
+    // Options: without or with a wrong CSRF token, or without the flow cookie: 403.
+    let resp = app.post_form(&options, &[]).await;
+    assert_eq!(resp.status, 403);
+    assert_eq!(json(&resp)["error"], "csrf");
+    let resp = app.post_form(&options, &[("csrf_token", "wrong")]).await;
+    assert_eq!(resp.status, 403);
+    assert_eq!(json(&resp)["error"], "csrf");
+    // Finish: the csrf page, nothing stored.
+    let resp = app
+        .post_form(&action, &[("factor_token", &factor), ("response", "{}")])
+        .await;
+    assert_eq!(resp.status, 403);
+    assert_eq!(error_key(&resp.html()).as_deref(), Some("csrf"));
+    let resp = finish(&app, &action, "wrong", &factor, "{}").await;
+    assert_eq!(resp.status, 403);
+    app.clear_cookies();
+    let resp = app.post_form(&options, &[("csrf_token", &csrf)]).await;
+    assert_eq!(resp.status, 403);
+    let resp = finish(&app, &action, &csrf, &factor, "{}").await;
+    assert_eq!(resp.status, 403);
+    assert!(session_cookie(&app).is_none());
+
+    // A login flow that is not at the enrolment step offers no passkey enrolment.
+    let login = app.get("/ui/login").await;
+    let html = login.html();
+    let flow_action = form_action(&app, &html);
+    let flow = flow_action
+        .split("?flow=")
+        .nth(1)
+        .expect("flow id")
+        .to_owned();
+    let resp = app
+        .post_form(
+            &format!("/ui/login/enroll/passkey/start?flow={flow}"),
+            &[("csrf_token", &csrf_from(&html))],
+        )
+        .await;
+    assert_eq!(resp.status, 400, "{}", resp.text());
+    assert_eq!(json(&resp)["error"], PASSKEY_FAILED);
+    let resp = app
+        .post_form(
+            &format!("/ui/login/enroll/passkey/finish?flow={flow}"),
+            &[("csrf_token", &csrf_from(&html)), ("response", "{}")],
+        )
+        .await;
+    assert_eq!(resp.status, 400, "{}", resp.text());
+    assert!(session_cookie(&app).is_none());
+    assert_eq!(passkey_count(&app, BOB).await, 0);
+}
+
+#[tokio::test]
+async fn optional_and_off_never_show_the_enrolment_choice() {
+    let app = app().await;
+    for policy in [MfaPolicy::Off, MfaPolicy::Optional] {
+        set_policy(&app, policy).await;
+        app.clear_cookies();
+        let resp = password(&app, "/ui/login", BOB).await;
+        assert!(!resp.html().contains("mfa-enroll-passkey"), "{policy:?}");
+        assert_signed_in_single_factor(&app, &resp).await;
+    }
 }

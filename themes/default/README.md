@@ -105,7 +105,7 @@ Other pages receive extra keys:
 | `account_email.html` (0.3) | `messages`, `mode`: `change` (`csrf_token`, `action`, `email`, `email_verified`, `recent_auth`, `login_url`), `confirm` (`confirm_action`, `token`), or `done` |
 | `account_password.html` (0.3) | `csrf_token`, `messages`, `action`, `has_password`, `recent_auth`, `login_url`, `revoke_others` |
 | `account_linked.html` (0.3) | `csrf_token`, `messages`, `recent_auth`, `login_url`, `linked` (`[{ id, provider, email, created, created_iso, last_used, last_used_iso, unlink_url }]`), `available` (`[{ slug, name, connect_url }]`) |
-| `mfa_enroll.html` (0.3) | Enrolment mode: `form` (id `mfa-enroll`, field `code`), `qr_svg`, `secret_groups`, `factor_token`. Done mode: `codes`, `codes_text`, `continue_url` (recovery codes, shown once) |
+| `mfa_enroll.html` (0.3) | Enrolment mode: `form` (id `mfa-enroll`, field `code`), `qr_svg`, `secret_groups`, `factor_token`; since 0.4 `passkey_enroll` (`{ options_url, action }` of the webauthn.js registration form, or null). Done mode: `codes`, `codes_text`, `continue_url` (recovery codes, shown once) |
 | `email_code.html` (0.3) | `form` (id `email-code`, field `code`), `factor_token` (or null), `resend_action` (or null) |
 | `magic_link.html` (0.3) | `action`, `csrf_token`, `token` (posted back by the button) |
 | `upstream_link.html` (0.3) | `form` (id `upstream-link`, fields `identifier`, `password`; the first message names the provider), `passkey` (as on the sign-in page) |

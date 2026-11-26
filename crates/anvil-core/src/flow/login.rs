@@ -10,10 +10,15 @@
 //!   [`LoginState::passkey_challenge`] (put there by [`Effect::StartPasskey`]).
 //! - [`LoginStep::SecondFactor`]: a TOTP code or a recovery code for the user whose password
 //!   was verified; success signs in with `amr = [pwd, otp, mfa]`.
-//! - [`LoginStep::Enroll`]: the effective policy is `Required` and the user has no second factor:
-//!   they enrol an authenticator app (the sealed pending secret is in
-//!   [`LoginState::pending_totp`]) and the confirming code signs them in with
-//!   `amr = [pwd, otp, mfa]`.
+//! - [`LoginStep::Enroll`]: the effective policy is `Required` and the user has no second factor.
+//!   The page offers a choice:
+//!   - an authenticator app (the sealed pending secret is in [`LoginState::pending_totp`]); the
+//!     confirming code signs them in with `amr = [pwd, otp, mfa]`. Works without JavaScript.
+//!   - a passkey: [`passkey_enrolment_user`] allows the registration options (the service stores
+//!     the registration state in [`LoginState::enroll_passkey`] with a compare-and-swap), and
+//!     [`take_passkey_enrolment`] takes that state out before the response is verified (single
+//!     use). The stored passkey signs them in like a passkey sign-in:
+//!     `amr = [hwk|swk, user, mfa]` ([`passkey_enrolment_finish`]).
 //!
 //! # MFA policy (AUTH-08)
 //!
@@ -86,6 +91,11 @@ pub struct LoginState {
     /// Taken out with a compare-and-swap when the confirming code is accepted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_totp: Option<String>,
+    /// Enrolment: the server-side state of a pending passkey registration (webauthn-rs
+    /// registration state for the step's user). Not a secret, but single-use: taken out with a
+    /// compare-and-swap before the registration response is verified.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enroll_passkey: Option<String>,
     /// A started upstream sign-in (`flow::upstream`); taken out with a compare-and-swap by the
     /// callback.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -312,8 +322,57 @@ pub fn enroll_required(
 ) -> (FlowState, FormDescription) {
     state.step = LoginStep::Enroll { user_id };
     state.passkey_challenge = None;
+    state.enroll_passkey = None;
     state.pending_totp = Some(pending_totp);
     (FlowState::Login(state), enroll_form(Vec::new()))
+}
+
+/// Message key of a refused passkey enrolment (abandoned, replayed, cross-flow or invalid
+/// registration, or a passkey already registered).
+pub const PASSKEY_ENROLMENT_FAILED: &str = "mfa_enroll.passkey_failed";
+
+/// The user passkey registration options may be created for: the user of the enrolment step.
+/// `None` in any other step (passkey enrolment is only offered there).
+pub fn passkey_enrolment_user(state: &LoginState) -> Option<UserId> {
+    match state.step {
+        LoginStep::Enroll { user_id } => Some(user_id),
+        _ => None,
+    }
+}
+
+/// The state holding a new passkey registration challenge (replacing an earlier one).
+pub fn with_passkey_enrolment(mut state: LoginState, registration_state: String) -> LoginState {
+    state.enroll_passkey = Some(registration_state);
+    state
+}
+
+/// A passkey registration response arrived: takes the pending registration state out of the
+/// enrolment step. `Some((user, registration state))`: `state` no longer holds it, and the
+/// service swaps the stored state to it before verifying (single use). `None`: not in the
+/// enrolment step, or no registration pending (never requested, already used, or the user went
+/// the authenticator-app way): refused with [`passkey_enrolment_failed`]; `state` is unchanged.
+pub fn take_passkey_enrolment(state: &mut LoginState) -> Option<(UserId, String)> {
+    let LoginStep::Enroll { user_id } = state.step else {
+        return None;
+    };
+    state.enroll_passkey.take().map(|r| (user_id, r))
+}
+
+/// The terminal effect of a verified, stored passkey enrolment: the session is signed in (or the
+/// step-up session upgraded) as a passkey sign-in, `amr = [hwk|swk, user, mfa]`, MFA `acr`.
+pub fn passkey_enrolment_finish(state: &LoginState) -> Effect {
+    match state.step_up_session {
+        Some(session) => Effect::UpgradeSession {
+            session,
+            auth: SessionAuth::Passkey,
+        },
+        None => Effect::CreateSession(SessionAuth::Passkey),
+    }
+}
+
+/// The enrolment form after a refused passkey enrolment (the authenticator-app choice stays).
+pub fn passkey_enrolment_failed() -> FormDescription {
+    enroll_form(vec![error(PASSKEY_ENROLMENT_FAILED)])
 }
 
 /// The state of a step-up flow for `session` of `user`: the second-factor step, or (with a
@@ -1143,5 +1202,115 @@ mod tests {
         // The state round-trips through JSON.
         let json = serde_json::to_string(&state).unwrap();
         assert_eq!(serde_json::from_str::<FlowState>(&json).unwrap(), state);
+    }
+
+    fn enrol_state(user: UserId) -> LoginState {
+        let (state, _) = enroll_required(LoginState::default(), user, "sealed".into());
+        let FlowState::Login(s) = state else {
+            panic!("login state")
+        };
+        s
+    }
+
+    #[test]
+    fn passkey_enrolment_is_offered_only_in_the_enrolment_step() {
+        let user = UserId::new_v7();
+        assert_eq!(passkey_enrolment_user(&enrol_state(user)), Some(user));
+        assert_eq!(passkey_enrolment_user(&LoginState::default()), None);
+        let (_, second) = second_factor_state(BOTH);
+        assert_eq!(passkey_enrolment_user(&second), None);
+        let email = LoginState {
+            step: LoginStep::EmailCode,
+            ..LoginState::default()
+        };
+        assert_eq!(passkey_enrolment_user(&email), None);
+    }
+
+    #[test]
+    fn passkey_enrolment_challenge_is_taken_out_once() {
+        let user = UserId::new_v7();
+        let pending = with_passkey_enrolment(enrol_state(user), "reg-1".into());
+        // A newer challenge replaces an older one.
+        let pending = with_passkey_enrolment(pending, "reg-2".into());
+        let mut taken = pending;
+        let (who, registration) = take_passkey_enrolment(&mut taken).expect("pending");
+        assert_eq!(who, user);
+        assert_eq!(registration, "reg-2");
+        assert_eq!(taken.enroll_passkey, None);
+        // The TOTP choice survives a passkey attempt.
+        assert_eq!(taken.pending_totp.as_deref(), Some("sealed"));
+        assert_eq!(taken.step, LoginStep::Enroll { user_id: user });
+        // Used (replay), or never requested (the authenticator-app way): refused.
+        assert_eq!(take_passkey_enrolment(&mut taken), None);
+        assert_eq!(take_passkey_enrolment(&mut enrol_state(user)), None);
+        // Outside the enrolment step a stray value is never used.
+        let mut identify = LoginState {
+            enroll_passkey: Some("reg".into()),
+            ..LoginState::default()
+        };
+        assert_eq!(take_passkey_enrolment(&mut identify), None);
+        assert_eq!(identify.enroll_passkey.as_deref(), Some("reg"));
+    }
+
+    #[test]
+    fn a_fresh_enrolment_drops_an_earlier_passkey_challenge() {
+        let user = UserId::new_v7();
+        let pending = with_passkey_enrolment(enrol_state(user), "reg".into());
+        let (state, _) = enroll_required(pending, user, "sealed-2".into());
+        let FlowState::Login(s) = state else {
+            panic!("login state")
+        };
+        assert_eq!(s.enroll_passkey, None);
+    }
+
+    #[test]
+    fn passkey_enrolment_signs_in_as_a_passkey_or_upgrades_the_step_up_session() {
+        let user = UserId::new_v7();
+        assert!(matches!(
+            passkey_enrolment_finish(&enrol_state(user)),
+            Effect::CreateSession(SessionAuth::Passkey)
+        ));
+        let session = SessionId::new_v7();
+        let (state, _) = step_up(
+            session,
+            user,
+            SecondFactorMethods::default(),
+            Some("p".into()),
+        );
+        let FlowState::Login(s) = state else {
+            panic!("login state")
+        };
+        assert!(matches!(
+            passkey_enrolment_finish(&s),
+            Effect::UpgradeSession {
+                session: x,
+                auth: SessionAuth::Passkey
+            } if x == session
+        ));
+        let f = passkey_enrolment_failed();
+        assert_eq!(f.id, ENROLL_FORM_ID);
+        assert_eq!(all_keys(&f), vec![PASSKEY_ENROLMENT_FAILED]);
+        assert_form_invariants(&f, &[]);
+    }
+
+    #[test]
+    fn enrolment_state_with_a_passkey_challenge_round_trips_and_old_json_decodes() {
+        let state = FlowState::Login(with_passkey_enrolment(
+            enrol_state(UserId::new_v7()),
+            "{\"rs\":1}".into(),
+        ));
+        let json = serde_json::to_string(&state).unwrap();
+        assert_eq!(serde_json::from_str::<FlowState>(&json).unwrap(), state);
+        // Enrolment JSON written before this field existed still decodes (no challenge).
+        let FlowState::Login(mut old) = state else {
+            panic!()
+        };
+        old.enroll_passkey = None;
+        let json = serde_json::to_string(&FlowState::Login(old.clone())).unwrap();
+        assert!(!json.contains("enroll_passkey"), "{json}");
+        assert_eq!(
+            serde_json::from_str::<FlowState>(&json).unwrap(),
+            FlowState::Login(old)
+        );
     }
 }

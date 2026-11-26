@@ -2,14 +2,25 @@
 {% import "form.html" as forms %}
 {#- In-flow second-factor enrolment at sign-in (AUTH-08), when the MFA policy is `required` and
     the user has no second factor. Two modes:
-    - Enrolment (`form`, form id `mfa-enroll`, field `code`): `qr_svg` (trusted inline SVG of the
-      otpauth URI), `secret_groups` (the key for manual entry), `factor_token` (hidden binding
-      token). Works without JavaScript.
+    - Enrolment, a choice of two factors (authenticator app first, then passkey):
+      - passkey (`passkey_enroll` = {options_url, action}, or none when the issuer cannot be a
+        WebAuthn relying party): a webauthn.js registration form; its button is hidden until the
+        script finds WebAuthn support, and a noscript note explains that it needs JavaScript. A
+        refused registration comes back as the form message `mfa_enroll.passkey_failed`, shown
+        in this section.
+      - authenticator app (`form`, form id `mfa-enroll`, field `code`): `qr_svg` (trusted inline
+        SVG of the otpauth URI), `secret_groups` (the key for manual entry), `factor_token`
+        (hidden binding token). Works without JavaScript.
     - Done (`codes` set): the new recovery codes, shown once; `codes_text` (one per line) and
       `continue_url` (continues the authorization request).
-    Selectors: mfa-enroll-required, totp-qr, totp-secret, form mfa-enroll with input code, button
-    mfa-enroll-submit, messages mfa-enroll-msg-N, link link-login; recovery-codes,
-    recovery-codes-text, link-continue. -#}
+    The authenticator-app section comes first (its form is the page's first form), the passkey
+    section after it.
+    Selectors: mfa-enroll-required; section mfa-enroll-totp with totp-qr, totp-secret, form
+    mfa-enroll with input code, button mfa-enroll-submit, messages mfa-enroll-msg-N; section
+    mfa-enroll-passkey with form mfa-enroll-passkey-form, button mfa-enroll-passkey-submit, status
+    mfa-enroll-passkey-status, messages mfa-enroll-passkey-msg-N, noscript note
+    mfa-enroll-passkey-nojs; link link-login; recovery-codes, recovery-codes-text,
+    link-continue. -#}
 {% block heading %}{% if codes %}{{ t("title.mfa_codes") }}{% else %}{{ t("title.mfa_enroll") }}{% endif %}{% endblock %}
 {% block content %}
 {% if codes %}
@@ -27,8 +38,11 @@
 <a id="link-continue" href="{{ continue_url }}">{{ t("mfa_codes.continue") }}</a>
 </nav>
 {% else %}
-{% set has_error = "error" in form.messages|map(attribute="level")|list %}
+{% set passkey_failed = "mfa_enroll.passkey_failed" in form.messages|map(attribute="key")|list %}
+{% set has_error = not passkey_failed and "error" in form.messages|map(attribute="level")|list %}
 <p id="mfa-enroll-required">{{ t("mfa_enroll.required") }}</p>
+<section id="mfa-enroll-totp" aria-labelledby="mfa-enroll-totp-heading">
+<h2 id="mfa-enroll-totp-heading">{{ t("mfa_enroll.totp_heading") }}</h2>
 <p id="totp-instructions">{{ t("mfa_enroll.instructions") }}</p>
 {% if qr_svg %}<div class="anvil-qr" id="totp-qr">{{ qr_svg }}</div>{% endif %}
 {% if secret_groups %}
@@ -38,7 +52,7 @@
 <form id="{{ form.id }}" method="post" action="{{ form.action }}" novalidate>
 <input type="hidden" name="csrf_token" value="{{ form.csrf_token }}">
 {% if factor_token %}<input type="hidden" id="factor_token" name="factor_token" value="{{ factor_token }}">{% endif %}
-{% if form.messages %}
+{% if form.messages and not passkey_failed %}
 <div class="anvil-form-messages">
 {{ forms.messages(form.messages, form.id) }}
 </div>
@@ -49,6 +63,27 @@
 </div>
 <button type="submit" id="{{ form.id }}-submit">{{ t("mfa_enroll.submit") }}</button>
 </form>
+</section>
+{% if passkey_enroll %}
+<section id="mfa-enroll-passkey" aria-labelledby="mfa-enroll-passkey-heading">
+<h2 id="mfa-enroll-passkey-heading">{{ t("mfa_enroll.passkey_heading") }}</h2>
+<p id="mfa-enroll-passkey-help">{{ t("mfa_enroll.passkey_help") }}</p>
+<form id="mfa-enroll-passkey-form" method="post" action="{{ passkey_enroll.action }}" data-webauthn="register" data-options-url="{{ passkey_enroll.options_url }}" data-webauthn-msg-cancelled="{{ t("mfa_enroll.webauthn.cancelled") }}" data-webauthn-msg-failed="{{ t("mfa_enroll.webauthn.failed") }}" novalidate>
+<input type="hidden" name="csrf_token" value="{{ form.csrf_token }}">
+{% if factor_token %}<input type="hidden" name="factor_token" value="{{ factor_token }}">{% endif %}
+<input type="hidden" name="response" value="">
+{% if passkey_failed %}
+<div class="anvil-form-messages">
+{{ forms.messages(form.messages, "mfa-enroll-passkey") }}
+</div>
+{% endif %}
+<button type="button" id="mfa-enroll-passkey-submit" data-webauthn-trigger hidden>{{ t("mfa_enroll.passkey_button") }}</button>
+<p id="mfa-enroll-passkey-status" class="anvil-muted" data-webauthn-status aria-live="polite"></p>
+<noscript><p class="anvil-muted" id="mfa-enroll-passkey-nojs">{{ t("mfa_enroll.passkey_nojs") }}</p></noscript>
+</form>
+</section>
+<script src="{{ page.asset_base }}/webauthn.js" defer></script>
+{% endif %}
 {% if page.links.login %}
 <nav class="anvil-links" aria-label="{{ t("nav.other_options") }}">
 <a id="link-login" href="{{ page.links.login }}">{{ t("second_factor.start_over") }}</a>

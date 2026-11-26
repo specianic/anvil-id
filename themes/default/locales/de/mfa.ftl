@@ -1,12 +1,20 @@
 # MFA policy enforcement at sign-in: in-flow enrolment and its recovery codes (AUTH-08), German.
 title-mfa_enroll = Bestätigung in zwei Schritten einrichten
 title-mfa_codes = Speichern Sie Ihre Wiederherstellungscodes
-mfa_enroll-required = Ihre Organisation verlangt eine Bestätigung in zwei Schritten. Fügen Sie eine Authenticator-App hinzu, um fortzufahren.
+mfa_enroll-required = Ihre Organisation verlangt eine Bestätigung in zwei Schritten. Fügen Sie einen Passkey oder eine Authenticator-App hinzu, um fortzufahren.
 mfa_enroll-instructions = Scannen Sie diesen QR-Code mit Ihrer Authenticator-App und geben Sie dann den 6-stelligen Code ein, den sie anzeigt.
 mfa_enroll-manual = Sie können den Code nicht scannen? Geben Sie stattdessen diesen Schlüssel in der App ein:
 mfa_enroll-code_label = Code aus der App
 mfa_enroll-submit = Bestätigen und weiter
 mfa_enroll-code_invalid = Dieser Code hat nicht funktioniert. Prüfen Sie, ob die Uhrzeit auf Ihrem Gerät stimmt, und versuchen Sie es erneut.
+mfa_enroll-passkey_heading = Passkey verwenden
+mfa_enroll-passkey_help = Melden Sie sich mit Fingerabdruck, Gesichtserkennung, Bildschirmsperre oder Sicherheitsschlüssel an. Beim nächsten Mal müssen Sie nichts eintippen.
+mfa_enroll-passkey_button = Passkey hinzufügen und weiter
+mfa_enroll-passkey_nojs = Zum Hinzufügen eines Passkeys wird JavaScript benötigt. Verwenden Sie ohne JavaScript die Authenticator-App oben.
+mfa_enroll-passkey_failed = Der Passkey konnte nicht hinzugefügt werden. Versuchen Sie es erneut oder verwenden Sie eine Authenticator-App.
+mfa_enroll-webauthn-cancelled = Das Hinzufügen des Passkeys wurde abgebrochen oder hat zu lange gedauert. Versuchen Sie es erneut oder verwenden Sie eine Authenticator-App.
+mfa_enroll-webauthn-failed = Der Passkey konnte nicht hinzugefügt werden. Versuchen Sie es erneut oder verwenden Sie eine Authenticator-App.
+mfa_enroll-totp_heading = Authenticator-App verwenden
 mfa_codes-help = Die Bestätigung in zwei Schritten ist aktiv. Bewahren Sie diese Wiederherstellungscodes sicher auf: Mit jedem Code können Sie sich einmal anmelden, falls Sie Ihre Authenticator-App verlieren. Sie werden nur jetzt angezeigt.
 mfa_codes-copy_label = Wiederherstellungscodes (zum Kopieren)
 mfa_codes-continue = Ich habe sie gespeichert, weiter

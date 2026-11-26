@@ -45,7 +45,11 @@
 //! state under the flow id (the account page's sealing, `service::account`) and the page shows it
 //! ([`FlowOutcome::Enroll`]). The confirming code takes the secret out with a compare-and-swap,
 //! creates the credential and recovery codes (shown once on the next page) and signs in with
-//! `[pwd, otp, mfa]`.
+//! `[pwd, otp, mfa]`. The same step offers a passkey instead
+//! ([`FlowService::passkey_enrolment_options`] / [`FlowService::passkey_enrolment_finish`]): the
+//! registration state is stored in the flow with a compare-and-swap and taken out with one before
+//! the response is verified (abandoned, replayed and cross-flow responses fail); the stored
+//! passkey signs in as a passkey sign-in, `[hwk|swk, user, mfa]`.
 //!
 //! [`FlowService::start_login`] starts a step-up flow when the stored request decides
 //! `StepUp` for the caller's session: the flow begins at the second-factor (or enrolment) step
@@ -125,10 +129,15 @@ use crate::flow::engine::{
     second_factor_required, session_acr_amr, step_up, transition, upgraded_acr_amr,
 };
 use crate::flow::form::{FormDescription, FormMessage, MessageLevel};
+use crate::flow::login::{
+    passkey_enrolment_failed, passkey_enrolment_finish as login_passkey_enrolment_finish,
+    passkey_enrolment_user, take_passkey_enrolment, with_passkey_enrolment,
+};
+use crate::flow::settings::DEFAULT_PASSKEY_LABEL;
 use crate::model::{
     ActorKind, AuditAction, AuditActor, AuditDetails, AuditOutcome, AuthRequestId, BrowserSession,
-    CounterOutcome, CredentialKind, Flow, FlowId, FlowKind, NewEmail, NewFlow,
-    NewPasswordCredential, NewSelfServiceToken, NewUser, OutboxId, PasskeyCredential,
+    CounterOutcome, CredentialId, CredentialKind, Flow, FlowId, FlowKind, NewEmail, NewFlow,
+    NewPasskey, NewPasswordCredential, NewSelfServiceToken, NewUser, OutboxId, PasskeyCredential,
     RecoveryCodeHash, RecoveryNotice, RequestContext, SecretHash, SelfServiceKind, SessionId,
     StandardClaims, TOTP_SEED_PURPOSE, Tenant, TenantId, TotpCredential, User, UserId, UserStatus,
     credential_aad, seal_payload,
@@ -137,8 +146,8 @@ use crate::oauth::decision::{SessionDecision, decide};
 use crate::policy::PasswordPolicy;
 use crate::policy::mfa::{AcrRequest, MfaRequirement, mfa_requirement};
 use crate::ports::{
-    AssertionIdentity, BreachChecker, Clock, PasskeyCeremonies, PasskeyError, PasswordCheck,
-    PasswordHasher, RelyingParty, Storage, StorageError,
+    AssertionIdentity, BreachChecker, Clock, PasskeyCeremonies, PasskeyError, PasskeyUser,
+    PasswordCheck, PasswordHasher, RelyingParty, Storage, StorageError,
 };
 use anvil_jose::otp::TotpSecret as PendingSecret;
 
@@ -685,6 +694,231 @@ impl FlowService {
                 "passkey sign-in is not available in this step".into(),
             )),
         }
+    }
+
+    /// Creates passkey registration options for the user of a login flow in its enrolment step
+    /// (MFA policy `required`, no second factor yet) and returns the creation options JSON for
+    /// `navigator.credentials.create`. The registration state replaces any earlier one in the
+    /// flow state (compare-and-swap). The user's existing passkeys are excluded. Errors:
+    /// `Forbidden` (binding), `InvalidRequest` (expired or unknown flow, not in the enrolment
+    /// step, inactive user, or a concurrent change of the flow), `Internal` (the issuer cannot
+    /// be a relying party).
+    pub async fn passkey_enrolment_options(
+        &self,
+        cx: &FlowContext<'_>,
+        flow_id: FlowId,
+        cookie_token: Option<&str>,
+        csrf_token: &str,
+    ) -> Result<String, CoreError> {
+        let unavailable =
+            || CoreError::InvalidRequest("passkey enrolment is not available in this step".into());
+        let (flow, state) = match self
+            .load(cx, flow_id, cookie_token, csrf_token, FlowKind::Login)
+            .await?
+        {
+            Loaded::Flow(f, FlowState::Login(s)) => (f, s),
+            Loaded::Flow(..) => return Err(unavailable()),
+            Loaded::Restarted(_) => {
+                return Err(CoreError::InvalidRequest("the sign-in flow expired".into()));
+            }
+        };
+        let tenant = cx.tenant.id;
+        let Some(user_id) = passkey_enrolment_user(&state) else {
+            return Err(unavailable());
+        };
+        let Some(user) = self.second_factor_user(tenant, user_id).await? else {
+            return Err(unavailable());
+        };
+        let exclude: Vec<Vec<u8>> = self
+            .storage
+            .users()
+            .passkeys(tenant, user.id)
+            .await?
+            .into_iter()
+            .map(|p| p.credential_id)
+            .collect();
+        let challenge = self.passkeys.start_registration(
+            cx.relying_party()?,
+            &passkey_user(&user),
+            &exclude,
+        )?;
+        let next = with_passkey_enrolment(state, challenge.state_json);
+        let json = encode_state(&FlowState::Login(next))?;
+        if !self
+            .storage
+            .flows()
+            .swap_state(tenant, flow.id, &flow.state, &json, self.clock.now())
+            .await?
+        {
+            return Err(CoreError::InvalidRequest(
+                "the sign-in flow changed concurrently".into(),
+            ));
+        }
+        Ok(challenge.options_json)
+    }
+
+    /// Completes an in-flow passkey enrolment with the registration response from
+    /// `navigator.credentials.create`. The pending registration state is taken out of the flow
+    /// with a compare-and-swap before the response is verified, so it is used once: an
+    /// abandoned (superseded), replayed, cross-flow or invalid response, or one with no pending
+    /// registration (the user went the authenticator-app way), renders the enrolment form with
+    /// `mfa_enroll.passkey_failed` and stores nothing. A verified passkey is stored for the
+    /// step's user (audited `passkey_registered`) and the user is signed in like a passkey
+    /// sign-in (`[hwk|swk, user, mfa]`, MFA `acr`), or the step-up session is upgraded.
+    /// `current_session` is handled as in [`Self::submit`].
+    pub async fn passkey_enrolment_finish(
+        &self,
+        cx: &FlowContext<'_>,
+        flow_id: FlowId,
+        cookie_token: Option<&str>,
+        csrf_token: &str,
+        response_json: &str,
+        current_session: Option<SessionId>,
+    ) -> Result<SubmitResult, CoreError> {
+        let (flow, state) = match self
+            .load(cx, flow_id, cookie_token, csrf_token, FlowKind::Login)
+            .await?
+        {
+            Loaded::Flow(f, FlowState::Login(s)) => (f, s),
+            Loaded::Flow(f, other) => {
+                // Not a login flow: the current form of that flow, unchanged.
+                let form = crate::flow::engine::current_form(
+                    &other,
+                    vec![FormMessage::error("flow.invalid_input")],
+                    &self.env(cx),
+                );
+                let form = bind_form(form, cx, f.id, csrf_token);
+                return Ok(SubmitResult::plain(FlowOutcome::Render(form)));
+            }
+            Loaded::Restarted(outcome) => return Ok(SubmitResult::plain(outcome)),
+        };
+        let tenant = cx.tenant.id;
+        let now = self.clock.now();
+        let mut next = state;
+        let Some((user_id, registration)) = take_passkey_enrolment(&mut next) else {
+            return self
+                .passkey_enrolment_refused(cx, &flow, csrf_token, &next, None)
+                .await;
+        };
+        let next_json = encode_state(&FlowState::Login(next.clone()))?;
+        // Single use: whoever swaps the challenge out first verifies it; a replayed or
+        // concurrent finish loses the swap.
+        if !self
+            .storage
+            .flows()
+            .swap_state(tenant, flow.id, &flow.state, &next_json, now)
+            .await?
+        {
+            return self
+                .passkey_enrolment_refused(cx, &flow, csrf_token, &next, None)
+                .await;
+        }
+        let Some(user) = self.second_factor_user(tenant, user_id).await? else {
+            return self
+                .passkey_enrolment_refused(cx, &flow, csrf_token, &next, Some(user_id))
+                .await;
+        };
+        let Ok(registered) =
+            self.passkeys
+                .finish_registration(cx.relying_party()?, response_json, &registration)
+        else {
+            return self
+                .passkey_enrolment_refused(cx, &flow, csrf_token, &next, Some(user_id))
+                .await;
+        };
+        let new = NewPasskey {
+            id: CredentialId::new_v7(),
+            credential_id: registered.credential_id,
+            passkey_json: registered.passkey_json,
+            counter: registered.counter,
+            backup_eligible: registered.backup_eligible,
+            label: DEFAULT_PASSKEY_LABEL.to_owned(),
+            created_at: now,
+        };
+        match self
+            .storage
+            .users()
+            .create_passkey(tenant, user.id, &new)
+            .await
+        {
+            Ok(()) => {}
+            // The credential is already registered (to this or another account).
+            Err(StorageError::Conflict(_)) => {
+                return self
+                    .passkey_enrolment_refused(cx, &flow, csrf_token, &next, Some(user_id))
+                    .await;
+            }
+            Err(e) => return Err(e.into()),
+        }
+        self.audit()
+            .record(
+                tenant,
+                AuditActor::user(user.id),
+                AuditAction::PasskeyRegistered,
+                Some(new.id.to_string()),
+                AuditOutcome::Success,
+                cx.ctx,
+                AuditDetails::credential(CredentialKind::Webauthn),
+            )
+            .await?;
+        let env = self.env(cx);
+        let mut queue = VecDeque::new();
+        let mut exec = Exec {
+            flow: &flow,
+            state_json: &next_json,
+            current_session,
+            subject: Some(user),
+            attempt: Some(AuthAttempt::PasskeySucceeded { user: user_id }),
+            method: "passkey",
+            passkey_backup_eligible: registered.backup_eligible,
+            recovery_codes: Vec::new(),
+            csrf_token,
+        };
+        let terminal = login_passkey_enrolment_finish(&next);
+        match self.run(cx, &terminal, &mut queue, &mut exec, &env).await? {
+            Step::Done(outcome) => Ok(SubmitResult {
+                outcome: *outcome,
+                attempt: exec.attempt,
+            }),
+            _ => Err(CoreError::Internal(
+                "passkey enrolment ended without a session".into(),
+            )),
+        }
+    }
+
+    /// The enrolment form with `mfa_enroll.passkey_failed` (and the pending authenticator-app
+    /// secret). Nothing is written: the challenge was already taken out (or never pending), and
+    /// a lost swap must not overwrite the winner's state. `user` is audited `login_failed`
+    /// (method `passkey_enrolment`) when a registration response was actually checked.
+    async fn passkey_enrolment_refused(
+        &self,
+        cx: &FlowContext<'_>,
+        flow: &Flow,
+        csrf_token: &str,
+        state: &LoginState,
+        user: Option<UserId>,
+    ) -> Result<SubmitResult, CoreError> {
+        if let Some(user) = user {
+            self.audit_login_failed(cx, Some(user), AuditDetails::login("passkey_enrolment"))
+                .await?;
+        }
+        let state = FlowState::Login(state.clone());
+        let form = match &state {
+            FlowState::Login(s) if passkey_enrolment_user(s).is_some() => {
+                passkey_enrolment_failed()
+            }
+            _ => crate::flow::engine::current_form(
+                &state,
+                vec![FormMessage::error("flow.invalid_input")],
+                &self.env(cx),
+            ),
+        };
+        let form = bind_form(form, cx, flow.id, csrf_token);
+        let outcome = match self.pending_enrolment(cx, flow.id, &state).await? {
+            Some(totp) => FlowOutcome::Enroll { form, totp },
+            None => FlowOutcome::Render(form),
+        };
+        Ok(SubmitResult::plain(outcome))
     }
 
     /// Submits user input to a flow. `current_session` (the caller's existing session, if any)
@@ -2261,6 +2495,21 @@ fn engine_kind(kind: FlowKind) -> bool {
         | FlowKind::Recovery
         | FlowKind::Setup => true,
         FlowKind::Settings | FlowKind::Consent | FlowKind::Logout => false,
+    }
+}
+
+/// The WebAuthn user of a passkey registration: the email as name, the display name (or the
+/// email) as display name, like the account page.
+fn passkey_user(user: &User) -> PasskeyUser {
+    PasskeyUser {
+        id: user.id,
+        name: user.email.clone(),
+        display_name: user
+            .claims
+            .name
+            .clone()
+            .filter(|n| !n.trim().is_empty())
+            .unwrap_or_else(|| user.email.clone()),
     }
 }
 
