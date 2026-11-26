@@ -51,6 +51,16 @@
 //! the response is verified (abandoned, replayed and cross-flow responses fail); the stored
 //! passkey signs in as a passkey sign-in, `[hwk|swk, user, mfa]`.
 //!
+//! A passkey counts as a second factor (`service::authorize::second_factor_methods`, the one
+//! answer for this engine, the step-up path and the authorization decision). At the
+//! second-factor step ([`FlowService::passkey_second_factor_options`] /
+//! [`FlowService::passkey_second_factor_finish`]) a discoverable challenge is stored in its own
+//! field of the flow state and taken out with a compare-and-swap before the assertion is
+//! verified; the assertion must come from one of the step user's own passkeys (user handle and
+//! credential id checked before any signature check, through the same verification path as the
+//! sign-in page's passkey). Success signs in as a passkey sign-in or upgrades the step-up
+//! session.
+//!
 //! [`FlowService::start_login`] starts a step-up flow when the stored request decides
 //! `StepUp` for the caller's session: the flow begins at the second-factor (or enrolment) step
 //! for the session's user and ends with `SessionRepo::upgrade_auth` on that same session (amr
@@ -118,7 +128,7 @@ use super::account::{
     seal_pending_totp,
 };
 use super::audit::AuditService;
-use super::authorize::mfa_context;
+use super::authorize::{mfa_context, second_factor_methods};
 use super::session::{NewSessionCookie, SessionService};
 use super::upstream::confirm_link;
 use crate::error::CoreError;
@@ -131,7 +141,9 @@ use crate::flow::engine::{
 use crate::flow::form::{FormDescription, FormMessage, MessageLevel};
 use crate::flow::login::{
     passkey_enrolment_failed, passkey_enrolment_finish as login_passkey_enrolment_finish,
-    passkey_enrolment_user, take_passkey_enrolment, with_passkey_enrolment,
+    passkey_enrolment_user, second_factor_passkey_failed, second_factor_passkey_user,
+    take_passkey_enrolment, take_second_factor_passkey, with_passkey_enrolment,
+    with_second_factor_passkey,
 };
 use crate::flow::settings::DEFAULT_PASSKEY_LABEL;
 use crate::model::{
@@ -147,7 +159,7 @@ use crate::policy::PasswordPolicy;
 use crate::policy::mfa::{AcrRequest, MfaRequirement, mfa_requirement};
 use crate::ports::{
     AssertionIdentity, BreachChecker, Clock, PasskeyCeremonies, PasskeyError, PasskeyUser,
-    PasswordCheck, PasswordHasher, RelyingParty, Storage, StorageError,
+    PasswordCheck, PasswordHasher, RelyingParty, Storage, StorageError, VerifiedAssertion,
 };
 use anvil_jose::otp::TotpSecret as PendingSecret;
 
@@ -921,6 +933,200 @@ impl FlowService {
         Ok(SubmitResult::plain(outcome))
     }
 
+    /// Creates a discoverable passkey challenge for the second-factor step of a login flow and
+    /// returns the options JSON for `navigator.credentials.get`. Only offered when the step's user
+    /// is active and has a passkey. The challenge is stored in its own field of the flow state
+    /// (`LoginState::second_factor_passkey`, replacing an earlier one, compare-and-swap), never
+    /// in the identify step's challenge. Errors: `Forbidden` (binding), `InvalidRequest` (expired
+    /// or unknown flow, not in a second-factor step with a passkey, inactive user or no passkey,
+    /// or a concurrent change of the flow), `Internal` (the issuer cannot be a relying party).
+    pub async fn passkey_second_factor_options(
+        &self,
+        cx: &FlowContext<'_>,
+        flow_id: FlowId,
+        cookie_token: Option<&str>,
+        csrf_token: &str,
+    ) -> Result<String, CoreError> {
+        let unavailable =
+            || CoreError::InvalidRequest("passkey is not available in this step".into());
+        let (flow, state) = match self
+            .load(cx, flow_id, cookie_token, csrf_token, FlowKind::Login)
+            .await?
+        {
+            Loaded::Flow(f, FlowState::Login(s)) => (f, s),
+            Loaded::Flow(..) => return Err(unavailable()),
+            Loaded::Restarted(_) => {
+                return Err(CoreError::InvalidRequest("the sign-in flow expired".into()));
+            }
+        };
+        let tenant = cx.tenant.id;
+        let Some(user_id) = second_factor_passkey_user(&state) else {
+            return Err(unavailable());
+        };
+        let Some(user) = self.second_factor_user(tenant, user_id).await? else {
+            return Err(unavailable());
+        };
+        if self
+            .storage
+            .users()
+            .passkeys(tenant, user.id)
+            .await?
+            .is_empty()
+        {
+            return Err(unavailable());
+        }
+        let challenge = self.passkeys.start_discoverable(cx.relying_party()?)?;
+        let next =
+            with_second_factor_passkey(state, challenge.state_json).ok_or_else(unavailable)?;
+        let json = encode_state(&FlowState::Login(next))?;
+        if !self
+            .storage
+            .flows()
+            .swap_state(tenant, flow.id, &flow.state, &json, self.clock.now())
+            .await?
+        {
+            return Err(CoreError::InvalidRequest(
+                "the sign-in flow changed concurrently".into(),
+            ));
+        }
+        Ok(challenge.options_json)
+    }
+
+    /// Completes the second-factor step with a passkey assertion from
+    /// `navigator.credentials.get`. The pending second-factor challenge is taken out of the flow
+    /// with a compare-and-swap before the assertion is verified, so it is used once. The
+    /// assertion must name the step user (user handle) and one of that user's stored passkeys;
+    /// another user's passkey, an unknown credential, an invalid assertion, a replayed or
+    /// cross-flow challenge, a challenge of the identify step, or no pending challenge renders the
+    /// second-factor form with `second_factor.passkey_failed`, with no session and no flow-state
+    /// change besides the consumed challenge. Success signs in like a passkey sign-in
+    /// (`[hwk|swk, user, mfa]`, MFA `acr`) or upgrades the step-up session in place.
+    /// `current_session` is handled as in [`Self::submit`].
+    pub async fn passkey_second_factor_finish(
+        &self,
+        cx: &FlowContext<'_>,
+        flow_id: FlowId,
+        cookie_token: Option<&str>,
+        csrf_token: &str,
+        response_json: &str,
+        current_session: Option<SessionId>,
+    ) -> Result<SubmitResult, CoreError> {
+        let (flow, state) = match self
+            .load(cx, flow_id, cookie_token, csrf_token, FlowKind::Login)
+            .await?
+        {
+            Loaded::Flow(f, FlowState::Login(s)) => (f, s),
+            Loaded::Flow(f, other) => {
+                let form = crate::flow::engine::current_form(
+                    &other,
+                    vec![FormMessage::error("flow.invalid_input")],
+                    &self.env(cx),
+                );
+                let form = bind_form(form, cx, f.id, csrf_token);
+                return Ok(SubmitResult::plain(FlowOutcome::Render(form)));
+            }
+            Loaded::Restarted(outcome) => return Ok(SubmitResult::plain(outcome)),
+        };
+        let tenant = cx.tenant.id;
+        let now = self.clock.now();
+        let mut next = state;
+        let Some((user_id, challenge)) = take_second_factor_passkey(&mut next) else {
+            return self
+                .passkey_second_factor_refused(cx, &flow, csrf_token, &next, None)
+                .await;
+        };
+        let next_json = encode_state(&FlowState::Login(next.clone()))?;
+        // Single use: whoever swaps the challenge out first verifies it; a replayed or
+        // concurrent finish loses the swap.
+        if !self
+            .storage
+            .flows()
+            .swap_state(tenant, flow.id, &flow.state, &next_json, now)
+            .await?
+        {
+            return self
+                .passkey_second_factor_refused(cx, &flow, csrf_token, &next, None)
+                .await;
+        }
+        let refused = Some(user_id);
+        let Some(user) = self.second_factor_user(tenant, user_id).await? else {
+            return self
+                .passkey_second_factor_refused(cx, &flow, csrf_token, &next, refused)
+                .await;
+        };
+        let verified = match self
+            .check_assertion(cx, response_json, &challenge, Some(user.id))
+            .await?
+        {
+            AssertionCheck::Verified { passkey, verified }
+                if self.record_assertion(cx, &passkey, &verified).await? =>
+            {
+                verified
+            }
+            _ => {
+                return self
+                    .passkey_second_factor_refused(cx, &flow, csrf_token, &next, refused)
+                    .await;
+            }
+        };
+        let env = self.env(cx);
+        let mut queue = VecDeque::new();
+        let mut exec = Exec {
+            flow: &flow,
+            state_json: &next_json,
+            current_session,
+            subject: Some(user),
+            attempt: Some(AuthAttempt::PasskeySucceeded { user: user_id }),
+            method: "passkey",
+            passkey_backup_eligible: verified.backup_eligible,
+            recovery_codes: Vec::new(),
+            csrf_token,
+        };
+        let terminal = login_passkey_enrolment_finish(&next);
+        match self.run(cx, &terminal, &mut queue, &mut exec, &env).await? {
+            Step::Done(outcome) => Ok(SubmitResult {
+                outcome: *outcome,
+                attempt: exec.attempt,
+            }),
+            _ => Err(CoreError::Internal(
+                "second-factor passkey ended without a session".into(),
+            )),
+        }
+    }
+
+    /// The second-factor form with `second_factor.passkey_failed` (another step's form with
+    /// `flow.invalid_input`). Nothing is written: the challenge was already taken out (or never
+    /// pending), and a lost swap must not overwrite the winner's state. `user` is audited
+    /// `login_failed` (method `passkey_second_factor`) when an assertion was actually checked.
+    async fn passkey_second_factor_refused(
+        &self,
+        cx: &FlowContext<'_>,
+        flow: &Flow,
+        csrf_token: &str,
+        state: &LoginState,
+        user: Option<UserId>,
+    ) -> Result<SubmitResult, CoreError> {
+        if let Some(user) = user {
+            self.audit_login_failed(cx, Some(user), AuditDetails::login("passkey_second_factor"))
+                .await?;
+        }
+        let form = match state.step {
+            LoginStep::SecondFactor { methods, .. } => second_factor_passkey_failed(methods),
+            _ => crate::flow::engine::current_form(
+                &FlowState::Login(state.clone()),
+                vec![FormMessage::error("flow.invalid_input")],
+                &self.env(cx),
+            ),
+        };
+        let form = bind_form(form, cx, flow.id, csrf_token);
+        let state = FlowState::Login(state.clone());
+        let outcome = match self.pending_enrolment(cx, flow.id, &state).await? {
+            Some(totp) => FlowOutcome::Enroll { form, totp },
+            None => FlowOutcome::Render(form),
+        };
+        Ok(SubmitResult::plain(outcome))
+    }
+
     /// Submits user input to a flow. `current_session` (the caller's existing session, if any)
     /// is revoked when the user signs in. Passkey options are requested with
     /// [`FlowService::passkey_options`], not here.
@@ -1594,10 +1800,7 @@ impl FlowService {
         tenant: TenantId,
         user: UserId,
     ) -> Result<SecondFactorMethods, CoreError> {
-        let users = self.storage.users();
-        let totp = users.totp(tenant, user).await?.is_some();
-        let recovery = totp && users.recovery_codes_remaining(tenant, user).await? > 0;
-        Ok(SecondFactorMethods { totp, recovery })
+        second_factor_methods(self.storage.as_ref(), tenant, user).await
     }
 
     /// The effective MFA policy and `acr` request of the flow's authorization request; the
@@ -2223,34 +2426,22 @@ impl FlowService {
         {
             return rejected;
         }
-        let rp = cx.relying_party()?;
-        let Ok(identity) = self.passkeys.identify(response_json) else {
-            self.audit_login_failed(cx, None, AuditDetails::login("passkey"))
-                .await?;
-            return rejected;
-        };
-        let found = users.find_passkey(tenant, &identity.credential_id).await?;
-        let Some(passkey) = bound_passkey(&identity, found) else {
-            self.audit_login_failed(cx, None, AuditDetails::login("passkey"))
-                .await?;
-            return rejected;
-        };
-        let verified = match self.passkeys.finish_discoverable(
-            rp,
-            response_json,
-            challenge,
-            &passkey.passkey_json,
-        ) {
-            Ok(v) if v.user_verified => v,
-            Ok(_) | Err(PasskeyError::Invalid) => {
-                self.audit_login_failed(cx, Some(passkey.user_id), AuditDetails::login("passkey"))
+        let (passkey, verified) = match self
+            .check_assertion(cx, response_json, challenge, None)
+            .await?
+        {
+            AssertionCheck::Verified { passkey, verified } => (passkey, verified),
+            AssertionCheck::Unbound => {
+                self.audit_login_failed(cx, None, AuditDetails::login("passkey"))
                     .await?;
                 return rejected;
             }
-            Err(PasskeyError::PossibleClone) => {
-                self.clone_suspected(cx, &passkey).await?;
+            AssertionCheck::Invalid(user) => {
+                self.audit_login_failed(cx, Some(user), AuditDetails::login("passkey"))
+                    .await?;
                 return rejected;
             }
+            AssertionCheck::CloneSuspected => return rejected,
         };
         let user = match users.get(tenant, passkey.user_id).await? {
             Some(u) if u.status == UserStatus::Active => u,
@@ -2260,16 +2451,7 @@ impl FlowService {
                 return rejected;
             }
         };
-        let json = verified
-            .updated_passkey_json
-            .as_deref()
-            .unwrap_or(&passkey.passkey_json);
-        if users
-            .update_passkey(tenant, passkey.id, json, verified.counter, now)
-            .await?
-            == CounterOutcome::Stale
-        {
-            self.clone_suspected(cx, &passkey).await?;
+        if !self.record_assertion(cx, &passkey, &verified).await? {
             return rejected;
         }
         if env.require_verified_email && !user.email_verified {
@@ -2287,6 +2469,82 @@ impl FlowService {
         exec.passkey_backup_eligible = verified.backup_eligible;
         exec.subject = Some(user);
         Ok(Step::Continue)
+    }
+
+    /// Checks a discoverable assertion against the stored passkeys (the one verification path of
+    /// the sign-in page's passkey and the second-factor passkey): the response names a credential
+    /// id and a user handle; the tenant-scoped stored passkey must exist and belong to that user
+    /// handle ([`bound_passkey`]) and, with `expected_user`, to that user, before any signature
+    /// check. The assertion must verify against `challenge` with user verification. A possible
+    /// clone records `passkey_clone_suspected`. Nothing is written for a verified assertion: the
+    /// caller records it with [`Self::record_assertion`].
+    async fn check_assertion(
+        &self,
+        cx: &FlowContext<'_>,
+        response_json: &str,
+        challenge: &str,
+        expected_user: Option<UserId>,
+    ) -> Result<AssertionCheck, CoreError> {
+        let rp = cx.relying_party()?;
+        let Ok(identity) = self.passkeys.identify(response_json) else {
+            return Ok(AssertionCheck::Unbound);
+        };
+        if expected_user.is_some_and(|u| u != identity.user_id) {
+            return Ok(AssertionCheck::Unbound);
+        }
+        let found = self
+            .storage
+            .users()
+            .find_passkey(cx.tenant.id, &identity.credential_id)
+            .await?;
+        let Some(passkey) = bound_passkey(&identity, found) else {
+            return Ok(AssertionCheck::Unbound);
+        };
+        match self
+            .passkeys
+            .finish_discoverable(rp, response_json, challenge, &passkey.passkey_json)
+        {
+            Ok(verified) if verified.user_verified => {
+                Ok(AssertionCheck::Verified { passkey, verified })
+            }
+            Ok(_) | Err(PasskeyError::Invalid) => Ok(AssertionCheck::Invalid(passkey.user_id)),
+            Err(PasskeyError::PossibleClone) => {
+                self.clone_suspected(cx, &passkey).await?;
+                Ok(AssertionCheck::CloneSuspected)
+            }
+        }
+    }
+
+    /// Stores the verified assertion's counter (and changed passkey) with a compare-and-swap.
+    /// `false`: the counter did not advance, `passkey_clone_suspected` was recorded and the
+    /// assertion must be refused.
+    async fn record_assertion(
+        &self,
+        cx: &FlowContext<'_>,
+        passkey: &PasskeyCredential,
+        verified: &VerifiedAssertion,
+    ) -> Result<bool, CoreError> {
+        let json = verified
+            .updated_passkey_json
+            .as_deref()
+            .unwrap_or(&passkey.passkey_json);
+        if self
+            .storage
+            .users()
+            .update_passkey(
+                cx.tenant.id,
+                passkey.id,
+                json,
+                verified.counter,
+                self.clock.now(),
+            )
+            .await?
+            == CounterOutcome::Stale
+        {
+            self.clone_suspected(cx, passkey).await?;
+            return Ok(false);
+        }
+        Ok(true)
     }
 
     /// `passkey_clone_suspected` for the passkey's user (the sign-in itself fails generically).
@@ -2496,6 +2754,22 @@ fn engine_kind(kind: FlowKind) -> bool {
         | FlowKind::Setup => true,
         FlowKind::Settings | FlowKind::Consent | FlowKind::Logout => false,
     }
+}
+
+/// Result of [`FlowService::check_assertion`].
+enum AssertionCheck {
+    /// The response names no stored passkey of the tenant bound to its user handle (or to the
+    /// expected user), or cannot be parsed. No signature was checked.
+    Unbound,
+    /// The stored passkey of this user did not verify (signature, challenge, origin, or no user
+    /// verification).
+    Invalid(UserId),
+    /// The authenticator may be cloned; `passkey_clone_suspected` was recorded.
+    CloneSuspected,
+    Verified {
+        passkey: PasskeyCredential,
+        verified: VerifiedAssertion,
+    },
 }
 
 /// The WebAuthn user of a passkey registration: the email as name, the display name (or the

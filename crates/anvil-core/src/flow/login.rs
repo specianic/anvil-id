@@ -4,12 +4,19 @@
 //! # Steps
 //!
 //! - [`LoginStep::Identify`]: the email/password form. A correct password is followed by
-//!   [`Effect::CheckSecondFactor`]: a user with TOTP moves to [`LoginStep::SecondFactor`]
+//!   [`Effect::CheckSecondFactor`]: a user with a second factor (TOTP or a passkey,
+//!   [`SecondFactorMethods::any`]) moves to [`LoginStep::SecondFactor`]
 //!   ([`second_factor_required`]); a user without signs in with `amr = [pwd]`. The same step
 //!   accepts a passkey assertion against the challenge stored in
 //!   [`LoginState::passkey_challenge`] (put there by [`Effect::StartPasskey`]).
 //! - [`LoginStep::SecondFactor`]: a TOTP code or a recovery code for the user whose password
-//!   was verified; success signs in with `amr = [pwd, otp, mfa]`.
+//!   was verified; success signs in with `amr = [pwd, otp, mfa]`. A user with a passkey can
+//!   instead present it: [`second_factor_passkey_user`] allows the assertion options (the
+//!   service stores the discoverable challenge in [`LoginState::second_factor_passkey`], never in
+//!   [`LoginState::passkey_challenge`], so an identify-step challenge is not accepted here), and
+//!   [`take_second_factor_passkey`] takes it out before the assertion is verified (single use).
+//!   The assertion must come from one of the step user's own passkeys; success signs in like a
+//!   passkey sign-in, `amr = [hwk|swk, user, mfa]` ([`passkey_enrolment_finish`]).
 //! - [`LoginStep::Enroll`]: the effective policy is `Required` and the user has no second factor.
 //!   The page offers a choice:
 //!   - an authenticator app (the sealed pending secret is in [`LoginState::pending_totp`]); the
@@ -66,6 +73,9 @@ use crate::policy::mfa::{AcrRequest, MfaRequirement, mfa_requirement};
 
 /// Id of the second-factor form.
 pub const SECOND_FACTOR_FORM_ID: &str = "second-factor";
+/// Name of the hidden marker field of the second-factor form that offers a passkey
+/// ([`second_factor_form`]).
+pub const SECOND_FACTOR_PASSKEY_FIELD: &str = "passkey";
 /// Id of the in-flow enrolment form.
 pub const ENROLL_FORM_ID: &str = "mfa-enroll";
 /// Id of the sign-in form shown while an upstream identity waits for link confirmation.
@@ -96,6 +106,12 @@ pub struct LoginState {
     /// compare-and-swap before the registration response is verified.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enroll_passkey: Option<String>,
+    /// Second-factor step: the server-side state of a discoverable passkey challenge issued at
+    /// this step for the step's user. Not a secret, but single-use: taken out with a
+    /// compare-and-swap before the assertion is verified. Separate from
+    /// [`Self::passkey_challenge`] so a challenge of the identify step is never accepted here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub second_factor_passkey: Option<String>,
     /// A started upstream sign-in (`flow::upstream`); taken out with a compare-and-swap by the
     /// callback.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -153,7 +169,7 @@ pub fn after_primary_auth(
     acr: AcrRequest,
     methods: SecondFactorMethods,
 ) -> AfterPrimary {
-    match mfa_requirement(policy, acr, false, methods.totp) {
+    match mfa_requirement(policy, acr, false, methods.any()) {
         MfaRequirement::None | MfaRequirement::Unmet => AfterPrimary::SignIn,
         MfaRequirement::SecondFactor => AfterPrimary::SecondFactor(methods),
         MfaRequirement::Enroll => AfterPrimary::Enroll,
@@ -165,8 +181,20 @@ pub fn after_primary_auth(
 pub struct SecondFactorMethods {
     /// The user has a TOTP credential.
     pub totp: bool,
-    /// The user has unused recovery codes.
+    /// The user has unused recovery codes (they belong to the TOTP credential).
     pub recovery: bool,
+    /// The user has at least one passkey. Absent in flow rows written before 0.4.
+    #[serde(default)]
+    pub passkey: bool,
+}
+
+impl SecondFactorMethods {
+    /// Whether the user has a second factor at all (TOTP or a passkey; recovery codes only back
+    /// up TOTP). The one answer the login engine, the step-up path and the authorization
+    /// decision use.
+    pub fn any(self) -> bool {
+        self.totp || self.passkey
+    }
 }
 
 pub(super) fn transition(
@@ -309,6 +337,7 @@ pub fn second_factor_required(
 ) -> (FlowState, FormDescription) {
     state.step = LoginStep::SecondFactor { user_id, methods };
     state.passkey_challenge = None;
+    state.second_factor_passkey = None;
     let f = second_factor_form(methods, Vec::new());
     (FlowState::Login(state), f)
 }
@@ -323,6 +352,7 @@ pub fn enroll_required(
     state.step = LoginStep::Enroll { user_id };
     state.passkey_challenge = None;
     state.enroll_passkey = None;
+    state.second_factor_passkey = None;
     state.pending_totp = Some(pending_totp);
     (FlowState::Login(state), enroll_form(Vec::new()))
 }
@@ -360,6 +390,7 @@ pub fn take_passkey_enrolment(state: &mut LoginState) -> Option<(UserId, String)
 
 /// The terminal effect of a verified, stored passkey enrolment: the session is signed in (or the
 /// step-up session upgraded) as a passkey sign-in, `amr = [hwk|swk, user, mfa]`, MFA `acr`.
+/// Also the terminal effect of a verified second-factor passkey.
 pub fn passkey_enrolment_finish(state: &LoginState) -> Effect {
     match state.step_up_session {
         Some(session) => Effect::UpgradeSession {
@@ -373,6 +404,42 @@ pub fn passkey_enrolment_finish(state: &LoginState) -> Effect {
 /// The enrolment form after a refused passkey enrolment (the authenticator-app choice stays).
 pub fn passkey_enrolment_failed() -> FormDescription {
     enroll_form(vec![error(PASSKEY_ENROLMENT_FAILED)])
+}
+
+/// Message key of a refused second-factor passkey (another user's or an unknown passkey, a
+/// replayed, cross-flow or never-issued challenge, or an invalid assertion).
+pub const SECOND_FACTOR_PASSKEY_FAILED: &str = "second_factor.passkey_failed";
+
+/// The user passkey assertion options may be created for at the second-factor step: the step's
+/// user, when they have a passkey. `None` in any other step.
+pub fn second_factor_passkey_user(state: &LoginState) -> Option<UserId> {
+    match state.step {
+        LoginStep::SecondFactor { user_id, methods } if methods.passkey => Some(user_id),
+        _ => None,
+    }
+}
+
+/// The state holding a new second-factor passkey challenge (replacing an earlier one). `None`
+/// outside a second-factor step that offers a passkey.
+pub fn with_second_factor_passkey(mut state: LoginState, challenge: String) -> Option<LoginState> {
+    second_factor_passkey_user(&state)?;
+    state.second_factor_passkey = Some(challenge);
+    Some(state)
+}
+
+/// A passkey assertion arrived at the second-factor step: takes the pending challenge out.
+/// `Some((user, challenge))`: `state` no longer holds it, and the service swaps the stored state
+/// to it before verifying (single use). `None`: not a second-factor step with a passkey, or no
+/// challenge pending (never requested or already used); `state` is unchanged.
+pub fn take_second_factor_passkey(state: &mut LoginState) -> Option<(UserId, String)> {
+    let user_id = second_factor_passkey_user(state)?;
+    state.second_factor_passkey.take().map(|c| (user_id, c))
+}
+
+/// The second-factor form after a refused passkey: the step's form with
+/// [`SECOND_FACTOR_PASSKEY_FAILED`].
+pub fn second_factor_passkey_failed(methods: SecondFactorMethods) -> FormDescription {
+    second_factor_form(methods, vec![error(SECOND_FACTOR_PASSKEY_FAILED)])
 }
 
 /// The state of a step-up flow for `session` of `user`: the second-factor step, or (with a
@@ -509,7 +576,10 @@ pub(super) fn form(state: &LoginState, messages: Vec<FormMessage>) -> FormDescri
 
 /// The second-factor form: a `code` field (TOTP, `autocomplete=one-time-code`; themes render it
 /// with `inputmode=numeric`) and, when the user has unused recovery codes, the alternative
-/// `recovery_code` field. Exactly one of them is submitted.
+/// `recovery_code` field. Exactly one of them is submitted. When the user has a passkey, the
+/// form also carries the hidden marker field [`SECOND_FACTOR_PASSKEY_FIELD`] (never submitted):
+/// it tells the presentation layer to show the passkey option, which posts to its own route. A
+/// passkey-only user's form has no `code` or `recovery_code` field.
 pub(super) fn second_factor_form(
     methods: SecondFactorMethods,
     messages: Vec<FormMessage>,
@@ -534,6 +604,17 @@ pub(super) fn second_factor_form(
             None,
             false,
             Some("off"),
+            Vec::new(),
+        ));
+    }
+    if methods.passkey {
+        fields.push(field(
+            SECOND_FACTOR_PASSKEY_FIELD,
+            FieldKind::Hidden,
+            "second_factor.passkey_heading",
+            None,
+            false,
+            None,
             Vec::new(),
         ));
     }
@@ -583,6 +664,12 @@ mod tests {
     const BOTH: SecondFactorMethods = SecondFactorMethods {
         totp: true,
         recovery: true,
+        passkey: false,
+    };
+    const PASSKEY_ONLY: SecondFactorMethods = SecondFactorMethods {
+        totp: false,
+        recovery: false,
+        passkey: true,
     };
 
     fn rendered(effects: &[Effect]) -> &FormDescription {
@@ -812,6 +899,7 @@ mod tests {
             SecondFactorMethods {
                 totp: true,
                 recovery: false,
+                passkey: false,
             },
         );
         let names: Vec<_> = f.fields.iter().map(|x| x.name.as_str()).collect();
@@ -905,6 +993,7 @@ mod tests {
         let (_, s) = second_factor_state(SecondFactorMethods {
             totp: true,
             recovery: false,
+            passkey: false,
         });
         let (next, effects) = engine_transition(
             FlowState::Login(s.clone()),
@@ -1312,5 +1401,200 @@ mod tests {
             serde_json::from_str::<FlowState>(&json).unwrap(),
             FlowState::Login(old)
         );
+    }
+
+    #[test]
+    fn a_passkey_counts_as_a_second_factor_like_totp() {
+        use crate::model::MfaPolicy::{Off, Optional, Required};
+        let a = AcrRequest::None;
+        assert!(PASSKEY_ONLY.any());
+        assert!(BOTH.any());
+        // Recovery codes alone are not a factor (they back up TOTP).
+        assert!(
+            !SecondFactorMethods {
+                totp: false,
+                recovery: true,
+                passkey: false
+            }
+            .any()
+        );
+        assert_eq!(
+            after_primary_auth(Required, a, PASSKEY_ONLY),
+            AfterPrimary::SecondFactor(PASSKEY_ONLY)
+        );
+        assert_eq!(
+            after_primary_auth(Optional, a, PASSKEY_ONLY),
+            AfterPrimary::SecondFactor(PASSKEY_ONLY)
+        );
+        assert_eq!(
+            after_primary_auth(Off, a, PASSKEY_ONLY),
+            AfterPrimary::SignIn
+        );
+        assert_eq!(
+            after_primary_auth(Off, AcrRequest::Voluntary, PASSKEY_ONLY),
+            AfterPrimary::SecondFactor(PASSKEY_ONLY)
+        );
+    }
+
+    #[test]
+    fn second_factor_methods_from_before_passkeys_decode_without_a_passkey() {
+        let user = UserId::new_v7();
+        let old = format!(
+            "{{\"kind\":\"login\",\"step\":{{\"name\":\"second_factor\",\"user_id\":\"{user}\",\
+             \"methods\":{{\"totp\":true,\"recovery\":false}}}}}}"
+        );
+        let FlowState::Login(s) = serde_json::from_str::<FlowState>(&old).unwrap() else {
+            panic!("login state")
+        };
+        assert_eq!(
+            s.step,
+            LoginStep::SecondFactor {
+                user_id: user,
+                methods: SecondFactorMethods {
+                    totp: true,
+                    recovery: false,
+                    passkey: false
+                }
+            }
+        );
+        assert_eq!(s.second_factor_passkey, None);
+        // And the new state round-trips, without the field when no challenge is pending.
+        let (_, s) = second_factor_state(PASSKEY_ONLY);
+        let json = serde_json::to_string(&FlowState::Login(s.clone())).unwrap();
+        assert!(!json.contains("second_factor_passkey"), "{json}");
+        let with = with_second_factor_passkey(s, "{\"c\":1}".into()).unwrap();
+        let json = serde_json::to_string(&FlowState::Login(with.clone())).unwrap();
+        assert_eq!(
+            serde_json::from_str::<FlowState>(&json).unwrap(),
+            FlowState::Login(with)
+        );
+    }
+
+    #[test]
+    fn passkey_only_second_factor_form_has_no_code_fields_but_the_passkey_marker() {
+        let (_, f) = second_factor_required(LoginState::default(), UserId::new_v7(), PASSKEY_ONLY);
+        let names: Vec<_> = f.fields.iter().map(|x| x.name.as_str()).collect();
+        assert_eq!(names, vec![SECOND_FACTOR_PASSKEY_FIELD]);
+        assert_eq!(f.fields[0].kind, FieldKind::Hidden);
+        assert_form_invariants(&f, &[]);
+        // TOTP and passkey: both; TOTP only: no marker (the page is unchanged).
+        let both = SecondFactorMethods {
+            passkey: true,
+            ..BOTH
+        };
+        let (_, f) = second_factor_required(LoginState::default(), UserId::new_v7(), both);
+        let names: Vec<_> = f.fields.iter().map(|x| x.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["code", "recovery_code", SECOND_FACTOR_PASSKEY_FIELD]
+        );
+        let (_, f) = second_factor_required(LoginState::default(), UserId::new_v7(), BOTH);
+        assert!(
+            f.fields
+                .iter()
+                .all(|x| x.name != SECOND_FACTOR_PASSKEY_FIELD)
+        );
+        // The refusal keeps the step's form with the one passkey message.
+        let f = second_factor_passkey_failed(PASSKEY_ONLY);
+        assert_eq!(f.id, SECOND_FACTOR_FORM_ID);
+        assert_eq!(all_keys(&f), vec![SECOND_FACTOR_PASSKEY_FAILED]);
+    }
+
+    #[test]
+    fn second_factor_passkey_challenge_is_taken_out_once_and_only_in_its_step() {
+        let (user, s) = second_factor_state(PASSKEY_ONLY);
+        assert_eq!(second_factor_passkey_user(&s), Some(user));
+        let s = with_second_factor_passkey(s, "c-1".into()).unwrap();
+        let mut s = with_second_factor_passkey(s, "c-2".into()).unwrap();
+        assert_eq!(
+            take_second_factor_passkey(&mut s),
+            Some((user, "c-2".into()))
+        );
+        assert_eq!(s.second_factor_passkey, None);
+        assert_eq!(
+            s.step,
+            LoginStep::SecondFactor {
+                user_id: user,
+                methods: PASSKEY_ONLY
+            }
+        );
+        // Used (replay) or never requested: nothing to take.
+        assert_eq!(take_second_factor_passkey(&mut s), None);
+        // A TOTP-only step, the identify step and the enrolment step offer no passkey here, and a
+        // stray value there (or the identify step's own challenge) is never used.
+        let (_, totp_only) = second_factor_state(BOTH);
+        assert_eq!(second_factor_passkey_user(&totp_only), None);
+        assert_eq!(
+            with_second_factor_passkey(totp_only.clone(), "c".into()),
+            None
+        );
+        let mut stray = LoginState {
+            second_factor_passkey: Some("c".into()),
+            ..totp_only
+        };
+        assert_eq!(take_second_factor_passkey(&mut stray), None);
+        let mut identify = LoginState {
+            passkey_challenge: Some("identify".into()),
+            second_factor_passkey: Some("c".into()),
+            ..LoginState::default()
+        };
+        assert_eq!(
+            with_second_factor_passkey(identify.clone(), "c".into()),
+            None
+        );
+        assert_eq!(take_second_factor_passkey(&mut identify), None);
+        assert_eq!(
+            with_second_factor_passkey(enrol_state(user), "c".into()),
+            None
+        );
+        // The identify step's challenge does not survive into the second-factor step, and the
+        // second-factor step does not read it.
+        let (next, _) = second_factor_required(identify, user, PASSKEY_ONLY);
+        let FlowState::Login(mut next) = next else {
+            panic!("login state")
+        };
+        assert_eq!(next.passkey_challenge, None);
+        assert_eq!(next.second_factor_passkey, None);
+        assert_eq!(take_second_factor_passkey(&mut next), None);
+    }
+
+    #[test]
+    fn a_totp_code_at_a_passkey_only_step_is_invalid_input() {
+        let (_, s) = second_factor_state(PASSKEY_ONLY);
+        for input in [
+            FlowInput::Totp {
+                code: "123456".into(),
+            },
+            FlowInput::RecoveryCode {
+                code: "ABCD-EFGH-IJKL-MNOP".into(),
+            },
+        ] {
+            let (_, effects) = engine_transition(FlowState::Login(s.clone()), input, &env());
+            let f = rendered(&effects);
+            assert_eq!(all_keys(f), vec!["flow.invalid_input"]);
+        }
+    }
+
+    #[test]
+    fn a_second_factor_passkey_signs_in_as_a_passkey_or_upgrades_the_step_up_session() {
+        let (_, s) = second_factor_state(PASSKEY_ONLY);
+        assert!(matches!(
+            passkey_enrolment_finish(&s),
+            Effect::CreateSession(SessionAuth::Passkey)
+        ));
+        let session = SessionId::new_v7();
+        let (state, f) = step_up(session, UserId::new_v7(), PASSKEY_ONLY, None);
+        assert_eq!(f.id, SECOND_FACTOR_FORM_ID);
+        let FlowState::Login(state) = state else {
+            panic!("login state")
+        };
+        assert!(second_factor_passkey_user(&state).is_some());
+        assert!(matches!(
+            passkey_enrolment_finish(&state),
+            Effect::UpgradeSession {
+                session: s,
+                auth: SessionAuth::Passkey
+            } if s == session
+        ));
     }
 }

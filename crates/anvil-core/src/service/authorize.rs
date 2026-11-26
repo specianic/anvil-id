@@ -48,10 +48,11 @@ use super::flow::{BindingError, FLOW_LIFETIME, check_binding};
 use super::key_rotation::enabled_algs;
 use crate::error::CoreError;
 use crate::flow::consent::{ConsentDecision, ConsentState, requested_scopes};
+use crate::flow::login::SecondFactorMethods;
 use crate::model::{
     AuthRequestId, AuthorizationParams, BrowserSession, Client, FlowId, FlowKind, GrantType,
     NewAuthorizationCode, NewAuthorizationRequest, NewFlow, NewTokenFamily, SecretHash, Tenant,
-    TokenFamilyId, UserStatus,
+    TenantId, TokenFamilyId, UserId, UserStatus,
 };
 use crate::oauth::authorize_request::{AuthorizeError, PROMPT_CREATE, RawParams, validate};
 use crate::oauth::decision::{MfaContext, SessionDecision, decide, requested_acr, session_is_mfa};
@@ -110,9 +111,28 @@ fn error_response(
     ))
 }
 
+/// The second factors `user` has: TOTP, unused recovery codes (only with TOTP) and passkeys.
+/// The one place that answers "does this user have a second factor"
+/// ([`SecondFactorMethods::any`]) for the login engine, the step-up path and [`mfa_context`].
+pub(crate) async fn second_factor_methods(
+    storage: &dyn Storage,
+    tenant: TenantId,
+    user: UserId,
+) -> Result<SecondFactorMethods, CoreError> {
+    let users = storage.users();
+    let totp = users.totp(tenant, user).await?.is_some();
+    let recovery = totp && users.recovery_codes_remaining(tenant, user).await? > 0;
+    let passkey = !users.passkeys(tenant, user).await?.is_empty();
+    Ok(SecondFactorMethods {
+        totp,
+        recovery,
+        passkey,
+    })
+}
+
 /// The MFA inputs of a request for `session`'s user: effective policy of tenant and client,
 /// the request's `acr`, and (only when a single-factor session would be checked) whether the
-/// user has a TOTP credential.
+/// user has a second factor (TOTP or a passkey, [`second_factor_methods`]).
 pub(crate) async fn mfa_context(
     storage: &dyn Storage,
     tenant: &Tenant,
@@ -132,7 +152,9 @@ pub(crate) async fn mfa_context(
         && !session_is_mfa(s)
         && ctx.wants_mfa()
     {
-        ctx.user_has_factor = storage.users().totp(tenant.id, s.user_id).await?.is_some();
+        ctx.user_has_factor = second_factor_methods(storage, tenant.id, s.user_id)
+            .await?
+            .any();
     }
     Ok(ctx)
 }
