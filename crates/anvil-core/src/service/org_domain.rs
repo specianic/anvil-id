@@ -43,7 +43,7 @@ use crate::policy::domain_verification::new_token;
 use crate::policy::home_realm::normalize_domain;
 use crate::ports::{DomainTxtLookup, Storage, StorageError};
 use crate::service::audit::AuditService;
-use crate::service::domain_check::{DomainCheck, check_domain};
+use crate::service::domain_check::{self, DomainCheck};
 
 /// Partial routing update; `None` leaves a field unchanged.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -228,7 +228,7 @@ impl OrgDomainService {
         if claim.status == OrgDomainStatus::Verified {
             return Ok(VerifyOutcome::Verified(claim));
         }
-        match check_domain(self.lookup.as_ref(), &claim.domain, &claim.token).await {
+        match domain_check::check_domain(self.lookup.as_ref(), &claim.domain, &claim.token).await {
             DomainCheck::NotVerified => {
                 self.record(
                     org,

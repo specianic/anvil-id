@@ -1730,6 +1730,7 @@ pub(crate) async fn import_saml_metadata(
             .into());
         }
     };
+    // The SAML adapter's `SamlXml::parse_metadata` (size caps, no DTD) through the service.
     let metadata = service.parse_idp_metadata(field, &xml)?;
     Ok(json(StatusCode::OK, &SamlMetadataView::new(metadata, url)))
 }
