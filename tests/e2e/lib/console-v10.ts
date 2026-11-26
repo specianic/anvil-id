@@ -19,9 +19,27 @@
 //   `invitations-include-closed`, rows `invitation-row` with `data-email` and `data-status`,
 //   `invitation-status`; user page `user-organizations`; client form `client-organization-policy`,
 //   client details `client-organization`
+// - org SSO (06-23): section navigation adds Connections, Domains, Branding.
+//   Connections: kind radios `org-connection-kind-oidc` / `org-connection-kind-saml` (SAML disabled with
+//   `saml-unavailable` when the operator flag is off), `saml-experimental` badge; SAML form
+//   `saml-metadata-form`, `saml-metadata-xml`, `saml-metadata-url`, `saml-import-metadata`,
+//   `saml-connection-form`, `saml-display-name`, `saml-slug`, `saml-idp-entity-id`, `saml-sso-url`,
+//   `saml-cert-{n}`, `saml-cert-info`, `saml-cert-expired`, `saml-name-id-format`, `saml-attr-{email|
+//   given_name|family_name|name}`, `saml-submit`; OIDC uses the Phase 4 `connection-form`; table row
+//   actions "Open {name}" / "Delete {name}" (cell `org-connection-{slug}`); the side panel "Connection
+//   {name}" (`org-connection-details`) shows `saml-sp-values` (`saml-sp-entity-id`, `saml-sp-acs-url`,
+//   `saml-sp-metadata-url`, each with `copy-…`) or `connection-redirect-uri`, and
+//   `connection-secret-status`; `close-org-connection`.
+//   Domains: `add-domain-form`, `add-domain-input`, `add-domain`; per domain `domain-card` (`data-domain`,
+//   `data-status`), `domain-status`, `domain-record-name`, `domain-record-value`, `verify-domain`,
+//   `domain-checks`, `domain-routing-form`, `domain-connection`, `domain-routing`,
+//   `domain-allow-password`, `save-domain-routing`, `domain-routing-error` (the API's 409 detail),
+//   `delete-domain`. Branding: the ThemeEditor test ids (`color-colors.primary`, `publish-theme`, ...).
+//   Tenant connections list: `connection-organization`.
 //
 // Env: ANVIL_URL, SETUP_URL, E2E_STATE_FILE (see tests/e2e/run.sh).
 
+import { randomBytes } from 'node:crypto';
 import { expect, type Page } from '@playwright/test';
 import { adminCall, tenantPath } from './admin-api';
 import { tenantIssuer } from './upstream';
@@ -131,4 +149,69 @@ export async function orgInvitations(token: string, slug: string, org: string): 
     tenantPath(slug, `/organizations/${encodeURIComponent(org)}/invitations?include_closed=true`),
   );
   return body.items;
+}
+
+/** A domain claim as the admin API returns it (06-17 DomainView). */
+export interface DomainView {
+  id: string;
+  domain: string;
+  status: 'pending' | 'verified';
+  record_name: string;
+  record_value: string;
+  connection_id?: string | null;
+  routing: boolean;
+  allow_local_password: boolean;
+  [field: string]: unknown;
+}
+
+/** The org's domain claims. */
+export async function orgDomains(token: string, slug: string, org: string): Promise<DomainView[]> {
+  const body = await adminCall<{ items: DomainView[] }>(
+    token,
+    'GET',
+    tenantPath(slug, `/organizations/${encodeURIComponent(org)}/domains`),
+  );
+  return body.items;
+}
+
+/** A connection as the admin API returns it (only the fields the specs read). */
+export interface OrgConnectionView {
+  id: string;
+  slug: string;
+  kind: string;
+  enabled: boolean;
+  organization?: string | null;
+  secret_configured: boolean;
+  redirect_uri: string;
+  sp?: { entity_id: string; acs_url: string; metadata_url: string } | null;
+  config: Record<string, unknown>;
+}
+
+/** The org's connections. */
+export async function orgConnections(token: string, slug: string, org: string): Promise<OrgConnectionView[]> {
+  const body = await adminCall<{ items: OrgConnectionView[] }>(
+    token,
+    'GET',
+    tenantPath(slug, `/organizations/${encodeURIComponent(org)}/connections`),
+  );
+  return body.items;
+}
+
+/** The org's stored branding tokens (06-17 BrandingView, scope `org`). */
+export async function orgBrandingPrimary(token: string, slug: string, org: string): Promise<string | null> {
+  const body = await adminCall<{ scope: string; tokens: { colors?: { primary?: string | null } | null } }>(
+    token,
+    'GET',
+    tenantPath(slug, `/organizations/${encodeURIComponent(org)}/branding`),
+  );
+  expect(body.scope).toBe('org');
+  return body.tokens.colors?.primary ?? null;
+}
+
+/**
+ * A unique test domain under a real ICANN suffix that is not a reserved name (so the API accepts
+ * it). Only the suite's mock DNS answers for it during verification: nothing leaves the machine.
+ */
+export function randomOrgDomain(prefix = 'acme-e2e'): string {
+  return `${prefix}-${randomBytes(5).toString('hex')}.com`;
 }

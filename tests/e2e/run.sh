@@ -4,16 +4,25 @@
 #
 #   1. Mailpit on 127.0.0.1:1025 (SMTP) and 127.0.0.1:8025 (HTTP API)
 #   2. the admin console (`npm ci` + `npm run build` in admin-ui), then `cargo build --release -p anvilid`
-#      so the tested binary embeds the console at /console/, then `anvilid serve` in a temp data dir with
-#      ANVILID_SMTP_URL=smtp://127.0.0.1:1025 and --breach-check off (Postgres variant: a throwaway
-#      postgres:18-alpine container and a random KEK passed through the environment)
+#      so the tested binary embeds the console at /console/; then ONE mock DNS for the whole suite
+#      (lib/mock-dns-cli.ts: TXT answers on UDP 127.0.0.1:$E2E_DNS_PORT, records set by the specs through
+#      its HTTP control channel, E2E_DNS_CONTROL_URL, with publishTxt/removeTxt from lib/mock-dns.ts);
+#      then `anvilid serve` in a temp data dir with ANVILID_SMTP_URL=smtp://127.0.0.1:1025,
+#      ANVILID_SAML_EXPERIMENTAL=true (SAML organization connections),
+#      ANVILID_DOMAIN_VERIFICATION_RESOLVERS=127.0.0.1:$E2E_DNS_PORT (domain verification asks only
+#      the mock DNS, so no test domain is looked up on the internet) and --breach-check off (Postgres
+#      variant: a throwaway postgres:18-alpine container and a random KEK passed through the environment)
 #   3. the setup URL from the logs; the specs complete /setup once and share the credential
 #   4. `playwright test` on the given specs (default: every tests/e2e/specs/*.spec.ts, sorted, with
 #      a11y.spec.ts first and qual04.spec.ts left to scripts/qual04.sh), in both Playwright projects (chromium, and nojs with JavaScript disabled)
 #
 # Requires Docker, Node.js, `npm ci` in tests/e2e and examples/node-rp (nojs.spec.ts starts the
 # sample RP) and Playwright's chromium.
-# Ports: E2E_PORT (default 18090) for AnvilID, 1025/8025 for Mailpit.
+# Ports: E2E_PORT (default 18090) for AnvilID, 1025/8025 for Mailpit, E2E_DNS_PORT (default 53535, UDP)
+# and E2E_DNS_CONTROL_PORT (default 53536, HTTP) for the mock DNS.
+#
+# Specs that verify a domain, enable routing or rotate keys do it in a tenant of their own: the
+# default tenant never gets a routed domain, so its sign-in page stays the combined form.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -47,6 +56,8 @@ MAILPIT_IMAGE=axllent/mailpit:v1.29.7
 POSTGRES_IMAGE=postgres:18-alpine
 PORT=${E2E_PORT:-18090}
 ANVIL_URL="http://localhost:$PORT"
+E2E_DNS_PORT=${E2E_DNS_PORT:-53535}
+E2E_DNS_CONTROL_PORT=${E2E_DNS_CONTROL_PORT:-53536}
 
 [[ -d tests/e2e/node_modules ]] || {
     echo "error: tests/e2e/node_modules missing; run 'npm ci --prefix tests/e2e'" >&2
@@ -59,12 +70,17 @@ LOG="$TMP_DIR/anvilid.log"
 MAILPIT_CID=""
 PG_CID=""
 ANVIL_PID=""
+DNS_PID=""
 
 cleanup() {
     local status=$?
     if [[ -n "$ANVIL_PID" ]]; then
         kill "$ANVIL_PID" 2>/dev/null || true
         wait "$ANVIL_PID" 2>/dev/null || true
+    fi
+    if [[ -n "$DNS_PID" ]]; then
+        kill "$DNS_PID" 2>/dev/null || true
+        wait "$DNS_PID" 2>/dev/null || true
     fi
     if ((status != 0)) && [[ -f "$LOG" ]]; then
         echo "--- anvilid log (setup token redacted) ---" >&2
@@ -102,10 +118,39 @@ npm --prefix admin-ui run build
 cargo build --release -p anvilid --locked
 BIN="$ROOT/target/release/anvilid"
 
+# The suite-wide mock DNS, started before anvilid (same runner as lib/mock-idp-cli.ts). It prints
+# `READY <udp port> <control URL>` once both sockets are bound.
+DNS_LOG="$TMP_DIR/mock-dns.log"
+node --experimental-strip-types tests/e2e/lib/mock-dns-cli.ts \
+    --port "$E2E_DNS_PORT" --control-port "$E2E_DNS_CONTROL_PORT" >"$DNS_LOG" 2>&1 &
+DNS_PID=$!
+for _ in $(seq 1 60); do
+    grep -q '^READY ' "$DNS_LOG" 2>/dev/null && break
+    kill -0 "$DNS_PID" 2>/dev/null || {
+        echo "error: the mock DNS exited:" >&2
+        cat "$DNS_LOG" >&2
+        exit 1
+    }
+    sleep 0.5
+done
+grep -q '^READY ' "$DNS_LOG" || {
+    echo "error: the mock DNS did not report READY" >&2
+    exit 1
+}
+export E2E_DNS_PORT
+export E2E_DNS_CONTROL_URL="http://127.0.0.1:$E2E_DNS_CONTROL_PORT"
+
 # Every spec posts from 127.0.0.1, so the default login budget (10/min, burst 5) would throttle the
 # suite. Rate limiting stays ON (its behaviour is covered by the Rust security_ratelimit /
 # security_bruteforce suites); only the per-IP auth budget is raised for this run.
-env_args=(ANVILID_SMTP_URL=smtp://127.0.0.1:1025 ANVILID_RATE_LIMIT_AUTH_PER_MINUTE=1200)
+# SAML organization connections are experimental and off by default; the suite turns them on.
+# Domain verification asks only the suite's mock DNS.
+env_args=(
+    ANVILID_SMTP_URL=smtp://127.0.0.1:1025
+    ANVILID_RATE_LIMIT_AUTH_PER_MINUTE=1200
+    ANVILID_SAML_EXPERIMENTAL=true
+    "ANVILID_DOMAIN_VERIFICATION_RESOLVERS=127.0.0.1:$E2E_DNS_PORT"
+)
 if [[ "$BACKEND" == postgres ]]; then
     # Throwaway local-only credentials; the container is removed on exit.
     PG_CID=$(docker run -d -p 127.0.0.1::5432 \
@@ -149,6 +194,7 @@ done
 wait_for "$ANVIL_URL/health/ready"
 
 # 4. The suite. One worker: the specs share one installation and one single-use setup token.
+# E2E_DNS_PORT and E2E_DNS_CONTROL_URL are exported above.
 ANVIL_URL="$ANVIL_URL" \
     MAILPIT_URL=http://127.0.0.1:8025 \
     SETUP_URL="$SETUP_URL" \
