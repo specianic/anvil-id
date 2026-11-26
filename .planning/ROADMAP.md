@@ -246,7 +246,7 @@ Plans:
   2. An organization admin configures an OIDC or SAML 2.0 connection and users log in through it with just-in-time provisioning; SAML stays flagged experimental unless it passes the signature-wrapping attack corpus (decision D4)
   3. After a domain is verified by DNS TXT record, a user entering an email on that domain is routed to the organization's IdP
   4. Every managed object (tenants, users, clients, organizations, connections, branding, keys, sessions, audit log) can be administered from the console
-**Plans**: 27 plans in 9 waves
+**Plans**: 31 plans in 11 waves
 
 Plans:
 - [ ] 06-01-PLAN.md — Dependencies (bergshamra-dsig on aws-lc, uppsala, hickory, psl, flate2), scoped chrono deny exception (Q2), D4 spike, ARCHITECTURE verdict (wave 1)
@@ -274,8 +274,12 @@ Plans:
 - [ ] 06-23-PLAN.md — Console: org SSO tabs (connections incl. SAML, domains, branding), e2e runner env + e2e (wave 6)
 - [ ] 06-24-PLAN.md — E2E: org switch, invitations, SAML, HRD (+ no-JS) (wave 7)
 - [ ] 06-25-PLAN.md — Docs: ORGANIZATIONS, SAML (experimental profile, interop checklist), UPGRADING 0.4 -> 1.0, ARCHITECTURE/OPERATIONS/CONFIG/WEBHOOKS/theme (wave 7)
-- [ ] 06-26-PLAN.md — Phase gate: security map, plaintext scan, just ci, version 1.0.0-beta.1 + migration pins, requirements; owner checkpoint (push + Q8 tags); all workflows green (wave 8)
-- [ ] 06-27-PLAN.md — Prerelease v1.0.0-beta.1 after owner sign-off (v0.3.0/v0.4.0 tagged first; 1.0.0 ships in Phase 7) (wave 9)
+- [ ] 06-28-PLAN.md — Gap: email-first decision follows the flag-aware routable rule, lock/CAPTCHA page shows the email-first form, org JIT allowed under closed registration for the org's verified domains (wave 8)
+- [ ] 06-29-PLAN.md — Gap: admin API per-user organizations + listUsers ?email=, console on them, connection page uses SecretRotation (wave 8)
+- [ ] 06-30-PLAN.md — Gap: remove forwarding effective_policy, stale contract comments, Cargo.lock-based single aws-lc check (wave 8)
+- [ ] 06-31-PLAN.md — Gap: invitation return-to after sign-in (allowlisted, sealed), sign-in after invitation registration, docs (wave 9)
+- [ ] 06-26-PLAN.md — Phase gate: security map (incl. gap-plan tests), plaintext scan, just ci, version 1.0.0-beta.1 + migration pins, requirements; owner checkpoint (push + Q8 tags); all workflows green (wave 10)
+- [ ] 06-27-PLAN.md — Prerelease v1.0.0-beta.1 after owner sign-off (v0.3.0/v0.4.0 tagged first; 1.0.0 ships in Phase 7) (wave 11)
 
 ### Phase 7: Release 1.0 "Credible for business" (Certification and release)
 **Goal**: AnvilID 1.0 ships as a certified, externally reviewed, stable platform that teams can migrate onto from other systems
