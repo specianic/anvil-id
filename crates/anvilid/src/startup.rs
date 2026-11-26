@@ -12,6 +12,7 @@ use anvil_core::service::bootstrap::{BootstrapService, InstallResult};
 use anvil_core::service::key_rotation::KeyRotationService;
 use anvil_jose::Kek;
 use anvil_web::adapters::backchannel::LogoutDeliveryWorker;
+use anvil_web::adapters::webhook::WebhookDeliveryWorker;
 use anvil_web::adapters::{Argon2Pool, OutboundClient, breach_checker_with};
 use anvil_web::observability::{MetricsEndpoint, TraceContextHook};
 use anvil_web::{AppConfig, AppDeps, AppState};
@@ -21,7 +22,7 @@ use secrecy::{ExposeSecret, SecretString};
 
 use crate::config::{Config, LogFormat};
 use crate::datadir::{self, KekOrigin, OnMissing, ServeLock};
-use crate::jobs::BackgroundWorker;
+use crate::jobs::{BackgroundWorker, BoxFuture};
 use crate::limiter;
 use crate::storage::{self, Backend};
 
@@ -38,9 +39,19 @@ pub struct Started {
     /// The application state behind `app` (readiness is cleared on it at shutdown).
     pub state: AppState,
     /// Continuous workers spawned on every node by `jobs::spawn_workers`: the back-channel
-    /// logout worker (wired to `AppState::logout_wake` and the state's outbound client), and
-    /// later workers pushed here.
+    /// logout worker (wired to `AppState::logout_wake` and the state's outbound client), the
+    /// webhook delivery worker (same outbound client), and later workers pushed here.
     pub workers: Vec<Box<dyn BackgroundWorker>>,
+}
+
+impl BackgroundWorker for WebhookDeliveryWorker {
+    fn name(&self) -> &'static str {
+        "webhook_delivery"
+    }
+
+    fn run(self: Box<Self>, stop: BoxFuture) -> BoxFuture {
+        Box::pin(WebhookDeliveryWorker::run(*self, stop))
+    }
 }
 
 /// Data directory, serve lock and KEK, in that order: the lock is taken before a KEK could be
@@ -239,7 +250,16 @@ pub async fn start(cfg: &Config, observability: Observability) -> anyhow::Result
         state.outbound_arc(),
         state.logout_wake(),
     );
-    let workers: Vec<Box<dyn BackgroundWorker>> = vec![Box::new(logout_worker)];
+    // Webhook deliveries: leased claims (no double delivery across nodes), sent through the
+    // state's single outbound client.
+    let webhook_worker = WebhookDeliveryWorker::new(
+        Arc::clone(&storage),
+        Arc::clone(&clock),
+        Arc::clone(&kek),
+        state.outbound_arc(),
+    );
+    let workers: Vec<Box<dyn BackgroundWorker>> =
+        vec![Box::new(logout_worker), Box::new(webhook_worker)];
     let app = anvil_web::router(state.clone());
     Ok(Started {
         app,
