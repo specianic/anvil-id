@@ -1642,6 +1642,13 @@ export interface components {
          * @enum {string}
          */
         ClientAuthMethod: "client_secret_basic" | "client_secret_post" | "private_key_jwt" | "none";
+        /**
+         * @description What a client is: `application` (default) or `agent`, an AI agent acting for the user
+         *     (the consent page says so). An agent never skips consent. Administrators set it on any
+         *     client; dynamic registration and metadata documents never do.
+         * @enum {string}
+         */
+        ClientKind: "application" | "agent";
         /** @description One page of clients. */
         ClientList: {
             items: components["schemas"]["ClientView"][];
@@ -1686,6 +1693,8 @@ export interface components {
             /** @description May introspect any token of the tenant (confidential clients only). */
             can_introspect: boolean;
             client_id: string;
+            /** @description `application` or `agent` (an AI agent; never skips consent). */
+            client_kind: components["schemas"]["ClientKind"];
             /** @description Returned once, on create (secret-based auth methods only). */
             client_secret?: string | null;
             client_type: components["schemas"]["ClientType"];
@@ -1693,6 +1702,11 @@ export interface components {
             /** Format: date-time */
             created_at: string;
             grant_types: components["schemas"]["GrantType"][];
+            /**
+             * @description May use the native headless flow API (administrator-registered first-party clients
+             *     with PKCE only).
+             */
+            headless_native: boolean;
             /** @description ID-token signing algorithm (one of the tenant's `signing_algs`). */
             id_token_signed_response_alg: string;
             /** @description Inline public JWK Set (`private_key_jwt` only). */
@@ -1715,6 +1729,8 @@ export interface components {
              */
             registration_source: components["schemas"]["ClientSource"];
             require_pkce: boolean;
+            /** @description The client may only use pushed authorization requests (RFC 9126 §6). */
+            require_pushed_authorization_requests: boolean;
             scopes: string[];
             token_format: components["schemas"]["TokenFormat"];
             /** Format: date-time */
@@ -1838,10 +1854,16 @@ export interface components {
             backchannel_logout_uri?: string | null;
             /** @description Default `false`; confidential clients only. */
             can_introspect?: boolean | null;
+            client_kind?: components["schemas"]["ClientKind"] | null;
             client_type: components["schemas"]["ClientType"];
             consent_mode?: components["schemas"]["ConsentMode"] | null;
             /** @description Default `["authorization_code"]`. */
             grant_types?: components["schemas"]["GrantType"][];
+            /**
+             * @description Default `false`. Needs `consent_mode` `skip_first_party`, PKCE and `client_kind`
+             *     `application` (422 otherwise).
+             */
+            headless_native?: boolean | null;
             /** @description Default `RS256`; must be enabled in the tenant's `signing_algs`. */
             id_token_signed_response_alg?: string | null;
             /** @description Inline public JWK Set, required for `private_key_jwt`. */
@@ -1856,6 +1878,8 @@ export interface components {
             redirect_uris?: string[];
             /** @description Default `true`. Only confidential clients may set `false`. */
             require_pkce?: boolean | null;
+            /** @description Default `false`. The client may only use pushed authorization requests (RFC 9126 §6). */
+            require_pushed_authorization_requests?: boolean | null;
             scopes?: string[];
             token_format?: components["schemas"]["TokenFormat"] | null;
         };
@@ -2111,6 +2135,18 @@ export interface components {
          * @enum {string}
          */
         GrantType: "authorization_code" | "refresh_token" | "client_credentials";
+        /** @description Headless flow API settings of a tenant. */
+        HeadlessSettings: {
+            /**
+             * @description Origins of single-page apps that may call the headless flow API with credentials
+             *     (browser mode). Exact `https://host[:port]` origins, lowercase, no path or wildcard;
+             *     `http://localhost` and `http://127.0.0.1` only in development mode. The app must be
+             *     same-site with the issuer (browsers block cross-site cookies). Empty = only the
+             *     tenant's own origin. At most 50.
+             * @default []
+             */
+            allowed_origins: string[];
+        };
         /** @description An initial access token (never its value). */
         InitialAccessTokenDto: {
             /** Format: date-time */
@@ -2389,6 +2425,13 @@ export interface components {
              */
             email_otp: boolean;
             /**
+             * @description Default: no extra origins.
+             * @default {
+             *       "allowed_origins": []
+             *     }
+             */
+            headless: components["schemas"]["HeadlessSettings"];
+            /**
              * @description Default `false`; needs SMTP (the installation's, for a new tenant).
              * @default false
              */
@@ -2398,6 +2441,13 @@ export interface components {
              * @default optional
              */
             mfa_policy: components["schemas"]["MfaPolicy"];
+            /**
+             * @description Default: pushed authorization requests optional.
+             * @default {
+             *       "require_pushed_authorization_requests": false
+             *     }
+             */
+            par: components["schemas"]["ParSettings"];
             /** @default open */
             registration: components["schemas"]["RegistrationMode"];
             /** @default false */
@@ -2532,6 +2582,16 @@ export interface components {
             slug: string;
             /** Format: date-time */
             updated_at: string;
+        };
+        /** @description Pushed authorization request policy of a tenant (RFC 9126). */
+        ParSettings: {
+            /**
+             * @description Every client of the tenant must use pushed authorization requests (RFC 9126 §5
+             *     `require_pushed_authorization_requests`). Default `false`; a client can still require it
+             *     for itself.
+             * @default false
+             */
+            require_pushed_authorization_requests: boolean;
         };
         /** @description RFC 9457 problem details (`application/problem+json`). */
         Problem: {
@@ -2901,10 +2961,14 @@ export interface components {
             default_locale: string;
             /** @description Sign-in with a one-time code sent by email. */
             email_otp: boolean;
+            /** @description Headless flow API settings (browser-mode origin allow-list). */
+            headless: components["schemas"]["HeadlessSettings"];
             /** @description Sign-in with a magic link sent by email. */
             magic_link: boolean;
             /** @description Tenant MFA policy (a client may make it stricter). */
             mfa_policy: components["schemas"]["MfaPolicy"];
+            /** @description Pushed authorization request policy (RFC 9126). */
+            par: components["schemas"]["ParSettings"];
             registration: components["schemas"]["RegistrationMode"];
             /** @description Users must verify their email address before they can sign in. */
             require_verified_email: boolean;
@@ -2926,9 +2990,11 @@ export interface components {
             default_locale?: string | null;
             /** @description Turning it on needs SMTP (tenant SMTP settings or the installation SMTP). */
             email_otp?: boolean | null;
+            headless?: components["schemas"]["HeadlessSettings"] | null;
             /** @description Turning it on needs SMTP (tenant SMTP settings or the installation SMTP). */
             magic_link?: boolean | null;
             mfa_policy?: components["schemas"]["MfaPolicy"] | null;
+            par?: components["schemas"]["ParSettings"] | null;
             registration?: components["schemas"]["RegistrationMode"] | null;
             require_verified_email?: boolean | null;
             /**
@@ -3081,8 +3147,14 @@ export interface components {
             /** @description `null` removes the back-channel logout URI. */
             backchannel_logout_uri?: string | null;
             can_introspect?: boolean | null;
+            client_kind?: components["schemas"]["ClientKind"] | null;
             consent_mode?: components["schemas"]["ConsentMode"] | null;
             grant_types?: components["schemas"]["GrantType"][] | null;
+            /**
+             * @description Needs `consent_mode` `skip_first_party`, PKCE, `client_kind` `application` and an
+             *     administrator-registered client (422 otherwise).
+             */
+            headless_native?: boolean | null;
             /** @description `null` resets to RS256. */
             id_token_signed_response_alg?: string | null;
             jwks?: Record<string, never> | null;
@@ -3092,6 +3164,7 @@ export interface components {
             post_logout_redirect_uris?: string[] | null;
             redirect_uris?: string[] | null;
             require_pkce?: boolean | null;
+            require_pushed_authorization_requests?: boolean | null;
             scopes?: string[] | null;
             token_format?: components["schemas"]["TokenFormat"] | null;
         };

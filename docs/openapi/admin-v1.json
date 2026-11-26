@@ -12601,6 +12601,14 @@
           "none"
         ]
       },
+      "ClientKind": {
+        "type": "string",
+        "description": "What a client is: `application` (default) or `agent`, an AI agent acting for the user\n(the consent page says so). An agent never skips consent. Administrators set it on any\nclient; dynamic registration and metadata documents never do.",
+        "enum": [
+          "application",
+          "agent"
+        ]
+      },
       "ClientList": {
         "type": "object",
         "description": "One page of clients.",
@@ -12678,6 +12686,9 @@
           "backchannel_logout_session_required",
           "allowed_resources",
           "organization",
+          "require_pushed_authorization_requests",
+          "client_kind",
+          "headless_native",
           "registration_source",
           "created_at",
           "updated_at"
@@ -12714,6 +12725,10 @@
           "client_id": {
             "type": "string"
           },
+          "client_kind": {
+            "$ref": "#/components/schemas/ClientKind",
+            "description": "`application` or `agent` (an AI agent; never skips consent)."
+          },
           "client_secret": {
             "type": [
               "string",
@@ -12736,6 +12751,10 @@
             "items": {
               "$ref": "#/components/schemas/GrantType"
             }
+          },
+          "headless_native": {
+            "type": "boolean",
+            "description": "May use the native headless flow API (administrator-registered first-party clients\nwith PKCE only)."
           },
           "id_token_signed_response_alg": {
             "type": "string",
@@ -12793,6 +12812,10 @@
           },
           "require_pkce": {
             "type": "boolean"
+          },
+          "require_pushed_authorization_requests": {
+            "type": "boolean",
+            "description": "The client may only use pushed authorization requests (RFC 9126 §6)."
           },
           "scopes": {
             "type": "array",
@@ -13185,6 +13208,17 @@
             ],
             "description": "Default `false`; confidential clients only."
           },
+          "client_kind": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ClientKind",
+                "description": "Default `application`. An `agent` must use `consent_mode` `required` (422 otherwise)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "client_type": {
             "$ref": "#/components/schemas/ClientType"
           },
@@ -13205,6 +13239,13 @@
               "$ref": "#/components/schemas/GrantType"
             },
             "description": "Default `[\"authorization_code\"]`."
+          },
+          "headless_native": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Default `false`. Needs `consent_mode` `skip_first_party`, PKCE and `client_kind`\n`application` (422 otherwise)."
           },
           "id_token_signed_response_alg": {
             "type": [
@@ -13271,6 +13312,13 @@
               "null"
             ],
             "description": "Default `true`. Only confidential clients may set `false`."
+          },
+          "require_pushed_authorization_requests": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Default `false`. The client may only use pushed authorization requests (RFC 9126 §6)."
           },
           "scopes": {
             "type": "array",
@@ -13892,6 +13940,21 @@
           "client_credentials"
         ]
       },
+      "HeadlessSettings": {
+        "type": "object",
+        "description": "Headless flow API settings of a tenant.",
+        "properties": {
+          "allowed_origins": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Origins of single-page apps that may call the headless flow API with credentials\n(browser mode). Exact `https://host[:port]` origins, lowercase, no path or wildcard;\n`http://localhost` and `http://127.0.0.1` only in development mode. The app must be\nsame-site with the issuer (browsers block cross-site cookies). Empty = only the\ntenant's own origin. At most 50.",
+            "default": []
+          }
+        },
+        "additionalProperties": false
+      },
       "InitialAccessTokenDto": {
         "type": "object",
         "description": "An initial access token (never its value).",
@@ -14450,6 +14513,13 @@
             "description": "Default `false`; needs SMTP (the installation's, for a new tenant).",
             "default": false
           },
+          "headless": {
+            "$ref": "#/components/schemas/HeadlessSettings",
+            "description": "Default: no extra origins.",
+            "default": {
+              "allowed_origins": []
+            }
+          },
           "magic_link": {
             "type": "boolean",
             "description": "Default `false`; needs SMTP (the installation's, for a new tenant).",
@@ -14459,6 +14529,13 @@
             "$ref": "#/components/schemas/MfaPolicy",
             "description": "Default `optional`.",
             "default": "optional"
+          },
+          "par": {
+            "$ref": "#/components/schemas/ParSettings",
+            "description": "Default: pushed authorization requests optional.",
+            "default": {
+              "require_pushed_authorization_requests": false
+            }
           },
           "registration": {
             "$ref": "#/components/schemas/RegistrationMode",
@@ -14839,6 +14916,18 @@
             "format": "date-time"
           }
         }
+      },
+      "ParSettings": {
+        "type": "object",
+        "description": "Pushed authorization request policy of a tenant (RFC 9126).",
+        "properties": {
+          "require_pushed_authorization_requests": {
+            "type": "boolean",
+            "description": "Every client of the tenant must use pushed authorization requests (RFC 9126 §5\n`require_pushed_authorization_requests`). Default `false`; a client can still require it\nfor itself.",
+            "default": false
+          }
+        },
+        "additionalProperties": false
       },
       "Problem": {
         "type": "object",
@@ -15765,7 +15854,9 @@
           "default_locale",
           "claims",
           "dcr",
-          "cimd"
+          "cimd",
+          "par",
+          "headless"
         ],
         "properties": {
           "auto_link": {
@@ -15803,6 +15894,10 @@
             "type": "boolean",
             "description": "Sign-in with a one-time code sent by email."
           },
+          "headless": {
+            "$ref": "#/components/schemas/HeadlessSettings",
+            "description": "Headless flow API settings (browser-mode origin allow-list)."
+          },
           "magic_link": {
             "type": "boolean",
             "description": "Sign-in with a magic link sent by email."
@@ -15810,6 +15905,10 @@
           "mfa_policy": {
             "$ref": "#/components/schemas/MfaPolicy",
             "description": "Tenant MFA policy (a client may make it stricter)."
+          },
+          "par": {
+            "$ref": "#/components/schemas/ParSettings",
+            "description": "Pushed authorization request policy (RFC 9126)."
           },
           "registration": {
             "$ref": "#/components/schemas/RegistrationMode"
@@ -15900,6 +15999,17 @@
             ],
             "description": "Turning it on needs SMTP (tenant SMTP settings or the installation SMTP)."
           },
+          "headless": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/HeadlessSettings",
+                "description": "Replaces the headless settings (the whole origin list). Wildcards, paths and non-https\norigins are refused (422)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "magic_link": {
             "type": [
               "boolean",
@@ -15911,6 +16021,17 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/MfaPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "par": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ParSettings",
+                "description": "Replaces the PAR policy."
               },
               {
                 "type": "null"
@@ -16333,6 +16454,17 @@
               "null"
             ]
           },
+          "client_kind": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ClientKind",
+                "description": "An `agent` must use `consent_mode` `required` (422 otherwise)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "consent_mode": {
             "oneOf": [
               {
@@ -16351,6 +16483,13 @@
             "items": {
               "$ref": "#/components/schemas/GrantType"
             }
+          },
+          "headless_native": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Needs `consent_mode` `skip_first_party`, PKCE, `client_kind` `application` and an\nadministrator-registered client (422 otherwise)."
           },
           "id_token_signed_response_alg": {
             "type": [
@@ -16412,6 +16551,12 @@
             }
           },
           "require_pkce": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "require_pushed_authorization_requests": {
             "type": [
               "boolean",
               "null"

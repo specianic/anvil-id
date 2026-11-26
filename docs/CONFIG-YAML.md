@@ -14,8 +14,8 @@ already in force changes nothing.
 
 | Section | Key | Notes |
 |---|---|---|
-| `tenant` | `slug` | Display name, custom host and settings (registration, MFA, signing algorithms, sign-in by email, upstream linking, default language, DCR and CIMD policy, role and permission claim mapping; since 1.0 also the organization claim mapping `claims.org_roles` / `claims.org_permissions`). |
-| `clients` | `client_id` | Static clients only. Since 1.0 with the `organization` policy (`off`, `optional`, `required`). |
+| `tenant` | `slug` | Display name, custom host and settings (registration, MFA, signing algorithms, sign-in by email, upstream linking, default language, DCR and CIMD policy, role and permission claim mapping; since 1.0 also the organization claim mapping `claims.org_roles` / `claims.org_permissions`, the PAR policy `par` and the headless origin allow-list `headless`). |
+| `clients` | `client_id` | Static clients only. Since 1.0 with the `organization` policy (`off`, `optional`, `required`), `require_pushed_authorization_requests`, `client_kind` and `headless_native`. |
 | `connections` | `slug` | Tenant-level upstream identity providers (social presets, OIDC, OAuth 2.0). Organization connections are not included (below). |
 | `branding` | `client_id` (absent = tenant-wide) | Theme tokens and custom CSS. |
 | `roles` | `name` | Name, description, permissions. |
@@ -67,6 +67,63 @@ clients:
 
 In the system tenant `organization` must be `off`, and no client may list the `org:admin` scope;
 `dcr.allowed_scopes` can never contain `org:admin` in any tenant.
+
+### Pushed authorization requests, agents and headless (1.0)
+
+These fields are omitted from an export while they have their default, so documents written
+before 1.0 export and apply unchanged.
+
+Tenant settings:
+
+```yaml excerpt
+tenant:
+  settings:
+    par:
+      require_pushed_authorization_requests: true   # default false
+    headless:
+      allowed_origins: [https://app.example.com]    # default []
+```
+
+- `par.require_pushed_authorization_requests`: every client of the tenant must use a pushed
+  authorization request (RFC 9126 section 5). With `false` each client decides for itself.
+- `headless.allowed_origins`: the origins of single-page apps that may call the headless flow API
+  in browser mode with credentials (see `docs/HEADLESS.md`). Each entry is an exact origin
+  `https://host[:port]`, lowercase, without path, query, fragment, userinfo or wildcard; at most
+  50. `http://localhost` and `http://127.0.0.1` are accepted only when the server runs in
+  development mode. The app must be **same-site** with the issuer (for example
+  `app.example.com` with `id.example.com`): browsers block the cross-site cookies the flow needs.
+  A bad entry is reported by path, for example
+  `tenant.settings.headless.allowed_origins[0]: origin must not contain a wildcard`.
+
+Client fields:
+
+```yaml excerpt
+clients:
+  - client_id: mobile-app
+    # ...
+    consent_mode: skip_first_party
+    require_pushed_authorization_requests: true   # default false
+    client_kind: application                      # application (default) | agent
+    headless_native: true                         # default false
+```
+
+- `require_pushed_authorization_requests`: the client may only start authorization with a pushed
+  request (RFC 9126 section 6 client metadata).
+- `client_kind: agent` marks an AI agent acting for the user; the consent page says so. An agent
+  must keep `consent_mode: required`.
+- `headless_native: true` lets the client use the native headless flow API. It needs
+  `consent_mode: skip_first_party` (first-party apps only), `require_pkce: true` and
+  `client_kind: application`.
+
+The same rules apply to every write path (admin API, this document, dynamic registration, Client
+ID Metadata Documents), and a refusal names the field, for example `clients[0].consent_mode:
+agent clients never skip consent`. Dynamic registration (RFC 7591) accepts
+`require_pushed_authorization_requests` as client metadata. It never sets `client_kind` or
+`headless_native`: those keys are ignored like any unknown metadata, and a dynamic or metadata
+document client can never be `headless_native`. An administrator can mark any client, dynamic
+ones included, as an agent through the admin API. There is no automatic `agent` default for
+dynamic or metadata document clients in 1.0; the consent page always shows how such a client was
+registered.
 
 ## Example
 
@@ -265,3 +322,4 @@ plans against the new state and completes the remaining changes.
   `allow_listed` needs a host. The published schema encodes the per-field bounds.
 - Clients outside the `system` tenant cannot list `admin` or `admin:*` scopes; `system` tenant
   clients cannot list `org:admin` and must keep `organization: off` (1.0).
+- `headless.allowed_origins` holds at most 50 origins (1.0).

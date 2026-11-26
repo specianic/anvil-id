@@ -169,6 +169,26 @@
             "org_roles": { "$ref": "#/$defs/optional_claim_rule" },
             "org_permissions": { "$ref": "#/$defs/optional_claim_rule" }
           }
+        },
+        "par": {
+          "description": "Pushed authorization requests (RFC 9126). Omitted from exports when default.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "require_pushed_authorization_requests": { "type": "boolean" }
+          }
+        },
+        "headless": {
+          "description": "Headless flow API settings. Omitted from exports when default. Each origin is an exact lowercase https://host[:port] origin (no path, query, fragment, userinfo or wildcard; http://localhost and http://127.0.0.1 only in development mode); the server checks the exact rules.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "allowed_origins": {
+              "type": "array",
+              "maxItems": 50,
+              "items": { "type": "string", "pattern": "^https?://[^/?#@*\\s]+$" }
+            }
+          }
         }
       }
     },
@@ -204,7 +224,19 @@
         "mfa_policy": {
           "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/mfa_policy" }]
         },
-        "organization": { "enum": ["off", "optional", "required"] }
+        "organization": { "enum": ["off", "optional", "required"] },
+        "require_pushed_authorization_requests": {
+          "description": "RFC 9126 section 6: the client must use pushed authorization requests. Omitted from exports when false.",
+          "type": "boolean"
+        },
+        "client_kind": {
+          "description": "application (default, omitted from exports) or agent. An agent must use consent_mode required.",
+          "enum": ["application", "agent"]
+        },
+        "headless_native": {
+          "description": "May use the native headless flow API. Needs consent_mode skip_first_party, require_pkce true and client_kind application. Omitted from exports when false.",
+          "type": "boolean"
+        }
       }
     },
     "connection": {

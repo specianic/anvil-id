@@ -550,6 +550,146 @@ async fn invalid_documents_are_reported_by_path() {
     );
 }
 
+/// The 1.0 client fields and tenant PAR/headless settings round-trip through YAML apply and
+/// export; the client policy and origin rules refuse a document by path and change nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn yaml_v10_fields_round_trip_and_refusals() {
+    let a = Instance::new().await;
+    let client_id = configure(&a).await;
+    let out = a.run(&["tenant", "export", "default", "-o", "doc.yaml"], &[]);
+    assert!(out.status.success(), "{}", text(&out));
+    let mut doc = yaml(&a.path("doc.yaml"));
+    // Defaults are omitted from the export.
+    for key in [
+        "require_pushed_authorization_requests",
+        "client_kind",
+        "headless_native",
+    ] {
+        assert!(doc["clients"][0].get(key).is_none(), "{key}");
+    }
+    assert!(doc["tenant"]["settings"].get("par").is_none());
+    assert!(doc["tenant"]["settings"].get("headless").is_none());
+
+    doc["clients"][0]["require_pushed_authorization_requests"] = json!(true);
+    doc["clients"][0]["client_kind"] = json!("agent");
+    doc["clients"].as_array_mut().unwrap().push(json!({
+        "client_id": "native-app",
+        "name": "Native app",
+        "client_type": "public",
+        "application_type": "native",
+        "auth_method": "none",
+        "redirect_uris": ["http://127.0.0.1/callback"],
+        "grant_types": ["authorization_code"],
+        "scopes": ["openid"],
+        "consent_mode": "skip_first_party",
+        "headless_native": true,
+    }));
+    doc["tenant"]["settings"]["par"] = json!({"require_pushed_authorization_requests": true});
+    doc["tenant"]["settings"]["headless"] =
+        json!({"allowed_origins": ["https://spa.example.test"]});
+    write_yaml(&a.path("doc.yaml"), &doc);
+
+    let out = a.run(&["tenant", "plan", "-f", "doc.yaml"], &[]);
+    assert!(out.status.success(), "{}", text(&out));
+    let plan = text(&out);
+    for shown in [
+        "client_kind",
+        "require_pushed_authorization_requests",
+        "settings.par",
+        "settings.headless",
+        "+ client native-app",
+    ] {
+        assert!(plan.contains(shown), "plan misses {shown}: {plan}");
+    }
+
+    let out = a.run(&["tenant", "apply", "-f", "doc.yaml", "--yes"], &[]);
+    assert!(out.status.success(), "{}", text(&out));
+    let tenant = a.tenant("default").await;
+    assert!(tenant.settings.par.require_pushed_authorization_requests);
+    assert_eq!(
+        tenant.settings.headless.allowed_origins,
+        ["https://spa.example.test"]
+    );
+    let billing = a
+        .storage
+        .clients()
+        .get(tenant.id, &client_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(billing.require_pushed_authorization_requests);
+    assert_eq!(billing.client_kind, anvil_core::model::ClientKind::Agent);
+    let native = a
+        .storage
+        .clients()
+        .get(tenant.id, "native-app")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(native.headless_native);
+
+    // The export carries every value, and re-applying it changes nothing.
+    let out = a.run(&["tenant", "export", "default", "-o", "export.yaml"], &[]);
+    assert!(out.status.success(), "{}", text(&out));
+    let exported = yaml(&a.path("export.yaml"));
+    assert_eq!(exported["clients"][0]["client_kind"], "agent");
+    assert_eq!(
+        exported["clients"][0]["require_pushed_authorization_requests"],
+        true
+    );
+    let native = exported["clients"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["client_id"] == "native-app")
+        .expect("native-app exported");
+    assert_eq!(native["headless_native"], true);
+    assert_eq!(
+        exported["tenant"]["settings"]["par"]["require_pushed_authorization_requests"],
+        true
+    );
+    assert_eq!(
+        exported["tenant"]["settings"]["headless"]["allowed_origins"],
+        json!(["https://spa.example.test"])
+    );
+    let out = a.run(&["tenant", "apply", "-f", "export.yaml", "--yes"], &[]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(text(&out).contains("No changes."), "{}", text(&out));
+
+    // An agent that skips consent, a wildcard origin and a path origin are refused by path.
+    let mut bad = exported.clone();
+    bad["clients"][0]["consent_mode"] = json!("skip_first_party");
+    bad["tenant"]["settings"]["headless"]["allowed_origins"] =
+        json!(["https://*.example.test", "https://a.example.test/path"]);
+    write_yaml(&a.path("bad.yaml"), &bad);
+    let out = a.run(&["tenant", "apply", "-f", "bad.yaml", "--yes"], &[]);
+    assert!(!out.status.success(), "{}", text(&out));
+    let printed = text(&out);
+    for path in [
+        "clients[0].consent_mode",
+        "tenant.settings.headless.allowed_origins[0]",
+        "tenant.settings.headless.allowed_origins[1]",
+    ] {
+        assert!(printed.contains(path), "{path}: {printed}");
+    }
+    let tenant = a.tenant("default").await;
+    assert_eq!(
+        tenant.settings.headless.allowed_origins,
+        ["https://spa.example.test"]
+    );
+    let billing = a
+        .storage
+        .clients()
+        .get(tenant.id, &client_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        billing.consent_mode,
+        anvil_core::model::ConsentMode::Required
+    );
+}
+
 /// Org-owned objects (ORG-02, Pitfall 8): an org with an org-owned role named `editor` (the same
 /// name as the tenant role of [`configure`]), an org connection `acme-sso` with an identity link,
 /// and a member holding the org role. Written through storage as the organization services do.
