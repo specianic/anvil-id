@@ -6,15 +6,15 @@ current_phase: 04
 current_phase_name: release 0 3 real world logins
 current_plan: Not started
 status: planning
-stopped_at: Completed 04-36-PLAN.md
-last_updated: "2026-11-26T00:03:44.181Z"
+stopped_at: Completed 04-37-PLAN.md
+last_updated: "2026-11-26T00:22:20.846Z"
 last_activity: 2026-11-25
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 102
-  completed_plans: 99
-  percent: 97
+  completed_plans: 100
+  percent: 98
 ---
 
 # Project State
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 **Status:** Ready to plan
 **Last Activity:** 2026-11-25
 **Last Activity Description:** Phase 3 complete, transitioned to Phase 04
-**Progress:** [██████████] 97%
+**Progress:** [██████████] 98%
 
 Phase 3 plans 03-01 through 03-34 are all complete (34/34 summaries); v0.2.0 is published. 03-34 closed the verification gap (base64). Next: Phase 3 re-verification, then Phase 4.
 
@@ -154,6 +154,7 @@ Phase 3 plans 03-01 through 03-34 are all complete (34/34 summaries); v0.2.0 is 
 | Phase 04 P34 | 50min | 3 tasks | 40 files |
 | Phase 04 P35 | 75min | 2 tasks | 16 files |
 | Phase 04 P36 | 95min | 3 tasks | 16 files |
+| Phase 04 P37 | 45min | 3 tasks | 14 files |
 
 ## Accumulated Context
 
@@ -348,6 +349,10 @@ Recent decisions affecting current work:
 - [Phase 04]: 04-34: logout-token iss recorded per RP session (SQLite 0006 / Postgres 0005); unlink is one guarded storage intent (DeleteLinkOutcome), unverified email never counts
 - [Phase 04]: 04-35: email_otp = code, magic_link = link, enforced separately (route 404 + core refusal by what the email carried); login_code code/link optional, overrides must guard with 'is defined'
 - [Phase 04]: 04-36: every sign-in wakes the back-channel worker (AppState::wake_logout_worker is the only notifier)
+- [Phase 04]: 04-37: Upstream JIT accounts with an unverified email get a verification email in the same transaction; require_verified_email refuses upstream sign-in to unverified accounts (email_not_verified)
+- [Phase 04]: 04-37: Upstream binding cookie cleared only when the callback proved state + binding (CallbackResult.binding_proved)
+- [Phase 04]: 04-37: Tenant cookie suffix is hex16(sha256(tenant UUID bytes)); no transition read of old names, everyone signs in again after upgrade
+- [Phase 04]: 04-37: Generic OIDC falls back to UserInfo when the ID token has no email; UserInfo sub must equal the ID token sub
 
 ### Pending Todos
 
@@ -360,6 +365,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-26T00:03:44.179Z
-Stopped at: Completed 04-36-PLAN.md
+Last session: 2026-11-26T00:22:20.843Z
+Stopped at: Completed 04-37-PLAN.md
 Resume file: None
