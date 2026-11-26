@@ -1,0 +1,122 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id AS \"id!: uuid::Uuid\", tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      name AS \"name!\", kind AS \"kind!\", salt_separator AS \"salt_separator!\",\n                      rounds AS \"rounds!\", mem_cost AS \"mem_cost!\",\n                      signer_key_enc AS \"signer_key_enc!\", created_at AS \"created_at!\"\n                 FROM password_hash_profile WHERE tenant_id = ?1 AND id = ?2",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: uuid::Uuid",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "password_hash_profile",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "tenant_id!: uuid::Uuid",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "password_hash_profile",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "name": "name!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "password_hash_profile",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "kind!",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "password_hash_profile",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "name": "salt_separator!",
+        "ordinal": 4,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "password_hash_profile",
+            "name": "salt_separator"
+          }
+        }
+      },
+      {
+        "name": "rounds!",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "password_hash_profile",
+            "name": "rounds"
+          }
+        }
+      },
+      {
+        "name": "mem_cost!",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "password_hash_profile",
+            "name": "mem_cost"
+          }
+        }
+      },
+      {
+        "name": "signer_key_enc!",
+        "ordinal": 7,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "password_hash_profile",
+            "name": "signer_key_enc"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "password_hash_profile",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "8322a83b143935afed4bedd9c951576234f2fd2bdface7cc4108206a45fcf722"
+}

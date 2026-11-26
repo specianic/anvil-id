@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT kind AS \"kind!\", expires_at AS \"expires_at!\"\n                 FROM self_service_token\n                WHERE tenant_id = ?1 AND user_id = ?2 AND consumed_at IS NULL\n                  AND expires_at > ?3\n                ORDER BY created_at, token_hash",
+  "describe": {
+    "columns": [
+      {
+        "name": "kind!",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "self_service_token",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "name": "expires_at!",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "self_service_token",
+            "name": "expires_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "c99465473a6661cfd1fd1a1d4c252e97892694d50bf7710cd3ab406dbe43cd38"
+}

@@ -1,0 +1,206 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id AS \"id!: uuid::Uuid\", tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      client_id AS \"client_id!\", user_id AS \"user_id?: uuid::Uuid\",\n                      scope AS \"scope!\", auth_time AS \"auth_time?\", acr AS \"acr?\", amr AS \"amr!\",\n                      session_id AS \"session_id?: uuid::Uuid\", claims AS \"claims?\",\n                      created_at AS \"created_at!\", absolute_expires_at AS \"absolute_expires_at!\",\n                      revoked_at AS \"revoked_at?\", revoked_reason AS \"revoked_reason?\",\n                      resource AS \"resource!\", org_id AS \"org_id?: uuid::Uuid\"\n                 FROM token_family WHERE tenant_id = ?1 AND user_id = ?2\n                ORDER BY created_at, id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: uuid::Uuid",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "token_family",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "tenant_id!: uuid::Uuid",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "token_family",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "name": "client_id!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "token_family",
+            "name": "client_id"
+          }
+        }
+      },
+      {
+        "name": "user_id?: uuid::Uuid",
+        "ordinal": 3,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "token_family",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "name": "scope!",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "token_family",
+            "name": "scope"
+          }
+        }
+      },
+      {
+        "name": "auth_time?",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "token_family",
+            "name": "auth_time"
+          }
+        }
+      },
+      {
+        "name": "acr?",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "token_family",
+            "name": "acr"
+          }
+        }
+      },
+      {
+        "name": "amr!",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "token_family",
+            "name": "amr"
+          }
+        }
+      },
+      {
+        "name": "session_id?: uuid::Uuid",
+        "ordinal": 8,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "token_family",
+            "name": "session_id"
+          }
+        }
+      },
+      {
+        "name": "claims?",
+        "ordinal": 9,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "token_family",
+            "name": "claims"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 10,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "token_family",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "absolute_expires_at!",
+        "ordinal": 11,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "token_family",
+            "name": "absolute_expires_at"
+          }
+        }
+      },
+      {
+        "name": "revoked_at?",
+        "ordinal": 12,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "token_family",
+            "name": "revoked_at"
+          }
+        }
+      },
+      {
+        "name": "revoked_reason?",
+        "ordinal": 13,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "token_family",
+            "name": "revoked_reason"
+          }
+        }
+      },
+      {
+        "name": "resource!",
+        "ordinal": 14,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "token_family",
+            "name": "resource"
+          }
+        }
+      },
+      {
+        "name": "org_id?: uuid::Uuid",
+        "ordinal": 15,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "token_family",
+            "name": "org_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      true,
+      false,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "afb90512e11485f965c57346f7f9b34ca35a2d3e23b4602abf46bbaa8e501164"
+}

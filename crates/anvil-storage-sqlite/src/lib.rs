@@ -378,6 +378,11 @@ impl Storage for SqliteStorage {
             "DELETE FROM self_service_token WHERE rowid IN
                (SELECT rowid FROM self_service_token WHERE expires_at <= ?1 LIMIT ?2)"
         );
+        // Pushed authorization requests, consumed or not, once expired.
+        total += purge!(
+            "DELETE FROM pushed_authorization_request WHERE rowid IN
+               (SELECT rowid FROM pushed_authorization_request WHERE expires_at <= ?1 LIMIT ?2)"
+        );
         total += purge!(
             "DELETE FROM admin_setup_token WHERE rowid IN
                (SELECT rowid FROM admin_setup_token WHERE expires_at <= ?1 LIMIT ?2)"

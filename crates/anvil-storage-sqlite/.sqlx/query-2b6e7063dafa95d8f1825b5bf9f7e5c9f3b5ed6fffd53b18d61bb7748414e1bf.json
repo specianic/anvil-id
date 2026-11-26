@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO pushed_authorization_request\n                 (tenant_id, uri_hash, client_id, params, created_at, expires_at)\n             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "2b6e7063dafa95d8f1825b5bf9f7e5c9f3b5ed6fffd53b18d61bb7748414e1bf"
+}

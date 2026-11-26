@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE pushed_authorization_request\n                  SET consumed_at = ?3\n                WHERE tenant_id = ?1 AND uri_hash = ?2\n                  AND consumed_at IS NULL AND expires_at > ?3\n            RETURNING client_id   AS \"client_id!\",\n                      params      AS \"params!\",\n                      expires_at  AS \"expires_at!\",\n                      consumed_at AS \"consumed_at?\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "client_id!",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "pushed_authorization_request",
+            "name": "client_id"
+          }
+        }
+      },
+      {
+        "name": "params!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "pushed_authorization_request",
+            "name": "params"
+          }
+        }
+      },
+      {
+        "name": "expires_at!",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "pushed_authorization_request",
+            "name": "expires_at"
+          }
+        }
+      },
+      {
+        "name": "consumed_at?",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "pushed_authorization_request",
+            "name": "consumed_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "1660e7a837a93cd5365f5842c356ad7923cbdf85937634bb67640ca0daf675db"
+}

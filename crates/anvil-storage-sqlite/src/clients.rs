@@ -20,33 +20,6 @@ pub(crate) struct SqliteClients {
     pub(crate) reader: SqlitePool,
 }
 
-/// TRANSITIONAL(07-08): the client table has no columns yet for
-/// `require_pushed_authorization_requests`, `client_kind` and `headless_native`. Reads fill the
-/// defaults; a write carrying a non-default value is refused instead of being dropped silently.
-const NEW_FIELDS_UNSUPPORTED: &str = "TRANSITIONAL(07-08): client PAR/kind/headless columns";
-
-fn refuse_new_fields_in_new(client: &NewClient) -> Result<(), StorageError> {
-    if client.require_pushed_authorization_requests
-        || client.client_kind != ClientKind::Application
-        || client.headless_native
-    {
-        return Err(StorageError::Unsupported(NEW_FIELDS_UNSUPPORTED));
-    }
-    Ok(())
-}
-
-fn refuse_new_fields_in_update(update: &ClientUpdate) -> Result<(), StorageError> {
-    if update.require_pushed_authorization_requests == Some(true)
-        || update
-            .client_kind
-            .is_some_and(|k| k != ClientKind::Application)
-        || update.headless_native == Some(true)
-    {
-        return Err(StorageError::Unsupported(NEW_FIELDS_UNSUPPORTED));
-    }
-    Ok(())
-}
-
 pub(crate) struct ClientRow {
     id: uuid::Uuid,
     tenant_id: uuid::Uuid,
@@ -76,6 +49,9 @@ pub(crate) struct ClientRow {
     metadata_expires_at: Option<i64>,
     registration_access_token_hash: Option<Vec<u8>>,
     organization: String,
+    require_pushed_authorization_requests: bool,
+    client_kind: String,
+    headless_native: bool,
 }
 
 impl TryFrom<ClientRow> for Client {
@@ -133,10 +109,9 @@ impl TryFrom<ClientRow> for Client {
                 OrgClientPolicy::parse,
                 "client.organization",
             )?,
-            // TRANSITIONAL(07-08): no columns yet, see NEW_FIELDS_UNSUPPORTED.
-            require_pushed_authorization_requests: false,
-            client_kind: ClientKind::Application,
-            headless_native: false,
+            require_pushed_authorization_requests: r.require_pushed_authorization_requests,
+            client_kind: parse_enum(&r.client_kind, ClientKind::parse, "client.client_kind")?,
+            headless_native: r.headless_native,
         })
     }
 }
@@ -148,7 +123,6 @@ pub(crate) async fn insert_client(
     tenant: TenantId,
     client: &NewClient,
 ) -> Result<Client, StorageError> {
-    refuse_new_fields_in_new(client)?;
     let client_type = client.client_type.as_str();
     let application_type = client.application_type.as_str();
     let auth_method = client.auth_method.as_str();
@@ -172,6 +146,7 @@ pub(crate) async fn insert_client(
         .as_ref()
         .map(|h| h.as_bytes().as_slice());
     let organization = client.organization.as_str();
+    let client_kind = client.client_kind.as_str();
     sqlx::query!(
         "INSERT INTO client
              (id, tenant_id, client_id, name, client_type, application_type, auth_method,
@@ -180,9 +155,9 @@ pub(crate) async fn insert_client(
               can_introspect, post_logout_redirect_uris, backchannel_logout_uri,
               backchannel_logout_session_required, allowed_resources, mfa_policy,
               registration_source, metadata_expires_at, registration_access_token_hash,
-              organization)
+              organization, require_pushed_authorization_requests, client_kind, headless_native)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14, ?15, ?16, ?17,
-                 ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27)",
+                 ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30)",
         client.id.0,
         tenant.0,
         client.client_id,
@@ -210,6 +185,9 @@ pub(crate) async fn insert_client(
         metadata_expires_at,
         registration_token,
         organization,
+        client.require_pushed_authorization_requests,
+        client_kind,
+        client.headless_native,
     )
     .execute(conn)
     .await
@@ -278,7 +256,11 @@ impl ClientRepo for SqliteClients {
                       registration_source AS "registration_source!",
                       metadata_expires_at AS "metadata_expires_at?",
                       registration_access_token_hash AS "registration_access_token_hash?",
-                      organization AS "organization!"
+                      organization AS "organization!",
+                      require_pushed_authorization_requests
+                        AS "require_pushed_authorization_requests!: bool",
+                      client_kind AS "client_kind!",
+                      headless_native AS "headless_native!: bool"
                  FROM client WHERE tenant_id = ?1 AND client_id = ?2"#,
             tenant.0,
             client_id,
@@ -318,7 +300,11 @@ impl ClientRepo for SqliteClients {
                       registration_source AS "registration_source!",
                       metadata_expires_at AS "metadata_expires_at?",
                       registration_access_token_hash AS "registration_access_token_hash?",
-                      organization AS "organization!"
+                      organization AS "organization!",
+                      require_pushed_authorization_requests
+                        AS "require_pushed_authorization_requests!: bool",
+                      client_kind AS "client_kind!",
+                      headless_native AS "headless_native!: bool"
                  FROM client
                 WHERE tenant_id = ?1 AND (?2 IS NULL OR id > ?2)
                 ORDER BY id
@@ -344,7 +330,6 @@ impl ClientRepo for SqliteClients {
         update: &ClientUpdate,
         now: OffsetDateTime,
     ) -> Result<Option<Client>, StorageError> {
-        refuse_new_fields_in_update(update)?;
         let redirect_uris = update
             .redirect_uris
             .as_ref()
@@ -388,6 +373,7 @@ impl ClientRepo for SqliteClients {
             .flatten()
             .map(|h| h.as_bytes().to_vec());
         let organization = update.organization.map(|p| p.as_str());
+        let client_kind = update.client_kind.map(|k| k.as_str());
         let now_ms = odt_to_ms(now);
         sqlx::query_as!(
             ClientRow,
@@ -415,7 +401,11 @@ impl ClientRepo for SqliteClients {
                         CASE WHEN ?23 THEN ?24 ELSE metadata_expires_at END,
                       registration_access_token_hash =
                         CASE WHEN ?25 THEN ?26 ELSE registration_access_token_hash END,
-                      organization = COALESCE(?27, organization)
+                      organization = COALESCE(?27, organization),
+                      require_pushed_authorization_requests =
+                        COALESCE(?28, require_pushed_authorization_requests),
+                      client_kind = COALESCE(?29, client_kind),
+                      headless_native = COALESCE(?30, headless_native)
                 WHERE tenant_id = ?1 AND client_id = ?2
             RETURNING id AS "id!: uuid::Uuid", tenant_id AS "tenant_id!: uuid::Uuid",
                       client_id AS "client_id!", name AS "name!", client_type AS "client_type!",
@@ -436,7 +426,11 @@ impl ClientRepo for SqliteClients {
                       registration_source AS "registration_source!",
                       metadata_expires_at AS "metadata_expires_at?",
                       registration_access_token_hash AS "registration_access_token_hash?",
-                      organization AS "organization!""#,
+                      organization AS "organization!",
+                      require_pushed_authorization_requests
+                        AS "require_pushed_authorization_requests!: bool",
+                      client_kind AS "client_kind!",
+                      headless_native AS "headless_native!: bool""#,
             tenant.0,
             client_id,
             update.name,
@@ -464,6 +458,9 @@ impl ClientRepo for SqliteClients {
             set_reg_token,
             reg_token,
             organization,
+            update.require_pushed_authorization_requests,
+            client_kind,
+            update.headless_native,
         )
         .fetch_optional(&self.writer)
         .await
@@ -544,7 +541,6 @@ impl ClientRepo for SqliteClients {
         metadata_expires_at: OffsetDateTime,
         now: OffsetDateTime,
     ) -> Result<Client, StorageError> {
-        refuse_new_fields_in_new(client)?;
         let client_type = client.client_type.as_str();
         let application_type = client.application_type.as_str();
         let auth_method = client.auth_method.as_str();
@@ -565,6 +561,7 @@ impl ClientRepo for SqliteClients {
             .as_ref()
             .map(|h| h.as_bytes().as_slice());
         let organization = client.organization.as_str();
+        let client_kind = client.client_kind.as_str();
         let expires_ms = odt_to_ms(metadata_expires_at);
         let now_ms = odt_to_ms(now);
         // One statement: insert, or replace the metadata of an existing CIMD client (row id,
@@ -579,9 +576,11 @@ impl ClientRepo for SqliteClients {
                     id_token_signed_response_alg, can_introspect, post_logout_redirect_uris,
                     backchannel_logout_uri, backchannel_logout_session_required,
                     allowed_resources, mfa_policy, registration_source, metadata_expires_at,
-                    registration_access_token_hash, organization)
+                    registration_access_token_hash, organization,
+                    require_pushed_authorization_requests, client_kind, headless_native)
                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14, ?15,
-                       ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, 'cimd', ?24, ?25, ?26)
+                       ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, 'cimd', ?24, ?25, ?26, ?27, ?28,
+                       ?29)
                ON CONFLICT (tenant_id, client_id) DO UPDATE
                   SET name = excluded.name,
                       client_type = excluded.client_type,
@@ -606,7 +605,11 @@ impl ClientRepo for SqliteClients {
                       mfa_policy = excluded.mfa_policy,
                       metadata_expires_at = excluded.metadata_expires_at,
                       registration_access_token_hash = excluded.registration_access_token_hash,
-                      organization = excluded.organization
+                      organization = excluded.organization,
+                      require_pushed_authorization_requests =
+                        excluded.require_pushed_authorization_requests,
+                      client_kind = excluded.client_kind,
+                      headless_native = excluded.headless_native
                 WHERE client.registration_source = 'cimd'
             RETURNING id AS "id!: uuid::Uuid", tenant_id AS "tenant_id!: uuid::Uuid",
                       client_id AS "client_id!", name AS "name!", client_type AS "client_type!",
@@ -627,7 +630,11 @@ impl ClientRepo for SqliteClients {
                       registration_source AS "registration_source!",
                       metadata_expires_at AS "metadata_expires_at?",
                       registration_access_token_hash AS "registration_access_token_hash?",
-                      organization AS "organization!""#,
+                      organization AS "organization!",
+                      require_pushed_authorization_requests
+                        AS "require_pushed_authorization_requests!: bool",
+                      client_kind AS "client_kind!",
+                      headless_native AS "headless_native!: bool""#,
             client.id.0,
             tenant.0,
             client.client_id,
@@ -654,6 +661,9 @@ impl ClientRepo for SqliteClients {
             expires_ms,
             registration_token,
             organization,
+            client.require_pushed_authorization_requests,
+            client_kind,
+            client.headless_native,
         )
         .fetch_optional(&self.writer)
         .await
@@ -694,7 +704,11 @@ impl ClientRepo for SqliteClients {
                       registration_source AS "registration_source!",
                       metadata_expires_at AS "metadata_expires_at?",
                       registration_access_token_hash AS "registration_access_token_hash?",
-                      organization AS "organization!"
+                      organization AS "organization!",
+                      require_pushed_authorization_requests
+                        AS "require_pushed_authorization_requests!: bool",
+                      client_kind AS "client_kind!",
+                      headless_native AS "headless_native!: bool"
                  FROM client
                 WHERE tenant_id = ?1 AND client_id = ?2 AND registration_source = 'dynamic'
                   AND registration_access_token_hash = ?3"#,

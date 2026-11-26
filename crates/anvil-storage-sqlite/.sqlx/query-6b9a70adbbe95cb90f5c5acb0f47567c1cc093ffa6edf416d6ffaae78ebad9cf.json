@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE credential SET secret = ?5, updated_at = ?6\n              WHERE tenant_id = ?1 AND user_id = ?2 AND kind = ?3 AND secret = ?4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "6b9a70adbbe95cb90f5c5acb0f47567c1cc093ffa6edf416d6ffaae78ebad9cf"
+}

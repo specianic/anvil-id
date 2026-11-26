@@ -716,26 +716,59 @@ impl UserRepo for SqliteUsers {
 
     async fn replace_password_if(
         &self,
-        _tenant: TenantId,
-        _user: UserId,
-        _expected: &str,
-        _new_phc: &str,
-        _now: OffsetDateTime,
+        tenant: TenantId,
+        user: UserId,
+        expected: &str,
+        new_phc: &str,
+        now: OffsetDateTime,
     ) -> Result<bool, StorageError> {
-        Err(StorageError::Unsupported(
-            "TRANSITIONAL(07-08): UserRepo::replace_password_if",
-        ))
+        let now_ms = odt_to_ms(now);
+        // One conditional statement on the single writer: the compare and the swap cannot be
+        // separated by another writer.
+        let done = sqlx::query!(
+            "UPDATE credential SET secret = ?5, updated_at = ?6
+              WHERE tenant_id = ?1 AND user_id = ?2 AND kind = ?3 AND secret = ?4",
+            tenant.0,
+            user.0,
+            PASSWORD_KIND,
+            expected,
+            new_phc,
+            now_ms,
+        )
+        .execute(&self.writer)
+        .await
+        .map_err(map_err)?;
+        Ok(done.rows_affected() == 1)
     }
 
     async fn pending_self_service_tokens(
         &self,
-        _tenant: TenantId,
-        _user: UserId,
-        _now: OffsetDateTime,
-    ) -> Result<Vec<(anvil_core::model::SelfServiceKind, OffsetDateTime)>, StorageError> {
-        Err(StorageError::Unsupported(
-            "TRANSITIONAL(07-08): UserRepo::pending_self_service_tokens",
-        ))
+        tenant: TenantId,
+        user: UserId,
+        now: OffsetDateTime,
+    ) -> Result<Vec<(SelfServiceKind, OffsetDateTime)>, StorageError> {
+        let now_ms = odt_to_ms(now);
+        sqlx::query!(
+            r#"SELECT kind AS "kind!", expires_at AS "expires_at!"
+                 FROM self_service_token
+                WHERE tenant_id = ?1 AND user_id = ?2 AND consumed_at IS NULL
+                  AND expires_at > ?3
+                ORDER BY created_at, token_hash"#,
+            tenant.0,
+            user.0,
+            now_ms,
+        )
+        .fetch_all(&self.reader)
+        .await
+        .map_err(map_err)?
+        .into_iter()
+        .map(|r| {
+            Ok((
+                parse_enum(&r.kind, SelfServiceKind::parse, "self_service_token.kind")?,
+                ms_to_odt(r.expires_at)?,
+            ))
+        })
+        .collect()
     }
 }
 

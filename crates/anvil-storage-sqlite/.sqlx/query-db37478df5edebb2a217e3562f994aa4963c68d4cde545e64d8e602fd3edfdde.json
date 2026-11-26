@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO password_hash_profile\n                 (id, tenant_id, name, kind, salt_separator, rounds, mem_cost, signer_key_enc,\n                  created_at)\n             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 9
+    },
+    "nullable": []
+  },
+  "hash": "db37478df5edebb2a217e3562f994aa4963c68d4cde545e64d8e602fd3edfdde"
+}

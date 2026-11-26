@@ -4,8 +4,9 @@
 use anvil_core::model::{
     AccessTokenRecord, AuthRequestId, AuthorizationCode, AuthorizationRequest, CodeHash,
     ConsentGrant, NewAccessToken, NewAuthorizationCode, NewAuthorizationRequest, NewConsent,
-    NewRefreshToken, NewTokenFamily, OrgId, RefreshToken, ReplayKind, RevokeReason, SecretHash,
-    SessionId, TenantId, TokenFamily, TokenFamilyId, UserId,
+    NewPushedRequest, NewRefreshToken, NewTokenFamily, OrgId, PushedRequest, RefreshToken,
+    ReplayKind, RequestUriHash, RevokeReason, SecretHash, SessionId, TenantId, TokenFamily,
+    TokenFamilyId, UserId,
 };
 use anvil_core::ports::{ConsumeOutcome, GrantRepo, JtiOutcome, RotateOutcome, StorageError};
 use sqlx::{SqliteConnection, SqlitePool};
@@ -757,32 +758,90 @@ impl GrantRepo for SqliteGrants {
 
     async fn families_for_user(
         &self,
-        _tenant: TenantId,
-        _user: UserId,
-    ) -> Result<Vec<anvil_core::model::TokenFamily>, StorageError> {
-        Err(StorageError::Unsupported(
-            "TRANSITIONAL(07-08): GrantRepo::families_for_user",
-        ))
+        tenant: TenantId,
+        user: UserId,
+    ) -> Result<Vec<TokenFamily>, StorageError> {
+        sqlx::query_as!(
+            FamilyRow,
+            r#"SELECT id AS "id!: uuid::Uuid", tenant_id AS "tenant_id!: uuid::Uuid",
+                      client_id AS "client_id!", user_id AS "user_id?: uuid::Uuid",
+                      scope AS "scope!", auth_time AS "auth_time?", acr AS "acr?", amr AS "amr!",
+                      session_id AS "session_id?: uuid::Uuid", claims AS "claims?",
+                      created_at AS "created_at!", absolute_expires_at AS "absolute_expires_at!",
+                      revoked_at AS "revoked_at?", revoked_reason AS "revoked_reason?",
+                      resource AS "resource!", org_id AS "org_id?: uuid::Uuid"
+                 FROM token_family WHERE tenant_id = ?1 AND user_id = ?2
+                ORDER BY created_at, id"#,
+            tenant.0,
+            user.0,
+        )
+        .fetch_all(&self.reader)
+        .await
+        .map_err(map_err)?
+        .into_iter()
+        .map(TokenFamily::try_from)
+        .collect()
     }
 
     async fn create_pushed_request(
         &self,
-        _tenant: TenantId,
-        _request: &anvil_core::model::NewPushedRequest,
+        tenant: TenantId,
+        request: &NewPushedRequest,
     ) -> Result<(), StorageError> {
-        Err(StorageError::Unsupported(
-            "TRANSITIONAL(07-08): GrantRepo::create_pushed_request",
-        ))
+        let hash = request.request_uri_hash.as_bytes().as_slice();
+        let params = to_json(&request.params, "pushed_authorization_request.params")?;
+        let created_at = odt_to_ms(request.created_at);
+        let expires_at = odt_to_ms(request.expires_at);
+        sqlx::query!(
+            "INSERT INTO pushed_authorization_request
+                 (tenant_id, uri_hash, client_id, params, created_at, expires_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            tenant.0,
+            hash,
+            request.client_id,
+            params,
+            created_at,
+            expires_at,
+        )
+        .execute(&self.writer)
+        .await
+        .map_err(map_err)?;
+        Ok(())
     }
 
     async fn consume_pushed_request(
         &self,
-        _tenant: TenantId,
-        _request_uri_hash: &anvil_core::model::RequestUriHash,
-        _now: OffsetDateTime,
-    ) -> Result<Option<anvil_core::model::PushedRequest>, StorageError> {
-        Err(StorageError::Unsupported(
-            "TRANSITIONAL(07-08): GrantRepo::consume_pushed_request",
-        ))
+        tenant: TenantId,
+        request_uri_hash: &RequestUriHash,
+        now: OffsetDateTime,
+    ) -> Result<Option<PushedRequest>, StorageError> {
+        let hash = request_uri_hash.as_bytes().as_slice();
+        let now_ms = odt_to_ms(now);
+        // The race is decided by this single statement on the single writer connection.
+        let row = sqlx::query!(
+            r#"UPDATE pushed_authorization_request
+                  SET consumed_at = ?3
+                WHERE tenant_id = ?1 AND uri_hash = ?2
+                  AND consumed_at IS NULL AND expires_at > ?3
+            RETURNING client_id   AS "client_id!",
+                      params      AS "params!",
+                      expires_at  AS "expires_at!",
+                      consumed_at AS "consumed_at?""#,
+            tenant.0,
+            hash,
+            now_ms,
+        )
+        .fetch_optional(&self.writer)
+        .await
+        .map_err(map_err)?;
+        row.map(|r| {
+            Ok(PushedRequest {
+                client_id: r.client_id,
+                params: from_json(&r.params, "pushed_authorization_request.params")?,
+                expires_at: ms_to_odt(r.expires_at)?,
+                consumed_at: opt_ms_to_odt(r.consumed_at)?,
+            })
+        })
+        .transpose()
     }
 }
