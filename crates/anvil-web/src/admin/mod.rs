@@ -73,6 +73,9 @@ fn scope_description(scope: &str) -> String {
                           settings, clients, users and their credentials, sessions, email \
                           templates, SMTP settings and test sends)"
             .to_owned(),
+        "admin:users:export" => "Export users (bulk and GDPR export); granted only by this scope \
+                                 or admin:write, never by admin:read or admin:users:write"
+            .to_owned(),
         other => {
             let mut parts = other.split(':').skip(1);
             let resource = parts.next().unwrap_or_default();

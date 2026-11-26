@@ -121,6 +121,7 @@ macro_rules! storage_contract_tests {
             client_set_secret_hash,
             client_delete_revokes_families,
             client_list_pagination,
+            client_new_fields_non_default_refused_until_columns_exist,
             // keys
             key_insert_and_active,
             key_second_active_conflict,

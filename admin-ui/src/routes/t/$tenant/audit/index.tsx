@@ -117,6 +117,10 @@ const ACTION_SET: Record<AuditAction, true> = {
   org_domain_deleted: true,
   saml_login_succeeded: true,
   saml_login_failed: true,
+  users_imported: true,
+  user_exported: true,
+  password_profile_created: true,
+  password_profile_deleted: true,
 };
 const ACTIONS = Object.keys(ACTION_SET).sort() as AuditAction[];
 const OUTCOMES: readonly AuditOutcome[] = ["success", "failure"];

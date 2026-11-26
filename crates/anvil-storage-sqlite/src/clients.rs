@@ -1,9 +1,9 @@
 //! `ClientRepo` on SQLite.
 
 use anvil_core::model::{
-    ApplicationType, BrandingScope, Client, ClientAuthMethod, ClientId, ClientSource, ClientType,
-    ClientUpdate, ConsentMode, MfaPolicy, NewClient, OrgClientPolicy, Page, PageRequest,
-    RevokeReason, SecretHash, TenantId, TokenFormat,
+    ApplicationType, BrandingScope, Client, ClientAuthMethod, ClientId, ClientKind, ClientSource,
+    ClientType, ClientUpdate, ConsentMode, MfaPolicy, NewClient, OrgClientPolicy, Page,
+    PageRequest, RevokeReason, SecretHash, TenantId, TokenFormat,
 };
 use anvil_core::ports::{ClientRepo, StorageError};
 use sqlx::{SqliteConnection, SqlitePool};
@@ -18,6 +18,33 @@ use crate::convert::{
 pub(crate) struct SqliteClients {
     pub(crate) writer: SqlitePool,
     pub(crate) reader: SqlitePool,
+}
+
+/// TRANSITIONAL(07-08): the client table has no columns yet for
+/// `require_pushed_authorization_requests`, `client_kind` and `headless_native`. Reads fill the
+/// defaults; a write carrying a non-default value is refused instead of being dropped silently.
+const NEW_FIELDS_UNSUPPORTED: &str = "TRANSITIONAL(07-08): client PAR/kind/headless columns";
+
+fn refuse_new_fields_in_new(client: &NewClient) -> Result<(), StorageError> {
+    if client.require_pushed_authorization_requests
+        || client.client_kind != ClientKind::Application
+        || client.headless_native
+    {
+        return Err(StorageError::Unsupported(NEW_FIELDS_UNSUPPORTED));
+    }
+    Ok(())
+}
+
+fn refuse_new_fields_in_update(update: &ClientUpdate) -> Result<(), StorageError> {
+    if update.require_pushed_authorization_requests == Some(true)
+        || update
+            .client_kind
+            .is_some_and(|k| k != ClientKind::Application)
+        || update.headless_native == Some(true)
+    {
+        return Err(StorageError::Unsupported(NEW_FIELDS_UNSUPPORTED));
+    }
+    Ok(())
 }
 
 pub(crate) struct ClientRow {
@@ -106,6 +133,10 @@ impl TryFrom<ClientRow> for Client {
                 OrgClientPolicy::parse,
                 "client.organization",
             )?,
+            // TRANSITIONAL(07-08): no columns yet, see NEW_FIELDS_UNSUPPORTED.
+            require_pushed_authorization_requests: false,
+            client_kind: ClientKind::Application,
+            headless_native: false,
         })
     }
 }
@@ -117,6 +148,7 @@ pub(crate) async fn insert_client(
     tenant: TenantId,
     client: &NewClient,
 ) -> Result<Client, StorageError> {
+    refuse_new_fields_in_new(client)?;
     let client_type = client.client_type.as_str();
     let application_type = client.application_type.as_str();
     let auth_method = client.auth_method.as_str();
@@ -211,6 +243,9 @@ pub(crate) async fn insert_client(
         metadata_expires_at: client.metadata_expires_at,
         registration_access_token_hash: client.registration_access_token_hash,
         organization: client.organization,
+        require_pushed_authorization_requests: client.require_pushed_authorization_requests,
+        client_kind: client.client_kind,
+        headless_native: client.headless_native,
     })
 }
 
@@ -309,6 +344,7 @@ impl ClientRepo for SqliteClients {
         update: &ClientUpdate,
         now: OffsetDateTime,
     ) -> Result<Option<Client>, StorageError> {
+        refuse_new_fields_in_update(update)?;
         let redirect_uris = update
             .redirect_uris
             .as_ref()
@@ -508,6 +544,7 @@ impl ClientRepo for SqliteClients {
         metadata_expires_at: OffsetDateTime,
         now: OffsetDateTime,
     ) -> Result<Client, StorageError> {
+        refuse_new_fields_in_new(client)?;
         let client_type = client.client_type.as_str();
         let application_type = client.application_type.as_str();
         let auth_method = client.auth_method.as_str();

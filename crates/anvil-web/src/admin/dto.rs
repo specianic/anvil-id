@@ -245,6 +245,10 @@ wire_enum!(
         OrgDomainDeleted,
         SamlLoginSucceeded,
         SamlLoginFailed,
+        UsersImported,
+        UserExported,
+        PasswordProfileCreated,
+        PasswordProfileDeleted,
     }
 );
 wire_enum!(
@@ -683,6 +687,8 @@ impl From<NewTenantSettings> for CoreTenantSettings {
             cimd: s.cimd.into(),
             claims: s.claims.into(),
             dcr: s.dcr.into(),
+            par: anvil_core::model::ParSettings::default(),
+            headless: anvil_core::model::HeadlessSettings::default(),
         }
     }
 }
@@ -785,6 +791,9 @@ impl TenantSettingsPatch {
                 Some(patch) => patch.merge(&current.claims),
                 None => current.claims.clone(),
             },
+            // Not exposed in the admin API yet (07-12): keep the stored values.
+            par: current.par.clone(),
+            headless: current.headless.clone(),
         });
         (settings, captcha)
     }

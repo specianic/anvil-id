@@ -259,6 +259,9 @@ pub fn new_client() -> NewClient {
         metadata_expires_at: None,
         registration_access_token_hash: None,
         organization: anvil_core::model::OrgClientPolicy::Off,
+        require_pushed_authorization_requests: false,
+        client_kind: anvil_core::model::ClientKind::Application,
+        headless_native: false,
     }
 }
 
@@ -293,6 +296,9 @@ pub fn expected_client(tenant: TenantId, c: &NewClient) -> Client {
         metadata_expires_at: c.metadata_expires_at,
         registration_access_token_hash: c.registration_access_token_hash,
         organization: c.organization,
+        require_pushed_authorization_requests: c.require_pushed_authorization_requests,
+        client_kind: c.client_kind,
+        headless_native: c.headless_native,
     }
 }
 

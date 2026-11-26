@@ -69,6 +69,9 @@ fn client(
         organization: anvil_core::model::OrgClientPolicy::default(),
         created_at: at,
         updated_at: at,
+        require_pushed_authorization_requests: false,
+        client_kind: anvil_core::model::ClientKind::Application,
+        headless_native: false,
     }
 }
 

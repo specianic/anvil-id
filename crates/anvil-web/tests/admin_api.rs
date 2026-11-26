@@ -509,12 +509,12 @@ async fn user_with_password_can_log_in() {
         .expect("password credential stored");
     let hasher = Argon2Pool::new(argon2::Params::new(256, 1, 1, None).unwrap(), 1).unwrap();
     let ok = hasher
-        .verify(Some(&cred.phc), "correct horse battery staple")
+        .verify(Some(&cred.phc), "correct horse battery staple", None)
         .await
         .unwrap();
     assert!(ok.valid);
     let bad = hasher
-        .verify(Some(&cred.phc), "wrong password")
+        .verify(Some(&cred.phc), "wrong password", None)
         .await
         .unwrap();
     assert!(!bad.valid);

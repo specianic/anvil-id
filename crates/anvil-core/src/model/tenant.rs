@@ -100,9 +100,13 @@ pub struct TenantSettings {
     pub cimd: CimdSettings,
     /// How roles and permissions are mapped into tokens.
     pub claims: ClaimMappingSettings,
-    /// Pushed authorization requests (RFC 9126) tenant policy.
+    /// Pushed authorization requests (RFC 9126) tenant policy. Omitted when default, so the
+    /// config export and its JSON schema stay unchanged until 07-12 exposes it.
+    #[serde(skip_serializing_if = "ParSettings::is_default")]
     pub par: ParSettings,
-    /// Headless flow API settings (browser mode origin allow-list).
+    /// Headless flow API settings (browser mode origin allow-list). Omitted when default, like
+    /// `par`.
+    #[serde(skip_serializing_if = "HeadlessSettings::is_default")]
     pub headless: HeadlessSettings,
 }
 
@@ -116,6 +120,12 @@ pub struct ParSettings {
     pub require_pushed_authorization_requests: bool,
 }
 
+impl ParSettings {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 /// Headless flow API settings of a tenant.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -127,6 +137,10 @@ pub struct HeadlessSettings {
 }
 
 impl HeadlessSettings {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
     /// Validates one allow-list entry (decision Q5): scheme `https`, a host, an optional port,
     /// no userinfo, path, query, fragment or wildcard, all lowercase. With `dev` (callers pass
     /// the installation's dev mode), `http://localhost[:port]` and `http://127.0.0.1[:port]` are
@@ -784,6 +798,9 @@ mod tests {
             serde_json::from_str::<TenantSettings>(&json).unwrap(),
             with_new
         );
+        // Defaults are not serialized (config export unchanged until 07-12).
+        let default_json = serde_json::to_value(TenantSettings::default()).unwrap();
+        assert!(default_json.get("par").is_none() && default_json.get("headless").is_none());
         // Partial nested objects take defaults too.
         let partial: TenantSettings = serde_json::from_str(r#"{"par":{},"headless":{}}"#).unwrap();
         assert_eq!(partial, TenantSettings::default());

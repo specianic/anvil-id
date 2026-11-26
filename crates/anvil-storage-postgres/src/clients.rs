@@ -1,9 +1,9 @@
 //! `ClientRepo` on Postgres.
 
 use anvil_core::model::{
-    ApplicationType, BrandingScope, Client, ClientAuthMethod, ClientId, ClientSource, ClientType,
-    ClientUpdate, ConsentMode, GrantType, MfaPolicy, NewClient, OrgClientPolicy, Page, PageRequest,
-    RevokeReason, SecretHash, TenantId, TokenFormat,
+    ApplicationType, BrandingScope, Client, ClientAuthMethod, ClientId, ClientKind, ClientSource,
+    ClientType, ClientUpdate, ConsentMode, GrantType, MfaPolicy, NewClient, OrgClientPolicy, Page,
+    PageRequest, RevokeReason, SecretHash, TenantId, TokenFormat,
 };
 use anvil_core::ports::{ClientRepo, StorageError};
 use sqlx::PgPool;
@@ -18,6 +18,33 @@ use crate::convert::{
 #[derive(Debug, Clone)]
 pub(crate) struct PgClients {
     pub(crate) pool: PgPool,
+}
+
+/// TRANSITIONAL(07-11): the client table has no columns yet for
+/// `require_pushed_authorization_requests`, `client_kind` and `headless_native`. Reads fill the
+/// defaults; a write carrying a non-default value is refused instead of being dropped silently.
+const NEW_FIELDS_UNSUPPORTED: &str = "TRANSITIONAL(07-11): client PAR/kind/headless columns";
+
+fn refuse_new_fields_in_new(client: &NewClient) -> Result<(), StorageError> {
+    if client.require_pushed_authorization_requests
+        || client.client_kind != ClientKind::Application
+        || client.headless_native
+    {
+        return Err(StorageError::Unsupported(NEW_FIELDS_UNSUPPORTED));
+    }
+    Ok(())
+}
+
+fn refuse_new_fields_in_update(update: &ClientUpdate) -> Result<(), StorageError> {
+    if update.require_pushed_authorization_requests == Some(true)
+        || update
+            .client_kind
+            .is_some_and(|k| k != ClientKind::Application)
+        || update.headless_native == Some(true)
+    {
+        return Err(StorageError::Unsupported(NEW_FIELDS_UNSUPPORTED));
+    }
+    Ok(())
 }
 
 pub(crate) struct ClientRow {
@@ -116,6 +143,10 @@ impl ClientRow {
                 &self.organization,
                 OrgClientPolicy::parse,
             )?,
+            // TRANSITIONAL(07-11): no columns yet, see NEW_FIELDS_UNSUPPORTED.
+            require_pushed_authorization_requests: false,
+            client_kind: ClientKind::Application,
+            headless_native: false,
         })
     }
 }
@@ -151,6 +182,9 @@ pub(crate) fn client_from_new(tenant: TenantId, c: &NewClient) -> Client {
         registration_access_token_hash: c.registration_access_token_hash,
         registration_source: c.registration_source,
         organization: c.organization,
+        require_pushed_authorization_requests: c.require_pushed_authorization_requests,
+        client_kind: c.client_kind,
+        headless_native: c.headless_native,
     }
 }
 
@@ -163,6 +197,7 @@ pub(crate) async fn insert_client<'e, E>(
 where
     E: sqlx::PgExecutor<'e>,
 {
+    refuse_new_fields_in_new(c)?;
     let post_logout = to_json(
         "client.post_logout_redirect_uris",
         &c.post_logout_redirect_uris,
@@ -286,6 +321,7 @@ impl ClientRepo for PgClients {
         update: &ClientUpdate,
         now: OffsetDateTime,
     ) -> Result<Option<Client>, StorageError> {
+        refuse_new_fields_in_update(update)?;
         let post_logout = update
             .post_logout_redirect_uris
             .as_ref()
@@ -471,6 +507,7 @@ impl ClientRepo for PgClients {
         metadata_expires_at: OffsetDateTime,
         now: OffsetDateTime,
     ) -> Result<Client, StorageError> {
+        refuse_new_fields_in_new(c)?;
         // One statement: insert, or replace the metadata of an existing CIMD client. The
         // conflict update only applies to CIMD rows; for a static or dynamic client holding the
         // `client_id` the WHERE fails, nothing changes and no row comes back (`Conflict`).

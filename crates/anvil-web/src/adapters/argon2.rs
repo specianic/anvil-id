@@ -14,6 +14,7 @@ use std::time::Duration;
 use ::argon2::password_hash::phc::PasswordHash;
 use ::argon2::{Algorithm, Argon2, Params, PasswordHasher as _, PasswordVerifier as _, Version};
 use anvil_core::error::CoreError;
+use anvil_core::model::HashProfileMaterial;
 use anvil_core::ports::{PasswordCheck, PasswordHasher};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use zeroize::Zeroizing;
@@ -140,7 +141,19 @@ impl PasswordHasher for Argon2Pool {
         .map_err(|e| CoreError::Internal(format!("argon2 task failed: {e}")))?
     }
 
-    async fn verify(&self, phc: Option<&str>, password: &str) -> Result<PasswordCheck, CoreError> {
+    async fn verify(
+        &self,
+        phc: Option<&str>,
+        password: &str,
+        profile: Option<&HashProfileMaterial>,
+    ) -> Result<PasswordCheck, CoreError> {
+        if profile.is_some() {
+            // Argon2 PHC strings carry their own parameters; a legacy hash profile is never
+            // valid here. 07-09 puts a dispatcher in front of this pool.
+            return Err(CoreError::Internal(
+                "password hash profile not supported by Argon2Pool (TRANSITIONAL(07-09))".into(),
+            ));
+        }
         let permit = self.permit().await?;
         let known = phc.is_some();
         let target = phc.unwrap_or(&self.dummy_phc).to_owned();
@@ -192,12 +205,12 @@ mod tests {
         let phc = pool.hash("correct horse").await.expect("hash");
         assert!(phc.starts_with("$argon2id$v=19$m=256,t=1,p=1$"), "{phc}");
         let ok = pool
-            .verify(Some(&phc), "correct horse")
+            .verify(Some(&phc), "correct horse", None)
             .await
             .expect("verify");
         assert!(ok.valid);
         assert!(!ok.needs_rehash);
-        let bad = pool.verify(Some(&phc), "wrong").await.expect("verify");
+        let bad = pool.verify(Some(&phc), "wrong", None).await.expect("verify");
         assert!(!bad.valid);
         assert!(!bad.needs_rehash);
     }
@@ -206,7 +219,7 @@ mod tests {
     async fn missing_user_runs_the_dummy_hash() {
         let pool = Argon2Pool::new(low(), 1).expect("pool");
         let before = pool.verifications();
-        let check = pool.verify(None, "anything").await.expect("verify");
+        let check = pool.verify(None, "anything", None).await.expect("verify");
         assert!(!check.valid);
         assert_eq!(
             pool.verifications(),
@@ -214,7 +227,7 @@ mod tests {
             "a real Argon2 verification ran"
         );
         // The dummy hash's own password is random, so even guessing cannot make it valid.
-        assert!(!pool.verify(None, "").await.expect("verify").valid);
+        assert!(!pool.verify(None, "", None).await.expect("verify").valid);
     }
 
     #[tokio::test]
@@ -223,10 +236,10 @@ mod tests {
         let pool = Argon2Pool::new(params, 1).expect("pool");
         let phc = pool.hash("pw").await.expect("hash");
         let t = std::time::Instant::now();
-        pool.verify(Some(&phc), "nope").await.expect("verify");
+        pool.verify(Some(&phc), "nope", None).await.expect("verify");
         let real = t.elapsed();
         let t = std::time::Instant::now();
-        pool.verify(None, "nope").await.expect("verify");
+        pool.verify(None, "nope", None).await.expect("verify");
         let dummy = t.elapsed();
         assert!(dummy * 3 >= real, "dummy {dummy:?} vs real {real:?}");
     }
@@ -236,13 +249,13 @@ mod tests {
         let old = Argon2Pool::new(Params::new(128, 1, 1, None).expect("params"), 1).expect("pool");
         let phc = old.hash("pw").await.expect("hash");
         let pool = Argon2Pool::new(low(), 1).expect("pool");
-        let check = pool.verify(Some(&phc), "pw").await.expect("verify");
+        let check = pool.verify(Some(&phc), "pw", None).await.expect("verify");
         assert!(check.valid);
         assert!(check.needs_rehash);
         // Wrong password: never asks for a rehash.
         assert!(
             !pool
-                .verify(Some(&phc), "x")
+                .verify(Some(&phc), "x", None)
                 .await
                 .expect("verify")
                 .needs_rehash
@@ -250,9 +263,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn argon2_pool_refuses_profile_material() {
+        let pool = Argon2Pool::new(low(), 1).expect("pool");
+        let phc = pool.hash("pw").await.expect("hash");
+        let material = HashProfileMaterial {
+            salt_separator: vec![0x01],
+            signer_key: secrecy::SecretBox::from(vec![0x02_u8; 16].into_boxed_slice()),
+            rounds: 8,
+            mem_cost: 14,
+        };
+        // Even the right password against a real hash: never valid with a profile.
+        for phc in [Some(phc.as_str()), None] {
+            match pool.verify(phc, "pw", Some(&material)).await {
+                Err(CoreError::Internal(msg)) => {
+                    assert!(msg.contains("TRANSITIONAL(07-09)"), "{msg}")
+                }
+                other => panic!("a profile must be refused, got {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn garbage_phc_is_invalid() {
         let pool = Argon2Pool::new(low(), 1).expect("pool");
-        let check = pool.verify(Some("not-a-phc"), "pw").await.expect("verify");
+        let check = pool.verify(Some("not-a-phc"), "pw", None).await.expect("verify");
         assert!(!check.valid);
     }
 
@@ -262,12 +296,12 @@ mod tests {
             Argon2Pool::with_acquire_timeout(low(), 1, Duration::from_millis(50)).expect("pool");
         let phc = pool.hash("pw").await.expect("hash");
         let held = Arc::clone(&pool.sem).acquire_owned().await.expect("permit");
-        let err = pool.verify(Some(&phc), "pw").await.expect_err("saturated");
+        let err = pool.verify(Some(&phc), "pw", None).await.expect_err("saturated");
         assert!(matches!(err, CoreError::Overloaded));
         let err = pool.hash("pw").await.expect_err("saturated");
         assert!(matches!(err, CoreError::Overloaded));
         drop(held);
-        assert!(pool.verify(Some(&phc), "pw").await.expect("verify").valid);
+        assert!(pool.verify(Some(&phc), "pw", None).await.expect("verify").valid);
     }
 
     #[test]

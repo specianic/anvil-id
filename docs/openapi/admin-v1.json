@@ -12215,7 +12215,11 @@
           "org_domain_updated",
           "org_domain_deleted",
           "saml_login_succeeded",
-          "saml_login_failed"
+          "saml_login_failed",
+          "users_imported",
+          "user_exported",
+          "password_profile_created",
+          "password_profile_deleted"
         ]
       },
       "AuditActorView": {
@@ -16950,6 +16954,7 @@
               "admin:settings:write": "Read and write settings",
               "admin:tenants:read": "Read tenants",
               "admin:tenants:write": "Read and write tenants",
+              "admin:users:export": "Export users (bulk and GDPR export); granted only by this scope or admin:write, never by admin:read or admin:users:write",
               "admin:users:read": "Read users",
               "admin:users:write": "Read and write users",
               "admin:write": "Full administration: read and write everything (tenants and their settings, clients, users and their credentials, sessions, email templates, SMTP settings and test sends)"

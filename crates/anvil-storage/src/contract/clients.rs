@@ -1,7 +1,8 @@
 //! ClientRepo contract.
 
 use anvil_core::model::{
-    ClientUpdate, ConsentMode, GrantType, NewClient, PageRequest, RevokeReason, TokenFormat,
+    ClientKind, ClientUpdate, ConsentMode, GrantType, NewClient, PageRequest, RevokeReason,
+    TokenFormat,
 };
 use anvil_core::ports::{RotateOutcome, StorageError};
 use time::Duration;
@@ -779,4 +780,94 @@ pub async fn client_organization_policy_round_trip(s: &TestStorage) {
             .organization,
         OrgClientPolicy::Optional
     );
+}
+
+/// TRANSITIONAL(07-08/07-11): until the client columns exist, a create or update carrying a
+/// non-default `require_pushed_authorization_requests`, `client_kind` or `headless_native` is
+/// refused with `Unsupported`, never stored without the value. Defaults still work. 07-08
+/// (SQLite) and 07-11 (Postgres) replace this case with a round-trip test.
+pub async fn client_new_fields_non_default_refused_until_columns_exist(s: &TestStorage) {
+    let tenant = seed_tenant(s).await;
+    let assert_transitional = |r: Result<_, StorageError>, what: &str| match r {
+        Err(StorageError::Unsupported(msg)) => assert!(
+            msg.starts_with("TRANSITIONAL(07-08)") || msg.starts_with("TRANSITIONAL(07-11)"),
+            "{what}: {msg}"
+        ),
+        Err(e) => panic!("{what}: expected Unsupported, got {e:?}"),
+        Ok(_) => panic!("{what}: a non-default value must not be accepted yet"),
+    };
+    let variants: [(&str, fn(&mut NewClient)); 3] = [
+        ("par", |c| c.require_pushed_authorization_requests = true),
+        ("agent", |c| c.client_kind = ClientKind::Agent),
+        ("headless", |c| c.headless_native = true),
+    ];
+    for (what, set) in variants {
+        let mut new = new_client();
+        set(&mut new);
+        assert_transitional(
+            s.storage.clients().create(tenant, &new).await.map(|_| ()),
+            what,
+        );
+        assert_eq!(
+            s.storage
+                .clients()
+                .get(tenant, &new.client_id)
+                .await
+                .expect("get"),
+            None,
+            "{what}: a refused create stores nothing"
+        );
+    }
+
+    let new = new_client();
+    let created = s
+        .storage
+        .clients()
+        .create(tenant, &new)
+        .await
+        .expect("create");
+    assert_eq!(created.client_kind, ClientKind::Application);
+    assert!(!created.require_pushed_authorization_requests && !created.headless_native);
+    let now = created.updated_at + Duration::seconds(1);
+    let updates = [
+        ClientUpdate {
+            require_pushed_authorization_requests: Some(true),
+            ..ClientUpdate::default()
+        },
+        ClientUpdate {
+            client_kind: Some(ClientKind::Agent),
+            ..ClientUpdate::default()
+        },
+        ClientUpdate {
+            headless_native: Some(true),
+            ..ClientUpdate::default()
+        },
+    ];
+    for update in &updates {
+        assert_transitional(
+            s.storage
+                .clients()
+                .update(tenant, &new.client_id, update, now)
+                .await
+                .map(|_| ()),
+            "update",
+        );
+    }
+    // Setting the defaults explicitly is a no-op, not a refusal.
+    let same = ClientUpdate {
+        require_pushed_authorization_requests: Some(false),
+        client_kind: Some(ClientKind::Application),
+        headless_native: Some(false),
+        name: Some("renamed".into()),
+        ..ClientUpdate::default()
+    };
+    let updated = s
+        .storage
+        .clients()
+        .update(tenant, &new.client_id, &same, now)
+        .await
+        .expect("update")
+        .expect("client exists");
+    assert_eq!(updated.name, "renamed");
+    assert_eq!(updated.client_kind, ClientKind::Application);
 }

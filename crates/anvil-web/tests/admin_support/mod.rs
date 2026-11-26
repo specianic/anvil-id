@@ -68,6 +68,9 @@ pub async fn system_client(app: &TestApp, scopes: &[&str]) -> String {
                 registration_access_token_hash: None,
                 registration_source: anvil_core::model::ClientSource::Static,
                 organization: anvil_core::model::OrgClientPolicy::Off,
+                require_pushed_authorization_requests: false,
+                client_kind: anvil_core::model::ClientKind::Application,
+                headless_native: false,
             },
         )
         .await
@@ -362,6 +365,9 @@ pub async fn org_admin_token_with(
                 registration_access_token_hash: None,
                 registration_source: anvil_core::model::ClientSource::Static,
                 organization: anvil_core::model::OrgClientPolicy::Optional,
+                require_pushed_authorization_requests: false,
+                client_kind: anvil_core::model::ClientKind::Application,
+                headless_native: false,
             },
         )
         .await

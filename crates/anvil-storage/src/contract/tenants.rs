@@ -210,6 +210,8 @@ pub async fn tenant_update_settings_round_trip(s: &TestStorage) {
             org_roles: None,
             org_permissions: None,
         },
+        par: anvil_core::model::ParSettings::default(),
+        headless: anvil_core::model::HeadlessSettings::default(),
     };
     let updated = repo
         .update(

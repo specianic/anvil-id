@@ -750,6 +750,7 @@ impl anvil_core::ports::PasswordHasher for NoHasher {
         &self,
         _phc: Option<&str>,
         _password: &str,
+        _profile: Option<&anvil_core::model::HashProfileMaterial>,
     ) -> Result<anvil_core::ports::PasswordCheck, CoreError> {
         panic!("not used")
     }

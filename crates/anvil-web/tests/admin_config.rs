@@ -174,6 +174,9 @@ async fn seed_runtime_client(
             .then_some(SecretHash([3; 32])),
         registration_source: source,
         organization: anvil_core::model::OrgClientPolicy::Off,
+        require_pushed_authorization_requests: false,
+        client_kind: anvil_core::model::ClientKind::Application,
+        headless_native: false,
     };
     match source {
         ClientSource::Cimd => {

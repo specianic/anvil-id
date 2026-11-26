@@ -917,6 +917,9 @@ async fn legacy_admin_scope_client_stays_editable() {
                 registration_access_token_hash: None,
                 registration_source: ClientSource::Static,
                 organization: anvil_core::model::OrgClientPolicy::Off,
+                require_pushed_authorization_requests: false,
+                client_kind: anvil_core::model::ClientKind::Application,
+                headless_native: false,
             },
         )
         .await

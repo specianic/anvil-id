@@ -715,6 +715,9 @@ async fn rp_session_for(app: &TestApp, user: UserId, session: SessionId) -> Stri
                 registration_access_token_hash: None,
                 registration_source: anvil_core::model::ClientSource::Static,
                 organization: anvil_core::model::OrgClientPolicy::Off,
+                require_pushed_authorization_requests: false,
+                client_kind: anvil_core::model::ClientKind::Application,
+                headless_native: false,
             },
         )
         .await
@@ -931,6 +934,7 @@ impl PasswordHasher for FakeHasher {
         &self,
         _phc: Option<&str>,
         _password: &str,
+        _profile: Option<&anvil_core::model::HashProfileMaterial>,
     ) -> Result<anvil_core::ports::PasswordCheck, CoreError> {
         Err(CoreError::Internal("not used".into()))
     }
