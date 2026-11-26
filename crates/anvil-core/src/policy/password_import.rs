@@ -696,6 +696,315 @@ pub fn check_import_floors(h: &StoredHash<'_>) -> Result<bool, HashPolicyError> 
     }
 }
 
+// --- import conversion ---------------------------------------------------------------------------
+
+/// A raw byte field of an import input: `{"hex": "…"}` (either case) or `{"base64": "…"}`
+/// (standard alphabet, padded or unpadded). `Debug` prints the encoding and length only.
+#[derive(Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ByteField {
+    Hex(String),
+    Base64(String),
+}
+
+impl ByteField {
+    fn decode(&self) -> Result<Vec<u8>, HashPolicyError> {
+        match self {
+            Self::Hex(s) => {
+                limit(s)?;
+                if s.len() % 2 != 0 {
+                    return Err(HashPolicyError::Malformed);
+                }
+                s.as_bytes()
+                    .chunks(2)
+                    .map(|pair| match (hex_val(pair[0]), hex_val(pair[1])) {
+                        (Some(hi), Some(lo)) => Ok(hi << 4 | lo),
+                        _ => Err(HashPolicyError::Malformed),
+                    })
+                    .collect()
+            }
+            Self::Base64(s) => {
+                limit(s)?;
+                if s.is_empty() {
+                    return Ok(Vec::new());
+                }
+                b64std_decode(s).map_err(|_| HashPolicyError::Malformed)
+            }
+        }
+    }
+}
+
+fn hex_val(c: u8) -> Option<u8> {
+    match c {
+        b'0'..=b'9' => Some(c - b'0'),
+        b'a'..=b'f' => Some(c - b'a' + 10),
+        b'A'..=b'F' => Some(c - b'A' + 10),
+        _ => None,
+    }
+}
+
+impl fmt::Debug for ByteField {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Hex(s) => write!(f, "hex({} chars)", s.len()),
+            Self::Base64(s) => write!(f, "base64({} chars)", s.len()),
+        }
+    }
+}
+
+/// Digest named by a `salted_sha2` import. MD5 and SHA-1 parse so they can be refused with
+/// `weak_parameters` rather than a generic error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SaltedDigest {
+    Md5,
+    Sha1,
+    Sha256,
+    Sha512,
+}
+
+/// The import schemes, as accepted in the `scheme` field of [`ImportPassword`].
+pub const IMPORT_SCHEMES: [&str; 8] = [
+    "bcrypt",
+    "argon2",
+    "scrypt",
+    "firebase_scrypt",
+    "pbkdf2",
+    "django_pbkdf2",
+    "passlib_pbkdf2",
+    "salted_sha2",
+];
+
+/// The `password` object of an import record, tagged by `scheme`. Unknown fields are rejected.
+/// See the accepted shapes in the module docs below. `Debug` prints the scheme and field lengths
+/// only.
+///
+/// # Accepted input shapes
+///
+/// Byte fields (`salt`, `hash` where shown as *bytes*) are `{"hex": "…"}` or `{"base64": "…"}`.
+///
+/// | `scheme` | Fields | Stored as |
+/// |---|---|---|
+/// | `bcrypt` | `hash`: MCF string `$2a$`/`$2b$`/`$2y$` | as is; cost 4..=16, weak below 10; `$2x$` refused (`refused_variant`) |
+/// | `argon2` | `hash`: PHC string (argon2i/d/id, `v=16`/`v=19`) | as is after the m/t/p caps |
+/// | `scrypt` | `salt` *bytes*, `hash` *bytes*, `log_n` (log2 N, 1..=63), `r`, `p` | `$anvil-scrypt$` |
+/// | `firebase_scrypt` | `salt` *bytes* (the user's salt), `hash` *bytes* (`passwordHash`), `profile` (UUID of the tenant hash profile holding signer key, salt separator, rounds, mem cost) | `$anvil-firebase-scrypt$` |
+/// | `pbkdf2` | `prf` (`sha1`/`sha256`/`sha512`), `iterations`, `salt` *bytes*, `hash` *bytes* | `$anvil-pbkdf2$` |
+/// | `django_pbkdf2` | `hash`: `pbkdf2_sha256$<iterations>$<salt>$<base64 hash>` (or `pbkdf2_sha1`); the salt string's UTF-8 bytes are the salt | `$anvil-pbkdf2$` |
+/// | `passlib_pbkdf2` | `hash`: `$pbkdf2-sha256$<iterations>$<ab64 salt>$<ab64 hash>` (also `$pbkdf2$` = SHA-1, `$pbkdf2-sha512$`); ab64 is base64 with `.` for `+`, no padding | `$anvil-pbkdf2$` |
+/// | `salted_sha2` | `alg` (`sha256`/`sha512`; `md5`/`sha1` refused), `position` (`prefix` = `H(salt‖password)`, `suffix` = `H(password‖salt)`), `salt` *bytes* (required, at least 8 bytes), `hash` *bytes* (digest length) | `$anvil-sha2$`, always weak |
+///
+/// Refusals: an unknown `scheme` (including `md5`, `sha1`, `sha256` as a scheme) is `unknown_scheme`
+/// through [`parse_import_value`]; unsalted digests and MD5/SHA-1 salted digests are
+/// `weak_parameters`; unknown Django/passlib algorithm identifiers are `unknown_scheme`.
+#[derive(Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(tag = "scheme", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ImportPassword {
+    Bcrypt {
+        hash: String,
+    },
+    Argon2 {
+        hash: String,
+    },
+    Scrypt {
+        salt: ByteField,
+        hash: ByteField,
+        log_n: u8,
+        r: u32,
+        p: u32,
+    },
+    FirebaseScrypt {
+        salt: ByteField,
+        hash: ByteField,
+        profile: Uuid,
+    },
+    Pbkdf2 {
+        prf: Prf,
+        iterations: u32,
+        salt: ByteField,
+        hash: ByteField,
+    },
+    DjangoPbkdf2 {
+        hash: String,
+    },
+    PasslibPbkdf2 {
+        hash: String,
+    },
+    SaltedSha2 {
+        alg: SaltedDigest,
+        position: SaltPosition,
+        #[serde(default)]
+        salt: Option<ByteField>,
+        hash: ByteField,
+    },
+}
+
+impl ImportPassword {
+    /// The `scheme` tag.
+    #[must_use]
+    pub fn scheme(&self) -> &'static str {
+        match self {
+            Self::Bcrypt { .. } => "bcrypt",
+            Self::Argon2 { .. } => "argon2",
+            Self::Scrypt { .. } => "scrypt",
+            Self::FirebaseScrypt { .. } => "firebase_scrypt",
+            Self::Pbkdf2 { .. } => "pbkdf2",
+            Self::DjangoPbkdf2 { .. } => "django_pbkdf2",
+            Self::PasslibPbkdf2 { .. } => "passlib_pbkdf2",
+            Self::SaltedSha2 { .. } => "salted_sha2",
+        }
+    }
+}
+
+impl fmt::Debug for ImportPassword {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut d = f.debug_struct("ImportPassword");
+        d.field("scheme", &self.scheme());
+        match self {
+            Self::Bcrypt { hash }
+            | Self::Argon2 { hash }
+            | Self::DjangoPbkdf2 { hash }
+            | Self::PasslibPbkdf2 { hash } => {
+                d.field("hash_len", &hash.len());
+            }
+            Self::Scrypt { salt, hash, .. }
+            | Self::FirebaseScrypt { salt, hash, .. }
+            | Self::Pbkdf2 { salt, hash, .. } => {
+                d.field("salt", salt).field("hash", hash);
+            }
+            Self::SaltedSha2 { salt, hash, .. } => {
+                d.field("salt", salt).field("hash", hash);
+            }
+        }
+        d.finish_non_exhaustive()
+    }
+}
+
+/// Parses the `password` object of an import record, mapping an unknown `scheme` to
+/// `unknown_scheme` and any other shape error (missing or unknown fields, wrong types) to
+/// `malformed`. The serde error itself is dropped: it can quote input.
+pub fn parse_import_value(v: serde_json::Value) -> Result<ImportPassword, HashPolicyError> {
+    todo!()
+}
+
+/// The result of converting an import input: the stored string and whether the floors flag it
+/// weak. `Debug` redacts the stored string.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Converted {
+    pub stored: String,
+    pub weak: bool,
+}
+
+impl fmt::Debug for Converted {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Converted")
+            .field("stored_len", &self.stored.len())
+            .field("weak", &self.weak)
+            .finish()
+    }
+}
+
+/// Converts an import input into the stored encoding, enforcing the caps (`over_cap`) and the
+/// floors (`weak_parameters`). The one conversion path for the admin API and the CLI.
+pub fn convert_import(input: &ImportPassword) -> Result<Converted, HashPolicyError> {
+    todo!()
+}
+
+/// A `bcrypt`/`argon2` input that is not that scheme at all is malformed input, not an unknown
+/// scheme of ours.
+fn declared(r: Result<StoredHash<'_>, HashPolicyError>) -> Result<StoredHash<'_>, HashPolicyError> {
+    r.map_err(|e| match e {
+        HashPolicyError::UnknownScheme => HashPolicyError::Malformed,
+        other => other,
+    })
+}
+
+fn finish(h: &StoredHash<'_>) -> Result<Converted, HashPolicyError> {
+    check_stored_caps(h)?;
+    let weak = check_import_floors(h)?;
+    Ok(Converted {
+        stored: format_stored(h),
+        weak,
+    })
+}
+
+fn pbkdf2(
+    prf: Prf,
+    iterations: u32,
+    salt: Vec<u8>,
+    hash: Vec<u8>,
+) -> Result<Converted, HashPolicyError> {
+    if iterations == 0 || hash.is_empty() {
+        return Err(HashPolicyError::Malformed);
+    }
+    finish(&StoredHash::Pbkdf2 {
+        prf,
+        iterations,
+        salt,
+        hash,
+    })
+}
+
+/// Django `pbkdf2_sha256$<iterations>$<salt>$<base64 hash>`.
+fn convert_django(s: &str) -> Result<Converted, HashPolicyError> {
+    limit(s)?;
+    let mut it = s.split('$');
+    let (Some(alg), Some(i), Some(salt), Some(hash), None) =
+        (it.next(), it.next(), it.next(), it.next(), it.next())
+    else {
+        // Django's other hashers (`md5$salt$hash`, `unsalted_sha1$$hash`, ...) mostly have
+        // fewer segments; refuse them by name where possible.
+        return match s.split_once('$') {
+            Some((alg, _)) if !alg.starts_with("pbkdf2_") => Err(HashPolicyError::UnknownScheme),
+            _ => Err(HashPolicyError::Malformed),
+        };
+    };
+    let prf = match alg {
+        "pbkdf2_sha256" => Prf::Sha256,
+        "pbkdf2_sha1" => Prf::Sha1,
+        _ => return Err(HashPolicyError::UnknownScheme),
+    };
+    let iterations = dec_u32(i)?;
+    let hash = if hash.is_empty() {
+        Vec::new()
+    } else {
+        b64std_decode(hash).map_err(|_| HashPolicyError::Malformed)?
+    };
+    pbkdf2(prf, iterations, salt.as_bytes().to_vec(), hash)
+}
+
+/// passlib `$pbkdf2-sha256$<iterations>$<ab64 salt>$<ab64 hash>`.
+fn convert_passlib(s: &str) -> Result<Converted, HashPolicyError> {
+    limit(s)?;
+    let mut it = s.split('$');
+    let (Some(""), Some(ident), Some(i), Some(salt), Some(hash), None) = (
+        it.next(),
+        it.next(),
+        it.next(),
+        it.next(),
+        it.next(),
+        it.next(),
+    ) else {
+        return Err(HashPolicyError::Malformed);
+    };
+    let prf = match ident {
+        "pbkdf2" => Prf::Sha1,
+        "pbkdf2-sha256" => Prf::Sha256,
+        "pbkdf2-sha512" => Prf::Sha512,
+        _ => return Err(HashPolicyError::UnknownScheme),
+    };
+    let iterations = dec_u32(i)?;
+    pbkdf2(prf, iterations, ab64_decode(salt)?, ab64_decode(hash)?)
+}
+
+/// passlib "adapted base64": the standard alphabet with `.` instead of `+`, no padding.
+fn ab64_decode(s: &str) -> Result<Vec<u8>, HashPolicyError> {
+    if s.contains('+') {
+        return Err(HashPolicyError::Malformed);
+    }
+    b64_decode_nopad(&s.replace('.', "+"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1110,6 +1419,462 @@ mod tests {
             if let Ok(p) = parse_stored(&m) {
                 prop_assert_eq!(format_stored(&p), m);
             }
+        }
+    }
+
+    // --- import conversion ---------------------------------------------------------------------
+
+    fn import(v: serde_json::Value) -> Result<Converted, HashPolicyError> {
+        convert_import(&parse_import_value(v)?)
+    }
+
+    fn ok(v: serde_json::Value) -> Converted {
+        import(v).expect("converts")
+    }
+
+    const FIREBASE_SALT: &str = "42xEC+ixf3L2lw==";
+    const FIREBASE_HASH: &str =
+        "lSrfV15cpx95/sZS2W9c9Kp6i/LVgQNDNC/qzrCnh1SAyZvqmZqAjTdn3aoItz+VHjoZilo78198JAdRuid5lQ==";
+    const RFC7914_HASH: &str = "fdbabe1c9d3472007856e7190d01e9fe7c6ad7cbc8237830e77376634b3731622eaf30d92e22a3886ff109279d9830dac727afb94a83ee6d8360cbdfa2cc0640";
+
+    #[test]
+    fn import_bcrypt_and_argon2_as_is() {
+        let s = format!("$2a$05${BCRYPT_TAIL}");
+        let c = ok(serde_json::json!({"scheme": "bcrypt", "hash": s}));
+        assert_eq!(
+            c,
+            Converted {
+                stored: s,
+                weak: true
+            },
+            "cost 5 is below 10"
+        );
+        let s = format!("$2b$10${BCRYPT_TAIL}");
+        assert!(!ok(serde_json::json!({"scheme": "bcrypt", "hash": s})).weak);
+        assert_eq!(
+            import(
+                serde_json::json!({"scheme": "bcrypt", "hash": format!("$2b$03${BCRYPT_TAIL}")})
+            ),
+            Err(HashPolicyError::WeakParameters)
+        );
+        assert_eq!(
+            import(
+                serde_json::json!({"scheme": "bcrypt", "hash": format!("$2x$10${BCRYPT_TAIL}")})
+            ),
+            Err(HashPolicyError::RefusedVariant)
+        );
+        let c = ok(serde_json::json!({"scheme": "argon2", "hash": ARGON2I_README}));
+        assert_eq!(
+            c,
+            Converted {
+                stored: ARGON2I_README.into(),
+                weak: false
+            }
+        );
+    }
+
+    #[test]
+    fn import_cannot_smuggle_another_scheme() {
+        let anvil = scrypt(14, 8, 1);
+        for (scheme, hash) in [
+            ("bcrypt", anvil.clone()),
+            ("argon2", anvil),
+            ("bcrypt", ARGON2I_README.to_string()),
+            ("argon2", format!("$2b$10${BCRYPT_TAIL}")),
+            ("bcrypt", "$1$saltsalt$hash".to_string()),
+        ] {
+            assert_eq!(
+                import(serde_json::json!({"scheme": scheme, "hash": hash})),
+                Err(HashPolicyError::Malformed),
+                "{scheme} {hash}"
+            );
+        }
+    }
+
+    #[test]
+    fn import_scrypt_rfc7914_vector() {
+        let c = ok(serde_json::json!({
+            "scheme": "scrypt", "salt": {"base64": "TmFDbA=="}, "hash": {"hex": RFC7914_HASH},
+            "log_n": 10, "r": 8, "p": 16
+        }));
+        assert_eq!(
+            c.stored,
+            "$anvil-scrypt$ln=10,r=8,p=16$TmFDbA$/bq+HJ00cgB4VucZDQHp/nxq18vII3gw53N2Y0s3MWIurzDZLiKjiG/xCSedmDDaxyevuUqD7m2DYMvfoswGQA"
+        );
+        assert!(!c.weak);
+        // Uppercase hex is the same bytes.
+        let upper = ok(serde_json::json!({
+            "scheme": "scrypt", "salt": {"hex": "4e61436c"}, "hash": {"hex": RFC7914_HASH.to_uppercase()},
+            "log_n": 10, "r": 8, "p": 16
+        }));
+        assert_eq!(upper, c);
+    }
+
+    #[test]
+    fn import_firebase_scrypt_vector() {
+        let c = ok(serde_json::json!({
+            "scheme": "firebase_scrypt", "salt": {"base64": FIREBASE_SALT}, "hash": {"base64": FIREBASE_HASH},
+            "profile": "0b9a6b7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b"
+        }));
+        assert_eq!(
+            c.stored,
+            "$anvil-firebase-scrypt$profile=0b9a6b7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b$42xEC+ixf3L2lw$lSrfV15cpx95/sZS2W9c9Kp6i/LVgQNDNC/qzrCnh1SAyZvqmZqAjTdn3aoItz+VHjoZilo78198JAdRuid5lQ"
+        );
+        assert!(!c.weak);
+        assert!(c.stored.starts_with(FIREBASE_PROFILE_PREFIX));
+    }
+
+    #[test]
+    fn import_pbkdf2_generic_django_and_passlib() {
+        // PBKDF2-HMAC-SHA256("password", 0x10..0x1f, 29000), computed with Python hashlib.
+        let expected = "$anvil-pbkdf2$alg=sha256,i=29000$EBESExQVFhcYGRobHB0eHw$lK/NCVPwPoiutAFj+DgqoDnIMTMGIqcHDo8y1yR2iSY";
+        let generic = ok(serde_json::json!({
+            "scheme": "pbkdf2", "prf": "sha256", "iterations": 29000,
+            "salt": {"base64": "EBESExQVFhcYGRobHB0eHw"},
+            "hash": {"base64": "lK/NCVPwPoiutAFj+DgqoDnIMTMGIqcHDo8y1yR2iSY="}
+        }));
+        assert_eq!(
+            generic,
+            Converted {
+                stored: expected.into(),
+                weak: true
+            }
+        );
+        let passlib = ok(serde_json::json!({
+            "scheme": "passlib_pbkdf2",
+            "hash": "$pbkdf2-sha256$29000$EBESExQVFhcYGRobHB0eHw$lK/NCVPwPoiutAFj.DgqoDnIMTMGIqcHDo8y1yR2iSY"
+        }));
+        assert_eq!(
+            passlib, generic,
+            "adapted base64 converts to the same stored string"
+        );
+        // Django: PBKDF2-HMAC-SHA256("password", b"seasalt2026abcdefghij", 600000).
+        let django = ok(serde_json::json!({
+            "scheme": "django_pbkdf2",
+            "hash": "pbkdf2_sha256$600000$seasalt2026abcdefghij$vzhv8lHKtIQgPgn8kaqzhwkhLxdlkVYL69D6MdJ5Hz4="
+        }));
+        assert_eq!(
+            django,
+            Converted {
+                stored: "$anvil-pbkdf2$alg=sha256,i=600000$c2Vhc2FsdDIwMjZhYmNkZWZnaGlq$vzhv8lHKtIQgPgn8kaqzhwkhLxdlkVYL69D6MdJ5Hz4".into(),
+                weak: false
+            }
+        );
+        // Unknown identifiers.
+        assert_eq!(
+            import(
+                serde_json::json!({"scheme": "passlib_pbkdf2", "hash": "$pbkdf2-md5$1000$EBESExQVFhcYGRobHB0eHw$AAAA"})
+            ),
+            Err(HashPolicyError::UnknownScheme)
+        );
+        assert_eq!(
+            import(
+                serde_json::json!({"scheme": "django_pbkdf2", "hash": "argon2$argon2id$v=19$m=1,t=1,p=1$a$b"})
+            ),
+            Err(HashPolicyError::UnknownScheme)
+        );
+        // passlib's alphabet has no '+'.
+        assert_eq!(
+            import(
+                serde_json::json!({"scheme": "passlib_pbkdf2", "hash": "$pbkdf2-sha256$29000$EBESExQVFhcYGRobHB0eHw$lK/NCVPwPoiutAFj+DgqoDnIMTMGIqcHDo8y1yR2iSY"})
+            ),
+            Err(HashPolicyError::Malformed)
+        );
+    }
+
+    #[test]
+    fn import_salted_sha2_is_always_weak() {
+        // SHA-256(salt || "password"), computed with Python hashlib.
+        let c = ok(serde_json::json!({
+            "scheme": "salted_sha2", "alg": "sha256", "position": "prefix",
+            "salt": {"hex": "00112233445566778899aabbccddeeff"},
+            "hash": {"hex": "9db024047938d4cad75a5684778b36d7f38b7f792ad69fd1a8aebe48bdc011eb"}
+        }));
+        assert_eq!(
+            c,
+            Converted {
+                stored: "$anvil-sha2$alg=sha256,pos=prefix$ABEiM0RVZneImaq7zN3u/w$nbAkBHk41MrXWlaEd4s21/OLf3kq1p/RqK6+SL3AEes".into(),
+                weak: true
+            }
+        );
+        // Digest length must match the algorithm.
+        assert_eq!(
+            import(serde_json::json!({
+                "scheme": "salted_sha2", "alg": "sha512", "position": "suffix",
+                "salt": {"hex": "00112233445566778899aabbccddeeff"},
+                "hash": {"hex": "9db024047938d4cad75a5684778b36d7f38b7f792ad69fd1a8aebe48bdc011eb"}
+            })),
+            Err(HashPolicyError::Malformed)
+        );
+    }
+
+    fn pbkdf2_input(iterations: u32, salt_len: usize) -> serde_json::Value {
+        serde_json::json!({
+            "scheme": "pbkdf2", "prf": "sha256", "iterations": iterations,
+            "salt": {"hex": "ab".repeat(salt_len)}, "hash": {"hex": "cd".repeat(32)}
+        })
+    }
+
+    fn sha2_input(alg: &str, salt: Option<&str>) -> serde_json::Value {
+        let mut v = serde_json::json!({
+            "scheme": "salted_sha2", "alg": alg, "position": "suffix",
+            "hash": {"hex": "cd".repeat(32)}
+        });
+        if let Some(s) = salt {
+            v["salt"] = serde_json::json!({"hex": s});
+        }
+        v
+    }
+
+    #[test]
+    fn import_refuses_pbkdf2_below_1000_iterations() {
+        assert_eq!(
+            import(pbkdf2_input(999, 16)),
+            Err(HashPolicyError::WeakParameters)
+        );
+        assert_eq!(import(pbkdf2_input(1000, 16)).map(|c| c.weak), Ok(true));
+        assert_eq!(import(pbkdf2_input(99_999, 16)).map(|c| c.weak), Ok(true));
+        assert_eq!(import(pbkdf2_input(100_000, 16)).map(|c| c.weak), Ok(false));
+        // RFC 6070 vector: 4-byte salt "salt" is below the salt floor.
+        assert_eq!(
+            import(serde_json::json!({
+                "scheme": "pbkdf2", "prf": "sha1", "iterations": 4096, "salt": {"hex": "73616c74"},
+                "hash": {"hex": "4b007901b765489abead49d926f721d065a429c1"}
+            })),
+            Err(HashPolicyError::WeakParameters)
+        );
+    }
+
+    #[test]
+    fn import_refuses_short_salt() {
+        assert_eq!(
+            import(pbkdf2_input(600_000, 7)),
+            Err(HashPolicyError::WeakParameters)
+        );
+        assert!(import(pbkdf2_input(600_000, 8)).is_ok());
+        let seven = "ab".repeat(7);
+        let eight = "ab".repeat(8);
+        assert_eq!(
+            import(sha2_input("sha256", Some(&seven))),
+            Err(HashPolicyError::WeakParameters)
+        );
+        assert!(import(sha2_input("sha256", Some(&eight))).is_ok());
+        assert_eq!(
+            import(serde_json::json!({
+                "scheme": "django_pbkdf2", "hash": "pbkdf2_sha256$600000$1234567$vzhv8lHKtIQgPgn8kaqzhwkhLxdlkVYL69D6MdJ5Hz4="
+            })),
+            Err(HashPolicyError::WeakParameters)
+        );
+    }
+
+    #[test]
+    fn import_refuses_unsalted_sha256() {
+        assert_eq!(
+            import(sha2_input("sha256", None)),
+            Err(HashPolicyError::WeakParameters)
+        );
+        assert_eq!(
+            import(sha2_input("sha256", Some(""))),
+            Err(HashPolicyError::WeakParameters)
+        );
+        assert_eq!(
+            import(serde_json::json!({"scheme": "sha256", "hash": {"hex": "cd".repeat(32)}})),
+            Err(HashPolicyError::UnknownScheme)
+        );
+    }
+
+    /// MD5: refused as `unknown_scheme` when named as a scheme (no `md5` import scheme exists, and
+    /// Django's `md5$…` hasher is not PBKDF2), and as `weak_parameters` when named as the digest of
+    /// a salted import.
+    #[test]
+    fn import_refuses_md5() {
+        assert_eq!(
+            import(
+                serde_json::json!({"scheme": "md5", "hash": "5f4dcc3b5aa765d61d8327deb882cf99"})
+            ),
+            Err(HashPolicyError::UnknownScheme)
+        );
+        let salt = "ab".repeat(16);
+        assert_eq!(
+            import(sha2_input("md5", Some(&salt))),
+            Err(HashPolicyError::WeakParameters)
+        );
+        assert_eq!(
+            import(
+                serde_json::json!({"scheme": "django_pbkdf2", "hash": "md5$seasalt$5f4dcc3b5aa765d61d8327deb882cf99"})
+            ),
+            Err(HashPolicyError::UnknownScheme)
+        );
+    }
+
+    /// Plain SHA-1: same rule as MD5.
+    #[test]
+    fn import_refuses_plain_sha1() {
+        assert_eq!(
+            import(
+                serde_json::json!({"scheme": "sha1", "hash": "5baa61e4c9b93f3f0682250b6cf8331b7ee68fd8"})
+            ),
+            Err(HashPolicyError::UnknownScheme)
+        );
+        let salt = "ab".repeat(16);
+        assert_eq!(
+            import(sha2_input("sha1", Some(&salt))),
+            Err(HashPolicyError::WeakParameters)
+        );
+        assert_eq!(
+            import(
+                serde_json::json!({"scheme": "django_pbkdf2", "hash": "unsalted_sha1$$5baa61e4c9b93f3f0682250b6cf8331b7ee68fd8"})
+            ),
+            Err(HashPolicyError::UnknownScheme)
+        );
+    }
+
+    #[test]
+    fn import_refuses_over_cap_argon2_phc() {
+        assert_eq!(
+            import(serde_json::json!({"scheme": "argon2", "hash": argon2(4_194_304, 2, 1)})),
+            Err(HashPolicyError::OverCap)
+        );
+        assert_eq!(
+            import(serde_json::json!({"scheme": "argon2", "hash": argon2(19456, 11, 1)})),
+            Err(HashPolicyError::OverCap)
+        );
+        // The other caps at import too.
+        assert_eq!(
+            import(
+                serde_json::json!({"scheme": "bcrypt", "hash": format!("$2b$17${BCRYPT_TAIL}")})
+            ),
+            Err(HashPolicyError::OverCap)
+        );
+        assert_eq!(
+            import(pbkdf2_input(5_000_001, 16)),
+            Err(HashPolicyError::OverCap)
+        );
+        assert_eq!(
+            import(serde_json::json!({
+                "scheme": "scrypt", "salt": {"hex": "abab"}, "hash": {"hex": "cd".repeat(32)},
+                "log_n": 17, "r": 8, "p": 1
+            })),
+            Err(HashPolicyError::OverCap)
+        );
+        assert_eq!(
+            import(serde_json::json!({
+                "scheme": "scrypt", "salt": {"hex": "abab"}, "hash": {"hex": "cd".repeat(32)},
+                "log_n": 0, "r": 8, "p": 1
+            })),
+            Err(HashPolicyError::Malformed)
+        );
+    }
+
+    #[test]
+    fn import_rejects_unknown_fields() {
+        let extra = serde_json::json!({"scheme": "argon2", "hash": ARGON2I_README, "pepper": "x"});
+        assert!(serde_json::from_value::<ImportPassword>(extra.clone()).is_err());
+        assert_eq!(
+            parse_import_value(extra).err(),
+            Some(HashPolicyError::Malformed)
+        );
+        let both = serde_json::json!({
+            "scheme": "pbkdf2", "prf": "sha256", "iterations": 600000,
+            "salt": {"hex": "abababababababab", "base64": "q6urq6urq6s="}, "hash": {"hex": "cd".repeat(32)}
+        });
+        assert_eq!(
+            parse_import_value(both).err(),
+            Some(HashPolicyError::Malformed)
+        );
+        for bad in [
+            serde_json::json!({"hash": ARGON2I_README}),
+            serde_json::json!({"scheme": 7}),
+            serde_json::json!("bcrypt"),
+            serde_json::json!({"scheme": "pbkdf2", "prf": "md5", "iterations": 1000,
+                "salt": {"hex": "abababababababab"}, "hash": {"hex": "cd"}}),
+            serde_json::json!({"scheme": "scrypt", "salt": {"hex": "ab"}, "hash": {"hex": "cd"},
+                "log_n": 300, "r": 8, "p": 1}),
+        ] {
+            assert_eq!(
+                parse_import_value(bad.clone()).err(),
+                Some(HashPolicyError::Malformed),
+                "{bad}"
+            );
+        }
+        // Bad hex / base64 in a byte field.
+        for salt in [
+            serde_json::json!({"hex": "abc"}),
+            serde_json::json!({"hex": "zz"}),
+            serde_json::json!({"base64": "q6u-"}),
+        ] {
+            let mut v = pbkdf2_input(600_000, 16);
+            v["salt"] = salt;
+            assert_eq!(import(v), Err(HashPolicyError::Malformed));
+        }
+    }
+
+    #[test]
+    fn import_password_debug_redacts() {
+        let inputs = [
+            serde_json::json!({"scheme": "bcrypt", "hash": format!("$2b$10${BCRYPT_TAIL}")}),
+            serde_json::json!({"scheme": "argon2", "hash": ARGON2I_README}),
+            serde_json::json!({
+                "scheme": "firebase_scrypt", "salt": {"base64": FIREBASE_SALT}, "hash": {"base64": FIREBASE_HASH},
+                "profile": "0b9a6b7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b"
+            }),
+            serde_json::json!({
+                "scheme": "scrypt", "salt": {"base64": "TmFDbA=="}, "hash": {"hex": RFC7914_HASH},
+                "log_n": 10, "r": 8, "p": 16
+            }),
+            serde_json::json!({
+                "scheme": "django_pbkdf2",
+                "hash": "pbkdf2_sha256$600000$seasalt2026abcdefghij$vzhv8lHKtIQgPgn8kaqzhwkhLxdlkVYL69D6MdJ5Hz4="
+            }),
+            sha2_input("sha256", Some("00112233445566778899aabbccddeeff")),
+        ];
+        for v in inputs {
+            let p = parse_import_value(v).unwrap();
+            let out = format!("{p:?}");
+            assert!(out.contains(p.scheme()), "{out}");
+            for needle in [
+                "E5YPO9kmyu",
+                "c29tZXNhbHQ",
+                "42xEC",
+                "lSrfV15",
+                "TmFDbA",
+                "fdbabe1c",
+                "seasalt",
+                "vzhv8l",
+                "00112233",
+                "cdcdcd",
+            ] {
+                assert!(!out.contains(needle), "{out:?} leaks {needle:?}");
+            }
+            let c = convert_import(&p).unwrap();
+            let out = format!("{c:?}");
+            assert!(!out.contains('$') && out.contains("stored_len"), "{out}");
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn import_conversion_is_total(raw in proptest::collection::vec(any::<u8>(), 0..300)) {
+            if let Ok(p) = serde_json::from_slice::<ImportPassword>(&raw) {
+                if let Ok(c) = convert_import(&p) {
+                    let h = parse_stored(&c.stored).expect("converted output parses");
+                    prop_assert_eq!(check_stored_caps(&h), Ok(()));
+                }
+            }
+        }
+
+        #[test]
+        fn converted_output_always_parses(
+            ln in 1u8..=16, r in 1u32..=8, salt in proptest::collection::vec(any::<u8>(), 1..64),
+            hash in proptest::collection::vec(any::<u8>(), 16..=64)
+        ) {
+            let v = serde_json::json!({
+                "scheme": "scrypt", "salt": {"base64": anvil_jose::encoding::b64std(&salt)},
+                "hash": {"base64": anvil_jose::encoding::b64std(&hash)}, "log_n": ln, "r": r, "p": 1
+            });
+            let c = import(v).expect("in range");
+            let parsed = parse_stored(&c.stored).unwrap();
+            prop_assert_eq!(parsed, StoredHash::Scrypt { log_n: ln, r, p: 1, salt, hash });
         }
     }
 }
