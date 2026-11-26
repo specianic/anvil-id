@@ -117,7 +117,7 @@ use std::sync::Arc;
 
 use anvil_jose::Kek;
 use anvil_jose::email_code::generate_email_code;
-use anvil_jose::encoding::{ct_eq, random_token, secret_hash};
+use anvil_jose::encoding::{b64url, ct_eq, random_token, secret_hash};
 use anvil_jose::otp::{TotpSecret, check_code};
 use anvil_jose::recovery_code::{normalize_recovery_code, recovery_code_hash};
 use secrecy::{ExposeSecret as _, SecretString};
@@ -398,6 +398,30 @@ pub fn bound_passkey(
     found: Option<PasskeyCredential>,
 ) -> Option<PasskeyCredential> {
     found.filter(|pk| pk.user_id == identity.user_id && pk.credential_id == identity.credential_id)
+}
+
+/// Request options (`navigator.credentials.get` JSON) with `publicKey.allowCredentials` set to
+/// `passkeys` (base64url credential ids), replacing whatever list the options carried. Used at the
+/// second-factor step, where the user is known: it narrows the browser's passkey picker and is not
+/// a security check (the finish verifies ownership). `Internal` if the options are not an object
+/// with a `publicKey` object.
+fn with_allow_credentials(
+    options_json: &str,
+    passkeys: &[PasskeyCredential],
+) -> Result<String, CoreError> {
+    let malformed = || CoreError::Internal("passkey request options are malformed".into());
+    let mut options: serde_json::Value =
+        serde_json::from_str(options_json).map_err(|_| malformed())?;
+    let public_key = options
+        .get_mut("publicKey")
+        .and_then(serde_json::Value::as_object_mut)
+        .ok_or_else(malformed)?;
+    let allow = passkeys
+        .iter()
+        .map(|pk| serde_json::json!({ "type": "public-key", "id": b64url(&pk.credential_id) }))
+        .collect();
+    public_key.insert("allowCredentials".into(), serde_json::Value::Array(allow));
+    serde_json::to_string(&options).map_err(|_| malformed())
 }
 
 /// The time step a TOTP `code` matches for the sealed credential at `now`, if any. Whitespace in
@@ -940,6 +964,10 @@ impl FlowService {
     /// in the identify step's challenge. Errors: `Forbidden` (binding), `InvalidRequest` (expired
     /// or unknown flow, not in a second-factor step with a passkey, inactive user or no passkey,
     /// or a concurrent change of the flow), `Internal` (the issuer cannot be a relying party).
+    ///
+    /// The options list the step user's passkeys in `publicKey.allowCredentials`, so the browser
+    /// offers only that user's passkeys. The list narrows the picker only: ownership is enforced
+    /// when the assertion is finished ([`Self::passkey_second_factor_finish`]).
     pub async fn passkey_second_factor_options(
         &self,
         cx: &FlowContext<'_>,
@@ -966,16 +994,12 @@ impl FlowService {
         let Some(user) = self.second_factor_user(tenant, user_id).await? else {
             return Err(unavailable());
         };
-        if self
-            .storage
-            .users()
-            .passkeys(tenant, user.id)
-            .await?
-            .is_empty()
-        {
+        let passkeys = self.storage.users().passkeys(tenant, user.id).await?;
+        if passkeys.is_empty() {
             return Err(unavailable());
         }
         let challenge = self.passkeys.start_discoverable(cx.relying_party()?)?;
+        let options_json = with_allow_credentials(&challenge.options_json, &passkeys)?;
         let next =
             with_second_factor_passkey(state, challenge.state_json).ok_or_else(unavailable)?;
         let json = encode_state(&FlowState::Login(next))?;
@@ -989,7 +1013,7 @@ impl FlowService {
                 "the sign-in flow changed concurrently".into(),
             ));
         }
-        Ok(challenge.options_json)
+        Ok(options_json)
     }
 
     /// Completes the second-factor step with a passkey assertion from
@@ -3072,6 +3096,48 @@ mod tests {
         assert_eq!(bound_passkey(&identity, Some(passkey(alice, &[9]))), None);
         let ok = passkey(alice, &[1, 2, 3]);
         assert_eq!(bound_passkey(&identity, Some(ok.clone())), Some(ok));
+    }
+
+    #[test]
+    fn allow_credentials_list_exactly_the_given_passkeys() {
+        let alice = UserId::new_v7();
+        let options = r#"{"publicKey":{"challenge":"abc","allowCredentials":[{"type":"public-key","id":"AA"}],"userVerification":"required"},"mediation":"optional"}"#;
+        let out = with_allow_credentials(
+            options,
+            &[passkey(alice, &[1, 2, 3]), passkey(alice, &[0xfb, 0xff])],
+        )
+        .expect("options");
+        let v: serde_json::Value = serde_json::from_str(&out).expect("json");
+        assert_eq!(
+            v["publicKey"]["allowCredentials"],
+            serde_json::json!([
+                { "type": "public-key", "id": "AQID" },
+                { "type": "public-key", "id": "-_8" },
+            ])
+        );
+        // Everything else is untouched.
+        assert_eq!(v["publicKey"]["challenge"], "abc");
+        assert_eq!(v["publicKey"]["userVerification"], "required");
+        assert_eq!(v["mediation"], "optional");
+    }
+
+    #[test]
+    fn allow_credentials_refuse_malformed_options() {
+        let pk = passkey(UserId::new_v7(), &[1]);
+        for bad in [
+            "not json",
+            "[]",
+            r#"{"publicKey":[]}"#,
+            r#"{"challenge":"abc"}"#,
+        ] {
+            assert!(
+                matches!(
+                    with_allow_credentials(bad, std::slice::from_ref(&pk)),
+                    Err(CoreError::Internal(_))
+                ),
+                "{bad}"
+            );
+        }
     }
 
     fn sealed_totp(kek: &Kek, secret: &TotpSecret) -> TotpCredential {
