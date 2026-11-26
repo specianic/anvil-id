@@ -50,3 +50,6 @@
   `connections/$connectionId.tsx` still has its own `SecretCard` with the same logic (06-23 did not
   own that file); it should switch to `SecretRotation` in the gate gap plan.
 - (decision, for 06-24) SAML e2e: use option (a): the mock SAML IdP (tests/e2e/lib/mock-saml-idp.ts) gets an https listener with its in-memory key/cert and the specs set ignoreHTTPSErrors; the product keeps requiring https SSO URLs (no loopback-http exception). 06-24 may edit mock-saml-idp.ts as a forced extra.
+- (from 06-22) The brute-force lock and CAPTCHA page (`posted_login_form`) still renders the combined form in routed tenants (no enumeration impact; UX inconsistency). Gap plan: render the email-first form there.
+- (from 06-22) `OrgRepo::tenant_has_routing` ignores the SAML runtime flag: a tenant whose only route is SAML with the flag off shows the email page, and every address goes to the password step. Gap plan: make the email-first decision use the same "routable" rule as `routed_domain` (flag-aware).
+- (from 06-23) ConnectionForm's reusable `SecretRotation` duplicates the tenant connection page's `SecretCard`; switch the page to the shared component (one implementation).
