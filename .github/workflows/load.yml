@@ -1,0 +1,59 @@
+# Load and HA tests (QUAL-05, OPS-03): tests/load/run-perf.sh (k6 token benchmark, median of 3)
+# and tests/load/run-ha.sh (3 nodes behind HAProxy, restarts under load).
+#
+# On demand only for now. Plan 05-26 adds the push-to-main and nightly triggers and makes the
+# results gating; until then nothing here is a required check. Runs on the public 4 vCPU runner,
+# shared by k6, Postgres and AnvilID (see tests/load/README.md).
+name: load
+
+on:
+  workflow_dispatch:
+    inputs:
+      which:
+        description: Which test to run
+        type: choice
+        options: [both, perf, ha]
+        default: both
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  K6_VERSION: "2.4.0"
+
+jobs:
+  load:
+    name: load (${{ inputs.which }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      # Same image build as e2e.yml (musl binary in the Rust alpine image, size gate, smoke test).
+      - run: just docker-image
+      - name: Install k6 ${{ env.K6_VERSION }}
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/k6.tgz" \
+            "https://github.com/grafana/k6/releases/download/v${K6_VERSION}/k6-v${K6_VERSION}-linux-amd64.tar.gz"
+          tar -xzf "$RUNNER_TEMP/k6.tgz" -C "$RUNNER_TEMP"
+          sudo install "$RUNNER_TEMP/k6-v${K6_VERSION}-linux-amd64/k6" /usr/local/bin/k6
+          k6 version
+      - name: Token benchmark (median of 3)
+        if: inputs.which == 'both' || inputs.which == 'perf'
+        run: tests/load/run-perf.sh
+      - name: HA test
+        if: (success() || failure()) && (inputs.which == 'both' || inputs.which == 'ha')
+        run: tests/load/run-ha.sh
+      - name: Upload summaries and logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: load-results
+          path: target/load/
+          if-no-files-found: warn

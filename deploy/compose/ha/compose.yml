@@ -1,0 +1,91 @@
+# HA test stack (OPS-03): three stateless AnvilID nodes on one Postgres, a Redis-protocol server
+# for the shared rate limiter, and HAProxy in front with active health checks. Used by
+# tests/load/run-ha.sh; also a starting point for operators (see tests/load/README.md).
+#
+# Not a hardened production deployment: the Postgres credentials below are throwaway, local-only
+# defaults for this test stack, and the database and Valkey ports are not published to the host.
+#
+# Environment (from the caller; nothing secret is stored here):
+#   ANVILID_KEK        required, base64 32 bytes (run-ha.sh generates one per run, env only)
+#   ANVILID_IMAGE      default anvilid:ci (scripts/docker-image.sh)
+#   RATE_LIMIT_TOKEN   token quotas per IP and per client (default 5000/s: the load test must not
+#                      measure the limiter; 05-26 lowers them for the shared-limit check)
+#
+# ANVILID_SHUTDOWN_DRAIN, ANVILID_REDIS_URL and ANVILID_DATABASE_MAX_CONNECTIONS take effect once
+# plans 05-05 / 05-16 add those keys; until then anvilid ignores them (unknown ANVILID_* keys are
+# not read).
+#
+# Images are pinned by digest (tag kept for readability).
+name: anvilid-ha
+
+x-anvilid: &anvilid
+  image: ${ANVILID_IMAGE:-anvilid:ci}
+  depends_on:
+    postgres:
+      condition: service_healthy
+    valkey:
+      condition: service_healthy
+  environment:
+    ANVILID_DATABASE_URL: postgres://anvilid:anvilid-local-only@postgres:5432/anvilid
+    # Empty when unset: anvilid then refuses to start (it never generates a KEK for Postgres).
+    ANVILID_KEK: ${ANVILID_KEK:-}
+    ANVILID_PUBLIC_URL: http://localhost:8080
+    ANVILID_LISTEN: 0.0.0.0:8080
+    ANVILID_LOG_FORMAT: json
+    RUST_LOG: info
+    # Client IPs come from HAProxy's X-Forwarded-For; only the compose network may set it.
+    ANVILID_TRUSTED_PROXIES: 172.30.75.0/24
+    ANVILID_RATE_LIMIT_TOKEN_PER_SECOND: ${RATE_LIMIT_TOKEN:-5000}
+    ANVILID_RATE_LIMIT_TOKEN_CLIENT_PER_SECOND: ${RATE_LIMIT_TOKEN:-5000}
+    ANVILID_REDIS_URL: redis://valkey:6379
+    ANVILID_SHUTDOWN_DRAIN: 10s
+    ANVILID_DATABASE_MAX_CONNECTIONS: "20"
+  # SIGTERM -> readiness 503 -> drain (10 s) -> graceful shutdown; well inside 30 s.
+  stop_grace_period: 30s
+  networks: [ha]
+
+services:
+  postgres:
+    image: postgres:18-alpine@sha256:0115267ab5a509022df9319c77be365cef335adb71556c75f60f5360ee247e71
+    environment:
+      POSTGRES_USER: anvilid
+      POSTGRES_PASSWORD: anvilid-local-only
+      POSTGRES_DB: anvilid
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U anvilid -d anvilid"]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+    tmpfs:
+      - /var/lib/postgresql
+    networks: [ha]
+
+  valkey:
+    image: valkey/valkey:8-alpine@sha256:9971099af41c36e887aabdfe22b80c0fe45df949163dfc9cb434febc57cfc3fc
+    command: ["valkey-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+    networks: [ha]
+
+  # Three identical nodes, started together on an empty database (concurrent first start).
+  node1: *anvilid
+  node2: *anvilid
+  node3: *anvilid
+
+  haproxy:
+    image: haproxy:3.2-alpine@sha256:7816a9801a6846b912bc37e48529808e2fa87c3c47992441940f68e393ebcfeb
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    ports:
+      - "8080:8080"
+    depends_on: [node1, node2, node3]
+    networks: [ha]
+
+networks:
+  ha:
+    ipam:
+      config:
+        - subnet: 172.30.75.0/24
