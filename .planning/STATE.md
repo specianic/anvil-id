@@ -6,15 +6,15 @@ current_phase: 04
 current_phase_name: release 0 3 real world logins
 current_plan: 37
 status: executing
-stopped_at: Completed 05-24-PLAN.md
-last_updated: "2026-11-26T05:53:49.975Z"
+stopped_at: Completed 05-26-PLAN.md
+last_updated: "2026-11-26T06:10:12.970Z"
 last_activity: 2026-11-26
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 131
-  completed_plans: 127
-  percent: 96
+  completed_plans: 128
+  percent: 98
 ---
 
 # Project State
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 **Status:** Ready to execute
 **Last Activity:** 2026-11-26
 **Last Activity Description:** 04-32 phase gate complete (430-pair security map, anvilid 0.3.0, 0.3 migrations pinned, every workflow green on 9f88363)
-**Progress:** [██████████] 96%
+**Progress:** [██████████] 98%
 
 Phase 4 has 37 plans (04-01 through 04-37). Every plan except 04-33 (manual real-provider checklist, then tag
 v0.3.0) has a SUMMARY. Current Plan counts plans in execution order: 04-33 is the 37th and last.
@@ -183,6 +183,7 @@ v0.3.0) has a SUMMARY. Current Plan counts plans in execution order: 04-33 is th
 | Phase 05 P25 | 55min | 2 tasks | 9 files |
 | Phase 05 P27 | 60min | 2 tasks | 13 files |
 | Phase 05 P24 | 70min | 3 tasks | 18 files |
+| Phase 05 P26 | 75min | 2 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -424,6 +425,9 @@ Recent decisions affecting current work:
 - [Phase 05]: 05-25: MCP docs and mocks pinned to MCP authorization revision 2026-07-28 (checked 2026-11-26)
 - [Phase 05]: 05-25: CIMD clients take resources from dcr.allowed_resources (documented 0.4 limit)
 - [Phase 05]: 05-24: one-time secrets in the console move into component state inside mutationFn (never in query/mutation caches); OneTimeSecret component
+- [Phase 05]: 05-26: telemetry redaction is tested against the real anvilid binary (stderr log, OTLP bytes, /metrics, audit stdout)
+- [Phase 05]: 05-26: shared-limit bound allowed <= Q + ceil(Q*W) + 1 (GCRA, rate = burst = Q, W <= 1 s); exactly-once judged after a 50 s grace > 45 s lease
+- [Phase 05]: 05-26: first gating load run green: p99 2.27 ms at 1000 req/s (median of 3), idle VmRSS 51,164 kB, HA 0 failures over 3 restarts
 
 ### Pending Todos
 
@@ -436,6 +440,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-26T05:53:49.972Z
-Stopped at: Completed 05-24-PLAN.md
+Last session: 2026-11-26T06:10:12.967Z
+Stopped at: Completed 05-26-PLAN.md
 Resume file: None
