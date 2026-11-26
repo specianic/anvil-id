@@ -60,7 +60,7 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 anyhow = "1"
 # Use the re-export `testcontainers_modules::testcontainers`; do not add `testcontainers` directly.
-testcontainers-modules = { version = "0.15", default-features = false, features = ["postgres"] }
+testcontainers-modules = { version = "0.15", default-features = false, features = ["postgres", "redis"] }
 tempfile = "3.27"
 
 # Phase 2 (release 0.1). Every crate Phase 2 needs is declared here once.
@@ -91,7 +91,7 @@ axum-extra = { version = "0.12.6", features = ["cookie", "typed-header"] }
 tower-http = { version = "0.6.11", features = ["cors", "set-header", "limit", "trace", "request-id", "util"] }
 figment = { version = "0.10.19", features = ["toml", "env"] }
 # reqwest 0.13 `rustls` uses the aws-lc-rs provider (no ring).
-reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json", "blocking"] }
 # Built-in TLS listener: aws-lc-rs provider only.
 rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs", "std", "tls12", "logging"] }
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["aws_lc_rs", "tls12", "logging"] }
@@ -115,6 +115,23 @@ ipnet = "2.12"
 fluent-bundle = "0.16.0"
 fluent-langneg = "0.14.2"
 unic-langid = "0.9.6"
+
+# Phase 5 (release 0.4). Every crate Phase 5 needs is declared here once.
+# Redis: optional shared rate-limit backend, selected at runtime (`redis_url`). Never `tls-rustls` default
+# provider features that pull ring; `tokio-rustls-comp` goes through the workspace rustls (aws-lc-rs).
+redis = { version = "1.8.3", default-features = false, features = ["tokio-comp", "connection-manager", "script", "tokio-rustls-comp"] }
+metrics = "0.24.6"
+# No default features: we serve /metrics ourselves (no hyper listener, no push gateway).
+metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
+opentelemetry = { version = "0.33.1", default-features = false, features = ["trace"] }
+opentelemetry_sdk = { version = "0.33.1", default-features = false, features = ["trace"] }
+# OTLP over HTTP/protobuf on reqwest's blocking client (reqwest gains `blocking` above); no tonic/gRPC.
+opentelemetry-otlp = { version = "0.33.1", default-features = false, features = ["http-proto", "reqwest-blocking-client", "trace"] }
+tracing-opentelemetry = { version = "0.34.0", default-features = false }
+# YAML for the declarative tenant config (CLI only).
+serde-saphyr = "2.2.0"
+# Attribute JSON Schemas: offline only (no remote $ref resolution).
+jsonschema = { version = "0.63.1", default-features = false }
 
 # Dev-only (tests).
 proptest = "1.12.0"

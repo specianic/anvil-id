@@ -22,6 +22,8 @@ axum-extra.workspace = true
 fluent-bundle.workspace = true
 fluent-langneg.workspace = true
 ipnet.workspace = true
+jsonschema.workspace = true
+metrics.workspace = true
 minijinja.workspace = true
 moka.workspace = true
 qrcodegen.workspace = true
@@ -50,6 +52,7 @@ anvil-storage-postgres.workspace = true
 anvil-storage-sqlite.workspace = true
 http-body-util.workspace = true
 insta.workspace = true
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
 proptest.workspace = true
 serde_json.workspace = true
 sqlx = { workspace = true, features = ["postgres"] }

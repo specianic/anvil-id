@@ -13,8 +13,11 @@ workspace = true
 anvil-core.workspace = true
 async-trait.workspace = true
 governor.workspace = true
+metrics.workspace = true
 moka.workspace = true
+redis.workspace = true
 time.workspace = true
 
 [dev-dependencies]
-tokio.workspace = true
+testcontainers-modules.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
