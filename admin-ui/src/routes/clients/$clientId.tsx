@@ -33,6 +33,12 @@ function List({ items, empty }: { items: readonly string[]; empty: string }) {
   );
 }
 
+const MFA_LABELS: Record<NonNullable<ClientView["mfa_policy"]>, string> = {
+  off: "Off",
+  optional: "Optional",
+  required: "Required",
+};
+
 function ClientDetails({ client }: { client: ClientView }) {
   return (
     <div className="space-y-4">
@@ -76,6 +82,34 @@ function ClientDetails({ client }: { client: ClientView }) {
             <Field label="Scopes">
               <List items={client.scopes} empty="None" />
             </Field>
+          </dl>
+        </CardContent>
+      </Card>
+      <Card data-testid="client-logout-security">
+        <CardHeader>
+          <CardTitle>Logout and security</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <dl className="divide-y">
+            <Field label="Post-logout redirect URIs">
+              <List items={client.post_logout_redirect_uris} empty="None" />
+            </Field>
+            <Field label="Back-channel logout URI">
+              {client.backchannel_logout_uri ? (
+                <code className="text-xs">{client.backchannel_logout_uri}</code>
+              ) : (
+                <span className="text-muted-foreground">None</span>
+              )}
+            </Field>
+            {client.backchannel_logout_uri && (
+              <Field label="Back-channel session required">
+                {client.backchannel_logout_session_required ? "Yes" : "No"}
+              </Field>
+            )}
+            <Field label="Allowed resources">
+              <List items={client.allowed_resources} empty="None: tokens are for this client" />
+            </Field>
+            <Field label="MFA policy">{client.mfa_policy ? MFA_LABELS[client.mfa_policy] : "Tenant default"}</Field>
           </dl>
         </CardContent>
       </Card>

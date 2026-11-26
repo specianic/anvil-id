@@ -179,6 +179,24 @@ test('admin console: users, sessions, audit, clients, email and SMTP', async ({ 
     await expectNoA11yViolations(page);
   });
 
+  await test.step("the sample RP's client card shows its logout, resource and MFA settings", async () => {
+    // The sample RP registers no logout URIs, resources or MFA policy: the card shows the defaults.
+    await page.goto(consoleUrl('clients'));
+    const row = page.getByRole('row').filter({ hasText: 'e2e console sample RP' }).first();
+    await findInPagedTable(page, row);
+    await row.getByRole('link').click();
+    await expect(page.getByRole('heading', { level: 1, name: 'e2e console sample RP' })).toBeVisible();
+    const card = page.getByTestId('client-logout-security');
+    await expect(card).toContainText('Logout and security');
+    const field = (label: string) => card.locator('dt', { hasText: label }).locator('xpath=following-sibling::dd[1]');
+    await expect(field('Post-logout redirect URIs')).toHaveText('None');
+    await expect(field('Back-channel logout URI')).toHaveText('None');
+    await expect(card.locator('dt', { hasText: 'Back-channel session required' })).toHaveCount(0);
+    await expect(field('Allowed resources')).toHaveText('None: tokens are for this client');
+    await expect(field('MFA policy')).toHaveText('Tenant default');
+    await expectNoA11yViolations(page);
+  });
+
   await test.step('email template: line error, customize, reset', async () => {
     await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Email' }).click();
     await expect(page.getByRole('heading', { level: 1, name: 'Email' })).toBeVisible();
