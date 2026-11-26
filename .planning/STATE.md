@@ -7,14 +7,14 @@ current_phase_name: release 0 3 real world logins
 current_plan: 37
 status: executing
 stopped_at: "04-33 Task 1 checkpoint: awaiting owner real-provider checklist (approved / waive) before tagging v0.3.0 from 9c2bdd2 (Phase 5 wave 3 in progress; 05-10, 05-06, 05-07, 05-18 complete)"
-last_updated: "2026-11-26T04:04:47.190Z"
+last_updated: "2026-11-26T04:09:32.363Z"
 last_activity: 2026-11-26
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 131
-  completed_plans: 114
-  percent: 85
+  completed_plans: 117
+  percent: 89
 ---
 
 # Project State
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 **Status:** Ready to execute
 **Last Activity:** 2026-11-26
 **Last Activity Description:** 04-32 phase gate complete (430-pair security map, anvilid 0.3.0, 0.3 migrations pinned, every workflow green on 9f88363)
-**Progress:** [█████████░] 85%
+**Progress:** [█████████░] 89%
 
 Phase 4 has 37 plans (04-01 through 04-37). Every plan except 04-33 (manual real-provider checklist, then tag
 v0.3.0) has a SUMMARY. Current Plan counts plans in execution order: 04-33 is the 37th and last.
@@ -170,6 +170,9 @@ v0.3.0) has a SUMMARY. Current Plan counts plans in execution order: 04-33 is th
 | Phase 05 P07 | 70min | 2 tasks | 64 files |
 | Phase 05 P18 | 36min | 2 tasks | 7 files |
 | Phase 05 P13 | 45min | 2 tasks | 8 files |
+| Phase 05 P16 | 70min | 2 tasks | 6 files |
+| Phase 05 P19 | 75min | 2 tasks | 8 files |
+| Phase 05 P15 | 50min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -391,6 +394,12 @@ Recent decisions affecting current work:
 - [Phase 05]: 05-18: signer cache keyed by (tenant, alg, kid, row id, sha256(sealed), KEK fingerprint); active row still read per request; direct aws-lc signing (RS256 504->180us)
 - [Phase 05]: 05-18: unknown-host negative cache only (TTL unknown_host_ttl, default 5 s, no invalidation hook); positive tenant/client rows never cached
 - [Phase 05]: 05-13: remembered consent skips only when the grant covers every requested scope and resource; CIMD clients are named by client_id host with the name marked unverified
+- [Phase 05]: 05-16: redis_url selects RedisLimiter in limiter.rs only; key names HMAC-SHA-256 (via rustls aws-lc provider) under Kek::derive_key(anvilid/ratelimit-key/v1); unreachable Redis fails startup
+- [Phase 05]: 05-16: active-key insert Conflict counts as a lost race only if a winner's active key exists; otherwise the Conflict is returned
+- [Phase 05]: 05-15: CIMD per-host fetch budget is installation-wide (nil-tenant Identifier key, auth quota); CIMD clients get dcr.allowed_resources; disabling the policy hides materialised CIMD rows
+
+- [Phase 05]: 05-19: attribute values validated per definition fragment (object rules in the service); stored keys without a definition are kept on every write; define() is create-or-replace
+- [Phase 05]: 05-19: attribute names may not be reserved/standard claims; account-page edits need the settings-flow binding but no re-auth; nav entry shown via account_attributes_nav (other account pages: deferred)
 
 ### Pending Todos
 
@@ -403,6 +412,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-26T03:47:14.983Z
-Stopped at: Completed 05-18-PLAN.md
+Last session: 2026-11-26T04:09:32.360Z
+Stopped at: Completed 05-15-PLAN.md
 Resume file: None
