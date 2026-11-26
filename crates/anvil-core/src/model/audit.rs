@@ -469,6 +469,18 @@ impl AuditDetails {
         d
     }
 
+    /// A user export (ADM-09): the mode (`single`, `bulk`, `gdpr`), the number of users exported
+    /// and whether password hashes were included (CLI bulk export only). Never exported data.
+    pub fn user_export(mode: &'static str, count: u64, include_password_hashes: bool) -> Self {
+        let mut d = Self::one("mode", Value::from(mode));
+        d.0.insert("count".into(), Value::from(count));
+        d.0.insert(
+            "include_password_hashes".into(),
+            Value::from(include_password_hashes),
+        );
+        d
+    }
+
     /// An organization by id and slug.
     pub fn org(id: OrgId, slug: &str) -> Self {
         let mut d = Self::one("org_id", Value::from(id.to_string()));
