@@ -222,7 +222,7 @@ Plans:
 - [ ] 05-17-PLAN.md — CLI: online SQLite backup/restore, Postgres guidance, admin recover (incl. fresh admin on lockout), healthcheck (wave 4)
 - [ ] 05-18-PLAN.md — Token-endpoint performance: content-addressed signer cache, optional direct aws-lc signing, host negative cache (wave 3)
 - [ ] 05-19-PLAN.md — Custom attributes: AttributeService + account-page editing (wave 4)
-- [ ] 05-20-PLAN.md — Declarative tenant config: export/plan/apply (system tenant rules), admin JSON routes, YAML CLI, JSON Schema (wave 5)
+- [x] 05-20-PLAN.md — Declarative tenant config: export/plan/apply (system tenant rules), admin JSON routes, YAML CLI, JSON Schema (wave 5)
 - [ ] 05-21-PLAN.md — DCR: RFC 7591/7592 endpoints under policy, initial access tokens (wave 5)
 - [ ] 05-22-PLAN.md — Helm chart (database.type, Redis guard for replicas), Compose examples, Docker HEALTHCHECK, deploy CI (wave 5)
 - [ ] 05-23-PLAN.md — Admin API: attributes, webhooks + delivery log, DCR/CIMD policy, IATs, client/tenant DTO fields (wave 6)
