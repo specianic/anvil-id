@@ -31,3 +31,4 @@
   member by email" pages through the users list (up to 10000 users, then asks for the user id). An
   `?email=` filter on listUsers would make the lookup one request.
 - (from 06-19) `policy::mfa::effective_policy` now only forwards to `effective_policy_for` with no callers outside mfa.rs: remove it (one implementation) in the gate gap plan. Org MFA during the first password login arrives as an immediate step-up (login flow has no org yet); documented, acceptable.
+- (from 06-20, UX) After registering through an invitation the user is not signed in, and a signed-out user with an account must sign in and reopen the invitation link manually. Gap plan: return-to-invitation after sign-in (login flow carries a validated return target to /ui/invitation) and optionally sign in after invitation registration.
