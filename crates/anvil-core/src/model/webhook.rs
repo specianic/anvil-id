@@ -79,6 +79,18 @@ pub enum WebhookEventType {
     SessionRevoked,
     #[serde(rename = "session.logged_out")]
     SessionLoggedOut,
+    #[serde(rename = "organization.created")]
+    OrganizationCreated,
+    #[serde(rename = "organization.deleted")]
+    OrganizationDeleted,
+    #[serde(rename = "organization.member_added")]
+    OrganizationMemberAdded,
+    #[serde(rename = "organization.member_removed")]
+    OrganizationMemberRemoved,
+    #[serde(rename = "organization.domain_verified")]
+    OrganizationDomainVerified,
+    #[serde(rename = "organization.domain_unverified")]
+    OrganizationDomainUnverified,
     /// Sent by the console's "send test event" action only.
     #[serde(rename = "test")]
     Test,
@@ -94,6 +106,12 @@ str_enum!(WebhookEventType {
     SessionCreated => "session.created",
     SessionRevoked => "session.revoked",
     SessionLoggedOut => "session.logged_out",
+    OrganizationCreated => "organization.created",
+    OrganizationDeleted => "organization.deleted",
+    OrganizationMemberAdded => "organization.member_added",
+    OrganizationMemberRemoved => "organization.member_removed",
+    OrganizationDomainVerified => "organization.domain_verified",
+    OrganizationDomainUnverified => "organization.domain_unverified",
     Test => "test",
 });
 
@@ -254,7 +272,7 @@ mod tests {
             assert_eq!(json, format!("\"{}\"", t.as_str()));
             assert_eq!(serde_json::from_str::<WebhookEventType>(&json).unwrap(), *t);
         }
-        assert_eq!(WebhookEventType::ALL.len(), 10);
+        assert_eq!(WebhookEventType::ALL.len(), 16);
         assert_eq!(WebhookEventType::UserCreated.as_str(), "user.created");
         for s in DeliveryStatus::ALL {
             assert_eq!(DeliveryStatus::parse(s.as_str()), Some(*s));

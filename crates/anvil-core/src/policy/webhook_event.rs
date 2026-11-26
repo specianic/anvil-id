@@ -13,7 +13,12 @@
 //! ```
 //!
 //! `data` holds the tenant id (the tenant's `id` in the admin API; not the slug), the subject
-//! ids that apply (`user_id`, `session_id`, `client_id`) and the actor. Never an email address,
+//! ids that apply (`user_id`, `session_id`, `client_id`, `org_id`, `domain_id`) and the actor.
+//!
+//! Organization events follow fixed audit conventions: `organization.created|deleted` have the
+//! org id as target; `organization.member_added|removed` have the user id as target and the org
+//! in the details ([`crate::model::AuditDetails::org`]); `organization.domain_verified|unverified`
+//! have the domain id as target and the org in the details. Never an email address,
 //! name, IP address, user agent or any other audit detail. Ids are copied only when they look like identifiers (bounded, no `@`, no
 //! whitespace), so a mis-built audit event cannot smuggle personal data into a payload.
 
@@ -35,6 +40,12 @@ enum Subject {
     User,
     /// The target is a session id.
     Session,
+    /// The target is an organization id.
+    Org,
+    /// The target is a user id; the org id comes from the details.
+    Member,
+    /// The target is an organization domain id; the org id comes from the details.
+    Domain,
 }
 
 /// The event type and the meaning of the audit target for an action, or `None` when the action
@@ -57,6 +68,12 @@ fn classify(action: AuditAction) -> Option<(WebhookEventType, Subject)> {
         A::SessionRevoked => Some((W::SessionRevoked, Subject::Session)),
         A::SessionsRevokedAll => Some((W::SessionRevoked, Subject::User)),
         A::Logout => Some((W::SessionLoggedOut, Subject::Session)),
+        A::OrganizationCreated => Some((W::OrganizationCreated, Subject::Org)),
+        A::OrganizationDeleted => Some((W::OrganizationDeleted, Subject::Org)),
+        A::OrgMemberAdded => Some((W::OrganizationMemberAdded, Subject::Member)),
+        A::OrgMemberRemoved => Some((W::OrganizationMemberRemoved, Subject::Member)),
+        A::OrgDomainVerified => Some((W::OrganizationDomainVerified, Subject::Domain)),
+        A::OrgDomainUnverified => Some((W::OrganizationDomainUnverified, Subject::Domain)),
         A::LoginFailed
         | A::SecondFactorFailed
         | A::PasskeyRegistered
@@ -123,7 +140,19 @@ fn classify(action: AuditAction) -> Option<(WebhookEventType, Subject)> {
         | A::InitialAccessTokenCreated
         | A::InitialAccessTokenRevoked
         | A::TenantConfigApplied
-        | A::AdminRecoveryIssued => None,
+        | A::AdminRecoveryIssued
+        | A::OrganizationUpdated
+        | A::OrgRoleAssigned
+        | A::OrgRoleUnassigned
+        | A::OrgInvitationCreated
+        | A::OrgInvitationRevoked
+        | A::OrgInvitationAccepted
+        | A::OrgDomainCreated
+        | A::OrgDomainVerificationFailed
+        | A::OrgDomainUpdated
+        | A::OrgDomainDeleted
+        | A::SamlLoginSucceeded
+        | A::SamlLoginFailed => None,
     }
 }
 
@@ -172,10 +201,23 @@ pub fn webhook_event(tenant_id: &str, e: &NewAuditEvent) -> Option<WebhookEvent>
     data.insert("tenant".into(), tenant_id.into());
     if let Some(target) = e.target.as_deref().and_then(safe_id) {
         let key = match subject {
-            Subject::User => "user_id",
+            Subject::User | Subject::Member => "user_id",
             Subject::Session => "session_id",
+            Subject::Org => "org_id",
+            Subject::Domain => "domain_id",
         };
         data.insert(key.into(), target.into());
+    }
+    // Member and domain events name their organization (from the typed `org` details).
+    if matches!(subject, Subject::Member | Subject::Domain)
+        && let Some(org_id) = e
+            .details
+            .as_map()
+            .get("org_id")
+            .and_then(Value::as_str)
+            .and_then(safe_id)
+    {
+        data.insert("org_id".into(), org_id.into());
     }
     // A session ends on behalf of its user: name them when the user is the actor.
     if subject == Subject::Session
@@ -285,6 +327,12 @@ mod tests {
             (A::SessionRevoked, W::SessionRevoked),
             (A::SessionsRevokedAll, W::SessionRevoked),
             (A::Logout, W::SessionLoggedOut),
+            (A::OrganizationCreated, W::OrganizationCreated),
+            (A::OrganizationDeleted, W::OrganizationDeleted),
+            (A::OrgMemberAdded, W::OrganizationMemberAdded),
+            (A::OrgMemberRemoved, W::OrganizationMemberRemoved),
+            (A::OrgDomainVerified, W::OrganizationDomainVerified),
+            (A::OrgDomainUnverified, W::OrganizationDomainUnverified),
         ];
         for action in AuditAction::ALL {
             let got = webhook_event("acme", &ok(*action, USER)).map(|e| e.event_type);
@@ -386,7 +434,16 @@ mod tests {
         assert_eq!(top, ["data", "timestamp", "type"]);
         for k in v["data"].as_object().unwrap().keys() {
             assert!(
-                ["tenant", "user_id", "session_id", "client_id", "actor"].contains(&k.as_str()),
+                [
+                    "tenant",
+                    "user_id",
+                    "session_id",
+                    "client_id",
+                    "org_id",
+                    "domain_id",
+                    "actor"
+                ]
+                .contains(&k.as_str()),
                 "{k}"
             );
         }
@@ -421,6 +478,122 @@ mod tests {
                 assert_only_allowed_keys(&parse(&w));
             }
         }
+    }
+
+    const ORG: &str = "0192f0c2-7d6a-7b1e-9a40-5f2d1c3b4a52";
+    const DOMAIN: &str = "0192f0c2-7d6a-7b1e-9a40-5f2d1c3b4a53";
+
+    fn org_details() -> AuditDetails {
+        AuditDetails::org(
+            crate::model::OrgId(uuid::Uuid::parse_str(ORG).unwrap()),
+            "acme",
+        )
+    }
+
+    fn admin_event(action: AuditAction, target: &str, details: AuditDetails) -> NewAuditEvent {
+        event(
+            action,
+            AuditOutcome::Success,
+            AuditActor::admin("adm"),
+            Some(target),
+            details,
+        )
+    }
+
+    #[test]
+    fn organization_lifecycle_events_carry_the_org_id() {
+        for (action, ty) in [
+            (AuditAction::OrganizationCreated, "organization.created"),
+            (AuditAction::OrganizationDeleted, "organization.deleted"),
+        ] {
+            let w = webhook_event("acme", &admin_event(action, ORG, org_details())).unwrap();
+            let v = parse(&w);
+            assert_eq!(v["type"], ty);
+            assert_eq!(v["data"]["org_id"], ORG);
+            assert!(v["data"].get("user_id").is_none());
+            assert!(v["data"].get("org_slug").is_none());
+            assert_only_allowed_keys(&v);
+        }
+    }
+
+    #[test]
+    fn organization_member_events_carry_user_and_org_ids() {
+        for (action, ty) in [
+            (AuditAction::OrgMemberAdded, "organization.member_added"),
+            (AuditAction::OrgMemberRemoved, "organization.member_removed"),
+        ] {
+            let w = webhook_event("acme", &admin_event(action, USER, org_details())).unwrap();
+            let v = parse(&w);
+            assert_eq!(v["type"], ty);
+            assert_eq!(v["data"]["user_id"], USER);
+            assert_eq!(v["data"]["org_id"], ORG);
+            assert_only_allowed_keys(&v);
+        }
+    }
+
+    #[test]
+    fn organization_domain_events_carry_domain_and_org_ids_not_the_name() {
+        for (action, ty) in [
+            (
+                AuditAction::OrgDomainVerified,
+                "organization.domain_verified",
+            ),
+            (
+                AuditAction::OrgDomainUnverified,
+                "organization.domain_unverified",
+            ),
+        ] {
+            let details = org_details().with(AuditDetails::domain("acme.example"));
+            let w = webhook_event("acme", &admin_event(action, DOMAIN, details)).unwrap();
+            let v = parse(&w);
+            assert_eq!(v["type"], ty);
+            assert_eq!(v["data"]["domain_id"], DOMAIN);
+            assert_eq!(v["data"]["org_id"], ORG);
+            assert!(!w.payload_json.contains("acme.example"));
+            assert_only_allowed_keys(&v);
+        }
+    }
+
+    #[test]
+    fn other_organization_and_saml_actions_do_not_emit() {
+        for action in [
+            AuditAction::OrganizationUpdated,
+            AuditAction::OrgRoleAssigned,
+            AuditAction::OrgRoleUnassigned,
+            AuditAction::OrgInvitationCreated,
+            AuditAction::OrgInvitationRevoked,
+            AuditAction::OrgInvitationAccepted,
+            AuditAction::OrgDomainCreated,
+            AuditAction::OrgDomainVerificationFailed,
+            AuditAction::OrgDomainUpdated,
+            AuditAction::OrgDomainDeleted,
+            AuditAction::SamlLoginSucceeded,
+            AuditAction::SamlLoginFailed,
+        ] {
+            assert_eq!(
+                webhook_event("acme", &admin_event(action, ORG, org_details())),
+                None,
+                "{action:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn org_id_detail_that_is_not_an_id_is_dropped() {
+        // A details map whose org_id is not id-shaped never reaches the payload.
+        let details = AuditDetails::from_stored(
+            [("org_id".to_owned(), Value::from("alice@example.test"))]
+                .into_iter()
+                .collect(),
+        );
+        let w = webhook_event(
+            "acme",
+            &admin_event(AuditAction::OrgMemberAdded, USER, details),
+        )
+        .unwrap();
+        let v = parse(&w);
+        assert!(v["data"].get("org_id").is_none());
+        assert!(!w.payload_json.contains('@'));
     }
 
     #[test]

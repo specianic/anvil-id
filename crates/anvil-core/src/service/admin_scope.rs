@@ -2,7 +2,7 @@
 //!
 //! - `admin:read` grants read access to every resource; `admin:write` grants read and write access
 //!   to every resource.
-//! - `admin:{tenants|clients|users|sessions|audit|settings}:read` grants read access to that
+//! - `admin:{tenants|clients|users|sessions|audit|settings|organizations}:read` grants read access to that
 //!   resource only;
 //!   `admin:{resource}:write` grants read and write access to that resource only.
 //!
@@ -32,7 +32,16 @@ pub const ALL_ADMIN_SCOPES: &[&str] = &[
     "admin:audit:write",
     "admin:settings:read",
     "admin:settings:write",
+    "admin:organizations:read",
+    "admin:organizations:write",
 ];
+
+/// Scope of an organization admin's token in an application tenant (decision Q1). Not an
+/// `admin:*` token ([`is_reserved_admin_token`] stays false): it is granted only at issuance,
+/// bounded per organization by the user's org-role permissions, and accepted only on that org's
+/// admin sub-routes together with a matching `org_id`. Its reservation rules (DCR, client scopes)
+/// land with the org admin path.
+pub const ORG_ADMIN_SCOPE: &str = "org:admin";
 
 /// A management resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -46,6 +55,9 @@ pub enum Resource {
     Audit,
     /// Tenant settings managed apart from the tenant record (signing keys, CAPTCHA, email).
     Settings,
+    /// Organizations and everything they own (members, invitations, org roles, org
+    /// connections, domains).
+    Organizations,
 }
 
 impl Resource {
@@ -58,6 +70,7 @@ impl Resource {
             Self::Sessions => "sessions",
             Self::Audit => "audit",
             Self::Settings => "settings",
+            Self::Organizations => "organizations",
         }
     }
 }
@@ -109,13 +122,14 @@ pub fn is_reserved_admin_token(token: &str) -> bool {
 mod tests {
     use super::*;
 
-    const RESOURCES: [Resource; 6] = [
+    const RESOURCES: [Resource; 7] = [
         Resource::Tenants,
         Resource::Clients,
         Resource::Users,
         Resource::Sessions,
         Resource::Audit,
         Resource::Settings,
+        Resource::Organizations,
     ];
 
     fn scope(s: &str) -> Scope {
@@ -191,7 +205,10 @@ mod tests {
         assert!(is_admin_scope("admin:sessions:write"));
         assert!(is_admin_scope("admin:audit:read"));
         assert!(is_admin_scope("admin:settings:write"));
+        assert!(is_admin_scope("admin:organizations:read"));
+        assert!(is_admin_scope("admin:organizations:write"));
         assert!(!is_admin_scope("openid"));
+        assert!(!is_admin_scope(ORG_ADMIN_SCOPE));
     }
 
     #[test]
@@ -204,6 +221,14 @@ mod tests {
         }
         for t in ["openid", "administrator", "xadmin:read", "Admin:read", ""] {
             assert!(!is_reserved_admin_token(t), "{t}");
+        }
+        // The org admin scope is not an admin API token: it never satisfies an admin route.
+        assert_eq!(ORG_ADMIN_SCOPE, "org:admin");
+        assert!(!is_reserved_admin_token(ORG_ADMIN_SCOPE));
+        let s = scope(ORG_ADMIN_SCOPE);
+        for r in RESOURCES {
+            assert!(!scope_satisfies(&s, r, Access::Read));
+            assert!(!scope_satisfies(&s, r, Access::Write));
         }
     }
 }

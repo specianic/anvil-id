@@ -10,7 +10,7 @@ use serde_json::{Map, Value};
 use time::OffsetDateTime;
 
 use super::credential::CredentialKind;
-use super::ids::{AuditEventId, TenantId, WebhookDeliveryId, str_enum};
+use super::ids::{AuditEventId, ConnectionId, OrgId, TenantId, WebhookDeliveryId, str_enum};
 use super::mail_settings::EmailKind;
 use super::registration::ClientSource;
 use super::webhook::{WebhookEvent, WebhookEventType};
@@ -198,6 +198,24 @@ pub enum AuditAction {
     InitialAccessTokenRevoked,
     TenantConfigApplied,
     AdminRecoveryIssued,
+    OrganizationCreated,
+    OrganizationUpdated,
+    OrganizationDeleted,
+    OrgMemberAdded,
+    OrgMemberRemoved,
+    OrgRoleAssigned,
+    OrgRoleUnassigned,
+    OrgInvitationCreated,
+    OrgInvitationRevoked,
+    OrgInvitationAccepted,
+    OrgDomainCreated,
+    OrgDomainVerified,
+    OrgDomainVerificationFailed,
+    OrgDomainUnverified,
+    OrgDomainUpdated,
+    OrgDomainDeleted,
+    SamlLoginSucceeded,
+    SamlLoginFailed,
 }
 
 str_enum!(AuditAction {
@@ -281,6 +299,24 @@ str_enum!(AuditAction {
     InitialAccessTokenRevoked => "initial_access_token_revoked",
     TenantConfigApplied => "tenant_config_applied",
     AdminRecoveryIssued => "admin_recovery_issued",
+    OrganizationCreated => "organization_created",
+    OrganizationUpdated => "organization_updated",
+    OrganizationDeleted => "organization_deleted",
+    OrgMemberAdded => "org_member_added",
+    OrgMemberRemoved => "org_member_removed",
+    OrgRoleAssigned => "org_role_assigned",
+    OrgRoleUnassigned => "org_role_unassigned",
+    OrgInvitationCreated => "org_invitation_created",
+    OrgInvitationRevoked => "org_invitation_revoked",
+    OrgInvitationAccepted => "org_invitation_accepted",
+    OrgDomainCreated => "org_domain_created",
+    OrgDomainVerified => "org_domain_verified",
+    OrgDomainVerificationFailed => "org_domain_verification_failed",
+    OrgDomainUnverified => "org_domain_unverified",
+    OrgDomainUpdated => "org_domain_updated",
+    OrgDomainDeleted => "org_domain_deleted",
+    SamlLoginSucceeded => "saml_login_succeeded",
+    SamlLoginFailed => "saml_login_failed",
 });
 
 /// Structured event details. Only typed constructors build it, and none of them accepts a
@@ -421,6 +457,24 @@ impl AuditDetails {
         d
     }
 
+    /// An organization by id and slug.
+    pub fn org(id: OrgId, slug: &str) -> Self {
+        let mut d = Self::one("org_id", Value::from(id.to_string()));
+        d.0.insert("org_slug".into(), Value::from(slug));
+        d
+    }
+
+    /// An organization domain (normalised A-label; public DNS data).
+    pub fn domain(domain: &str) -> Self {
+        Self::one("domain", Value::from(domain))
+    }
+
+    /// A connection by id (SAML/OIDC sign-in through an org connection). Never its
+    /// configuration, assertion, NameID or attribute values.
+    pub fn connection_id(id: ConnectionId) -> Self {
+        Self::one("connection_id", Value::from(id.to_string()))
+    }
+
     /// Merges `other` into `self` (later keys win).
     pub fn with(mut self, other: AuditDetails) -> Self {
         self.0.extend(other.0);
@@ -510,7 +564,16 @@ mod tests {
         for v in AuditOutcome::ALL {
             assert_eq!(AuditOutcome::parse(v.as_str()), Some(*v));
         }
-        assert_eq!(AuditAction::ALL.len(), 80);
+        assert_eq!(AuditAction::ALL.len(), 98);
+        assert_eq!(
+            AuditAction::OrgDomainVerificationFailed.as_str(),
+            "org_domain_verification_failed"
+        );
+        assert_eq!(AuditAction::SamlLoginFailed.as_str(), "saml_login_failed");
+        assert_eq!(
+            AuditAction::OrganizationCreated.as_str(),
+            "organization_created"
+        );
         assert_eq!(
             AuditAction::AdminRecoveryIssued.as_str(),
             "admin_recovery_issued"
@@ -587,6 +650,15 @@ mod tests {
             AuditDetails::client_source(ClientSource::Cimd).as_map()["source"],
             "cimd"
         );
+        let org = OrgId::new_v7();
+        let o = AuditDetails::org(org, "acme").with(AuditDetails::domain("acme.example"));
+        assert_eq!(o.as_map()["org_id"], org.to_string());
+        assert_eq!(o.as_map()["org_slug"], "acme");
+        assert_eq!(o.as_map()["domain"], "acme.example");
+        let conn = ConnectionId::new_v7();
+        let c = AuditDetails::connection_id(conn).with(AuditDetails::reason("audience"));
+        assert_eq!(c.as_map()["connection_id"], conn.to_string());
+        assert_eq!(c.as_map()["reason"], "audience");
         let p = AuditDetails::config_plan(1, 2, 0);
         assert_eq!(
             (p.as_map()["creates"].clone(), p.as_map()["deletes"].clone()),
