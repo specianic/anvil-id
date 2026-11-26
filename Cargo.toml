@@ -133,6 +133,25 @@ serde-saphyr = "2.2.0"
 # Attribute JSON Schemas: offline only (no remote $ref resolution).
 jsonschema = { version = "0.63.1", default-features = false }
 
+# Phase 6 (release 1.0). Every crate Phase 6 needs is declared here once.
+# XML-DSig for the SAML SP (ARCHITECTURE.md §20 D4): the bergshamra sub-crates, never the top `bergshamra`
+# crate (clap, bergshamra-enc). Providers are mutually exclusive: aws-lc only, never the RustCrypto default.
+# bergshamra-keys -> tsp-ltv pulls chrono: the single scoped wrapper exception in deny.toml (decision Q2).
+bergshamra-dsig = { version = "0.12.0", default-features = false, features = ["aws-lc"] }
+bergshamra-keys = { version = "0.12.0", default-features = false, features = ["aws-lc"] }
+bergshamra-xml = { version = "0.12.0", default-features = false }
+# The one XML parser (bergshamra's DOM). Always `Parser::with_forbid_dtd(true)`: DTDs are parsed by default.
+uppsala = "0.12.1"
+# DNS TXT domain verification. Default features (`system-config`, `tokio`) pull no TLS/ring.
+hickory-resolver = "0.26.4"
+# Dev-only: local UDP DNS stub encodes answers (same line as hickory-resolver's own hickory-proto).
+hickory-proto = "0.26.4"
+# Domain rules in anvil-core (pure data/algorithms, no I/O).
+psl = "2.1"
+idna = "1.1.0"
+# DEFLATE for the SAML HTTP-Redirect binding: pure Rust (miniz_oxide).
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+
 # Dev-only (tests).
 proptest = "1.12.0"
 insta = { version = "1.49.0", features = ["json"] }

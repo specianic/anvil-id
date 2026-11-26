@@ -74,7 +74,9 @@ deny = [
   { crate = "native-tls", reason = "rustls only" },
   { crate = "ring", reason = "single crypto backend: aws-lc-rs (not currently in graph; if it becomes unavoidable, use wrappers = [..] and document)" },
   { crate = "rsa", wrappers = ["crypto-glue"], reason = "RUSTSEC-2023-0071 (Marvin) concerns private-key ops; webauthn-rs verifies with public keys only (ARCHITECTURE.md §2)" },
-  { crate = "chrono", reason = "time crate only" },
+  # The ONLY chrono exception (decision Q2, option A; owner review pending). bergshamra-keys hard-depends on
+  # tsp-ltv, which hard-depends on chrono; nothing else may pull chrono and our code uses `time`.
+  { crate = "chrono", wrappers = ["tsp-ltv"], reason = "bergshamra-keys -> tsp-ltv (X.509 trust facade) needs chrono; our code stays on `time` (ARCHITECTURE §2, decision Q2)" },
   { crate = "samael", reason = "C XML security libs" },
   { crate = "xmlsec", reason = "C XML security libs" },
   { crate = "oxide-auth", reason = "dormant; we own the OAuth state machine" },

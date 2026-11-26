@@ -13,6 +13,9 @@ workspace = true
 [dependencies]
 anvil-jose.workspace = true
 async-trait.workspace = true
+# Domain normalisation and public-suffix rules (policy::home_realm): pure, no I/O.
+idna.workspace = true
+psl.workspace = true
 secrecy.workspace = true
 serde.workspace = true
 serde_json.workspace = true

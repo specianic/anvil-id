@@ -19,8 +19,15 @@ async-trait.workspace = true
 aws-lc-rs.workspace = true
 axum.workspace = true
 axum-extra.workspace = true
+# SAML SP (06-09): XML-DSig on aws-lc, uppsala as the single parser, DEFLATE for HTTP-Redirect.
+bergshamra-dsig.workspace = true
+bergshamra-keys.workspace = true
+bergshamra-xml.workspace = true
+flate2.workspace = true
 fluent-bundle.workspace = true
 fluent-langneg.workspace = true
+# DNS TXT domain verification adapter (06-10).
+hickory-resolver.workspace = true
 ipnet.workspace = true
 jsonschema.workspace = true
 metrics.workspace = true
@@ -39,6 +46,7 @@ tower.workspace = true
 tower-http.workspace = true
 tracing.workspace = true
 unic-langid.workspace = true
+uppsala.workspace = true
 url.workspace = true
 utoipa.workspace = true
 utoipa-axum.workspace = true
@@ -50,6 +58,8 @@ zeroize.workspace = true
 anvil-storage = { workspace = true, features = ["postgres-container"] }
 anvil-storage-postgres.workspace = true
 anvil-storage-sqlite.workspace = true
+# Local UDP DNS stub for the dns_txt adapter tests (encodes answers).
+hickory-proto.workspace = true
 http-body-util.workspace = true
 insta.workspace = true
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
