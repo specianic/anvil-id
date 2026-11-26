@@ -22,7 +22,17 @@
 //! Every mutation records exactly one audit event in the connection's tenant
 //! (`connection_created`, `connection_updated`, `connection_secret_rotated`,
 //! `connection_deleted`), target = the connection id, details = slug and kind (plus changed
-//! field names for updates). Failed calls record nothing.
+//! field names for updates, and `org_id` / `org_slug` for an organization's connection). Failed
+//! calls record nothing.
+//!
+//! **Owners** ([`ConnectionOwner`]): a connection belongs to the tenant (sign-in buttons) or to
+//! one organization (enterprise SSO, ORG-03). Both share the tenant's slug namespace and callback
+//! URL format. Organization connections are OIDC or SAML; they are managed only through the
+//! organization (the tenant-level calls see them but refuse to change them, 409). SAML
+//! connections (decision Q3) exist only per organization (tenant level: 422) and only while the
+//! operator flag `saml_experimental` is on: creating one, and every change to one except
+//! disabling it, answers `FeatureDisabled("saml")` (403) when the flag is off. Deleting stays
+//! possible. A SAML connection has no client secret.
 
 use std::sync::Arc;
 
@@ -36,8 +46,9 @@ use crate::error::CoreError;
 use crate::model::{
     AuditAction, AuditActor, AuditDetails, AuditOutcome, CONNECTION_SECRET_PURPOSE, ClaimMapping,
     Connection, ConnectionConfig, ConnectionId, ConnectionKind, ConnectionUpdate,
-    EndpointOverrides, NewConnection, OAuth2Config, OidcConfig, RequestContext, Scope,
-    SocialConfig, SocialProvider, TenantId, connection_aad, truncate_to_ms,
+    EndpointOverrides, IdpMetadata, NewConnection, OAuth2Config, OidcConfig, OrgId, Organization,
+    RequestContext, SamlConfig, Scope, SocialConfig, SocialProvider, TenantId, connection_aad,
+    truncate_to_ms,
 };
 use crate::ports::{SamlXml, Storage, StorageError};
 use crate::service::audit::AuditService;
@@ -307,17 +318,68 @@ fn validate_oauth2(o: &OAuth2Config) -> Result<(), CoreError> {
     validate_mapping(&o.mapping)
 }
 
-/// Static validation of a connection config. Kinds that need no discovery are also resolved
-/// with [`providers::resolve`] (the sign-in flow resolves them the same way), so a config that
-/// is stored can be resolved later.
+/// Static validation of a **tenant-level** connection config (admin API, tenant YAML). A SAML
+/// config is refused here: SAML connections belong to an organization
+/// ([`validate_config_for`]).
 pub fn validate_config(config: &ConnectionConfig) -> Result<(), CoreError> {
+    validate_config_for(config, false)
+}
+
+/// The `config.`-prefixed name of a field reported by [`SamlConfig::validate`].
+fn saml_field(field: &'static str) -> &'static str {
+    match field {
+        "idp_entity_id" => "config.idp_entity_id",
+        "sso_url" => "config.sso_url",
+        "signing_certs" => "config.signing_certs",
+        "name_id_format" => "config.name_id_format",
+        "metadata_url" => "config.metadata_url",
+        _ => "config",
+    }
+}
+
+/// Static validation of a SAML config ([`SamlConfig::validate`], fields `config.*`). Whether
+/// each certificate parses as X.509 is checked by the caller with the SAML adapter's loader
+/// (anvil-core has no X.509 parser).
+pub fn validate_saml(c: &SamlConfig) -> Result<(), CoreError> {
+    c.validate().map_err(|e| match e {
+        CoreError::Validation { field, message } => CoreError::Validation {
+            field: saml_field(field),
+            message,
+        },
+        other => other,
+    })
+}
+
+/// Static validation of a connection config for its owner (`in_org`: an organization's
+/// connection). Kinds that need no discovery are also resolved with [`providers::resolve`] (the
+/// sign-in flow resolves them the same way), so a config that is stored can be resolved later.
+/// Organization connections are OIDC or SAML; SAML is refused at tenant level.
+pub fn validate_config_for(config: &ConnectionConfig, in_org: bool) -> Result<(), CoreError> {
+    if in_org
+        && !matches!(
+            config,
+            ConnectionConfig::Oidc(_) | ConnectionConfig::Saml(_)
+        )
+    {
+        return Err(invalid(
+            "config",
+            "an organization connection is an OIDC or SAML connection",
+        ));
+    }
     match config {
         ConnectionConfig::Social(s) => validate_social(s)?,
         ConnectionConfig::Oidc(o) => return validate_oidc(o),
         ConnectionConfig::Oauth2(o) => validate_oauth2(o)?,
-        // TRANSITIONAL(06-17): SAML connections are refused until 06-17 adds the SAML rules
-        // (experimental flag, `SamlConfig::validate`, org scoping).
-        ConnectionConfig::Saml(_) => return Err(CoreError::FeatureDisabled("saml")),
+        ConnectionConfig::Saml(c) => {
+            if !in_org {
+                return Err(invalid(
+                    "config",
+                    "SAML connections belong to an organization; create them under the \
+                     organization's connections",
+                ));
+            }
+            return validate_saml(c);
+        }
     }
     let probe = Connection {
         id: ConnectionId(uuid::Uuid::nil()),
@@ -433,18 +495,33 @@ fn check_email_trust(
     Ok(())
 }
 
-/// Validates a create request and builds the row to insert (secret sealed for the new id).
-/// Returns whether a Microsoft email-trust risk was accepted (for the audit event).
+/// Validates a create request of a tenant-level connection and builds the row to insert
+/// (secret sealed for the new id). Returns whether a Microsoft email-trust risk was accepted
+/// (for the audit event).
 pub fn plan_create(
     kek: &Kek,
     tenant: TenantId,
     input: NewConnectionInput,
     now: time::OffsetDateTime,
 ) -> Result<(NewConnection, bool), CoreError> {
+    plan_create_for(kek, tenant, None, input, now)
+}
+
+/// [`plan_create`] for an owner: `org` = the organization the connection belongs to.
+pub fn plan_create_for(
+    kek: &Kek,
+    tenant: TenantId,
+    org: Option<OrgId>,
+    input: NewConnectionInput,
+    now: time::OffsetDateTime,
+) -> Result<(NewConnection, bool), CoreError> {
     validate_connection_slug(&input.slug)?;
     let display_name = validate_display_name(&input.display_name)?;
-    validate_config(&input.config)?;
+    validate_config_for(&input.config, org.is_some())?;
     let kind = input.config.kind();
+    if kind == ConnectionKind::Saml && input.secret.is_some() {
+        return Err(no_saml_secret());
+    }
     let trust = input
         .trust_email_verified
         .unwrap_or_else(|| kind.default_email_trust());
@@ -468,10 +545,14 @@ pub fn plan_create(
             secret_enc,
             trust_email_verified: trust,
             created_at: now,
-            org_id: None,
+            org_id: org,
         },
         risk,
     ))
+}
+
+fn no_saml_secret() -> CoreError {
+    invalid("secret", "a SAML connection has no client secret")
 }
 
 /// Validates a patch against the current connection and builds the storage update plus the
@@ -499,7 +580,7 @@ pub fn plan_update(
                 "the kind of a connection cannot change; create a new connection instead",
             ));
         }
-        validate_config(config)?;
+        validate_config_for(config, current.org_id.is_some())?;
         fields.push("config");
     }
     let kind = current.kind();
@@ -521,6 +602,25 @@ pub fn plan_update(
     ))
 }
 
+/// Who owns a connection: the tenant, or one organization of it.
+#[derive(Debug, Clone, Copy)]
+pub enum ConnectionOwner<'a> {
+    /// Tenant-level calls (admin API `…/connections`, tenant YAML): they see every connection
+    /// of the tenant but change only tenant-level ones.
+    Tenant,
+    /// An organization's calls: they see and change only that organization's connections.
+    Org(&'a Organization),
+}
+
+impl ConnectionOwner<'_> {
+    fn org_id(&self) -> Option<OrgId> {
+        match self {
+            Self::Tenant => None,
+            Self::Org(o) => Some(o.id),
+        }
+    }
+}
+
 /// Upstream connection administration and the single place connection secrets are opened.
 #[derive(Clone)]
 pub struct ConnectionService {
@@ -529,12 +629,22 @@ pub struct ConnectionService {
     /// Seals and opens connection secrets; must be the KEK the sign-in flow uses.
     pub kek: Arc<Kek>,
     /// The operator flag `saml_experimental` (decision Q3, off by default). SAML connections
-    /// can only be created or updated when it is on (enforced from 06-17; until then
-    /// `validate_config` refuses SAML with `FeatureDisabled`).
+    /// can only be created, enabled or changed while it is on (disabling and deleting always
+    /// work).
     pub saml_enabled: bool,
-    /// Parses IdP metadata for SAML connections (06-17). `None` where SAML is never configured
-    /// (CLI tenant config apply, the upstream sign-in flow opening secrets).
+    /// Parses IdP metadata for SAML connections (the admin API's metadata import). `None` where
+    /// SAML is never configured (CLI tenant config apply, the upstream sign-in flow opening
+    /// secrets).
     pub saml_xml: Option<Arc<dyn SamlXml>>,
+}
+
+/// Whether a patch only disables the connection (allowed for SAML with the flag off, so an
+/// operator can always switch a connection off).
+fn only_disables(patch: &ConnectionPatch) -> bool {
+    patch.enabled == Some(false)
+        && patch.display_name.is_none()
+        && patch.config.is_none()
+        && patch.trust_email_verified.is_none()
 }
 
 impl ConnectionService {
@@ -548,11 +658,16 @@ impl ConnectionService {
     async fn record(
         &self,
         conn: &Connection,
+        owner: ConnectionOwner<'_>,
         actor: AuditActor,
         action: AuditAction,
         ctx: &RequestContext,
         extra: AuditDetails,
     ) -> Result<(), CoreError> {
+        let mut details = AuditDetails::connection(&conn.slug, conn.kind().as_str()).with(extra);
+        if let ConnectionOwner::Org(org) = owner {
+            details = details.with(AuditDetails::org(org.id, &org.slug));
+        }
         self.audit()
             .record(
                 conn.tenant_id,
@@ -561,14 +676,36 @@ impl ConnectionService {
                 Some(conn.id.to_string()),
                 AuditOutcome::Success,
                 ctx,
-                AuditDetails::connection(&conn.slug, conn.kind().as_str()).with(extra),
+                details,
             )
             .await
     }
 
-    /// Every connection of the tenant, in slug order.
+    /// `FeatureDisabled("saml")` unless the operator flag is on.
+    fn require_saml(&self) -> Result<(), CoreError> {
+        if self.saml_enabled {
+            Ok(())
+        } else {
+            Err(CoreError::FeatureDisabled("saml"))
+        }
+    }
+
+    /// Every connection of the tenant (tenant-level and organizations'), in slug order.
     pub async fn list(&self, tenant: TenantId) -> Result<Vec<Connection>, CoreError> {
         Ok(self.storage.connections().list(tenant).await?)
+    }
+
+    /// The connections of `org`, in slug order.
+    pub async fn list_for_org(
+        &self,
+        tenant: TenantId,
+        org: &Organization,
+    ) -> Result<Vec<Connection>, CoreError> {
+        Ok(self
+            .storage
+            .connections()
+            .list_for_org(tenant, org.id)
+            .await?)
     }
 
     /// The connection `id` of `tenant`; `NotFound` for another tenant's connection.
@@ -580,8 +717,42 @@ impl ConnectionService {
             .ok_or(CoreError::NotFound)
     }
 
-    /// Validates and creates a connection (secret sealed before it is stored). Audited as
-    /// `connection_created`; a duplicate slug is `Conflict`.
+    /// The connection `id` as seen by `owner`: an organization sees only its own connections
+    /// (`NotFound` for every other one); the tenant sees all.
+    pub async fn get_owned(
+        &self,
+        tenant: TenantId,
+        owner: ConnectionOwner<'_>,
+        id: ConnectionId,
+    ) -> Result<Connection, CoreError> {
+        let conn = self.get(tenant, id).await?;
+        match owner {
+            ConnectionOwner::Org(org) if conn.org_id != Some(org.id) => Err(CoreError::NotFound),
+            _ => Ok(conn),
+        }
+    }
+
+    /// The connection `owner` may change: its own, and for the tenant only tenant-level ones (an
+    /// organization's connection is managed through the organization, `Conflict`).
+    async fn get_mutable(
+        &self,
+        tenant: TenantId,
+        owner: ConnectionOwner<'_>,
+        id: ConnectionId,
+    ) -> Result<Connection, CoreError> {
+        let conn = self.get_owned(tenant, owner, id).await?;
+        if matches!(owner, ConnectionOwner::Tenant) && conn.org_id.is_some() {
+            return Err(CoreError::Conflict(
+                "this connection belongs to an organization; change it under the \
+                 organization's connections"
+                    .into(),
+            ));
+        }
+        Ok(conn)
+    }
+
+    /// Validates and creates a tenant-level connection (secret sealed before it is stored).
+    /// Audited as `connection_created`; a duplicate slug is `Conflict`.
     pub async fn create(
         &self,
         tenant: TenantId,
@@ -589,8 +760,25 @@ impl ConnectionService {
         actor: AuditActor,
         ctx: &RequestContext,
     ) -> Result<Connection, CoreError> {
+        self.create_as(tenant, ConnectionOwner::Tenant, input, actor, ctx)
+            .await
+    }
+
+    /// [`Self::create`] for `owner`. An organization's connection is OIDC or SAML; SAML needs
+    /// the operator flag (`FeatureDisabled`) and an organization (422 at tenant level).
+    pub async fn create_as(
+        &self,
+        tenant: TenantId,
+        owner: ConnectionOwner<'_>,
+        input: NewConnectionInput,
+        actor: AuditActor,
+        ctx: &RequestContext,
+    ) -> Result<Connection, CoreError> {
         let now = truncate_to_ms(self.clock.now());
-        let (new, risk) = plan_create(&self.kek, tenant, input, now)?;
+        let (new, risk) = plan_create_for(&self.kek, tenant, owner.org_id(), input, now)?;
+        if new.config.kind() == ConnectionKind::Saml {
+            self.require_saml()?;
+        }
         let conn = self
             .storage
             .connections()
@@ -607,13 +795,20 @@ impl ConnectionService {
         } else {
             AuditDetails::empty()
         };
-        self.record(&conn, actor, AuditAction::ConnectionCreated, ctx, extra)
-            .await?;
+        self.record(
+            &conn,
+            owner,
+            actor,
+            AuditAction::ConnectionCreated,
+            ctx,
+            extra,
+        )
+        .await?;
         Ok(conn)
     }
 
-    /// Applies a patch (slug and kind are fixed). Audited as `connection_updated` with the
-    /// changed field names.
+    /// Applies a patch to a tenant-level connection (slug and kind are fixed). Audited as
+    /// `connection_updated` with the changed field names.
     pub async fn update(
         &self,
         tenant: TenantId,
@@ -622,7 +817,25 @@ impl ConnectionService {
         actor: AuditActor,
         ctx: &RequestContext,
     ) -> Result<Connection, CoreError> {
-        let current = self.get(tenant, id).await?;
+        self.update_as(tenant, ConnectionOwner::Tenant, id, patch, actor, ctx)
+            .await
+    }
+
+    /// [`Self::update`] for `owner`. Every change to a SAML connection except disabling it needs
+    /// the operator flag.
+    pub async fn update_as(
+        &self,
+        tenant: TenantId,
+        owner: ConnectionOwner<'_>,
+        id: ConnectionId,
+        patch: ConnectionPatch,
+        actor: AuditActor,
+        ctx: &RequestContext,
+    ) -> Result<Connection, CoreError> {
+        let current = self.get_mutable(tenant, owner, id).await?;
+        if current.kind() == ConnectionKind::Saml && !only_disables(&patch) {
+            self.require_saml()?;
+        }
         let (update, fields, risk) = plan_update(&current, patch)?;
         let conn = self
             .storage
@@ -634,13 +847,21 @@ impl ConnectionService {
         if risk {
             extra = extra.with(AuditDetails::reason("email_trust_risk_accepted"));
         }
-        self.record(&conn, actor, AuditAction::ConnectionUpdated, ctx, extra)
-            .await?;
+        self.record(
+            &conn,
+            owner,
+            actor,
+            AuditAction::ConnectionUpdated,
+            ctx,
+            extra,
+        )
+        .await?;
         Ok(conn)
     }
 
-    /// Replaces (`Some`, validated and sealed) or clears (`None`) the secret. Audited as
-    /// `connection_secret_rotated` (reason `cleared` when cleared); never with the secret.
+    /// Replaces (`Some`, validated and sealed) or clears (`None`) the secret of a tenant-level
+    /// connection. Audited as `connection_secret_rotated` (reason `cleared` when cleared); never
+    /// with the secret.
     pub async fn set_secret(
         &self,
         tenant: TenantId,
@@ -649,7 +870,24 @@ impl ConnectionService {
         actor: AuditActor,
         ctx: &RequestContext,
     ) -> Result<Connection, CoreError> {
-        let current = self.get(tenant, id).await?;
+        self.set_secret_as(tenant, ConnectionOwner::Tenant, id, secret, actor, ctx)
+            .await
+    }
+
+    /// [`Self::set_secret`] for `owner`. A SAML connection has no secret (422).
+    pub async fn set_secret_as(
+        &self,
+        tenant: TenantId,
+        owner: ConnectionOwner<'_>,
+        id: ConnectionId,
+        secret: Option<SecretString>,
+        actor: AuditActor,
+        ctx: &RequestContext,
+    ) -> Result<Connection, CoreError> {
+        let current = self.get_mutable(tenant, owner, id).await?;
+        if current.kind() == ConnectionKind::Saml {
+            return Err(no_saml_secret());
+        }
         let sealed = match &secret {
             None => None,
             Some(s) => {
@@ -678,6 +916,7 @@ impl ConnectionService {
         };
         self.record(
             &conn,
+            owner,
             actor,
             AuditAction::ConnectionSecretRotated,
             ctx,
@@ -687,7 +926,8 @@ impl ConnectionService {
         Ok(conn)
     }
 
-    /// Deletes the connection and its identity links. Audited as `connection_deleted`.
+    /// Deletes a tenant-level connection and its identity links. Audited as
+    /// `connection_deleted`.
     pub async fn delete(
         &self,
         tenant: TenantId,
@@ -695,18 +935,54 @@ impl ConnectionService {
         actor: AuditActor,
         ctx: &RequestContext,
     ) -> Result<(), CoreError> {
-        let current = self.get(tenant, id).await?;
+        self.delete_as(tenant, ConnectionOwner::Tenant, id, actor, ctx)
+            .await
+    }
+
+    /// [`Self::delete`] for `owner` (also for SAML with the flag off). Domains routed to the
+    /// connection keep their claim and lose the routing target (storage).
+    pub async fn delete_as(
+        &self,
+        tenant: TenantId,
+        owner: ConnectionOwner<'_>,
+        id: ConnectionId,
+        actor: AuditActor,
+        ctx: &RequestContext,
+    ) -> Result<(), CoreError> {
+        let current = self.get_mutable(tenant, owner, id).await?;
         if !self.storage.connections().delete(tenant, id).await? {
             return Err(CoreError::NotFound);
         }
         self.record(
             &current,
+            owner,
             actor,
             AuditAction::ConnectionDeleted,
             ctx,
             AuditDetails::empty(),
         )
         .await
+    }
+
+    /// Parses pasted or fetched IdP metadata (`md:EntityDescriptor`) into the values an
+    /// administrator may import. Needs the operator flag; persists nothing. The error names the
+    /// adapter's reason code only.
+    pub fn parse_idp_metadata(
+        &self,
+        field: &'static str,
+        xml: &[u8],
+    ) -> Result<IdpMetadata, CoreError> {
+        self.require_saml()?;
+        let parser = self
+            .saml_xml
+            .as_ref()
+            .ok_or_else(|| CoreError::Internal("no SAML XML adapter configured".into()))?;
+        parser
+            .parse_metadata(xml)
+            .map_err(|reason| CoreError::Validation {
+                field,
+                message: format!("is not usable SAML IdP metadata ({reason})"),
+            })
     }
 
     /// The plaintext secret of `conn` (`None` when none is configured). This is the only place
@@ -1234,5 +1510,136 @@ mod tests {
             Some("very-secret-value"),
         );
         assert!(!format!("{i:?}").contains("very-secret-value"));
+    }
+
+    const CERT: &str =
+        "-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUQ==\n-----END CERTIFICATE-----\n";
+
+    fn saml() -> ConnectionConfig {
+        ConnectionConfig::Saml(SamlConfig {
+            idp_entity_id: "https://idp.example.test/entity".into(),
+            sso_url: "https://idp.example.test/sso".into(),
+            signing_certs: vec![CERT.into()],
+            name_id_format: crate::model::NameIdFormat::Persistent,
+            attributes: crate::model::SamlAttributeMapping::default(),
+            metadata_url: None,
+        })
+    }
+
+    fn oidc_config() -> ConnectionConfig {
+        ConnectionConfig::Oidc(OidcConfig {
+            issuer: "https://idp.example.test".into(),
+            client_id: "client-123".into(),
+            scopes: vec![],
+            use_pkce: true,
+            fetch_userinfo: false,
+        })
+    }
+
+    #[test]
+    fn saml_is_refused_at_tenant_level() {
+        let kek = Kek::generate();
+        let t = TenantId::new_v7();
+        assert_eq!(field(validate_config(&saml())), "config");
+        assert_eq!(
+            field(plan_create(&kek, t, input("s", saml(), None), now())),
+            "config"
+        );
+    }
+
+    #[test]
+    fn org_connections_are_oidc_or_saml() {
+        let kek = Kek::generate();
+        let t = TenantId::new_v7();
+        let org = Some(OrgId::new_v7());
+        let (new, _) = plan_create_for(&kek, t, org, input("s", saml(), None), now()).unwrap();
+        assert_eq!(new.org_id, org);
+        let (new, _) =
+            plan_create_for(&kek, t, org, input("o", oidc_config(), Some("x")), now()).unwrap();
+        assert_eq!(new.org_id, org);
+        let social = ConnectionConfig::Social(social(SocialProvider::Google));
+        assert_eq!(
+            field(plan_create_for(
+                &kek,
+                t,
+                org,
+                input("g", social, None),
+                now()
+            )),
+            "config"
+        );
+    }
+
+    #[test]
+    fn saml_rules_name_config_fields_and_refuse_a_secret() {
+        let kek = Kek::generate();
+        let t = TenantId::new_v7();
+        let org = Some(OrgId::new_v7());
+        let with = |f: &dyn Fn(&mut SamlConfig)| {
+            let ConnectionConfig::Saml(mut c) = saml() else {
+                unreachable!()
+            };
+            f(&mut c);
+            ConnectionConfig::Saml(c)
+        };
+        let cases: [(&dyn Fn(&mut SamlConfig), &str); 5] = [
+            (
+                &|c| c.sso_url = "http://idp.example.test/sso".into(),
+                "config.sso_url",
+            ),
+            (
+                &|c| c.signing_certs = vec![CERT.into(); 4],
+                "config.signing_certs",
+            ),
+            (
+                &|c| c.signing_certs = vec!["not a cert".into()],
+                "config.signing_certs",
+            ),
+            (&|c| c.idp_entity_id = " ".into(), "config.idp_entity_id"),
+            (
+                &|c| c.name_id_format = crate::model::NameIdFormat::Transient,
+                "config.name_id_format",
+            ),
+        ];
+        for (mutate, expected) in cases {
+            assert_eq!(
+                field(plan_create_for(
+                    &kek,
+                    t,
+                    org,
+                    input("s", with(mutate), None),
+                    now()
+                )),
+                expected
+            );
+        }
+        assert_eq!(
+            field(plan_create_for(
+                &kek,
+                t,
+                org,
+                input("s", saml(), Some("x")),
+                now()
+            )),
+            "secret"
+        );
+    }
+
+    #[test]
+    fn only_disabling_counts_as_disabling() {
+        let off = ConnectionPatch {
+            enabled: Some(false),
+            ..ConnectionPatch::default()
+        };
+        assert!(only_disables(&off));
+        assert!(!only_disables(&ConnectionPatch::default()));
+        assert!(!only_disables(&ConnectionPatch {
+            enabled: Some(true),
+            ..ConnectionPatch::default()
+        }));
+        assert!(!only_disables(&ConnectionPatch {
+            display_name: Some("x".into()),
+            ..off
+        }));
     }
 }

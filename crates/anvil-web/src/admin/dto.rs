@@ -2,7 +2,6 @@
 //! domain types. anvil-core stays free of OpenAPI concerns, so every type that appears in the
 //! spec is defined here; the enums mirror the domain enums one to one.
 
-use anvil_core::error::CoreError;
 use anvil_core::model::{
     ActorKind as CoreActorKind, Address as CoreAddress, AppleConfig as CoreAppleConfig,
     ApplicationType as CoreApplicationType, AuditAction as CoreAuditAction, AuditEvent,
@@ -14,13 +13,14 @@ use anvil_core::model::{
     ConsentMode as CoreConsentMode, CredentialKind as CoreCredentialKind, CredentialSummary,
     DEFAULT_SIGNING_ALG, DcrPolicy as CoreDcrPolicy, DcrSettings as CoreDcrSettings,
     EmailKind as CoreEmailKind, EndpointOverrides as CoreEndpointOverrides,
-    GrantType as CoreGrantType, KeyState as CoreKeyState, MfaPolicy as CoreMfaPolicy,
-    OAuth2Config as CoreOAuth2Config, OidcConfig as CoreOidcConfig,
-    OrgClientPolicy as CoreOrgClientPolicy, Page, RegistrationMode as CoreRegistrationMode,
-    SigningKey as CoreSigningKey, SmtpTls as CoreSmtpTls, SocialConfig as CoreSocialConfig,
-    SocialProvider as CoreSocialProvider, StandardClaims as CoreStandardClaims, Tenant,
-    TenantSettings as CoreTenantSettings, TokenFormat as CoreTokenFormat, User,
-    UserStatus as CoreUserStatus,
+    GrantType as CoreGrantType, IdpMetadata, KeyState as CoreKeyState, MfaPolicy as CoreMfaPolicy,
+    NameIdFormat as CoreNameIdFormat, OAuth2Config as CoreOAuth2Config,
+    OidcConfig as CoreOidcConfig, OrgClientPolicy as CoreOrgClientPolicy, Page,
+    RegistrationMode as CoreRegistrationMode, SamlAttributeMapping as CoreSamlAttributeMapping,
+    SamlConfig as CoreSamlConfig, SigningKey as CoreSigningKey, SmtpTls as CoreSmtpTls,
+    SocialConfig as CoreSocialConfig, SocialProvider as CoreSocialProvider,
+    StandardClaims as CoreStandardClaims, Tenant, TenantSettings as CoreTenantSettings,
+    TokenFormat as CoreTokenFormat, User, UserStatus as CoreUserStatus,
 };
 use anvil_core::service::client::{ClientInput, ClientOptions, ClientOptionsPatch, ClientPatch};
 use anvil_core::service::connection::{ConnectionPatch, NewConnectionInput};
@@ -790,14 +790,35 @@ pub struct TenantView {
     /// The OpenID Provider configuration document of [`Self::issuer`].
     pub discovery_url: String,
     pub settings: TenantSettings,
+    /// Optional capabilities available in this tenant (set by the operator, read-only).
+    pub features: TenantFeatures,
     #[schema(format = DateTime)]
     pub created_at: String,
 }
 
+/// Optional capabilities of a tenant, decided by the operator's configuration.
+#[derive(Debug, Clone, Copy, Default, Serialize, ToSchema)]
+pub struct TenantFeatures {
+    /// SAML 2.0 organization connections can be configured (operator flag `saml_experimental`;
+    /// experimental through 1.0). Never in the system tenant, which has no organizations.
+    pub saml: bool,
+}
+
+impl TenantFeatures {
+    /// The features of `tenant` when the operator flag `saml_experimental` is `saml_flag`.
+    pub fn of(tenant: &Tenant, saml_flag: bool) -> Self {
+        Self {
+            saml: saml_flag && tenant.slug != anvil_core::model::SYSTEM_TENANT_SLUG,
+        }
+    }
+}
+
 impl TenantView {
     /// The view of `t`, whose canonical issuer is `issuer`. DCR/CIMD settings show the policy
-    /// in force (always `disabled` for the system tenant).
-    pub fn new(t: Tenant, issuer: String) -> Self {
+    /// in force (always `disabled` for the system tenant). `saml_flag` is the operator flag
+    /// `saml_experimental`.
+    pub fn new(t: Tenant, issuer: String, saml_flag: bool) -> Self {
+        let features = TenantFeatures::of(&t, saml_flag);
         let dcr = t.effective_dcr();
         let cimd = t.effective_cimd();
         let mut settings = TenantSettings::from(t.settings);
@@ -814,6 +835,7 @@ impl TenantView {
             ),
             issuer,
             settings,
+            features,
             created_at: ts(t.created_at),
         }
     }
@@ -828,15 +850,16 @@ pub struct TenantList {
 }
 
 impl TenantList {
-    /// The page `p`, each tenant with its canonical issuer from `issuer_of`.
-    pub fn new(p: Page<Tenant>, issuer_of: impl Fn(&Tenant) -> String) -> Self {
+    /// The page `p`, each tenant with its canonical issuer from `issuer_of` (`saml_flag`: the
+    /// operator flag `saml_experimental`).
+    pub fn new(p: Page<Tenant>, issuer_of: impl Fn(&Tenant) -> String, saml_flag: bool) -> Self {
         Self {
             items: p
                 .items
                 .into_iter()
                 .map(|t| {
                     let issuer = issuer_of(&t);
-                    TenantView::new(t, issuer)
+                    TenantView::new(t, issuer, saml_flag)
                 })
                 .collect(),
             next_cursor: p.next_cursor,
@@ -1923,6 +1946,50 @@ fn default_true() -> bool {
     true
 }
 
+wire_enum!(
+    /// SAML `NameIDFormat` requested from and accepted from the IdP (`transient` is refused:
+    /// it cannot identify a returning user).
+    NameIdFormat => CoreNameIdFormat { Unspecified, EmailAddress, Persistent, Transient }
+);
+
+impl Default for NameIdFormat {
+    fn default() -> Self {
+        CoreNameIdFormat::default().into()
+    }
+}
+
+/// Which assertion attributes (matched by `Name` or `FriendlyName`) carry the profile values;
+/// absent or `null` = not mapped.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct SamlAttributeMapping {
+    pub email: Option<String>,
+    pub given_name: Option<String>,
+    pub family_name: Option<String>,
+    pub name: Option<String>,
+}
+
+/// A SAML 2.0 identity provider (organization connections only; experimental, needs the
+/// operator flag `saml_experimental`). Certificates are public material and shown as PEM.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SamlConnectionConfig {
+    /// The IdP's entity ID (1-1024 bytes).
+    pub idp_entity_id: String,
+    /// The IdP's single sign-on URL for the HTTP-Redirect binding (https).
+    pub sso_url: String,
+    /// 1-3 IdP signing certificates, one PEM `CERTIFICATE` block each (rollover).
+    pub signing_certs: Vec<String>,
+    /// Default `unspecified`.
+    #[serde(default)]
+    pub name_id_format: NameIdFormat,
+    #[serde(default)]
+    pub attributes: SamlAttributeMapping,
+    /// Where the IdP metadata was imported from (https), for the record.
+    #[serde(default)]
+    pub metadata_url: Option<String>,
+}
+
 /// Connection configuration, tagged by `type`. It never contains the client secret.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -1930,6 +1997,8 @@ pub enum ConnectionConfig {
     Social(SocialConnectionConfig),
     Oidc(OidcConnectionConfig),
     Oauth2(OAuth2ConnectionConfig),
+    /// Organization connections only (422 at tenant level).
+    Saml(SamlConnectionConfig),
 }
 
 impl From<ConnectionConfig> for CoreConnectionConfig {
@@ -1969,22 +2038,39 @@ impl From<ConnectionConfig> for CoreConnectionConfig {
                     name: o.mapping.name,
                 },
             }),
+            ConnectionConfig::Saml(c) => Self::Saml(CoreSamlConfig {
+                idp_entity_id: c.idp_entity_id,
+                sso_url: c.sso_url,
+                signing_certs: c.signing_certs,
+                name_id_format: c.name_id_format.into(),
+                attributes: CoreSamlAttributeMapping {
+                    email: c.attributes.email,
+                    given_name: c.attributes.given_name,
+                    family_name: c.attributes.family_name,
+                    name: c.attributes.name,
+                },
+                metadata_url: c.metadata_url,
+            }),
         }
     }
 }
 
-impl TryFrom<CoreConnectionConfig> for ConnectionConfig {
-    type Error = CoreError;
-
-    fn try_from(c: CoreConnectionConfig) -> Result<Self, CoreError> {
-        Ok(match c {
-            // TRANSITIONAL(06-17): storage refuses SAML connections until 06-07/06-08, and the
-            // SAML connection view arrives with 06-17; reaching this is an internal error.
-            CoreConnectionConfig::Saml(_) => {
-                return Err(CoreError::Internal(
-                    "saml connection view arrives in 06-17".into(),
-                ));
-            }
+impl From<CoreConnectionConfig> for ConnectionConfig {
+    fn from(c: CoreConnectionConfig) -> Self {
+        match c {
+            CoreConnectionConfig::Saml(c) => Self::Saml(SamlConnectionConfig {
+                idp_entity_id: c.idp_entity_id,
+                sso_url: c.sso_url,
+                signing_certs: c.signing_certs,
+                name_id_format: c.name_id_format.into(),
+                attributes: SamlAttributeMapping {
+                    email: c.attributes.email,
+                    given_name: c.attributes.given_name,
+                    family_name: c.attributes.family_name,
+                    name: c.attributes.name,
+                },
+                metadata_url: c.metadata_url,
+            }),
             CoreConnectionConfig::Social(s) => Self::Social(SocialConnectionConfig {
                 provider: s.provider.into(),
                 client_id: s.client_id,
@@ -2019,8 +2105,54 @@ impl TryFrom<CoreConnectionConfig> for ConnectionConfig {
                     name: o.mapping.name,
                 },
             }),
-        })
+        }
     }
+}
+
+/// The service-provider values an IdP administrator registers for a SAML connection.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SamlSpValues {
+    /// SP entity ID (audience): `{issuer}/saml/{slug}`.
+    pub entity_id: String,
+    /// Assertion consumer service URL (HTTP-POST): `{issuer}/ui/login/saml/{slug}/acs`.
+    pub acs_url: String,
+    /// SP metadata: `{issuer}/saml/{slug}/metadata`.
+    pub metadata_url: String,
+}
+
+/// Values read from IdP metadata (`md:EntityDescriptor`) to prefill a SAML connection. Nothing
+/// is stored.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SamlMetadataView {
+    pub idp_entity_id: String,
+    pub sso_url: String,
+    /// PEM certificates (public material).
+    pub signing_certs: Vec<String>,
+    /// The URL the metadata was fetched from (absent for pasted XML).
+    pub metadata_url: Option<String>,
+}
+
+impl SamlMetadataView {
+    pub fn new(m: IdpMetadata, metadata_url: Option<String>) -> Self {
+        Self {
+            idp_entity_id: m.entity_id,
+            sso_url: m.sso_url,
+            signing_certs: m.signing_certs,
+            metadata_url,
+        }
+    }
+}
+
+/// Body of `POST …/organizations/{org}/connections/saml-metadata`: exactly one of `xml` (the
+/// pasted metadata document) or `url` (https; fetched through the SSRF-guarded client, at most
+/// 1 MiB).
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SamlMetadataImport {
+    #[serde(default)]
+    pub xml: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
 }
 
 /// An upstream connection. The client secret (Apple: the `.p8` key) is write-only:
@@ -2037,8 +2169,13 @@ pub struct ConnectionView {
     /// Treat the provider's `email_verified` as proof of address ownership (auto-linking).
     pub trust_email_verified: bool,
     pub secret_configured: bool,
-    /// The callback URL to register at the provider.
+    /// The callback URL to register at the provider (SAML: the assertion consumer service).
     pub redirect_uri: String,
+    /// The organization the connection belongs to; `null` = a tenant-level connection. An
+    /// organization's connection is changed only under that organization.
+    pub organization: Option<Uuid>,
+    /// SAML only: the service-provider values to register at the IdP.
+    pub sp: Option<SamlSpValues>,
     #[schema(format = DateTime)]
     pub created_at: String,
     #[schema(format = DateTime)]
@@ -2047,24 +2184,34 @@ pub struct ConnectionView {
 
 impl ConnectionView {
     /// The view of `c`; `issuer` is the tenant's issuer (the callback lives below it).
-    pub fn new(c: Connection, issuer: &str) -> Result<Self, CoreError> {
-        Ok(Self {
+    pub fn new(c: Connection, issuer: &str) -> Self {
+        let sp = matches!(c.config, CoreConnectionConfig::Saml(_)).then(|| SamlSpValues {
+            entity_id: format!("{issuer}/saml/{}", c.slug),
+            acs_url: format!("{issuer}/ui/login/saml/{}/acs", c.slug),
+            metadata_url: format!("{issuer}/saml/{}/metadata", c.slug),
+        });
+        Self {
             id: c.id.0,
-            redirect_uri: format!("{issuer}/ui/login/upstream/{}/callback", c.slug),
+            redirect_uri: match &sp {
+                Some(sp) => sp.acs_url.clone(),
+                None => format!("{issuer}/ui/login/upstream/{}/callback", c.slug),
+            },
+            sp,
+            organization: c.org_id.map(|o| o.0),
             kind: c.kind().into(),
             slug: c.slug,
             display_name: c.display_name,
             enabled: c.enabled,
-            config: c.config.try_into()?,
+            config: c.config.into(),
             trust_email_verified: c.trust_email_verified,
             secret_configured: c.secret_enc.is_some(),
             created_at: ts(c.created_at),
             updated_at: ts(c.updated_at),
-        })
+        }
     }
 }
 
-/// Every connection of a tenant, in slug order.
+/// Connections in slug order (a tenant's list includes its organizations' connections).
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ConnectionList {
     pub items: Vec<ConnectionView>,

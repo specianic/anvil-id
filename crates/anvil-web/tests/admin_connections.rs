@@ -387,3 +387,70 @@ async fn microsoft_email_trust_needs_the_risk_flag_and_is_audited() {
         "email_trust_risk_accepted"
     );
 }
+
+#[tokio::test]
+async fn tenant_connection_list_shows_org_connections_read_only() {
+    let app = app().await;
+    let t = full(&app).await;
+    let tenant = default_tenant(&app).await;
+    let org = create_org(&app, tenant.id, "acme").await;
+    let resp = req(&app, &t, Method::POST, &base(), Some(google("google"))).await;
+    assert_eq!(resp.status, 201, "{}", resp.text());
+    let resp = req(
+        &app,
+        &t,
+        Method::POST,
+        &format!("{API}/tenants/default/organizations/acme/connections"),
+        Some(json!({
+            "slug": "acme-entra",
+            "display_name": "Acme Entra",
+            "config": {"type": "oidc", "issuer": "https://login.acme.test", "client_id": "c"},
+            "secret": SECRET,
+        })),
+    )
+    .await;
+    assert_eq!(resp.status, 201, "{}", resp.text());
+    let org_conn = body_json(&resp)["id"].as_str().unwrap().to_owned();
+
+    // Listed with its organization; the tenant connection has none.
+    let resp = req(&app, &t, Method::GET, &base(), None).await;
+    let items = body_json(&resp)["items"].as_array().unwrap().clone();
+    assert_eq!(items.len(), 2);
+    let by_slug = |s: &str| items.iter().find(|i| i["slug"] == s).unwrap().clone();
+    assert_eq!(by_slug("acme-entra")["organization"], org.id.to_string());
+    assert_eq!(by_slug("google")["organization"], Value::Null);
+    let one = format!("{}/{org_conn}", base());
+    let resp = req(&app, &t, Method::GET, &one, None).await;
+    assert_eq!(resp.status, 200);
+
+    // Read-only at tenant level: every change is refused and nothing changes.
+    let resp = req(
+        &app,
+        &t,
+        Method::PATCH,
+        &one,
+        Some(json!({"display_name": "Hijacked", "enabled": false})),
+    )
+    .await;
+    assert_problem(&resp, 409);
+    let resp = req(
+        &app,
+        &t,
+        Method::PUT,
+        &format!("{one}/secret"),
+        Some(json!({"secret": null})),
+    )
+    .await;
+    assert_problem(&resp, 409);
+    let resp = req(&app, &t, Method::DELETE, &one, None).await;
+    assert_problem(&resp, 409);
+    let stored = app
+        .storage()
+        .connections()
+        .get(tenant.id, ConnectionId(org_conn.parse().unwrap()))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.display_name, "Acme Entra");
+    assert!(stored.enabled && stored.secret_enc.is_some());
+}

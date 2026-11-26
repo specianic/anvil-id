@@ -10,6 +10,10 @@
 //! reaches storage; views only report `secret_configured`. `redirect_uri` is the callback URL
 //! admins register at the provider.
 //!
+//! The list also shows the tenant's organization connections (field `organization`), read-only:
+//! changing one here answers 409, it is managed under `…/organizations/{org}/connections`. SAML
+//! connections exist only per organization: creating one here answers 422.
+//!
 //! Scope: `admin:settings:{read,write}` (or `admin:read` / `admin:write`), the scope family that
 //! guards the other tenant settings managed apart from the tenant record (SMTP, email
 //! templates). Changing the system tenant's connections needs `admin:write`, like its clients
@@ -34,7 +38,7 @@ use crate::request_context::AuditContext;
 use crate::state::AppState;
 
 impl AppState {
-    fn admin_connections(&self) -> ConnectionService {
+    pub(crate) fn admin_connections(&self) -> ConnectionService {
         ConnectionService {
             storage: self.storage_arc(),
             clock: self.clock_arc(),
@@ -67,11 +71,7 @@ fn connection_id(raw: &str) -> AdminResult<ConnectionId> {
         .map_err(|_| CoreError::NotFound.into())
 }
 
-fn view(
-    state: &AppState,
-    tenant: &Tenant,
-    c: anvil_core::model::Connection,
-) -> Result<ConnectionView, CoreError> {
+fn view(state: &AppState, tenant: &Tenant, c: anvil_core::model::Connection) -> ConnectionView {
     ConnectionView::new(c, &state.admin_issuer_of(tenant))
 }
 
@@ -107,7 +107,7 @@ pub(crate) async fn list_connections(
         .await?
         .into_iter()
         .map(|c| view(&state, &tenant, c))
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect();
     Ok(json(StatusCode::OK, &ConnectionList { items }))
 }
 
@@ -126,7 +126,7 @@ pub(crate) async fn list_connections(
         (status = 403, description = "Insufficient scope", body = Problem, content_type = "application/problem+json"),
         (status = 404, description = "Unknown tenant", body = Problem, content_type = "application/problem+json"),
         (status = 409, description = "Slug already in use in this tenant", body = Problem, content_type = "application/problem+json"),
-        (status = 422, description = "Validation failed", body = Problem, content_type = "application/problem+json"),
+        (status = 422, description = "Validation failed (also: a SAML connection, which belongs to an organization)", body = Problem, content_type = "application/problem+json"),
     ),
     security(
         ("oauth2" = ["admin:settings:write"]),
@@ -149,7 +149,7 @@ pub(crate) async fn create_connection(
         "/api/admin/v1/tenants/{}/connections/{}",
         tenant.slug, conn.id
     );
-    Ok(created(&location, &view(&state, &tenant, conn)?))
+    Ok(created(&location, &view(&state, &tenant, conn)))
 }
 
 /// Get an upstream connection (never includes the secret).
@@ -185,7 +185,7 @@ pub(crate) async fn get_connection(
         .admin_connections()
         .get(tenant.id, connection_id(&id)?)
         .await?;
-    Ok(json(StatusCode::OK, &view(&state, &tenant, conn)?))
+    Ok(json(StatusCode::OK, &view(&state, &tenant, conn)))
 }
 
 /// Update an upstream connection. Absent fields stay unchanged; the slug is immutable and a new
@@ -206,6 +206,7 @@ pub(crate) async fn get_connection(
         (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
         (status = 403, description = "Insufficient scope", body = Problem, content_type = "application/problem+json"),
         (status = 404, description = "Unknown tenant or connection", body = Problem, content_type = "application/problem+json"),
+        (status = 409, description = "The connection belongs to an organization", body = Problem, content_type = "application/problem+json"),
         (status = 422, description = "Validation failed", body = Problem, content_type = "application/problem+json"),
     ),
     security(
@@ -231,7 +232,7 @@ pub(crate) async fn update_connection(
             &ctx,
         )
         .await?;
-    Ok(json(StatusCode::OK, &view(&state, &tenant, conn)?))
+    Ok(json(StatusCode::OK, &view(&state, &tenant, conn)))
 }
 
 /// Delete an upstream connection and every identity link made through it.
@@ -249,6 +250,7 @@ pub(crate) async fn update_connection(
         (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
         (status = 403, description = "Insufficient scope", body = Problem, content_type = "application/problem+json"),
         (status = 404, description = "Unknown tenant or connection", body = Problem, content_type = "application/problem+json"),
+        (status = 409, description = "The connection belongs to an organization", body = Problem, content_type = "application/problem+json"),
     ),
     security(
         ("oauth2" = ["admin:settings:write"]),
@@ -286,6 +288,7 @@ pub(crate) async fn delete_connection(
         (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
         (status = 403, description = "Insufficient scope", body = Problem, content_type = "application/problem+json"),
         (status = 404, description = "Unknown tenant or connection", body = Problem, content_type = "application/problem+json"),
+        (status = 409, description = "The connection belongs to an organization", body = Problem, content_type = "application/problem+json"),
         (status = 422, description = "Validation failed", body = Problem, content_type = "application/problem+json"),
     ),
     security(
@@ -316,5 +319,5 @@ pub(crate) async fn put_connection_secret(
             &ctx,
         )
         .await?;
-    Ok(json(StatusCode::OK, &view(&state, &tenant, conn)?))
+    Ok(json(StatusCode::OK, &view(&state, &tenant, conn)))
 }

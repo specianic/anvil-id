@@ -1,7 +1,7 @@
 //! `/api/admin/v1/tenants`: installation-wide tenant management.
 //!
-//! Tenant settings carry `claims`, the mapping of a user's roles and permissions into tokens
-//! ([`TokenClaimMapping`]). A rule names the claim, the tokens it goes into and the scope that
+//! Tenant settings carry `claims`, the mapping of a user's roles and permissions (tenant-wide
+//! and in the active organization) into tokens ([`TokenClaimMapping`]). A rule names the claim, the tokens it goes into and the scope that
 //! gates it; names that collide with protocol or standard claims are refused (422) by
 //! `TenantService`.
 //!
@@ -9,7 +9,8 @@
 //! Settings carry `dcr` (dynamic client registration policy, allowed redirect hosts, scopes,
 //! resources, `client_credentials`, `max_clients`) and `cimd` (Client ID Metadata Document
 //! policy, allowed hosts, cache bounds); the system tenant keeps both `disabled` (a PATCH asking
-//! otherwise is a 422), and both are validated by `TenantService`.
+//! otherwise is a 422), and both are validated by `TenantService`. `features.saml` tells whether
+//! the operator enabled SAML organization connections (`saml_experimental`).
 
 use anvil_core::model::{
     ClaimMappingSettings, ClaimRule as CoreClaimRule, TokenTarget as CoreTokenTarget,
@@ -57,7 +58,11 @@ pub(crate) async fn list_tenants(
     let page = state.admin_tenants().list(page_request(q)?).await?;
     Ok(json(
         StatusCode::OK,
-        &TenantList::new(page, |t| state.admin_issuer_of(t)),
+        &TenantList::new(
+            page,
+            |t| state.admin_issuer_of(t),
+            state.config().saml_experimental,
+        ),
     ))
 }
 
@@ -97,7 +102,10 @@ pub(crate) async fn create_tenant(
         .await?;
     let location = format!("/api/admin/v1/tenants/{}", tenant.slug);
     let issuer = state.admin_issuer_of(&tenant);
-    Ok(created(&location, &TenantView::new(tenant, issuer)))
+    Ok(created(
+        &location,
+        &TenantView::new(tenant, issuer, state.config().saml_experimental),
+    ))
 }
 
 /// Get a tenant.
@@ -128,7 +136,10 @@ pub(crate) async fn get_tenant(
     auth.require(Resource::Tenants, Access::Read)?;
     let tenant = state.admin_tenants().get(&slug).await?;
     let issuer = state.admin_issuer_of(&tenant);
-    Ok(json(StatusCode::OK, &TenantView::new(tenant, issuer)))
+    Ok(json(
+        StatusCode::OK,
+        &TenantView::new(tenant, issuer, state.config().saml_experimental),
+    ))
 }
 
 /// Update a tenant (the slug is immutable). Settings are merged with the current ones; the
@@ -172,7 +183,10 @@ pub(crate) async fn update_tenant(
         .update(&slug, patch, captcha, auth.actor(), &ctx)
         .await?;
     let issuer = state.admin_issuer_of(&tenant);
-    Ok(json(StatusCode::OK, &TenantView::new(tenant, issuer)))
+    Ok(json(
+        StatusCode::OK,
+        &TenantView::new(tenant, issuer, state.config().saml_experimental),
+    ))
 }
 
 /// Delete a tenant with all its data. `system` and `default` cannot be deleted (403).
@@ -275,12 +289,30 @@ impl From<CoreClaimRule> for TokenClaimRule {
 
 /// How a user's roles and permissions are mapped into tokens. `null` disables a mapping.
 /// Default: `roles` in every token gated by scope `roles`; `permissions` in the access token
-/// only, not gated.
+/// only, not gated; `org_roles` / `org_permissions` (held in the active organization) likewise.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TokenClaimMapping {
     pub roles: Option<TokenClaimRule>,
     pub permissions: Option<TokenClaimRule>,
+    /// Roles held in the active organization. Absent on input = the default rule (claim
+    /// `org_roles` in every token, gated by scope `roles`).
+    #[serde(default = "default_org_roles")]
+    pub org_roles: Option<TokenClaimRule>,
+    /// Permissions held in the active organization. Absent on input = the default rule (claim
+    /// `org_permissions` in the access token, not gated).
+    #[serde(default = "default_org_permissions")]
+    pub org_permissions: Option<TokenClaimRule>,
+}
+
+fn default_org_roles() -> Option<TokenClaimRule> {
+    ClaimMappingSettings::default().org_roles.map(Into::into)
+}
+
+fn default_org_permissions() -> Option<TokenClaimRule> {
+    ClaimMappingSettings::default()
+        .org_permissions
+        .map(Into::into)
 }
 
 impl Default for TokenClaimMapping {
@@ -294,6 +326,8 @@ impl From<ClaimMappingSettings> for TokenClaimMapping {
         Self {
             roles: c.roles.map(Into::into),
             permissions: c.permissions.map(Into::into),
+            org_roles: c.org_roles.map(Into::into),
+            org_permissions: c.org_permissions.map(Into::into),
         }
     }
 }
@@ -303,8 +337,8 @@ impl From<TokenClaimMapping> for ClaimMappingSettings {
         Self {
             roles: c.roles.map(Into::into),
             permissions: c.permissions.map(Into::into),
-            // The org mappings are not on the wire yet (06-09): they keep their defaults.
-            ..ClaimMappingSettings::default()
+            org_roles: c.org_roles.map(Into::into),
+            org_permissions: c.org_permissions.map(Into::into),
         }
     }
 }
@@ -319,6 +353,12 @@ pub struct TokenClaimMappingPatch {
     #[serde(default, deserialize_with = "super::dto::double_option")]
     #[schema(value_type = Option<TokenClaimRule>)]
     pub permissions: Option<Option<TokenClaimRule>>,
+    #[serde(default, deserialize_with = "super::dto::double_option")]
+    #[schema(value_type = Option<TokenClaimRule>)]
+    pub org_roles: Option<Option<TokenClaimRule>>,
+    #[serde(default, deserialize_with = "super::dto::double_option")]
+    #[schema(value_type = Option<TokenClaimRule>)]
+    pub org_permissions: Option<Option<TokenClaimRule>>,
 }
 
 impl TokenClaimMappingPatch {
@@ -333,9 +373,14 @@ impl TokenClaimMappingPatch {
                 None => current.permissions.clone(),
                 Some(p) => p.map(Into::into),
             },
-            // Not on the wire yet (06-09): a patch keeps the stored org mappings.
-            org_roles: current.org_roles.clone(),
-            org_permissions: current.org_permissions.clone(),
+            org_roles: match self.org_roles {
+                None => current.org_roles.clone(),
+                Some(r) => r.map(Into::into),
+            },
+            org_permissions: match self.org_permissions {
+                None => current.org_permissions.clone(),
+                Some(p) => p.map(Into::into),
+            },
         }
     }
 }

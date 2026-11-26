@@ -11,7 +11,13 @@
 //! - `GET|POST …/{org}/roles`, `GET|PATCH|DELETE …/{org}/roles/{name}`: org-owned roles;
 //! - `GET …/{org}/members/{user_id}/roles`, `PUT|DELETE …/{org}/members/{user_id}/roles/{role}`
 //!   (`?scope=org|tenant`; without it the org-owned role wins, the tenant role is the fallback);
-//! - `GET|POST …/{org}/invitations`, `DELETE …/{org}/invitations/{id}`.
+//! - `GET|POST …/{org}/invitations`, `DELETE …/{org}/invitations/{id}`;
+//! - `GET|POST …/{org}/connections`, `GET|PATCH|DELETE …/{org}/connections/{id}`,
+//!   `PUT …/{org}/connections/{id}/secret` (OIDC) and `POST …/{org}/connections/saml-metadata`
+//!   (prefill from pasted or fetched IdP metadata; stores nothing): the org's enterprise
+//!   connections, OIDC or SAML. SAML is experimental: without the operator flag
+//!   `saml_experimental` creating, enabling or changing a SAML connection and the metadata import
+//!   answer 403 `feature_disabled` (disabling and deleting still work).
 //!
 //! **Principals** ([`OrgAdminAuth`]): a system-tenant token needs `admin:organizations:read` for
 //! reads and `admin:organizations:write` for writes (or `admin:read` / `admin:write`). On the
@@ -22,15 +28,18 @@
 
 use anvil_core::error::CoreError;
 use anvil_core::model::{
-    OrgInvitation, OrgInvitationId, Organization, Role, RoleId, RoleUpdate, Tenant, UserId,
+    Connection, ConnectionConfig as CoreConnectionConfig, ConnectionId, OrgInvitation,
+    OrgInvitationId, Organization, Role, RoleId, RoleUpdate, Tenant, UserId,
 };
 use anvil_core::service::admin_scope::{Access, Resource};
+use anvil_core::service::connection::{ConnectionOwner, ConnectionPatch, NewConnectionInput};
 use anvil_core::service::org_invitation::InvitationInput;
 use anvil_core::service::organization::{MemberInfo, OrgInput, OrgPatch, RoleScope};
 use anvil_core::service::role::RoleInput;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::Response;
+use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::{IntoParams, ToSchema};
@@ -42,7 +51,11 @@ use super::auth::{
     AdminAuth, AdminJson, AdminQuery, AdminResult, OrgAdminAuth, Principal, created, json,
     no_content, page_request,
 };
-use super::dto::{ListQuery, MfaPolicy, Problem, double_option, ts};
+use super::dto::{
+    ConnectionList, ConnectionView, CreateConnection, ListQuery, MfaPolicy, Problem,
+    PutConnectionSecret, SamlMetadataImport, SamlMetadataView, UpdateConnection, double_option, ts,
+};
+use crate::adapters::outbound::LIMIT_DOCUMENT;
 use crate::request_context::AuditContext;
 use crate::state::AppState;
 
@@ -63,6 +76,14 @@ pub(crate) fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(get_org_role, update_org_role, delete_org_role))
         .routes(routes!(list_invitations, create_invitation))
         .routes(routes!(revoke_invitation))
+        .routes(routes!(list_org_connections, create_org_connection))
+        .routes(routes!(import_saml_metadata))
+        .routes(routes!(
+            get_org_connection,
+            update_org_connection,
+            delete_org_connection
+        ))
+        .routes(routes!(put_org_connection_secret))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1297,4 +1318,391 @@ pub(crate) async fn revoke_invitation(
         .revoke(&tenant, &org, id, &auth.org_actor(), &ctx)
         .await?;
     Ok(no_content())
+}
+
+// ---------------------------------------------------------------------------------------------
+// Connections (06-17)
+// ---------------------------------------------------------------------------------------------
+
+/// Every IdP signing certificate of a SAML config must load as an X.509 certificate with the
+/// same loader the SAML adapter verifies signatures with (422 `config.signing_certs`).
+fn check_saml_certs(config: &CoreConnectionConfig) -> AdminResult<()> {
+    if let CoreConnectionConfig::Saml(c) = config
+        && c.signing_certs
+            .iter()
+            .any(|pem| bergshamra_keys::loader::load_x509_cert_pem(pem.as_bytes()).is_err())
+    {
+        return Err(CoreError::Validation {
+            field: "config.signing_certs",
+            message: "each entry must be a valid X.509 certificate in PEM form".to_owned(),
+        }
+        .into());
+    }
+    Ok(())
+}
+
+fn connection_id(raw: &str) -> AdminResult<ConnectionId> {
+    Ok(ConnectionId(path_uuid(raw)?))
+}
+
+fn connection_location(tenant: &Tenant, org: &Organization, conn: &Connection) -> String {
+    format!("{}/connections/{}", org_location(tenant, org), conn.id)
+}
+
+/// List the organization's enterprise connections (OIDC and SAML).
+#[utoipa::path(
+    get,
+    path = "/api/admin/v1/tenants/{slug}/organizations/{org}/connections",
+    tag = "organizations",
+    operation_id = "listOrganizationConnections",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("org" = String, Path, description = "Organization id or slug"),
+    ),
+    responses(
+        (status = 200, description = "The organization's connections, in slug order", body = ConnectionList),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope, or an org admin token of another organization", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant or organization", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:organizations:read"]),
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:read"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn list_org_connections(
+    OrgAdminAuth(auth): OrgAdminAuth,
+    State(state): State<AppState>,
+    Path((slug, org)): Path<(String, String)>,
+) -> AdminResult<Response> {
+    let (tenant, org) = org_for(&state, &auth, &slug, &org, Access::Read).await?;
+    let issuer = state.admin_issuer_of(&tenant);
+    let items = state
+        .admin_connections()
+        .list_for_org(tenant.id, &org)
+        .await?
+        .into_iter()
+        .map(|c| ConnectionView::new(c, &issuer))
+        .collect();
+    Ok(json(StatusCode::OK, &ConnectionList { items }))
+}
+
+/// Create an enterprise connection of the organization: OIDC (client secret sealed, never
+/// returned) or SAML (experimental: 403 `feature_disabled` unless the operator enabled
+/// `saml_experimental`). Slugs share the tenant's namespace. A SAML view carries the
+/// service-provider values to register at the IdP (`sp`).
+#[utoipa::path(
+    post,
+    path = "/api/admin/v1/tenants/{slug}/organizations/{org}/connections",
+    tag = "organizations",
+    operation_id = "createOrganizationConnection",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("org" = String, Path, description = "Organization id or slug"),
+    ),
+    request_body = CreateConnection,
+    responses(
+        (status = 201, description = "Created", body = ConnectionView, headers(("Location" = String, description = "URL of the new connection"))),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope, an org admin token of another organization, or SAML is not enabled (`feature_disabled`)", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant or organization", body = Problem, content_type = "application/problem+json"),
+        (status = 409, description = "Slug already in use in this tenant", body = Problem, content_type = "application/problem+json"),
+        (status = 422, description = "Validation failed (also: a kind other than OIDC or SAML)", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn create_org_connection(
+    OrgAdminAuth(auth): OrgAdminAuth,
+    State(state): State<AppState>,
+    AuditContext(ctx): AuditContext,
+    Path((slug, org)): Path<(String, String)>,
+    AdminJson(body): AdminJson<CreateConnection>,
+) -> AdminResult<Response> {
+    let (tenant, org) = org_for(&state, &auth, &slug, &org, Access::Write).await?;
+    let input: NewConnectionInput = body.into();
+    check_saml_certs(&input.config)?;
+    let conn = state
+        .admin_connections()
+        .create_as(
+            tenant.id,
+            ConnectionOwner::Org(&org),
+            input,
+            auth.actor(),
+            &ctx,
+        )
+        .await?;
+    let location = connection_location(&tenant, &org, &conn);
+    Ok(created(
+        &location,
+        &ConnectionView::new(conn, &state.admin_issuer_of(&tenant)),
+    ))
+}
+
+/// Get one of the organization's connections (never its secret).
+#[utoipa::path(
+    get,
+    path = "/api/admin/v1/tenants/{slug}/organizations/{org}/connections/{id}",
+    tag = "organizations",
+    operation_id = "getOrganizationConnection",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("org" = String, Path, description = "Organization id or slug"),
+        ("id" = uuid::Uuid, Path, description = "Connection id"),
+    ),
+    responses(
+        (status = 200, description = "The connection", body = ConnectionView),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope, or an org admin token of another organization", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant, organization or connection (or another organization's connection)", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:organizations:read"]),
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:read"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn get_org_connection(
+    OrgAdminAuth(auth): OrgAdminAuth,
+    State(state): State<AppState>,
+    Path((slug, org, id)): Path<(String, String, String)>,
+) -> AdminResult<Response> {
+    let (tenant, org) = org_for(&state, &auth, &slug, &org, Access::Read).await?;
+    let conn = state
+        .admin_connections()
+        .get_owned(tenant.id, ConnectionOwner::Org(&org), connection_id(&id)?)
+        .await?;
+    Ok(json(
+        StatusCode::OK,
+        &ConnectionView::new(conn, &state.admin_issuer_of(&tenant)),
+    ))
+}
+
+/// Update one of the organization's connections. Absent fields stay unchanged; the slug and
+/// kind are fixed. Every change to a SAML connection except disabling it needs the operator flag
+/// (403 `feature_disabled`).
+#[utoipa::path(
+    patch,
+    path = "/api/admin/v1/tenants/{slug}/organizations/{org}/connections/{id}",
+    tag = "organizations",
+    operation_id = "updateOrganizationConnection",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("org" = String, Path, description = "Organization id or slug"),
+        ("id" = uuid::Uuid, Path, description = "Connection id"),
+    ),
+    request_body = UpdateConnection,
+    responses(
+        (status = 200, description = "The updated connection", body = ConnectionView),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope, an org admin token of another organization, or SAML is not enabled (`feature_disabled`)", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant, organization or connection (or another organization's connection)", body = Problem, content_type = "application/problem+json"),
+        (status = 422, description = "Validation failed", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn update_org_connection(
+    OrgAdminAuth(auth): OrgAdminAuth,
+    State(state): State<AppState>,
+    AuditContext(ctx): AuditContext,
+    Path((slug, org, id)): Path<(String, String, String)>,
+    AdminJson(body): AdminJson<UpdateConnection>,
+) -> AdminResult<Response> {
+    let (tenant, org) = org_for(&state, &auth, &slug, &org, Access::Write).await?;
+    let patch: ConnectionPatch = body.into();
+    if let Some(config) = &patch.config {
+        check_saml_certs(config)?;
+    }
+    let conn = state
+        .admin_connections()
+        .update_as(
+            tenant.id,
+            ConnectionOwner::Org(&org),
+            connection_id(&id)?,
+            patch,
+            auth.actor(),
+            &ctx,
+        )
+        .await?;
+    Ok(json(
+        StatusCode::OK,
+        &ConnectionView::new(conn, &state.admin_issuer_of(&tenant)),
+    ))
+}
+
+/// Delete one of the organization's connections with its identity links. Domains routed to it
+/// stop routing (their claim and verification stay).
+#[utoipa::path(
+    delete,
+    path = "/api/admin/v1/tenants/{slug}/organizations/{org}/connections/{id}",
+    tag = "organizations",
+    operation_id = "deleteOrganizationConnection",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("org" = String, Path, description = "Organization id or slug"),
+        ("id" = uuid::Uuid, Path, description = "Connection id"),
+    ),
+    responses(
+        (status = 204, description = "Deleted"),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope, or an org admin token of another organization", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant, organization or connection (or another organization's connection)", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn delete_org_connection(
+    OrgAdminAuth(auth): OrgAdminAuth,
+    State(state): State<AppState>,
+    AuditContext(ctx): AuditContext,
+    Path((slug, org, id)): Path<(String, String, String)>,
+) -> AdminResult<Response> {
+    let (tenant, org) = org_for(&state, &auth, &slug, &org, Access::Write).await?;
+    state
+        .admin_connections()
+        .delete_as(
+            tenant.id,
+            ConnectionOwner::Org(&org),
+            connection_id(&id)?,
+            auth.actor(),
+            &ctx,
+        )
+        .await?;
+    Ok(no_content())
+}
+
+/// Set or remove the client secret of an OIDC connection of the organization. Write-only: the
+/// response reports `secret_configured`. SAML connections have no secret (422).
+#[utoipa::path(
+    put,
+    path = "/api/admin/v1/tenants/{slug}/organizations/{org}/connections/{id}/secret",
+    tag = "organizations",
+    operation_id = "putOrganizationConnectionSecret",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("org" = String, Path, description = "Organization id or slug"),
+        ("id" = uuid::Uuid, Path, description = "Connection id"),
+    ),
+    request_body = PutConnectionSecret,
+    responses(
+        (status = 200, description = "The connection", body = ConnectionView),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope, or an org admin token of another organization", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant, organization or connection (or another organization's connection)", body = Problem, content_type = "application/problem+json"),
+        (status = 422, description = "Validation failed", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn put_org_connection_secret(
+    OrgAdminAuth(auth): OrgAdminAuth,
+    State(state): State<AppState>,
+    AuditContext(ctx): AuditContext,
+    Path((slug, org, id)): Path<(String, String, String)>,
+    AdminJson(body): AdminJson<PutConnectionSecret>,
+) -> AdminResult<Response> {
+    let (tenant, org) = org_for(&state, &auth, &slug, &org, Access::Write).await?;
+    let id = connection_id(&id)?;
+    let secret = body.secret.ok_or_else(|| CoreError::Validation {
+        field: "secret",
+        message: "is required (null removes the secret)".to_owned(),
+    })?;
+    let conn = state
+        .admin_connections()
+        .set_secret_as(
+            tenant.id,
+            ConnectionOwner::Org(&org),
+            id,
+            secret.map(SecretString::from),
+            auth.actor(),
+            &ctx,
+        )
+        .await?;
+    Ok(json(
+        StatusCode::OK,
+        &ConnectionView::new(conn, &state.admin_issuer_of(&tenant)),
+    ))
+}
+
+/// The single answer for every metadata URL that could not be fetched (blocked destination,
+/// network error, status, size): never the URL, an address or the response.
+fn metadata_fetch_failed() -> CoreError {
+    CoreError::Validation {
+        field: "url",
+        message: "the metadata could not be fetched (an https URL of a public host, answering \
+                  with at most 1 MiB)"
+            .to_owned(),
+    }
+}
+
+/// Read SAML IdP metadata to prefill a connection: the pasted document (`xml`) or a metadata URL
+/// (`url`, https, fetched through the SSRF-guarded outbound client, at most 1 MiB). Persists
+/// nothing. Needs the operator flag `saml_experimental` (403 `feature_disabled`).
+#[utoipa::path(
+    post,
+    path = "/api/admin/v1/tenants/{slug}/organizations/{org}/connections/saml-metadata",
+    tag = "organizations",
+    operation_id = "importOrganizationSamlMetadata",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("org" = String, Path, description = "Organization id or slug"),
+    ),
+    request_body = SamlMetadataImport,
+    responses(
+        (status = 200, description = "The values read from the metadata", body = SamlMetadataView),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope, an org admin token of another organization, or SAML is not enabled (`feature_disabled`)", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant or organization", body = Problem, content_type = "application/problem+json"),
+        (status = 422, description = "Not exactly one of xml and url, the URL could not be fetched, or the document is not usable IdP metadata", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:organizations:write"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn import_saml_metadata(
+    OrgAdminAuth(auth): OrgAdminAuth,
+    State(state): State<AppState>,
+    Path((slug, org)): Path<(String, String)>,
+    AdminJson(body): AdminJson<SamlMetadataImport>,
+) -> AdminResult<Response> {
+    let _ = org_for(&state, &auth, &slug, &org, Access::Write).await?;
+    let service = state.admin_connections();
+    if !service.saml_enabled {
+        return Err(CoreError::FeatureDisabled("saml").into());
+    }
+    let (field, xml, url) = match (body.xml, body.url) {
+        (Some(xml), None) => ("xml", xml.into_bytes(), None),
+        (None, Some(url)) => {
+            let xml = state
+                .outbound()
+                .get(&url)
+                .map_err(|_| metadata_fetch_failed())?
+                .fetch(LIMIT_DOCUMENT)
+                .await
+                .map_err(|_| metadata_fetch_failed())?;
+            ("url", xml, Some(url))
+        }
+        _ => {
+            return Err(CoreError::Validation {
+                field: "xml",
+                message: "exactly one of xml and url is required".to_owned(),
+            }
+            .into());
+        }
+    };
+    let metadata = service.parse_idp_metadata(field, &xml)?;
+    Ok(json(StatusCode::OK, &SamlMetadataView::new(metadata, url)))
 }
