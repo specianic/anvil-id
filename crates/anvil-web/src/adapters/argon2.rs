@@ -112,12 +112,6 @@ impl Argon2Pool {
         self.permits
     }
 
-    /// Slots free right now (tests observe the shared pool through it).
-    #[cfg(test)]
-    pub(crate) fn available_permits(&self) -> usize {
-        self.sem.available_permits()
-    }
-
     async fn permit(&self) -> Result<OwnedSemaphorePermit, CoreError> {
         tokio::time::timeout(self.acquire_timeout, Arc::clone(&self.sem).acquire_owned())
             .await
@@ -282,6 +276,17 @@ impl PasswordHasher for Argon2Pool {
                 tracing::error!("stored password hash is not an Argon2 PHC string");
                 self.verify_dummy(password).await
             }
+        }
+    }
+}
+
+/// Test-only access to the pool's semaphore (the dispatcher tests observe the shared permit).
+#[cfg(test)]
+pub(crate) mod test_support {
+    impl super::Argon2Pool {
+        /// Slots free right now.
+        pub(crate) fn available_permits(&self) -> usize {
+            self.sem.available_permits()
         }
     }
 }
