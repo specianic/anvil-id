@@ -13,3 +13,8 @@ Items found during execution, dispositioned at the 07-23 gate.
 - (07-13) /par has only the per-IP Token rate class, no per-client limit.
 - (07-13) id_token_hint refused at /par (documented in PAR.md).
 - (07-13) Observed once mid-wave: export_redaction "admin email leaked" failures during a shared-tree run; passed in final runs. Watch for flakiness at the gate.
+- (07-19) docs/SUMMARY.md needs CERTIFICATION.md; THREAT-MODEL.md and SECURITY-REVIEW-SCOPE.md link `../SECURITY.md` (fails docs-site link check if added to the site) — 07-22.
+- (07-17) New import/export/profile named negatives must be registered in scripts/check-security-tests.sh (07-23 gate). futures-util added as direct dep (already in graph via axum).
+- (07-18) Native headless completion still creates a server-side session row (its cookie is never sent): authorization_code.session_id is NOT NULL and create_code writes rp_session with an FK to browser_session. Owner decision at the gate: accept, or make code issuance session-less in a later release. Browser-mode second-factor happy path (07-10 item) is now covered by headless_native::browser_mode_second_factor_completes_the_sign_in.
+- (07-18) New native named negatives (security_headless.rs `native_*`) may need registering in scripts/check-security-tests.sh (07-23 gate).
+- (07-18) Orchestrator default (owner may override): native headless sign-in keeps the server-side browser_session row (authorization_code.session_id NOT NULL; rp_session FK) but never sends its cookie, proven by native_no_sso_session_created. Accepted for 1.0; sessionless code issuance is a 1.x candidate. 07-22 documents it in HEADLESS.md.
