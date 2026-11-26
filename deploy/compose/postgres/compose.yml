@@ -48,9 +48,10 @@ services:
       RUST_LOG: info
       # Prometheus metrics on their own listener, not on the public port.
       ANVILID_METRICS_LISTEN: 0.0.0.0:9464
-      # SIGTERM: readiness 503 for 10 s, then graceful shutdown (stop_grace_period covers it).
+      # SIGTERM: readiness 503 for 10 s, then graceful shutdown: in-flight requests finish and
+      # background jobs get up to 20 s (stop_grace_period covers drain + jobs + margin).
       ANVILID_SHUTDOWN_DRAIN: 10s
-    stop_grace_period: 30s
+    stop_grace_period: 40s
     # Exec form: the distroless image has no shell. Probes /health/ready on the loopback.
     healthcheck:
       test: ["CMD", "/usr/local/bin/anvilid", "healthcheck"]

@@ -47,8 +47,9 @@ x-anvilid: &anvilid
     ANVILID_OUTBOUND_ALLOW_CIDRS: 172.30.75.0/24
     # Hermetic test stack: no breached-password lookups to the internet for the test users.
     ANVILID_BREACH_CHECK: "off"
-  # SIGTERM -> readiness 503 -> drain (10 s) -> graceful shutdown; well inside 30 s.
-  stop_grace_period: 30s
+  # SIGTERM -> readiness 503 -> drain (10 s) -> graceful shutdown (in-flight requests, then up to
+  # 20 s for background jobs); inside 40 s.
+  stop_grace_period: 40s
   networks: [ha]
 
 services:

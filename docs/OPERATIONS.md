@@ -217,7 +217,9 @@ requests in flight and stops its background workers. Set `shutdown_drain` to at 
 balancer's health-check interval times its failure threshold, so the balancer stops routing new
 requests to the node before it closes its listener, and give the orchestrator a grace period
 longer than the drain (the Helm chart refuses `terminationGracePeriodSeconds` not greater than the
-drain). With the default `0s` the node stops right away.
+drain). After the listener stops, background jobs get up to 20 s (webhook timeout 15 s + 5 s) to
+finish, so size the orchestrator grace period as drain + 20 s + margin (the Helm default of 40 s
+with a 10 s drain already does). With the default `0s` the node stops right away.
 
 ## High availability on Postgres
 

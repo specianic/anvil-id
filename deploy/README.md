@@ -49,7 +49,7 @@ docker compose -f deploy/compose/postgres/compose.yml \
   (`docker compose ... logs otel-collector`). Point its exporter at your tracing backend.
 - Logs: JSON on stderr (`ANVILID_LOG_FORMAT=json`); audit events as JSON lines on stdout.
 - Shutdown: on SIGTERM readiness turns 503 for `ANVILID_SHUTDOWN_DRAIN` (10 s) before the graceful
-  shutdown; `stop_grace_period` is 30 s.
+  shutdown, which gives background jobs up to 20 s to finish; `stop_grace_period` is 40 s.
 
 ## Kubernetes (Helm)
 

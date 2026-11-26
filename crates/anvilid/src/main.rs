@@ -17,6 +17,7 @@ mod tenant_config;
 use std::sync::Arc;
 
 use anvil_core::clock::SystemClock;
+use anvil_core::model::WEBHOOK_TIMEOUT;
 use anvil_core::policy::PasswordPolicy;
 use anvil_core::service::bootstrap::BootstrapService;
 use anvil_web::adapters::Argon2Pool;
@@ -28,8 +29,15 @@ use tokio::sync::watch;
 use crate::config::{CliOverrides, Config, Layers};
 use crate::storage::Backend;
 
-/// Time background jobs get to finish their current batch after the server stopped.
-const JOBS_SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// Slack on top of [`WEBHOOK_TIMEOUT`] for the jobs to record the outcome of their last request.
+const JOBS_SHUTDOWN_MARGIN: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Time background jobs get to finish their current batch after the server stopped: long enough
+/// for an in-flight webhook request (bounded by [`WEBHOOK_TIMEOUT`]) to finish. Derived, so a
+/// change of `WEBHOOK_TIMEOUT` follows. Delivery stays at-least-once regardless: an interrupted
+/// row is re-claimed when its lease expires and re-sent with the same `webhook-id`.
+const JOBS_SHUTDOWN_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(WEBHOOK_TIMEOUT.as_secs() + JOBS_SHUTDOWN_MARGIN.as_secs());
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -439,5 +447,11 @@ mod tests {
     fn cli_is_well_formed() {
         use clap::CommandFactory;
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn jobs_shutdown_timeout_covers_a_webhook_request() {
+        assert!(JOBS_SHUTDOWN_TIMEOUT >= WEBHOOK_TIMEOUT + std::time::Duration::from_secs(5));
+        assert_eq!(JOBS_SHUTDOWN_TIMEOUT, std::time::Duration::from_secs(20));
     }
 }
