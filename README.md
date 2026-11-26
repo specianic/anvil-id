@@ -12,6 +12,22 @@ apps), registration, email verification and recovery, rate limiting and brute-fo
 optional CAPTCHA, an audit log, and an admin console at `/console/` on top of the management API.
 Upgrading from 0.1: see [docs/UPGRADING.md](docs/UPGRADING.md).
 
+Coming in 0.4 "Operate it" (on `main`, not released yet):
+
+- A multi-tenant admin console: create tenants and switch between them.
+- Roles and permissions, mapped into tokens, and role-based console access
+  ([docs/UPGRADING.md](docs/UPGRADING.md#03-to-04)).
+- Custom user attributes validated with JSON Schema, editable by users on their account page.
+- Signed webhooks for user and session events ([docs/WEBHOOKS.md](docs/WEBHOOKS.md)).
+- Dynamic client registration (RFC 7591/7592) and Client ID Metadata Documents, both off by
+  default, with resource-aware consent for MCP clients ([docs/MCP.md](docs/MCP.md),
+  [docs/OPERATIONS.md](docs/OPERATIONS.md#client-registration-policies)).
+- Declarative tenant configuration in YAML: export, plan, apply ([docs/CONFIG-YAML.md](docs/CONFIG-YAML.md)).
+- Several nodes on Postgres with shared rate limits in Redis, health and readiness probes with
+  drain, Prometheus metrics, OpenTelemetry traces, online SQLite backups and shell-only admin
+  recovery ([docs/OPERATIONS.md](docs/OPERATIONS.md)).
+- A Helm chart and Docker Compose examples ([deploy/README.md](deploy/README.md)).
+
 ## Install
 
 Every release publishes static Linux binaries (x86_64, arm64), macOS binaries (Apple silicon,
@@ -90,6 +106,9 @@ Planning documents:
 - [docs/PRD.md](docs/PRD.md) — product requirements
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — architecture & implementation specification
 - [docs/UPGRADING.md](docs/UPGRADING.md) — upgrade notes
+- [docs/OPERATIONS.md](docs/OPERATIONS.md) — operating AnvilID (backups, HA, metrics, traces)
+- [docs/WEBHOOKS.md](docs/WEBHOOKS.md) — webhook events and signature verification
+- [docs/CONFIG-YAML.md](docs/CONFIG-YAML.md) — declarative tenant configuration
 
 ## Development
 

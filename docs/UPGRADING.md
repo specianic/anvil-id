@@ -166,3 +166,127 @@ logout endpoints are internal, add their addresses to `outbound_allow_cidrs`, an
   an MFA policy override and `allowed_resources`.
 - Brand the login pages (console: **Branding**), per tenant or per client.
 - Back-channel logout runs on every node; no extra process or setting is needed.
+
+## 0.3 to 0.4
+
+**Back up first.** Stop AnvilID, then copy the database (for SQLite, the whole data directory)
+and the KEK. The KEK now also seals webhook secrets. From 0.4 on, `anvilid backup create` makes
+online SQLite backups ([OPERATIONS.md](OPERATIONS.md#backup-and-restore-sqlite)).
+
+**Stop every 0.3 node before you start a 0.4 node.** Running 0.3 and 0.4 binaries against the same
+database is not tested.
+
+### Migrations
+
+The upgrade is automatic and keeps all data. There is one migration per backend, applied in a
+single transaction:
+
+- **SQLite:** `0007_release_0_4`.
+- **Postgres:** `0006_release_0_4`.
+
+Both only add tables, columns and indexes (new columns get constant defaults), plus one backfill
+(below). Neither is destructive, so no `--allow-destructive-migrations` flag is needed. They add
+the tables `role`, `role_assignment`, `attribute_definition`, `webhook_endpoint`,
+`webhook_delivery` and `initial_access_token`; the column `attributes` on `user` (a JSON object,
+default empty); the client columns `registration_source` (default `static`),
+`metadata_expires_at` and `registration_access_token_hash`; and `resources` on `consent_grant`
+(default empty). The CI upgrade tests build a 0.3 database, upgrade it, compare every row, check
+the backfill and run the full storage contract suite on the result (SQLite also checks that a
+restart does not run the backfill twice).
+
+**Administrator backfill.** If the `system` tenant exists, the migration creates its
+`administrator` role with the permission `admin:write` and assigns it to **every existing user of
+the `system` tenant**. New installations get the same role from the setup page.
+
+### Behaviour changes
+
+- **Console access follows roles.** In 0.3 every user of the `system` tenant got the admin scopes
+  the console asked for. In 0.4 the console token's admin scopes are bounded by the user's roles in
+  the `system` tenant: `admin:write` covers everything, `admin:read` every read scope, and
+  `admin:{resource}:write` also its read scope. Thanks to the backfill, existing system users keep
+  full access. **System users you create after the upgrade sign in to the console without any admin
+  access** until you assign them a role (console: **Roles**, or
+  `PUT /api/admin/v1/tenants/system/users/{user_id}/roles/administrator`). Management clients using
+  `client_credentials` are not affected. The last active holder of `admin:write` cannot be removed:
+  unassigning, deleting or disabling them, deleting their role or dropping `admin:write` from it is
+  refused with `409`. If you lock yourself out anyway, use `anvilid admin recover`
+  ([OPERATIONS.md](OPERATIONS.md#admin-access-recovery)).
+- **Role and permission claims.** The default claim mapping of every tenant puts a `roles` claim
+  in access tokens, ID tokens and UserInfo when the `roles` scope is granted, and a `permissions`
+  claim in JWT access tokens (not gated by a scope). Users without roles get neither claim, so
+  nothing changes until you create roles. Resource servers that reject unknown claims should allow
+  them, or change the mapping (tenant setting `claims`; `null` disables a claim). Opaque access
+  tokens and the introspection response carry no role, permission or attribute claims in 0.4.
+- **Consent covers resources.** A remembered consent now skips the screen only when it covers
+  every requested scope **and** every requested `resource` (RFC 8707). Grants stored by 0.3 have no
+  resources, so users of clients that send `resource` see the consent screen once more after the
+  upgrade (and `prompt=none` returns `consent_required` until they have). Clients that send no
+  `resource` are unaffected.
+- **Sessions survive the upgrade.** Cookie names do not change in 0.4, so users stay signed in.
+- **Oversized request bodies** now always get `413` (pages, protocol endpoints and the admin API),
+  whether the size is declared or streamed. Some routes answered `400` in 0.3.
+- **Health aliases.** `/healthz` (liveness) and `/readyz` (readiness) are added next to
+  `/health/live` and `/health/ready`. During a drain readiness answers `503 draining`. The probes
+  no longer go through tenant resolution or rate limiting.
+- **Tenant hosts.** A host that matches no tenant is remembered as a miss for 5 seconds per node,
+  so a newly configured custom host can take up to 5 seconds to resolve on each node.
+- **MFA `required`.** The enrolment step offers a passkey next to an authenticator app.
+- **Logs.** Each request writes one access line (target `anvil_web::access`) with the route
+  template, tenant, status, latency and request id. Client IP addresses are no longer logged by the
+  rate limiter. Parsers of the 0.3 request log lines need updating.
+- **Discovery** is unchanged by default. `registration_endpoint` and
+  `client_id_metadata_document_supported` appear only for tenants that enable dynamic registration
+  or client metadata documents.
+- **Admin API:** new resources `roles`, `attributes`, `webhooks`, `initial-access-tokens` and
+  `config` (export, plan, apply); the tenant view gains `issuer` and `discovery_url`; the client view
+  gains `registration_source` and `metadata_expires_at`; tenant settings gain `claims`, `dcr` and
+  `cimd`. Deleting, disabling or unassigning the last administrator answers `409`.
+
+### New configuration keys and defaults
+
+Everything new is off until you configure it:
+
+| Key | Default | Effect of the default |
+|---|---|---|
+| `redis_url` | unset | Rate limits are per node, as in 0.3 |
+| `rate_limit_redis_failure` | `closed` | Only matters with `redis_url`: while Redis is unreachable, `auth`-class requests (sign-in, registration, recovery and setup form posts, `/register`) get `429` with `Retry-After`; other classes fall back to per-node limits. `local` uses per-node limits for every class instead |
+| `metrics_listen`, `metrics_on_main_port` | unset, `false` | No `/metrics` |
+| `otel_endpoint`, `otel_service_name` | unset, `anvilid` | No trace export |
+| `shutdown_drain` | `0s` | The node stops right after SIGTERM, as in 0.3. Set it (for example `10s`) behind a load balancer |
+| `database_max_connections` | `10` | Postgres pool size per node, as in 0.3 |
+
+New tenant settings default to off as well: dynamic client registration (`dcr.policy`) and client
+metadata documents (`cimd.policy`) are `disabled` in every tenant, and always in `system`.
+[OPERATIONS.md](OPERATIONS.md#configuration-keys-added-in-04) describes every key, and
+[OPERATIONS.md](OPERATIONS.md#client-registration-policies) the registration policies.
+
+### Limitations in 0.4
+
+- **`jwks_uri` is not accepted for dynamically registered or CIMD clients.** `private_key_jwt`
+  clients of either kind must send inline `jwks`.
+- **KEK rotation is not supported.**
+- The webhook payload names the tenant by id (`data.tenant`), not by slug.
+
+### Deployment
+
+- A Helm chart is included (`deploy/helm/anvilid`). `database.type` selects `sqlite` (one replica)
+  or `postgres` (several replicas). The chart refuses more than one replica, or an HPA, without
+  `redis.url` / `redis.existingSecretKey`, unless you set `redis.acknowledgePerNodeLimits=true` and
+  accept per-pod rate limits. It also refuses SQLite with more than one replica, and a termination
+  grace period not longer than the drain.
+- Compose examples for Postgres and an OpenTelemetry/Prometheus overlay are in `deploy/compose/`;
+  see [deploy/README.md](../deploy/README.md).
+- The container image has a `HEALTHCHECK` that runs `anvilid healthcheck`.
+
+### What to configure next
+
+- Assign roles to your console administrators and define roles for your applications
+  (console: **Roles**). Add custom user attributes (console: **Attributes**) and choose which ones
+  users may edit on their account page.
+- Subscribe your services to user and session events: [WEBHOOKS.md](WEBHOOKS.md).
+- Behind a load balancer: set `shutdown_drain`, use `/health/ready`, and for several nodes on
+  Postgres set `redis_url` ([OPERATIONS.md](OPERATIONS.md#high-availability-on-postgres)).
+- Turn on metrics and traces ([OPERATIONS.md](OPERATIONS.md#metrics)).
+- Keep tenant configuration in version control with `anvilid tenant export` ([CONFIG-YAML.md](CONFIG-YAML.md)).
+- For MCP servers and agents, enable dynamic registration or client metadata documents for the
+  tenant ([MCP.md](MCP.md)).

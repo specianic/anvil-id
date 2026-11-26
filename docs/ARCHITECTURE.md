@@ -50,8 +50,10 @@ Versions are the latest stable releases as of the date above. Pin them in the wo
 | Admin UI | React + TypeScript, built with Vite as a static single-page app; TanStack Router and Query; shadcn/ui (Radix) components; TanStack Table. Embedded with rust-embed | Talks only to the public management API. TypeScript types and API client generated from the OpenAPI spec (`openapi-typescript`), so API drift fails the build. No server-side rendering (no Next.js) |
 | Config | figment (TOML file + `ANVILID_*` env vars + CLI flags) | |
 | CLI | clap 4 | |
-| Observability | tracing, tracing-subscriber (JSON), metrics + Prometheus exporter; OpenTelemetry behind the `otel` feature | |
-| Rate limiting | governor (GCRA buckets) and moka (brute-force backoff state), wrapped by our keyed limiter in `anvil-cache` (§11) | One limiter implementation. governor runs on the core `Clock`, so tests drive it with a fake clock |
+| Observability | tracing, tracing-subscriber (JSON), metrics + Prometheus exporter, OpenTelemetry (OTLP/HTTP traces via tracing-opentelemetry) | As built in 0.4: compiled into every build and switched on at runtime (`otel_endpoint`; `metrics_listen` or `metrics_on_main_port`). There is no `otel` cargo feature; with the keys unset no exporter or recorder is installed (§15) |
+| Rate limiting | governor (GCRA buckets) and moka (brute-force backoff state), wrapped by our keyed limiter in `anvil-cache` (§11) | One limiter interface. governor runs on the core `Clock`, so tests drive it with a fake clock. 0.4 adds a Redis backend of the same `RateLimiter` trait (GCRA and backoff as Lua scripts, `now` from the core clock), selected only by `redis_url`; one contract suite pins both backends to the same semantics |
+| Attribute schemas (0.4) | jsonschema (draft 2020-12), offline | Remote `$ref` refused, size and depth capped, regex engine without backtracking (§11) |
+| Tenant YAML (0.4) | serde-saphyr | Declarative tenant configuration (`anvilid tenant export|plan|apply`, docs/CONFIG-YAML.md) |
 | HTTP client | reqwest 0.13 (rustls) with SSRF guard | Upstream IdPs, JWKS fetch, webhooks, client metadata documents. Since 0.3 every outbound request goes through one guarded `OutboundClient` (§11) |
 | Upstream OIDC/OAuth 2 client (0.3) | Our own relying-party code on the guarded reqwest client plus `anvil-jose` for ID-token verification | The Rust OIDC/OAuth 2 client crates evaluated on 2026-11-25 (`openidconnect` 4.1, `oauth2` 5.0) depend on `chrono` (banned) and, for `openidconnect`, on a second crypto stack including RustCrypto `rsa`. `anvil-jose` already verifies RS256/PS256/ES256/Ed25519 against a JWKS with an alg allow-list |
 | i18n (0.3) | fluent-bundle, fluent-langneg, unic-langid | Fluent catalogs embedded in the binary, overridable from the theme directory (§10.6) |
@@ -103,7 +105,11 @@ decision before M1 starts.
 - **Postgres mode** supports any number of nodes. Coordination happens through the database: advisory
   locks for migrations, row leasing (`FOR UPDATE SKIP LOCKED`) for background jobs.
 - **Redis** is optional in HA mode. Without it, rate limits are enforced per node (documented). With
-  it, they are shared.
+  it, they are shared. As built in 0.4: Redis holds only rate-limit and brute-force state (key names
+  HMAC'd under a KEK-derived key); an unreachable Redis at startup is an error; during an outage a
+  5 s circuit breaker fails the `auth` class closed (429) or, with `rate_limit_redis_failure =
+  local`, falls back to the in-process limiter, and other classes always fall back to it
+  (docs/OPERATIONS.md). Nodes started together on an empty database converge on one installation.
 - TLS is normally terminated by a reverse proxy. `anvilid` can also terminate TLS itself
   (rustls, certificate files).
 
@@ -197,7 +203,7 @@ from handler code.
 | `credential` | id, tenant_id, user_id, kind (password/webauthn/totp), data (encrypted or hashed per kind), external_id (WebAuthn credential ID, nullable), counter (integer, nullable), backup_eligible, label, created_at, last_used_at | Password: PHC string. TOTP: sealed seed; `counter` = last accepted time step. WebAuthn: credential JSON; `counter` = signature counter. Counters are plain columns so replay and clone checks are a single conditional `UPDATE … WHERE counter < ?`. Partial unique indexes: one password and one TOTP per user, `external_id` unique per tenant; SQLite also checks `(kind = 'webauthn') = (external_id IS NOT NULL)`. Password rows migrated from 0.1 get random ids |
 | `recovery_code` | tenant_id, user_id, code_hash, created_at, used_at | Primary key (tenant_id, user_id, code_hash). One row per code, consumed atomically (`UPDATE … SET used_at … WHERE used_at IS NULL`). Removing TOTP deletes the user's codes |
 | `identity_link` | id, tenant_id, user_id, connection_id, subject, email_at_link, metadata (JSON), created_at, last_used_at | Upstream identities (0.3). Unique (tenant_id, connection_id, subject); composite foreign keys to `user (tenant_id, id)` and `connection (tenant_id, id)`, both cascading. `metadata` keeps provider facts such as the Microsoft `tid`/`oid`, the Google `hd` or the GitHub `login` |
-| `client` | id, tenant_id, client_id, name, type (confidential/public), application_type (web/native), require_pkce, auth_method, secret_hash, jwks / jwks_uri, redirect_uris, post_logout_redirect_uris, grant_types, scopes, token_format (jwt/opaque), consent_mode (required/skip_first_party), backchannel_logout_uri, backchannel_logout_session_required, allowed_resources, mfa_policy (nullable), created_at | `client_id` is unique per tenant; URL-form client IDs (CIMD) are cached in `client_metadata_cache` |
+| `client` | id, tenant_id, client_id, name, type (confidential/public), application_type (web/native), require_pkce, auth_method, secret_hash, jwks / jwks_uri, redirect_uris, post_logout_redirect_uris, grant_types, scopes, token_format (jwt/opaque), consent_mode (required/skip_first_party), backchannel_logout_uri, backchannel_logout_session_required, allowed_resources, mfa_policy (nullable), created_at | `client_id` is unique per tenant. 0.4 adds `registration_source` (static/dynamic/cimd), `metadata_expires_at` and `registration_access_token_hash`. **As built in 0.4 there is no `client_metadata_cache` table:** a fetched Client ID Metadata Document is validated and materialised as a `client` row with `registration_source = cimd` (`client_id` = the document URL, `metadata_expires_at` = the clamped cache lifetime), upserted in one statement that never overwrites a static or dynamic client. Failed fetches are not stored |
 | `signing_key` | id, tenant_id, kid, alg, state (next/active/retired), private_key (encrypted with KEK), public_jwk, activated_at, retired_at, expires_at | |
 | `browser_session` | id, tenant_id, user_id, auth_time, acr, amr (JSON), ip, user_agent, created_at, last_seen_at, expires_at, idle_expires_at | Session cookie holds an opaque random ID; only its hash is stored |
 | `rp_session` | tenant_id, session_id, client_id, issuer, created_at | Which clients a browser session signed in to (for back-channel logout). Primary key (tenant_id, session_id, client_id); cascades with the session. Recorded in the `GrantRepo::create_code` transaction, only for a stored session of the same tenant. `issuer` is the issuer the client got its code (and ID tokens) from; a later code for the same row overwrites it (latest wins). It is null only for rows written before the 0.3 issuer migration. There is no `sid` column: the OIDC `sid` is the browser session id (§8.3) |
@@ -209,7 +215,10 @@ from handler code.
 | `refresh_token` | token_hash (PK), tenant_id, family_id, parent_hash?, expires_at, consumed_at | Rotation: each use consumes the token and issues a child |
 | `access_token` | token_hash (PK), tenant_id, family_id?, client_id, user_id?, scope, created_at, expires_at, revoked_at | Only for opaque tokens; JWT access tokens are not stored. Revocation of a JWT revokes its family. Opaque client-credentials tokens have no family. `resource` arrives with RFC 8707 |
 | `consent_grant` | id, tenant_id, user_id, client_id, scopes, created_at, updated_at, revoked_at | Unique (tenant_id, user_id, client_id). Scopes are a sorted, de-duplicated set; a new grant is merged into the existing one in a single upsert so concurrent first grants lose nothing. Revoking also revokes that client's token families of the user. `resource` arrives with RFC 8707 |
-| `role`, `role_assignment` | role: id, tenant_id, org_id?, name, permissions (JSON). assignment: role_id, user_id, org_id? | RBAC (ORG-5) |
+| `role`, `role_assignment` | role: id, tenant_id, org_id?, name, description, permissions (JSON; Postgres `text[]`), created_at, updated_at. assignment: tenant_id, role_id, user_id | RBAC (ORG-5), built in 0.4. `org_id` is always null in 0.4; names are unique per tenant among tenant-level roles. Assignments have composite foreign keys to `role (tenant_id, id)` and `user (tenant_id, id)`, both cascading, so an assignment cannot cross tenants |
+| `attribute_definition` (0.4) | tenant_id, name, schema (JSON Schema fragment), required, user_editable, claim (rule or null), position, created_at, updated_at | Primary key (tenant_id, name). User values live in `user.attributes` (a JSON object) and are validated against the definitions on every write. Deleting a definition keeps stored values |
+| `webhook_endpoint`, `webhook_delivery` (0.4) | endpoint: id, tenant_id, name, url, events, enabled, secret_enc, previous_secret_enc, previous_secret_expires_at, disabled_reason, timestamps. delivery: id, tenant_id, endpoint_id, event_type, payload_json (ids only), status (pending/delivered/failed), attempts, next_attempt_at (also the claim lease), last_http_status, last_error (an error class, never response text), created_at, completed_at | Secrets sealed with the KEK. Deliveries are inserted by `AuditRepo::append` in the audit transaction (one per enabled, subscribed endpoint) and cascade with their endpoint; completed rows follow audit retention (docs/WEBHOOKS.md) |
+| `initial_access_token` (0.4) | id, tenant_id, description, token_hash (SHA-256, unique), expires_at, uses_remaining (null = unlimited), revoked_at, created_at | RFC 7591 initial access tokens for the `allow_listed` DCR policy; consumed by one conditional `UPDATE`. Purged 7 days after expiry or revocation |
 | `connection` (0.3) | id, tenant_id, slug, display_name, kind (google/apple/microsoft/github/oidc/oauth2), enabled, config (JSON, tagged `type`: social/oidc/oauth2), secret_enc, trust_email_verified, created_at, updated_at | Upstream IdP configuration, tenant-scoped in 0.3 (org-scoped connections and SAML arrive with ORG-2..4). Unique (tenant_id, slug). `kind` is derived from `config`. The secret (client secret, or the Apple `.p8` key) is sealed with the KEK under associated data tenant ‖ connection id and is write-only in the API |
 | `branding`, `branding_logo` (0.3) | branding: tenant_id, scope_key (tenant or client), tokens (JSON), custom_css, logo_sha256, logo_type, updated_at, plus the draft (tokens, custom_css, preview_hash, preview_expires_at). branding_logo: tenant_id, sha256, content_type, bytes | Published theme per scope and its preview draft (§10.7). Logos are content-addressed per tenant. SQLite keeps the draft in columns of `branding`; Postgres keeps it in a separate `branding_draft` table so a scope can have a draft without published branding. The port semantics are the same |
 | `organization`, `org_membership`, `org_invitation`, `org_domain` | standard fields | 1.0 (ORG-2..4) |
@@ -238,6 +247,15 @@ settings JSON written by 0.2 still parses. The `flow`, `self_service_token` and 
 kind checks are widened: Postgres swaps the CHECK constraints, SQLite rebuilds the three tables in
 the migration transaction (copy every row, no table references them). The second migration only
 adds the nullable `issuer` column to `rp_session` and `logout_delivery`.
+
+0.4 (SQLite migration `0007_release_0_4`, Postgres `0006_release_0_4`, additive) adds `role`,
+`role_assignment`, `attribute_definition`, `webhook_endpoint`, `webhook_delivery` and
+`initial_access_token`; `user.attributes`; the three client registration columns above; and
+`resources` on `consent_grant` (a sorted set merged like scopes; a remembered grant must cover
+every requested scope and resource). Tenant `settings` gains `claims` (role/permission claim
+mapping), `dcr` and `cimd` (both default `disabled`, forced `disabled` for `system`). The only
+data change is a backfill: the `system` tenant's `administrator` role (`admin:write`) is created
+and assigned to every existing system-tenant user.
 
 **Tenant-scoped foreign keys.** Rows that point at a user reference `(tenant_id, user_id)` →
 `user (tenant_id, id)`, so the database itself rejects a row whose user belongs to another tenant.
@@ -711,7 +729,7 @@ Paths below are relative to the tenant base (§12).
 | `GET, POST /userinfo` | UserInfo | OIDC-9 |
 | `POST /introspect`, `POST /revoke` | RFC 7662 / RFC 7009 | OIDC-10 |
 | `GET, POST /logout` | RP-initiated logout | OIDC-12 |
-| `POST /register` | Dynamic client registration (policy-controlled) | OIDC-17 |
+| `POST /register`, `GET, PUT, DELETE /register/{client_id}` | Dynamic client registration (RFC 7591) and management (RFC 7592), policy-controlled; built in 0.4. 404 while the tenant's policy is `disabled` | OIDC-17 |
 
 **Discovery path forms.** OpenID Connect Discovery appends the well-known suffix to the issuer
 (`{issuer}/.well-known/openid-configuration`, e.g. `/t/acme/.well-known/openid-configuration`).
@@ -816,12 +834,29 @@ credential changes.
   gained `mfa_policy`, `email_otp`, `magic_link` (refused without SMTP), `auto_link`,
   `upstream_registration` and `default_locale`. The request body limit is 64 KiB everywhere except
   the logo upload (400 KiB).
+- Added in 0.4: `roles` (CRUD, members, per-user assign/unassign), `attributes` (definitions and
+  per-user values), `webhooks` (endpoints, write-only secrets shown once, rotation, test, delivery
+  log, redelivery), `initial-access-tokens` (value shown once, stored hashed) and `config`
+  (declarative export, plan, apply). Tenant settings gain `claims`, `dcr` and `cimd`; the tenant
+  view gains the server-computed `issuer` and `discovery_url`; the client view gains
+  `registration_source` and `metadata_expires_at`. Roles, attributes and webhooks use
+  `admin:settings:{read|write}` (role assignment and user attribute values `admin:users:{read|write}`,
+  initial access tokens `admin:clients:{read|write}`), plus `admin:write` for the `system` tenant.
+  81 operations; `security_admin_v04.rs` and `security_rbac.rs` prove the scopes.
+- **RBAC admin scopes (0.4).** In the `system` tenant a user's roles decide which admin scopes the
+  console token can carry: the requested admin scopes are intersected, at code exchange and at
+  every refresh, with the scopes the user's role permissions grant (`admin:write` covers every
+  admin scope, `admin:read` every read scope, `admin:{r}:write` also `admin:{r}:read`). A system
+  user without a role gets no admin scope. Roles of other tenants never grant admin scopes. The
+  last active `admin:write` holder cannot be unassigned, deleted, blocked or stripped of the
+  permission (409), and nobody can create, edit, assign or unassign a role beyond their own admin
+  scopes. Client credentials tokens are unaffected (no user).
 - Installation-level administration (managing tenants) lives in a dedicated `system` tenant, so admin
   authentication uses the same machinery as everything else.
 - The admin console SPA (`/console/`) is a public OAuth client of the `system` tenant and only calls
   this API. As built in 0.2: the client is `anvil-console`, reconciled with the public URL at every
-  start (no off switch in 0.2). Users of the `system` tenant are the administrators until RBAC
-  (0.4); registration in the `system` tenant is always disabled, and clients of other tenants can
+  start (no off switch in 0.2). Users of the `system` tenant were the administrators until RBAC
+  (0.4; see above); registration in the `system` tenant is always disabled, and clients of other tenants can
   never obtain admin scopes. Sign-out revokes the console's tokens at `/t/system/revoke`.
 
 ### 10.4 How frontend assets ship in the binary
@@ -852,6 +887,12 @@ credential changes.
 
 `/health/live`, `/health/ready` (checks the database), `/metrics` (can be bound to a separate
 listener).
+
+As built in 0.4: `/healthz` and `/readyz` are aliases. The probes and `/metrics` sit outside tenant
+resolution and rate limiting. Readiness answers `503 draining` from SIGTERM until the process
+stops (`shutdown_drain`), `503 unavailable` when the storage check fails. `/metrics` is served on
+`metrics_listen` (a separate plain-HTTP listener that serves nothing else) or, with
+`metrics_on_main_port`, on the main listener; otherwise it answers 404 (§15).
 
 ### 10.6 Internationalization (0.3)
 
@@ -913,16 +954,20 @@ listener).
 | Client authentication | One `ClientAuthenticator`. Constant-time comparison (`subtle`) of hashed secrets. `private_key_jwt`: `aud` must equal the issuer, `exp` ≤ 5 min, `jti` recorded in `replay_guard` |
 | CSRF | Synchronizer token per flow plus `Sec-Fetch-Site`/`Origin` checks on every state-changing browser request. Fetch-Metadata rules for unsafe methods: (1) if `Sec-Fetch-Site` is present, only `same-origin` or `none` pass; (2) otherwise, if `Origin` is present, it must equal the public origin or the tenant's host origin; (3) if neither header is present the request passes this layer (non-browser clients, older browsers) and the synchronizer token alone decides. The layer fails closed if the allowed origins are unknown. Exempt: `/token` and `/api/admin/*` (client-authenticated, no cookies) and `POST /authorize` (cross-site by design) |
 | Cookies | `__Host-` prefix, `Secure`, `HttpOnly`, `SameSite=Lax` (session) or `Strict` (flow). Dev mode on `http://localhost` drops the `__Host-`/`Secure` requirements with a warning. Names carry a per-tenant suffix (path-based tenants share a host, and `__Host-` cookies cannot be scoped by path): since 0.3 the first 16 hex characters of SHA-256 over the tenant UUID's 16 bytes, stable for the tenant's life (earlier releases used the UUIDv7's first 12 hex characters, its creation millisecond, so tenants created in the same millisecond shared cookie names) |
-| Rate limiting | One keyed limiter (`anvil-cache`, GCRA) with route classes and default quotas: `auth` (POSTs under `/ui/login`, `/ui/registration`, `/ui/recovery` and `/setup`: 10/min per IP, burst 5), `token` (`/token`, `/introspect`, `/revoke`: 50/s per IP, plus 100/s per claimed client id), `admin` (20/s per IP), `default` (50/s per IP). `/health/*`, `/healthz` and `/assets/*` are never limited. All quotas are configurable (§13); `rate_limit_enabled = false` switches the limiter off with a warning. A request without a peer address gets a generic 500, never an invented address. 429 answers carry `Retry-After` (whole seconds, at least 1) and the shape of their surface: OAuth JSON `invalid_request`/`too many requests` with `no-store`, admin problem JSON `urn:anvilid:problem:too_many_requests`, or the themed error page `too_many_requests` |
+| Rate limiting | One keyed limiter (`anvil-cache`, GCRA) with route classes and default quotas: `auth` (POSTs under `/ui/login`, `/ui/registration`, `/ui/recovery` and `/setup`, and since 0.4 every method under `/register`: 10/min per IP, burst 5), `token` (`/token`, `/introspect`, `/revoke`: 50/s per IP, plus 100/s per claimed client id), `admin` (20/s per IP), `default` (50/s per IP). `/health/*`, `/healthz` and `/assets/*` are never limited. All quotas are configurable (§13); `rate_limit_enabled = false` switches the limiter off with a warning. A request without a peer address gets a generic 500, never an invented address. 429 answers carry `Retry-After` (whole seconds, at least 1) and the shape of their surface: OAuth JSON `invalid_request`/`too many requests` with `no-store`, admin problem JSON `urn:anvilid:problem:too_many_requests`, or the themed error page `too_many_requests` |
 | Brute-force on secrets | Argon2 verification runs on a bounded pool; login attempts against unknown users perform a dummy hash (constant-time behavior). **Two tiers (0.2):** a strict key (tenant + identifier + IP) allows 5 free failures, then locks progressively (1 s doubling, capped at 15 min; success clears it); a loose key (tenant + identifier, any IP) counts failures per hour and never locks: over the threshold it requires a CAPTCHA when the tenant has one, otherwise it delays. Nobody can lock an account out from arbitrary IPs. Known and unknown identifiers behave identically, the identifier is never logged or audited (`rate_limit_lockout` records key kind and seconds only). The second factor is throttled per user, passkey failures per IP |
 | CAPTCHA (0.2) | Optional per tenant (Turnstile or hCaptcha), shown only when the loose tier asks for it. Verification fails closed (HTTP error, timeout, malformed or oversized body, redirects; https endpoints only). The widget is a third-party script by the operator's choice: the page with the widget gets a CSP that allows the provider, every other page keeps `script-src 'self'`. A CAPTCHA can conflict with WCAG 2.2 SC 3.3.8 (accessible authentication); operators enabling it accept that trade-off |
 | Trusted proxies (0.2) | The client IP comes from the TCP peer unless the peer is in `trusted_proxies`. Then the configured header (`X-Forwarded-For` or `Forwarded`, never both) is walked right to left, skipping trusted hops, and the first untrusted entry is the client; an unparsable entry stops the walk (the last trusted hop is used), at most 32 hops. IPv4-mapped IPv6 is normalised. Forwarded proto/host never change the issuer or cookie mode (`public_url` decides) |
 | Response headers | Strict CSP (`script-src 'self'`, no inline scripts), `frame-ancestors 'none'` by default, HSTS when HTTPS, `Referrer-Policy: no-referrer` on auth pages. Exceptions are per page and narrow: the `form_post` page adds `form-action <redirect origin>`; the CAPTCHA page allows its provider; the theme preview page (0.3) allows `frame-ancestors 'self'` |
-| SSRF | 0.2 fetches no client-supplied URL (no `jwks_uri`, no `request_uri`). **Since 0.3 one guarded `OutboundClient` carries every outbound request** (upstream discovery, JWKS, token and profile calls, back-channel logout, CAPTCHA, the breached-password check; webhooks and client metadata documents later). Rules: https only (plain http only in development mode, and only to allow-listed destinations); IP literals are checked before sending and every DNS answer as it resolves, so the address connected to is the address checked; private, loopback, link-local, CGNAT, multicast, documentation, benchmarking and other reserved IPv4/IPv6 ranges are blocked, including IPv4 embedded in IPv6 (mapped, NAT64, 6to4); redirects are never followed; proxy environment variables are ignored; URLs with userinfo are refused; connect timeout 5 s, total 10 s; bodies capped (1 MiB documents, 64 KiB token responses). Error text never echoes the URL, address or body. Operator keys: `outbound_allow_cidrs` (destinations allowed despite the block list; default loopback in development mode, none otherwise; an explicit value, even empty, replaces the default) and `outbound_ca_file` (extra PEM roots, e.g. a private CA; TLS verification is never switched off). Negative tests: `security_ssrf.rs` |
+| SSRF | 0.2 fetches no client-supplied URL (no `jwks_uri`, no `request_uri`). **Since 0.3 one guarded `OutboundClient` carries every outbound request** (upstream discovery, JWKS, token and profile calls, back-channel logout, CAPTCHA, the breached-password check; since 0.4 also webhook deliveries and Client ID Metadata Document fetches). Rules: https only (plain http only in development mode, and only to allow-listed destinations); IP literals are checked before sending and every DNS answer as it resolves, so the address connected to is the address checked; private, loopback, link-local, CGNAT, multicast, documentation, benchmarking and other reserved IPv4/IPv6 ranges are blocked, including IPv4 embedded in IPv6 (mapped, NAT64, 6to4); redirects are never followed; proxy environment variables are ignored; URLs with userinfo are refused; connect timeout 5 s, total 10 s; bodies capped (1 MiB documents, 64 KiB token responses). Error text never echoes the URL, address or body. Operator keys: `outbound_allow_cidrs` (destinations allowed despite the block list; default loopback in development mode, none otherwise; an explicit value, even empty, replaces the default) and `outbound_ca_file` (extra PEM roots, e.g. a private CA; TLS verification is never switched off). Negative tests: `security_ssrf.rs`. **Operator infrastructure is exempt (0.4):** the OTLP trace exporter (its own blocking HTTP client), the Redis client and the `anvilid healthcheck` loopback probe, like Postgres and SMTP, reach destinations the operator configured and may be private; they never take a URL from a client or a tenant |
 | Upstream sign-in (0.3) | `state` bound to the flow and to a `SameSite=Lax` binding cookie, nonce, PKCE S256 (except Apple), pending state consumed once by compare-and-swap before any provider call, RFC 9207 `iss` checked when advertised, ID tokens fully validated with an RS256-only allow-list for presets (generic OIDC: the provider's algorithms ∩ RS256/PS256/ES256/Ed25519), never `alg: none` or HMAC. Linking only on a trusted verified email or explicit confirmation (§9.2). Negative tests: `security_linking.rs`, `upstream_*.rs` |
 | Email sign-in (0.3) | No enumeration (identical answers, and no email, for unknown, unverified and blocked addresses), flow-bound HMAC codes, single use, 10 min, attempt and send caps on the one limiter, magic link consumed only by a same-browser POST (§9.3). Negative tests: `security_email_code.rs` |
 | RP-initiated logout (0.3) | Hint verified (enabled algs, `typ: JWT`, size cap), exact post-logout URI match, CSRF-bound confirmation when the hint does not prove the session (§8.3). Negative tests: `security_logout.rs` |
 | Theming (0.3) | Allow-list CSS validator, re-validation at render, same-origin stylesheet under the unchanged CSP, logo type sniffing, preview token hashed at rest and valid 15 min (§10.7). Negative tests: `security_theme.rs` |
+| Dynamic registration (0.4) | Tenant policy `disabled` (404, not advertised) / `allow_listed` (initial access token, hashed, expiring, use-counted, consumed atomically; a refused request does not consume it; redirect-host allow-list) / `open`; always disabled for `system`. `software_statement` and `jwks_uri` refused, `admin:*` scopes never registrable, `max_clients` soft cap, `auth` rate class. Registration access tokens are 256-bit and stored hashed. Negative tests: `security_registration.rs` |
+| Client ID Metadata Documents (0.4) | Policy and host allow-list checked before any fetch; fetched only through `OutboundClient` (https only, 5 KiB, status 200, no redirects), per-host budget across the installation, 16 concurrent fetches per node; `client_id` must equal the document URL exactly; secrets, shared-secret auth methods and `jwks_uri` refused; failures never cached; consent names the client by its host and labels the self-asserted name unverified. Negative tests: `security_cimd.rs` |
+| Webhooks (0.4) | Endpoint URLs pass the outbound policy at creation and at every send; Standard Webhooks v1 HMAC signatures, secrets sealed with the KEK and shown once; ids-only payloads (no email, name, IP); redirects never followed. Negative tests: `security_webhooks.rs` |
+| RBAC and attributes (0.4) | Cross-tenant role assignment impossible (composite keys and service checks), admin scopes bounded by roles, last-administrator guard, escalation guard (§10.3). Mapped claims never override protocol or standard claims. Attribute schemas: offline only (remote `$ref` refused), 16 KiB and depth 32 caps, linear-time regex. Negative tests: `security_rbac.rs`, `security_attributes.rs` |
 | Secret hygiene | Secrets wrapped in `secrecy` types (no `Debug`/log output); `zeroize` on drop for key material |
 | Test code | No test-only branches in production code; test fakes implement the traits inside `#[cfg(test)]` or test crates only |
 
@@ -989,6 +1034,12 @@ listener).
   auto-link, upstream registration, default language) are tenant settings in the management API,
   not configuration keys. Email sign-in can be turned on only when SMTP is available (installation
   `smtp_url` or the tenant's own SMTP settings).
+- **Keys added in 0.4:** `redis_url` (secret: environment or file only; `redis://` or
+  `rediss://`), `rate_limit_redis_failure` (`closed` | `local`), `metrics_listen`,
+  `metrics_on_main_port`, `otel_endpoint` (credentials in URLs are redacted; exporter headers come
+  from `OTEL_EXPORTER_OTLP_HEADERS`), `otel_service_name`, `shutdown_drain` (at most 1 h) and
+  `database_max_connections` (Postgres pool per node, 1-1000). All default to off or to the 0.3
+  behaviour; docs/OPERATIONS.md has the reference.
 - **Startup reconciliation (0.2):** after installation the binary reconciles the console client
   with `public_url`, then ensures every tenant has an active key for each enabled algorithm.
 - **Audit stream:** audit events are written to the database and mirrored on stdout as one raw
@@ -998,8 +1049,11 @@ listener).
   worker uses tenant SMTP, then installation SMTP.
 - **CLI commands:** `serve`, `migrate`, `config show|validate`, `admin setup-url` (new bootstrap URL
   for recovery), `keys rotate`, `backup create|restore` (SQLite), `export`/`import` (tenant YAML).
-  0.1 ships `serve`, `migrate`, `config show|validate` and `admin setup-url`; 0.2 adds `keys rotate`;
-  the others arrive with their milestones.
+  0.1 ships `serve`, `migrate`, `config show|validate` and `admin setup-url`; 0.2 adds `keys rotate`.
+  As built in 0.4: `backup create|restore` (SQLite only; Postgres is refused with a pointer to
+  pg_dump/PITR), `admin recover` (shell-only administrator recovery), `healthcheck` (loopback
+  readiness probe for distroless images) and `tenant export|plan|apply` (the planned
+  `export`/`import` pair became a plan/apply workflow, docs/CONFIG-YAML.md).
 
 ## 14. Background jobs
 
@@ -1014,7 +1068,7 @@ its schedule with a small random delay.
 | Signing-key rotation check | 1 h (0.2) |
 | Email outbox delivery | continuous (polling with backoff) |
 | Back-channel logout delivery | 0.3: woken by every path that revokes sessions (§8.3), otherwise polls every 10 s; runs on every node and claims rows with a 2-minute row lease instead of a `job_lease` (§8.3) |
-| Webhook delivery (0.4) | event-driven, with retry |
+| Webhook delivery (0.4) | As built: runs on every node; polls every 2 s (a full batch is followed at once), claims up to 8 due rows with a 45 s row lease (`FOR UPDATE SKIP LOCKED` on Postgres) instead of a `job_lease`, sends them concurrently, retries on a fixed schedule over about 3 days (docs/WEBHOOKS.md) |
 | Audit log retention | daily (0.2; not scheduled when `audit_retention_days = 0`) |
 
 ## 15. Observability
@@ -1026,6 +1080,23 @@ its schedule with a small random delay.
   database pool stats; job runs and failures.
 - **Traces:** spans for each request and storage call; OTLP export behind the `otel` feature and
   `ANVILID_OTEL_ENDPOINT`.
+- **As built in 0.4** (differences from the plan above):
+  - Operational logs go to **stderr** (JSON outside dev mode); the audit stream is on stdout. One
+    request layer writes the `http.request` span and the access line (target `anvil_web::access`)
+    with `method`, `route` (the matched template, never the raw path or query), `tenant`,
+    `status`, `latency_ms` and `request_id`. No client IP, email or client id is recorded in
+    operational telemetry.
+  - Metrics (all names in `anvil_web::observability`): `anvil_http_requests_total{route_class,
+    status_class}`, `anvil_http_request_duration_seconds{route_class}`,
+    `anvil_ratelimit_rejections_total{route_class}`, `anvil_auth_attempts_total{outcome}` (no
+    method label), `anvil_tokens_issued_total{grant}`, `anvil_refresh_reuse_total`,
+    `anvil_jobs_runs_total{job,outcome}`, `anvil_webhook_deliveries_total{outcome}`,
+    `anvil_ratelimit_backend_errors_total{operation,reason}`. No database pool metric. Labels are
+    bounded classes only.
+  - Traces: OpenTelemetry is compiled in (no `otel` feature) and enabled by `otel_endpoint`
+    (OTLP/HTTP protobuf, batch exporter, flushed at shutdown). Spans cover requests; storage calls
+    are not separate spans in 0.4. An incoming `traceparent` is honoured only from
+    `trusted_proxies` peers. Audit events are never exported.
 - **Audit log:** separate from operational logs, stored in the database and optionally mirrored to
   stdout as `audit` events.
 
@@ -1121,6 +1192,19 @@ Redis-backed shared rate limiting; HA test (3 nodes on Postgres under load).
 Exit criteria: HA test shows no errors through node restarts; declarative export → import round-trips
 a tenant; an MCP client completes authorization using a client metadata document and resource
 indicators.
+
+Status (0.4 in progress): built are the multi-tenant console, RBAC with role claims and
+role-bounded admin scopes, custom user attributes, webhooks, dynamic client registration, CIMD,
+resource-aware consent, the declarative tenant configuration (`anvilid tenant export|plan|apply`),
+the Redis limiter backend, metrics/traces/health/drain, SQLite online backup and restore,
+`admin recover`, the Helm chart and Compose examples, and in-flow passkey enrolment. Evidence per
+exit criterion: the HA restart test is `tests/load/run-ha.sh` (three nodes behind HAProxy, run by
+the `load` workflow); the round trip is `crates/anvilid/tests/tenant_config.rs`
+(`round_trip_into_fresh_instance`); the MCP flow is covered by `crates/anvil-web/tests/cimd.rs` and
+the MCP e2e suite. The release gate decides from CI runs of these tests. Divergences from the plan
+above are recorded where they occur: §2 (telemetry compiled in), §6.1 (no
+`client_metadata_cache`), §10.3 (RBAC admin scopes), §11 (operator infrastructure outside
+`OutboundClient`), §13 (CLI), §14 (webhook worker) and §15.
 
 ### M5 — Release 1.0 "Credible for business"
 
