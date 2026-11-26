@@ -87,6 +87,11 @@ impl SoftAuthenticator {
         }
     }
 
+    /// The credential id, base64url without padding (the encoding of WebAuthn JSON options).
+    pub fn credential_id_b64(&self) -> String {
+        b64(&self.credential_id)
+    }
+
     fn cose_key(&self) -> Vec<u8> {
         let point = self.key.public_key().as_ref();
         assert_eq!(point.len(), 65, "uncompressed P-256 point");

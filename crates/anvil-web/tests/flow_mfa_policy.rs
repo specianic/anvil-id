@@ -1413,6 +1413,85 @@ async fn second_factor_passkey_of_another_user_is_refused() {
     assert_eq!(s.amr, amr(&[AMR_HWK, AMR_USER, AMR_MFA]));
 }
 
+/// The `publicKey.allowCredentials` of request options as (type, id) pairs, sorted; empty when
+/// the list is absent.
+fn allow_credentials(options: &serde_json::Value) -> Vec<(String, String)> {
+    let mut list: Vec<(String, String)> = options["publicKey"]["allowCredentials"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .map(|d| {
+                    (
+                        d["type"].as_str().expect("type").to_owned(),
+                        d["id"].as_str().expect("id").to_owned(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    list.sort();
+    list
+}
+
+#[tokio::test]
+async fn second_factor_passkey_options_list_only_the_step_users_credentials() {
+    let app = app().await;
+    set_policy(&app, MfaPolicy::Required).await;
+    let alice = user_id(&app, ALICE).await;
+    let alice_one = enrol_passkey(&app, ALICE).await;
+    let alice_two = enrol_passkey(&app, ALICE).await;
+    let bob_auth = enrol_passkey(&app, BOB).await;
+
+    let page = password(&app, "/ui/login", ALICE).await;
+    assert!(offers_passkey_second_factor(&page), "{}", page.text());
+    let (options, action, csrf, factor) = sf_passkey_form(&app, &page);
+    let opts = creation_options(&app, &options, &csrf).await;
+
+    let mut expected = vec![
+        ("public-key".to_owned(), alice_one.credential_id_b64()),
+        ("public-key".to_owned(), alice_two.credential_id_b64()),
+    ];
+    expected.sort();
+    let listed = allow_credentials(&opts);
+    assert_eq!(listed, expected, "{opts}");
+    assert!(
+        listed
+            .iter()
+            .all(|(_, id)| *id != bob_auth.credential_id_b64()),
+        "Bob's passkey is not offered on Alice's step"
+    );
+
+    // The narrowed options still complete with either of Alice's passkeys.
+    let resp = finish(
+        &app,
+        &action,
+        &csrf,
+        &factor,
+        &assertion(&alice_two, &opts, 1),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_eq!(session(&app).await.user_id, alice);
+}
+
+#[tokio::test]
+async fn identify_step_passkey_options_stay_discoverable() {
+    let app = app().await;
+    set_policy(&app, MfaPolicy::Required).await;
+    enrol_passkey(&app, ALICE).await;
+    enrol_passkey(&app, BOB).await;
+
+    let login = app.get("/ui/login").await;
+    let html = login.html();
+    let csrf = csrf_from(&html);
+    let identify_options = to_path(
+        &app,
+        &attribute_of(&html, "login-passkey", "data-options-url"),
+    );
+    let opts = creation_options(&app, &identify_options, &csrf).await;
+    assert!(allow_credentials(&opts).is_empty(), "{opts}");
+}
+
 #[tokio::test]
 async fn second_factor_passkey_unknown_credential_is_refused() {
     let app = app().await;
