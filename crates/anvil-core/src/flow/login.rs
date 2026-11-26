@@ -175,6 +175,31 @@ pub struct LoginState {
     /// in a new flow (`FlowService::continue_login`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub return_to_sealed: Option<String>,
+    /// How submissions prove they belong to this flow (`service::flow::check_binding` and
+    /// `check_token_binding`). Set once when the flow is created and never changed by a
+    /// transition; absent (cookie) in every flow written before 1.0.
+    #[serde(default, skip_serializing_if = "FlowBindingKind::is_cookie")]
+    pub binding: FlowBindingKind,
+}
+
+/// The binding of a login flow. A flow has exactly one: a submission presenting the other kind
+/// is refused even when its secret matches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FlowBindingKind {
+    /// A browser: the flow cookie plus the CSRF token (the default).
+    #[default]
+    Cookie,
+    /// A native first-party app (headless native mode): the flow token sent in the
+    /// `Authorization: AnvilFlow` header. Its hash is the flow's cookie hash; no CSRF token.
+    Token,
+}
+
+impl FlowBindingKind {
+    /// Whether this is the default cookie binding (not serialised).
+    pub fn is_cookie(&self) -> bool {
+        *self == Self::Cookie
+    }
 }
 
 /// Where the login stands.

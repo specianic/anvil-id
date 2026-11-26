@@ -3,8 +3,10 @@
 //! The flow engine (`anvil_core::service::flow::FlowService`) decides what a step means; this
 //! module owns everything the web layer adds around it, once:
 //!
-//! - the flow binding ([`FlowBinding`]: today the flow cookie plus the posted CSRF token) and the
-//!   caller's current browser session (the session-switch and step-up input of a submission);
+//! - the flow binding ([`FlowBinding`]: the flow cookie plus the posted CSRF token for a
+//!   browser, the flow token for a native app of the headless API) and the caller's current
+//!   browser session (the session-switch and step-up input of a submission; a native app has
+//!   none);
 //! - the brute-force gate ([`guard_attempt`]) before an attempt, the server-side CAPTCHA check
 //!   when the gate asks for one, and [`record_attempt`] after it ([`Throttle`] names the limiter
 //!   keys of each kind of step);
@@ -32,6 +34,7 @@ use anvil_cache::limiter::{Decision, LimitKey};
 use anvil_core::error::CoreError;
 use anvil_core::flow::engine::FlowInput;
 use anvil_core::flow::form::{FormDescription, FormMessage};
+use anvil_core::flow::login::FlowBindingKind;
 use anvil_core::flow::login::{
     IDENTIFY_FORM_ID, IdentifyInput, SSO_CHOICE_FORM_ID, UPSTREAM_LINK_FORM_ID,
 };
@@ -43,8 +46,8 @@ use anvil_core::policy::return_to::ReturnTarget;
 use anvil_core::ports::RelyingParty;
 use anvil_core::service::audit::AuditService;
 use anvil_core::service::flow::{
-    AuthAttempt, EmailLinkOutcome, FlowContext, FlowOutcome, IdentifyOutcome, IdpStart, LoginStart,
-    StartedFlow, SubmitResult, bind_form,
+    AuthAttempt, EmailLinkOutcome, FlowContext, FlowOutcome, FlowProof, IdentifyOutcome, IdpStart,
+    LoginStart, StartedFlow, SubmitResult, bind_form,
 };
 use axum_extra::extract::cookie::CookieJar;
 
@@ -59,34 +62,59 @@ use crate::tenant::ResolvedTenant;
 // Binding and outcome types
 // ---------------------------------------------------------------------------------------------
 
-/// How a submission proves it belongs to its flow. An enum from the start so that a second
-/// binding (the headless native flow token) is a new variant, not a new call signature.
+/// How a submission proves it belongs to its flow. The flow service checks the proof against
+/// the binding the flow was created with (`FlowProof`): a cookie-bound flow refuses a token
+/// and a token-bound flow refuses a cookie, whatever the values.
 pub(crate) enum FlowBinding<'a> {
     /// A browser: the flow cookie in `jar` (checked against the flow's stored hash by the flow
     /// service) plus the posted CSRF token. The session cookie in the same jar names the
     /// caller's current session.
     Cookie { jar: &'a CookieJar, csrf: &'a str },
+    /// A native first-party app of the headless API: the flow token from the
+    /// `Authorization: AnvilFlow` header. There is no browser, so no CSRF token and no current
+    /// session (no session switch, no step-up). Passkey ceremonies and the emailed link are
+    /// browser-only and refuse it.
+    Token { token: &'a str },
 }
 
 impl FlowBinding<'_> {
-    /// The CSRF token the flow service checks.
+    /// The CSRF token the flow service checks and forms are bound to (empty for a token).
     pub(crate) fn csrf(&self) -> &str {
         match self {
             Self::Cookie { csrf, .. } => csrf,
+            Self::Token { .. } => "",
         }
     }
 
-    /// The flow's binding secret as presented by the caller (the flow cookie's value), if any.
+    /// The flow's binding secret as presented by the caller (the flow cookie's value or the flow
+    /// token), if any.
     pub(crate) fn flow_token(&self, state: &AppState, tenant: &ResolvedTenant) -> Option<String> {
         match self {
             Self::Cookie { jar, .. } => jar
                 .get(&state.cookies().flow_name(&tenant.tenant))
                 .map(|c| c.value().to_owned()),
+            Self::Token { token } => Some((*token).to_owned()),
+        }
+    }
+
+    /// Whether this is the native token binding.
+    pub(crate) fn is_token(&self) -> bool {
+        matches!(self, Self::Token { .. })
+    }
+
+    /// The proof the flow service checks; `presented` is [`Self::flow_token`].
+    fn proof<'p>(&'p self, presented: Option<&'p str>) -> FlowProof<'p> {
+        match self {
+            Self::Cookie { csrf, .. } => FlowProof::Cookie {
+                cookie: presented,
+                csrf,
+            },
+            Self::Token { token } => FlowProof::Token(token),
         }
     }
 
     /// The caller's active browser session, if any (step-up input, and the session a new
-    /// sign-in switches away from).
+    /// sign-in switches away from). Always `None` for a native app.
     pub(crate) async fn current_session(
         &self,
         state: &AppState,
@@ -94,6 +122,7 @@ impl FlowBinding<'_> {
     ) -> Result<Option<BrowserSession>, CoreError> {
         match self {
             Self::Cookie { jar, .. } => current_browser_session(state, tenant, jar).await,
+            Self::Token { .. } => Ok(None),
         }
     }
 }
@@ -432,6 +461,28 @@ pub(crate) async fn start_login(
         .await
 }
 
+/// Starts a token-bound sign-in for a native first-party app (`FlowService::start_login_bound`
+/// with [`FlowBindingKind::Token`]): the same decisions as [`start_login`] without a browser
+/// session or return target. The started flow's `cookie_token` is its flow token.
+pub(crate) async fn start_native_login(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    request: AuthRequestId,
+) -> Result<LoginStart, CoreError> {
+    let cx = Cx::new(tenant);
+    let ctx = RequestContext::default();
+    state
+        .ui_flow_service()
+        .start_login_bound(
+            &cx.flow(tenant, &ctx),
+            Some(request),
+            None,
+            None,
+            FlowBindingKind::Token,
+        )
+        .await
+}
+
 /// The form a new sign-in of this tenant starts with (`FlowService::initial_login_form`: the
 /// email-first form in a tenant with a routable domain, the combined form otherwise), bound to
 /// `flow` and the submitted CSRF token, with `identifier` echoed. Used when the gate answers
@@ -572,11 +623,10 @@ async fn run_submission(
     let cx = Cx::new(tenant);
     state
         .ui_flow_service()
-        .submit(
+        .submit_bound(
             &cx.flow(tenant, ctx),
             flow,
-            token.as_deref(),
-            binding.csrf(),
+            binding.proof(token.as_deref()),
             input,
             session,
         )
@@ -682,11 +732,10 @@ pub(crate) async fn identify(
     let cx = Cx::new(tenant);
     let result = state
         .ui_flow_service()
-        .identify(
+        .identify_bound(
             &cx.flow(tenant, ctx),
             flow,
-            token.as_deref(),
-            binding.csrf(),
+            binding.proof(token.as_deref()),
             input,
         )
         .await
@@ -756,6 +805,11 @@ pub(crate) async fn passkey_options(
     binding: &FlowBinding<'_>,
     step: PasskeyStep,
 ) -> Result<String, DriveRejection> {
+    if binding.is_token() {
+        // Browser-only (WebAuthn needs the AnvilID origin); the flow service would refuse the
+        // token as a cookie anyway.
+        return Err(DriveRejection::Binding);
+    }
     let token = binding.flow_token(state, tenant);
     let cx = Cx::new(tenant);
     let ctx = RequestContext::default();
@@ -796,6 +850,9 @@ pub(crate) async fn passkey_finish(
     step: InFlowPasskey,
     response: &str,
 ) -> Result<SubmitResult, DriveRejection> {
+    if binding.is_token() {
+        return Err(DriveRejection::Binding);
+    }
     let token = binding.flow_token(state, tenant);
     let session = binding
         .current_session(state, tenant)
@@ -830,6 +887,9 @@ pub(crate) async fn email_link(
     binding: &FlowBinding<'_>,
     link_token: &str,
 ) -> Result<EmailLinkOutcome, DriveRejection> {
+    if binding.is_token() {
+        return Err(DriveRejection::Binding);
+    }
     let token = binding.flow_token(state, tenant);
     let session = binding
         .current_session(state, tenant)
@@ -963,7 +1023,7 @@ pub(crate) async fn current_step(
     binding: &FlowBinding<'_>,
 ) -> Result<Option<(FormDescription, FlowMeta)>, DriveRejection> {
     use anvil_core::flow::engine::{FlowEnv, FlowState, current_form};
-    use anvil_core::service::flow::{BindingError, check_binding, email_code_enabled};
+    use anvil_core::service::flow::{BindingError, email_code_enabled};
 
     let now = state.clock().now();
     let Some(stored) = state
@@ -982,7 +1042,7 @@ pub(crate) async fn current_step(
         return Ok(None);
     }
     let token = binding.flow_token(state, tenant);
-    match check_binding(&stored, token.as_deref(), binding.csrf(), now) {
+    match binding.proof(token.as_deref()).check(&stored, now) {
         Ok(()) => {}
         Err(BindingError::Expired) => return Ok(None),
         Err(BindingError::Forbidden) => return Err(DriveRejection::Binding),
@@ -1506,6 +1566,27 @@ mod tests {
         assert!(matches!(
             DriveRejection::from_flow(CoreError::NotFound),
             DriveRejection::Failed(CoreError::NotFound)
+        ));
+    }
+
+    #[test]
+    fn token_binding_presents_only_the_token() {
+        let native = FlowBinding::Token { token: "tok" };
+        assert!(native.is_token());
+        assert_eq!(native.csrf(), "");
+        assert!(matches!(native.proof(Some("tok")), FlowProof::Token("tok")));
+        let jar = CookieJar::new();
+        let browser = FlowBinding::Cookie {
+            jar: &jar,
+            csrf: "csrf",
+        };
+        assert!(!browser.is_token());
+        assert!(matches!(
+            browser.proof(Some("cookie")),
+            FlowProof::Cookie {
+                cookie: Some("cookie"),
+                csrf: "csrf"
+            }
         ));
     }
 }

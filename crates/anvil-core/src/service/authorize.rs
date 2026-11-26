@@ -142,6 +142,89 @@ pub struct ResumedPushedRequest {
     pub params: AuthorizationParams,
 }
 
+/// The JSON completion of a stored authorization request ([`AuthorizeService::complete`], the
+/// headless native mode): the authorization response's parameters instead of a redirect.
+pub enum Completion {
+    /// A code was issued, by the same issuance as the redirect response (stored hash, PKCE
+    /// challenge, token family). The client redeems it at the token endpoint with its
+    /// `code_verifier`.
+    Code {
+        code: SecretString,
+        iss: String,
+        state: Option<String>,
+    },
+    /// The authorization ended with an error for the client (the redirect response's `error`,
+    /// `error_description`, `state` and `iss`).
+    Error {
+        error: String,
+        error_description: Option<String>,
+        state: Option<String>,
+        iss: String,
+    },
+    /// The request needs a page (consent, account or organization choice, step-up, registration)
+    /// or ended on an error page: no code.
+    Interaction(AuthorizeOutcome),
+}
+
+impl std::fmt::Debug for Completion {
+    /// The code is redacted.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Code { iss, state, .. } => f
+                .debug_struct("Code")
+                .field("code", &"[redacted]")
+                .field("iss", iss)
+                .field("state", state)
+                .finish(),
+            Self::Error {
+                error,
+                error_description,
+                state,
+                iss,
+            } => f
+                .debug_struct("Error")
+                .field("error", error)
+                .field("error_description", error_description)
+                .field("state", state)
+                .field("iss", iss)
+                .finish(),
+            Self::Interaction(o) => f.debug_tuple("Interaction").field(o).finish(),
+        }
+    }
+}
+
+impl Completion {
+    /// The completion of an authorization outcome: a response's parameters (a code or an error),
+    /// anything else needs a page.
+    pub fn of(outcome: AuthorizeOutcome) -> Self {
+        let AuthorizeOutcome::Respond(response) = outcome else {
+            return Self::Interaction(outcome);
+        };
+        let get = |name: &str| {
+            response
+                .params
+                .iter()
+                .find(|(k, _)| k == name)
+                .map(|(_, v)| v.clone())
+        };
+        let iss = get("iss").unwrap_or_default();
+        let state = get("state");
+        match (get("code"), get("error")) {
+            (Some(code), _) => Self::Code {
+                code: SecretString::from(code),
+                iss,
+                state,
+            },
+            (None, error) => Self::Error {
+                error: error.unwrap_or_else(|| "server_error".to_owned()),
+                error_description: get("error_description"),
+                state,
+                iss,
+            },
+        }
+    }
+}
+
 /// The error response for `params` (its redirect URI, state and response mode).
 fn error_response(
     params: &AuthorizationParams,
@@ -819,6 +902,26 @@ impl AuthorizeService {
             .await
     }
 
+    /// Completes a stored authorization request for a sign-in that has no browser (the headless
+    /// native mode): the same decision and code issuance as [`Self::resume`] (session, MFA,
+    /// consent, organization, then `issue`), with the response's parameters returned as a
+    /// [`Completion`] instead of a redirect. `session` is the server-side session the sign-in
+    /// created; its cookie never leaves the server, so it can never be presented for single
+    /// sign-on (the code and its token family need a session row to anchor the RP session and
+    /// back-channel logout).
+    pub async fn complete(
+        &self,
+        tenant: &Tenant,
+        issuer: &str,
+        request_id: AuthRequestId,
+        session: BrowserSession,
+    ) -> Result<Completion, CoreError> {
+        let outcome = self
+            .continue_request(tenant, issuer, request_id, Some(session), Stage::AfterLogin)
+            .await?;
+        Ok(Completion::of(outcome))
+    }
+
     /// Continues a stored authorization request after the consent screen. Call only with a
     /// decision taken by [`ConsentService::approve`] / [`ConsentService::deny`] for this request
     /// and session. Allow issues the code once the stored grant covers the request (a grant
@@ -1463,6 +1566,54 @@ mod tests {
 
     const ISSUER: &str = "https://id.example.test/t/acme";
     const NOW: OffsetDateTime = datetime!(2026-11-25 12:00:00 UTC);
+
+    #[test]
+    fn completion_carries_the_redirect_responses_parameters() {
+        let ok = AuthorizationResponse::success(
+            RP,
+            "the-code",
+            Some("st"),
+            ISSUER,
+            ResponseMode::FormPost,
+        );
+        match Completion::of(AuthorizeOutcome::Respond(ok)) {
+            Completion::Code { code, iss, state } => {
+                assert_eq!(code.expose_secret(), "the-code");
+                assert_eq!(iss, ISSUER);
+                assert_eq!(state.as_deref(), Some("st"));
+            }
+            other => panic!("expected a code, got {other:?}"),
+        }
+        let err = AuthorizationResponse::error(
+            RP,
+            &CoreError::AccessDenied("no".into()),
+            None,
+            ISSUER,
+            ResponseMode::Query,
+        );
+        match Completion::of(AuthorizeOutcome::Respond(err)) {
+            Completion::Error {
+                error, state, iss, ..
+            } => {
+                assert_eq!(error, "access_denied");
+                assert_eq!(state, None);
+                assert_eq!(iss, ISSUER);
+            }
+            other => panic!("expected an error, got {other:?}"),
+        }
+        let consent = AuthorizeOutcome::Consent {
+            request_id: AuthRequestId::new_v7(),
+        };
+        assert!(matches!(
+            Completion::of(consent),
+            Completion::Interaction(AuthorizeOutcome::Consent { .. })
+        ));
+        // The code never shows in debug output.
+        let ok = AuthorizationResponse::success(RP, "the-code", None, ISSUER, ResponseMode::Query);
+        assert!(
+            !format!("{:?}", Completion::of(AuthorizeOutcome::Respond(ok))).contains("the-code")
+        );
+    }
 
     fn params() -> AuthorizationParams {
         AuthorizationParams {

@@ -10,6 +10,15 @@
 //! expired or unknown flow starts a fresh flow of the same kind that shows `flow.expired`
 //! ([`FlowOutcome::Restarted`]).
 //!
+//! A login flow of the headless native mode is bound to a flow token instead
+//! ([`FlowBindingKind::Token`], recorded as `binding: "token"` in the flow state and chosen only
+//! at creation, [`FlowService::start_login_bound`]). The flow stores the token's hash in its
+//! cookie hash column and the hash of a discarded random value as its CSRF hash. A submission
+//! proves the binding with a [`FlowProof`]: [`check_binding`] refuses a token-bound flow and
+//! [`check_token_binding`] refuses a cookie-bound one, so a flow is never usable with both. An
+//! expired or unknown token-bound flow is [`CoreError::NotFound`] (no restart: a fresh flow
+//! would need a new token).
+//!
 //! # Enumeration safety
 //!
 //! - Login: unknown users, blocked users and users without a password run
@@ -150,8 +159,8 @@ use crate::flow::engine::{
 };
 use crate::flow::form::{FormDescription, FormMessage, MessageLevel};
 use crate::flow::login::{
-    HrdRoute, Identified, IdentifyInput, IdentifyStep, USE_SSO, email_first, form_with,
-    identify_input, passkey_enrolment_failed,
+    FlowBindingKind, HrdRoute, Identified, IdentifyInput, IdentifyStep, USE_SSO, email_first,
+    form_with, identify_input, passkey_enrolment_failed,
     passkey_enrolment_finish as login_passkey_enrolment_finish, passkey_enrolment_user, routed,
     second_factor_passkey_failed, second_factor_passkey_user, take_passkey_enrolment,
     take_second_factor_passkey, with_passkey_enrolment, with_second_factor_passkey,
@@ -472,9 +481,27 @@ pub enum BindingError {
     Expired,
 }
 
-/// Checks that a submission belongs to `flow`: unexpired, with the flow cookie and the CSRF
-/// token whose hashes the flow stores. Both hashes are compared in constant time and both are
-/// always compared.
+/// The binding a stored flow was created with: [`FlowBindingKind::Token`] only for a login flow
+/// whose state says so; every other flow (all other kinds, unreadable state) is cookie-bound.
+pub fn binding_kind(flow: &Flow) -> FlowBindingKind {
+    /// Reads only the binding marker of the state JSON (a login state's `binding`).
+    #[derive(serde::Deserialize)]
+    struct Marker {
+        #[serde(default)]
+        binding: FlowBindingKind,
+    }
+    if flow.kind != FlowKind::Login {
+        return FlowBindingKind::Cookie;
+    }
+    serde_json::from_str::<Marker>(&flow.state)
+        .map(|m| m.binding)
+        .unwrap_or_default()
+}
+
+/// Checks that a submission belongs to `flow`: unexpired, cookie-bound, with the flow cookie and
+/// the CSRF token whose hashes the flow stores. Both hashes are compared in constant time and
+/// both are always compared. A token-bound flow (headless native mode) is refused whatever the
+/// values.
 pub fn check_binding(
     flow: &Flow,
     cookie_token: Option<&str>,
@@ -483,6 +510,9 @@ pub fn check_binding(
 ) -> Result<(), BindingError> {
     if flow.expires_at <= now {
         return Err(BindingError::Expired);
+    }
+    if binding_kind(flow) != FlowBindingKind::Cookie {
+        return Err(BindingError::Forbidden);
     }
     let Some(cookie) = cookie_token else {
         return Err(BindingError::Forbidden);
@@ -493,6 +523,67 @@ pub fn check_binding(
         Ok(())
     } else {
         Err(BindingError::Forbidden)
+    }
+}
+
+/// Checks that a native submission belongs to `flow`: unexpired, token-bound, with the flow
+/// token whose hash the flow stores (constant-time comparison). A cookie-bound flow is refused
+/// whatever the value.
+pub fn check_token_binding(
+    flow: &Flow,
+    token: &str,
+    now: OffsetDateTime,
+) -> Result<(), BindingError> {
+    if flow.expires_at <= now {
+        return Err(BindingError::Expired);
+    }
+    if binding_kind(flow) != FlowBindingKind::Token {
+        return Err(BindingError::Forbidden);
+    }
+    if ct_eq(&secret_hash(token), flow.cookie_hash.as_bytes()) {
+        Ok(())
+    } else {
+        Err(BindingError::Forbidden)
+    }
+}
+
+/// What a submission presents to prove it belongs to its flow.
+#[derive(Clone, Copy)]
+pub enum FlowProof<'a> {
+    /// A browser: the flow cookie (absent when the browser sent none) and the CSRF token.
+    Cookie {
+        cookie: Option<&'a str>,
+        csrf: &'a str,
+    },
+    /// A native first-party app: the flow token.
+    Token(&'a str),
+}
+
+impl std::fmt::Debug for FlowProof<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Cookie { .. } => "FlowProof::Cookie(..)",
+            Self::Token(_) => "FlowProof::Token(..)",
+        })
+    }
+}
+
+impl FlowProof<'_> {
+    /// The CSRF token forms rendered for this submission are bound to (empty for a token-bound
+    /// flow: a native app sends no CSRF token).
+    pub fn form_csrf(&self) -> &str {
+        match self {
+            Self::Cookie { csrf, .. } => csrf,
+            Self::Token(_) => "",
+        }
+    }
+
+    /// [`check_binding`] or [`check_token_binding`], by the kind presented.
+    pub fn check(&self, flow: &Flow, now: OffsetDateTime) -> Result<(), BindingError> {
+        match *self {
+            Self::Cookie { cookie, csrf } => check_binding(flow, cookie, csrf, now),
+            Self::Token(token) => check_token_binding(flow, token, now),
+        }
     }
 }
 
@@ -903,10 +994,23 @@ impl FlowService {
         csrf_token: &str,
         input: IdentifyInput,
     ) -> Result<IdentifyOutcome, CoreError> {
-        let (flow, state) = match self
-            .load(cx, flow_id, cookie_token, csrf_token, FlowKind::Login)
-            .await?
-        {
+        let proof = FlowProof::Cookie {
+            cookie: cookie_token,
+            csrf: csrf_token,
+        };
+        self.identify_bound(cx, flow_id, proof, input).await
+    }
+
+    /// [`Self::identify`] with either binding ([`FlowProof`]).
+    pub async fn identify_bound(
+        &self,
+        cx: &FlowContext<'_>,
+        flow_id: FlowId,
+        proof: FlowProof<'_>,
+        input: IdentifyInput,
+    ) -> Result<IdentifyOutcome, CoreError> {
+        let csrf_token = proof.form_csrf();
+        let (flow, state) = match self.load(cx, flow_id, proof, FlowKind::Login).await? {
             Loaded::Flow(f, s) => (f, s),
             Loaded::Restarted(outcome) => return Ok(IdentifyOutcome::Done(Box::new(outcome))),
         };
@@ -965,9 +1069,47 @@ impl FlowService {
         form: FormDescription,
         auth_request: Option<AuthRequestId>,
     ) -> Result<StartedFlow, CoreError> {
+        self.create_flow_bound(cx, id, state, form, auth_request, FlowBindingKind::Cookie)
+            .await
+    }
+
+    /// Creates a flow with `binding` (module docs). The binding marker of a login state is set
+    /// to `binding` (a login continued in a new cookie flow never keeps a token marker); only a
+    /// login can be token-bound. For a token-bound flow, [`StartedFlow::cookie_token`] is the
+    /// flow token (at least 256 bits from the system RNG), the stored CSRF hash is of a
+    /// discarded random value and the form carries no CSRF token.
+    async fn create_flow_bound(
+        &self,
+        cx: &FlowContext<'_>,
+        id: FlowId,
+        state: &FlowState,
+        form: FormDescription,
+        auth_request: Option<AuthRequestId>,
+        binding: FlowBindingKind,
+    ) -> Result<StartedFlow, CoreError> {
+        let marked;
+        let state = match state {
+            FlowState::Login(s) if s.binding != binding => {
+                let mut s = s.clone();
+                s.binding = binding;
+                marked = FlowState::Login(s);
+                &marked
+            }
+            FlowState::Login(_) => state,
+            _ if binding == FlowBindingKind::Cookie => state,
+            _ => {
+                return Err(CoreError::Internal(
+                    "only a login flow can be token-bound".into(),
+                ));
+            }
+        };
         let now = self.clock.now();
         let cookie = random_token();
         let csrf = random_token();
+        let form_csrf = match binding {
+            FlowBindingKind::Cookie => csrf.as_str(),
+            FlowBindingKind::Token => "",
+        };
         let new = NewFlow {
             id,
             kind: state.kind(),
@@ -982,7 +1124,7 @@ impl FlowService {
         Ok(StartedFlow {
             flow_id: new.id,
             cookie_token: SecretString::from(cookie),
-            form: bind_form(form, cx, new.id, &csrf),
+            form: bind_form(form, cx, new.id, form_csrf),
             factor_user: None,
             totp: None,
         })
@@ -1003,25 +1145,34 @@ impl FlowService {
 
     /// Loads a flow for a submission and checks its binding. An unknown or expired flow is
     /// restarted (kind of the input, or of the expired flow).
+    /// A token-bound proof is never restarted: an unknown, expired or non-engine flow is
+    /// [`CoreError::NotFound`].
     async fn load(
         &self,
         cx: &FlowContext<'_>,
         flow_id: FlowId,
-        cookie_token: Option<&str>,
-        csrf_token: &str,
+        proof: FlowProof<'_>,
         kind: FlowKind,
     ) -> Result<Loaded, CoreError> {
         let now = self.clock.now();
+        let native = matches!(proof, FlowProof::Token(_));
         let Some(flow) = self.storage.flows().get(cx.tenant.id, flow_id, now).await? else {
+            if native {
+                return Err(CoreError::NotFound);
+            }
             return Ok(Loaded::Restarted(self.restart(cx, kind, None).await?));
         };
         // A flow this engine does not run (settings, consent: another service owns their
         // state) is treated like an unknown flow, never decoded.
         if !engine_kind(flow.kind) {
+            if native {
+                return Err(CoreError::NotFound);
+            }
             return Ok(Loaded::Restarted(self.restart(cx, kind, None).await?));
         }
-        match check_binding(&flow, cookie_token, csrf_token, now) {
+        match proof.check(&flow, now) {
             Ok(()) => {}
+            Err(BindingError::Expired) if native => return Err(CoreError::NotFound),
             Err(BindingError::Expired) => {
                 let outcome = self.restart(cx, flow.kind, flow.auth_request_id).await?;
                 return Ok(Loaded::Restarted(outcome));
@@ -1049,7 +1200,15 @@ impl FlowService {
         csrf_token: &str,
     ) -> Result<String, CoreError> {
         let (flow, state) = match self
-            .load(cx, flow_id, cookie_token, csrf_token, FlowKind::Login)
+            .load(
+                cx,
+                flow_id,
+                FlowProof::Cookie {
+                    cookie: cookie_token,
+                    csrf: csrf_token,
+                },
+                FlowKind::Login,
+            )
             .await?
         {
             Loaded::Flow(f, s) => (f, s),
@@ -1098,7 +1257,15 @@ impl FlowService {
         let unavailable =
             || CoreError::InvalidRequest("passkey enrolment is not available in this step".into());
         let (flow, state) = match self
-            .load(cx, flow_id, cookie_token, csrf_token, FlowKind::Login)
+            .load(
+                cx,
+                flow_id,
+                FlowProof::Cookie {
+                    cookie: cookie_token,
+                    csrf: csrf_token,
+                },
+                FlowKind::Login,
+            )
             .await?
         {
             Loaded::Flow(f, FlowState::Login(s)) => (f, s),
@@ -1161,7 +1328,15 @@ impl FlowService {
         current_session: Option<SessionId>,
     ) -> Result<SubmitResult, CoreError> {
         let (flow, state) = match self
-            .load(cx, flow_id, cookie_token, csrf_token, FlowKind::Login)
+            .load(
+                cx,
+                flow_id,
+                FlowProof::Cookie {
+                    cookie: cookie_token,
+                    csrf: csrf_token,
+                },
+                FlowKind::Login,
+            )
             .await?
         {
             Loaded::Flow(f, FlowState::Login(s)) => (f, s),
@@ -1327,7 +1502,15 @@ impl FlowService {
         let unavailable =
             || CoreError::InvalidRequest("passkey is not available in this step".into());
         let (flow, state) = match self
-            .load(cx, flow_id, cookie_token, csrf_token, FlowKind::Login)
+            .load(
+                cx,
+                flow_id,
+                FlowProof::Cookie {
+                    cookie: cookie_token,
+                    csrf: csrf_token,
+                },
+                FlowKind::Login,
+            )
             .await?
         {
             Loaded::Flow(f, FlowState::Login(s)) => (f, s),
@@ -1385,7 +1568,15 @@ impl FlowService {
         current_session: Option<SessionId>,
     ) -> Result<SubmitResult, CoreError> {
         let (flow, state) = match self
-            .load(cx, flow_id, cookie_token, csrf_token, FlowKind::Login)
+            .load(
+                cx,
+                flow_id,
+                FlowProof::Cookie {
+                    cookie: cookie_token,
+                    csrf: csrf_token,
+                },
+                FlowKind::Login,
+            )
             .await?
         {
             Loaded::Flow(f, FlowState::Login(s)) => (f, s),
@@ -1512,15 +1703,31 @@ impl FlowService {
         input: FlowInput,
         current_session: Option<SessionId>,
     ) -> Result<SubmitResult, CoreError> {
+        let proof = FlowProof::Cookie {
+            cookie: cookie_token,
+            csrf: csrf_token,
+        };
+        self.submit_bound(cx, flow_id, proof, input, current_session)
+            .await
+    }
+
+    /// [`Self::submit`] with either binding ([`FlowProof`]). A token-bound flow has no browser,
+    /// so the caller passes no `current_session`.
+    pub async fn submit_bound(
+        &self,
+        cx: &FlowContext<'_>,
+        flow_id: FlowId,
+        proof: FlowProof<'_>,
+        input: FlowInput,
+        current_session: Option<SessionId>,
+    ) -> Result<SubmitResult, CoreError> {
         if matches!(input, FlowInput::PasskeyOptions) {
             return Err(CoreError::InvalidRequest(
                 "passkey options are requested separately".into(),
             ));
         }
-        let (flow, state) = match self
-            .load(cx, flow_id, cookie_token, csrf_token, input.kind())
-            .await?
-        {
+        let csrf_token = proof.form_csrf();
+        let (flow, state) = match self.load(cx, flow_id, proof, input.kind()).await? {
             Loaded::Flow(f, s) => (f, s),
             Loaded::Restarted(outcome) => return Ok(SubmitResult::plain(outcome)),
         };
@@ -1659,7 +1866,32 @@ impl FlowService {
         current: Option<&BrowserSession>,
         return_to: Option<ReturnTarget>,
     ) -> Result<LoginStart, CoreError> {
-        let return_to = return_to.filter(|_| auth_request.is_none());
+        self.start_login_bound(
+            cx,
+            auth_request,
+            current,
+            return_to,
+            FlowBindingKind::Cookie,
+        )
+        .await
+    }
+
+    /// [`Self::start_login`] with the flow's binding. A token-bound login (headless native
+    /// mode) has no browser: it never starts as a step-up and never carries a return target, so
+    /// `current` and `return_to` are ignored; the started flow's
+    /// [`StartedFlow::cookie_token`] is its flow token. The decisions (email-first, home-realm
+    /// routing, a direct start at an org IdP) are the same as for a browser.
+    pub async fn start_login_bound(
+        &self,
+        cx: &FlowContext<'_>,
+        auth_request: Option<AuthRequestId>,
+        current: Option<&BrowserSession>,
+        return_to: Option<ReturnTarget>,
+        binding: FlowBindingKind,
+    ) -> Result<LoginStart, CoreError> {
+        let native = binding == FlowBindingKind::Token;
+        let current = current.filter(|_| !native);
+        let return_to = return_to.filter(|_| auth_request.is_none() && !native);
         let return_to = return_to.as_ref();
         if let (Some(request_id), Some(session)) = (auth_request, current)
             && let Some(started) = self.start_step_up(cx, request_id, session).await?
@@ -1680,7 +1912,10 @@ impl FlowService {
         if let Some(requested) = params.and_then(|p| p.organization.as_deref())
             && let Some(conn) = self.org_single_connection(tenant, requested).await?
         {
-            let started = self.start(cx, FlowKind::Login, auth_request, None).await?;
+            let (state, form) = self.initial(cx, FlowKind::Login, None).await?;
+            let started = self
+                .create_login_flow(cx, state, form, auth_request, None, binding)
+                .await?;
             return Ok(LoginStart::Idp {
                 started,
                 idp: IdpStart::of(&conn),
@@ -1689,7 +1924,7 @@ impl FlowService {
         if !self.email_first_enabled(tenant).await? {
             let (state, form) = FlowState::initial(FlowKind::Login, None, &self.env(cx))?;
             let started = self
-                .create_login_flow(cx, state, form, auth_request, return_to)
+                .create_login_flow(cx, state, form, auth_request, return_to, binding)
                 .await?;
             return Ok(LoginStart::Form(started));
         }
@@ -1699,7 +1934,14 @@ impl FlowService {
             .and_then(|h| normalize_email(h.trim()).ok());
         let Some(email) = hint else {
             let started = self
-                .create_login_flow(cx, FlowState::Login(state), form, auth_request, return_to)
+                .create_login_flow(
+                    cx,
+                    FlowState::Login(state),
+                    form,
+                    auth_request,
+                    return_to,
+                    binding,
+                )
                 .await?;
             return Ok(LoginStart::Form(started));
         };
@@ -1707,12 +1949,26 @@ impl FlowService {
         let (route, idp) = self.hrd_route(tenant, &email).await?;
         Ok(match (routed(state.clone(), route, false), idp) {
             (Identified::Render(b), _) => LoginStart::Form(
-                self.create_login_flow(cx, FlowState::Login(b.0), b.1, auth_request, return_to)
-                    .await?,
+                self.create_login_flow(
+                    cx,
+                    FlowState::Login(b.0),
+                    b.1,
+                    auth_request,
+                    return_to,
+                    binding,
+                )
+                .await?,
             ),
             (Identified::StartIdp(_), Some(idp)) => LoginStart::Idp {
                 started: self
-                    .create_login_flow(cx, FlowState::Login(state), form, auth_request, return_to)
+                    .create_login_flow(
+                        cx,
+                        FlowState::Login(state),
+                        form,
+                        auth_request,
+                        return_to,
+                        binding,
+                    )
                     .await?,
                 idp,
             },
@@ -1724,8 +1980,9 @@ impl FlowService {
         })
     }
 
-    /// [`Self::create_flow`] for a fresh login: with `return_to` (only without an authorization
-    /// request and outside a step-up), the target is sealed under the new flow id first.
+    /// [`Self::create_flow`] for a fresh login with `binding`: with `return_to` (only without an
+    /// authorization request and outside a step-up), the target is sealed under the new flow id
+    /// first.
     async fn create_login_flow(
         &self,
         cx: &FlowContext<'_>,
@@ -1733,6 +1990,7 @@ impl FlowService {
         form: FormDescription,
         auth_request: Option<AuthRequestId>,
         return_to: Option<&ReturnTarget>,
+        binding: FlowBindingKind,
     ) -> Result<StartedFlow, CoreError> {
         let id = FlowId::new_v7();
         let state = match (state, return_to) {
@@ -1744,7 +2002,7 @@ impl FlowService {
             }
             (state, _) => state,
         };
-        self.create_flow_with_id(cx, id, &state, form, auth_request)
+        self.create_flow_bound(cx, id, &state, form, auth_request, binding)
             .await
     }
 
@@ -2012,9 +2270,10 @@ impl FlowService {
                 .await?;
             return Ok(EmailLinkOutcome::Done(outcome));
         }
-        // Same browser: the flow cookie (SameSite=Strict, sent on the page's own POST).
-        let same_browser =
-            cookie_token.is_some_and(|c| ct_eq(&secret_hash(c), flow.cookie_hash.as_bytes()));
+        // Same browser: the flow cookie (SameSite=Strict, sent on the page's own POST). A
+        // token-bound flow (native app) has no browser: its link is never consumed here.
+        let same_browser = binding_kind(&flow) == FlowBindingKind::Cookie
+            && cookie_token.is_some_and(|c| ct_eq(&secret_hash(c), flow.cookie_hash.as_bytes()));
         if !same_browser {
             return Ok(EmailLinkOutcome::OtherBrowser);
         }
@@ -3471,6 +3730,89 @@ mod tests {
             check_binding(&f, None, "x", NOW),
             Err(BindingError::Expired)
         );
+    }
+
+    /// A login flow whose state carries the token marker (the token's hash is the cookie hash).
+    fn token_flow(token: &str, expires_at: OffsetDateTime) -> Flow {
+        let state = FlowState::Login(LoginState {
+            binding: FlowBindingKind::Token,
+            ..LoginState::default()
+        });
+        Flow {
+            state: encode_state(&state).unwrap(),
+            ..flow(token, "discarded", expires_at)
+        }
+    }
+
+    #[test]
+    fn binding_marker_is_read_from_login_state_only() {
+        let later = NOW + Duration::minutes(5);
+        let f = token_flow("tok", later);
+        assert!(f.state.contains(r#""binding":"token""#));
+        assert_eq!(binding_kind(&f), FlowBindingKind::Token);
+        // The default is not serialised; old flows and other kinds are cookie-bound.
+        let cookie = FlowState::Login(LoginState::default());
+        assert!(!encode_state(&cookie).unwrap().contains("binding"));
+        assert_eq!(
+            binding_kind(&flow("c", "x", later)),
+            FlowBindingKind::Cookie
+        );
+        let other = Flow {
+            kind: FlowKind::Consent,
+            ..token_flow("tok", later)
+        };
+        assert_eq!(binding_kind(&other), FlowBindingKind::Cookie);
+    }
+
+    #[test]
+    fn token_flow_refuses_the_cookie_binding() {
+        let later = NOW + Duration::minutes(5);
+        let f = token_flow("tok", later);
+        // Even the right secret in the cookie (and any CSRF value) is refused.
+        for csrf in ["discarded", "tok", ""] {
+            assert_eq!(
+                check_binding(&f, Some("tok"), csrf, NOW),
+                Err(BindingError::Forbidden)
+            );
+        }
+        assert_eq!(check_token_binding(&f, "tok", NOW), Ok(()));
+        assert_eq!(FlowProof::Token("tok").check(&f, NOW), Ok(()));
+    }
+
+    #[test]
+    fn cookie_flow_refuses_the_token_binding() {
+        let later = NOW + Duration::minutes(5);
+        let f = flow("cookie", "csrf", later);
+        assert_eq!(
+            check_token_binding(&f, "cookie", NOW),
+            Err(BindingError::Forbidden)
+        );
+        assert_eq!(
+            FlowProof::Token("cookie").check(&f, NOW),
+            Err(BindingError::Forbidden)
+        );
+        let proof = FlowProof::Cookie {
+            cookie: Some("cookie"),
+            csrf: "csrf",
+        };
+        assert_eq!(proof.check(&f, NOW), Ok(()));
+    }
+
+    #[test]
+    fn token_binding_rejects_wrong_token_and_expiry() {
+        let f = token_flow("tok", NOW + Duration::minutes(5));
+        for wrong in ["", "to", "tok ", "TOK"] {
+            assert_eq!(
+                check_token_binding(&f, wrong, NOW),
+                Err(BindingError::Forbidden)
+            );
+        }
+        let f = token_flow("tok", NOW);
+        assert_eq!(
+            check_token_binding(&f, "tok", NOW),
+            Err(BindingError::Expired)
+        );
+        assert_eq!(FlowProof::Token("tok").form_csrf(), "");
     }
 
     #[test]
