@@ -119,6 +119,7 @@ export const TENANT_PAGES = [
   { to: "/t/$tenant/sessions", label: "Sessions" },
   { to: "/t/$tenant/roles", label: "Roles" },
   { to: "/t/$tenant/attributes", label: "Attributes" },
+  { to: "/t/$tenant/webhooks", label: "Webhooks" },
   { to: "/t/$tenant/audit", label: "Audit log" },
   { to: "/t/$tenant/email", label: "Email" },
   { to: "/t/$tenant/branding", label: "Branding" },

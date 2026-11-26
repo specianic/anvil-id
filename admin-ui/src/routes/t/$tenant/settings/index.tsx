@@ -437,6 +437,45 @@ function ClaimMapping({ tenant }: { tenant: TenantView }) {
   );
 }
 
+/** The other tenant settings pages. */
+function MoreSettings() {
+  const tenant = useTenant();
+  const link = "font-medium underline underline-offset-4";
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>
+          <h2>More settings</h2>
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <ul className="space-y-2 text-sm">
+          <li>
+            <Link to="/t/$tenant/settings/registration" params={{ tenant }} className={link} data-testid="registration-settings-link">
+              Client registration
+            </Link>{" "}
+            <span className="text-muted-foreground">
+              Dynamic client registration, Client ID Metadata Documents and initial access tokens.
+            </span>
+          </li>
+          <li>
+            <Link to="/t/$tenant/settings/config" params={{ tenant }} className={link} data-testid="config-settings-link">
+              Configuration
+            </Link>{" "}
+            <span className="text-muted-foreground">Export the tenant as a document, plan and apply changes.</span>
+          </li>
+          <li>
+            <Link to="/t/$tenant/webhooks" params={{ tenant }} className={link}>
+              Webhooks
+            </Link>{" "}
+            <span className="text-muted-foreground">Signed event deliveries to your endpoints.</span>
+          </li>
+        </ul>
+      </CardContent>
+    </Card>
+  );
+}
+
 /** Deleting the tenant removes all its data. `system` and `default` cannot be deleted (the API answers 403). */
 function DeleteTenant({ tenant }: { tenant: TenantView }) {
   const queryClient = useQueryClient();
@@ -516,6 +555,7 @@ function LoginSettingsPage() {
         <>
           <SettingsForm key={query.data.id} tenant={query.data} />
           <ClaimMapping key={`claims-${query.data.id}`} tenant={query.data} />
+          <MoreSettings />
           <DeleteTenant tenant={query.data} />
         </>
       )}

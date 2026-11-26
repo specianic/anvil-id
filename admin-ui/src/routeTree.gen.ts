@@ -50,8 +50,13 @@ import { Route as TTenantRolesRoleNameRouteImport } from './routes/t/$tenant/rol
 import { Route as TTenantRolesNewRouteImport } from './routes/t/$tenant/roles/new'
 import { Route as TTenantSessionsIndexRouteImport } from './routes/t/$tenant/sessions/index'
 import { Route as TTenantSettingsIndexRouteImport } from './routes/t/$tenant/settings/index'
+import { Route as TTenantSettingsConfigRouteImport } from './routes/t/$tenant/settings/config'
+import { Route as TTenantSettingsRegistrationRouteImport } from './routes/t/$tenant/settings/registration'
 import { Route as TTenantUsersIndexRouteImport } from './routes/t/$tenant/users/index'
 import { Route as TTenantUsersUserIdRouteImport } from './routes/t/$tenant/users/$userId'
+import { Route as TTenantWebhooksIndexRouteImport } from './routes/t/$tenant/webhooks/index'
+import { Route as TTenantWebhooksWebhookIdRouteImport } from './routes/t/$tenant/webhooks/$webhookId'
+import { Route as TTenantWebhooksNewRouteImport } from './routes/t/$tenant/webhooks/new'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -260,6 +265,17 @@ const TTenantSettingsIndexRoute = TTenantSettingsIndexRouteImport.update({
   path: '/settings/',
   getParentRoute: () => TTenantRoute,
 } as any)
+const TTenantSettingsConfigRoute = TTenantSettingsConfigRouteImport.update({
+  id: '/settings/config',
+  path: '/settings/config',
+  getParentRoute: () => TTenantRoute,
+} as any)
+const TTenantSettingsRegistrationRoute =
+  TTenantSettingsRegistrationRouteImport.update({
+    id: '/settings/registration',
+    path: '/settings/registration',
+    getParentRoute: () => TTenantRoute,
+  } as any)
 const TTenantUsersIndexRoute = TTenantUsersIndexRouteImport.update({
   id: '/users/',
   path: '/users/',
@@ -268,6 +284,22 @@ const TTenantUsersIndexRoute = TTenantUsersIndexRouteImport.update({
 const TTenantUsersUserIdRoute = TTenantUsersUserIdRouteImport.update({
   id: '/users/$userId',
   path: '/users/$userId',
+  getParentRoute: () => TTenantRoute,
+} as any)
+const TTenantWebhooksIndexRoute = TTenantWebhooksIndexRouteImport.update({
+  id: '/webhooks/',
+  path: '/webhooks/',
+  getParentRoute: () => TTenantRoute,
+} as any)
+const TTenantWebhooksWebhookIdRoute =
+  TTenantWebhooksWebhookIdRouteImport.update({
+    id: '/webhooks/$webhookId',
+    path: '/webhooks/$webhookId',
+    getParentRoute: () => TTenantRoute,
+  } as any)
+const TTenantWebhooksNewRoute = TTenantWebhooksNewRouteImport.update({
+  id: '/webhooks/new',
+  path: '/webhooks/new',
   getParentRoute: () => TTenantRoute,
 } as any)
 
@@ -304,7 +336,11 @@ export interface FileRoutesByFullPath {
   '/t/$tenant/email/smtp': typeof TTenantEmailSmtpRoute
   '/t/$tenant/roles/$roleName': typeof TTenantRolesRoleNameRoute
   '/t/$tenant/roles/new': typeof TTenantRolesNewRoute
+  '/t/$tenant/settings/config': typeof TTenantSettingsConfigRoute
+  '/t/$tenant/settings/registration': typeof TTenantSettingsRegistrationRoute
   '/t/$tenant/users/$userId': typeof TTenantUsersUserIdRoute
+  '/t/$tenant/webhooks/$webhookId': typeof TTenantWebhooksWebhookIdRoute
+  '/t/$tenant/webhooks/new': typeof TTenantWebhooksNewRoute
   '/t/$tenant/attributes/': typeof TTenantAttributesIndexRoute
   '/t/$tenant/audit/': typeof TTenantAuditIndexRoute
   '/t/$tenant/branding/': typeof TTenantBrandingIndexRoute
@@ -315,6 +351,7 @@ export interface FileRoutesByFullPath {
   '/t/$tenant/sessions/': typeof TTenantSessionsIndexRoute
   '/t/$tenant/settings/': typeof TTenantSettingsIndexRoute
   '/t/$tenant/users/': typeof TTenantUsersIndexRoute
+  '/t/$tenant/webhooks/': typeof TTenantWebhooksIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -348,7 +385,11 @@ export interface FileRoutesByTo {
   '/t/$tenant/email/smtp': typeof TTenantEmailSmtpRoute
   '/t/$tenant/roles/$roleName': typeof TTenantRolesRoleNameRoute
   '/t/$tenant/roles/new': typeof TTenantRolesNewRoute
+  '/t/$tenant/settings/config': typeof TTenantSettingsConfigRoute
+  '/t/$tenant/settings/registration': typeof TTenantSettingsRegistrationRoute
   '/t/$tenant/users/$userId': typeof TTenantUsersUserIdRoute
+  '/t/$tenant/webhooks/$webhookId': typeof TTenantWebhooksWebhookIdRoute
+  '/t/$tenant/webhooks/new': typeof TTenantWebhooksNewRoute
   '/t/$tenant/attributes': typeof TTenantAttributesIndexRoute
   '/t/$tenant/audit': typeof TTenantAuditIndexRoute
   '/t/$tenant/branding': typeof TTenantBrandingIndexRoute
@@ -359,6 +400,7 @@ export interface FileRoutesByTo {
   '/t/$tenant/sessions': typeof TTenantSessionsIndexRoute
   '/t/$tenant/settings': typeof TTenantSettingsIndexRoute
   '/t/$tenant/users': typeof TTenantUsersIndexRoute
+  '/t/$tenant/webhooks': typeof TTenantWebhooksIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -394,7 +436,11 @@ export interface FileRoutesById {
   '/t/$tenant/email/smtp': typeof TTenantEmailSmtpRoute
   '/t/$tenant/roles/$roleName': typeof TTenantRolesRoleNameRoute
   '/t/$tenant/roles/new': typeof TTenantRolesNewRoute
+  '/t/$tenant/settings/config': typeof TTenantSettingsConfigRoute
+  '/t/$tenant/settings/registration': typeof TTenantSettingsRegistrationRoute
   '/t/$tenant/users/$userId': typeof TTenantUsersUserIdRoute
+  '/t/$tenant/webhooks/$webhookId': typeof TTenantWebhooksWebhookIdRoute
+  '/t/$tenant/webhooks/new': typeof TTenantWebhooksNewRoute
   '/t/$tenant/attributes/': typeof TTenantAttributesIndexRoute
   '/t/$tenant/audit/': typeof TTenantAuditIndexRoute
   '/t/$tenant/branding/': typeof TTenantBrandingIndexRoute
@@ -405,6 +451,7 @@ export interface FileRoutesById {
   '/t/$tenant/sessions/': typeof TTenantSessionsIndexRoute
   '/t/$tenant/settings/': typeof TTenantSettingsIndexRoute
   '/t/$tenant/users/': typeof TTenantUsersIndexRoute
+  '/t/$tenant/webhooks/': typeof TTenantWebhooksIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -441,7 +488,11 @@ export interface FileRouteTypes {
     | '/t/$tenant/email/smtp'
     | '/t/$tenant/roles/$roleName'
     | '/t/$tenant/roles/new'
+    | '/t/$tenant/settings/config'
+    | '/t/$tenant/settings/registration'
     | '/t/$tenant/users/$userId'
+    | '/t/$tenant/webhooks/$webhookId'
+    | '/t/$tenant/webhooks/new'
     | '/t/$tenant/attributes/'
     | '/t/$tenant/audit/'
     | '/t/$tenant/branding/'
@@ -452,6 +503,7 @@ export interface FileRouteTypes {
     | '/t/$tenant/sessions/'
     | '/t/$tenant/settings/'
     | '/t/$tenant/users/'
+    | '/t/$tenant/webhooks/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -485,7 +537,11 @@ export interface FileRouteTypes {
     | '/t/$tenant/email/smtp'
     | '/t/$tenant/roles/$roleName'
     | '/t/$tenant/roles/new'
+    | '/t/$tenant/settings/config'
+    | '/t/$tenant/settings/registration'
     | '/t/$tenant/users/$userId'
+    | '/t/$tenant/webhooks/$webhookId'
+    | '/t/$tenant/webhooks/new'
     | '/t/$tenant/attributes'
     | '/t/$tenant/audit'
     | '/t/$tenant/branding'
@@ -496,6 +552,7 @@ export interface FileRouteTypes {
     | '/t/$tenant/sessions'
     | '/t/$tenant/settings'
     | '/t/$tenant/users'
+    | '/t/$tenant/webhooks'
   id:
     | '__root__'
     | '/'
@@ -530,7 +587,11 @@ export interface FileRouteTypes {
     | '/t/$tenant/email/smtp'
     | '/t/$tenant/roles/$roleName'
     | '/t/$tenant/roles/new'
+    | '/t/$tenant/settings/config'
+    | '/t/$tenant/settings/registration'
     | '/t/$tenant/users/$userId'
+    | '/t/$tenant/webhooks/$webhookId'
+    | '/t/$tenant/webhooks/new'
     | '/t/$tenant/attributes/'
     | '/t/$tenant/audit/'
     | '/t/$tenant/branding/'
@@ -541,6 +602,7 @@ export interface FileRouteTypes {
     | '/t/$tenant/sessions/'
     | '/t/$tenant/settings/'
     | '/t/$tenant/users/'
+    | '/t/$tenant/webhooks/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -856,6 +918,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof TTenantSettingsIndexRouteImport
       parentRoute: typeof TTenantRoute
     }
+    '/t/$tenant/settings/config': {
+      id: '/t/$tenant/settings/config'
+      path: '/settings/config'
+      fullPath: '/t/$tenant/settings/config'
+      preLoaderRoute: typeof TTenantSettingsConfigRouteImport
+      parentRoute: typeof TTenantRoute
+    }
+    '/t/$tenant/settings/registration': {
+      id: '/t/$tenant/settings/registration'
+      path: '/settings/registration'
+      fullPath: '/t/$tenant/settings/registration'
+      preLoaderRoute: typeof TTenantSettingsRegistrationRouteImport
+      parentRoute: typeof TTenantRoute
+    }
     '/t/$tenant/users/': {
       id: '/t/$tenant/users/'
       path: '/users'
@@ -868,6 +944,27 @@ declare module '@tanstack/react-router' {
       path: '/users/$userId'
       fullPath: '/t/$tenant/users/$userId'
       preLoaderRoute: typeof TTenantUsersUserIdRouteImport
+      parentRoute: typeof TTenantRoute
+    }
+    '/t/$tenant/webhooks/': {
+      id: '/t/$tenant/webhooks/'
+      path: '/webhooks'
+      fullPath: '/t/$tenant/webhooks/'
+      preLoaderRoute: typeof TTenantWebhooksIndexRouteImport
+      parentRoute: typeof TTenantRoute
+    }
+    '/t/$tenant/webhooks/$webhookId': {
+      id: '/t/$tenant/webhooks/$webhookId'
+      path: '/webhooks/$webhookId'
+      fullPath: '/t/$tenant/webhooks/$webhookId'
+      preLoaderRoute: typeof TTenantWebhooksWebhookIdRouteImport
+      parentRoute: typeof TTenantRoute
+    }
+    '/t/$tenant/webhooks/new': {
+      id: '/t/$tenant/webhooks/new'
+      path: '/webhooks/new'
+      fullPath: '/t/$tenant/webhooks/new'
+      preLoaderRoute: typeof TTenantWebhooksNewRouteImport
       parentRoute: typeof TTenantRoute
     }
   }
@@ -885,7 +982,11 @@ interface TTenantRouteChildren {
   TTenantEmailSmtpRoute: typeof TTenantEmailSmtpRoute
   TTenantRolesRoleNameRoute: typeof TTenantRolesRoleNameRoute
   TTenantRolesNewRoute: typeof TTenantRolesNewRoute
+  TTenantSettingsConfigRoute: typeof TTenantSettingsConfigRoute
+  TTenantSettingsRegistrationRoute: typeof TTenantSettingsRegistrationRoute
   TTenantUsersUserIdRoute: typeof TTenantUsersUserIdRoute
+  TTenantWebhooksWebhookIdRoute: typeof TTenantWebhooksWebhookIdRoute
+  TTenantWebhooksNewRoute: typeof TTenantWebhooksNewRoute
   TTenantAttributesIndexRoute: typeof TTenantAttributesIndexRoute
   TTenantAuditIndexRoute: typeof TTenantAuditIndexRoute
   TTenantBrandingIndexRoute: typeof TTenantBrandingIndexRoute
@@ -896,6 +997,7 @@ interface TTenantRouteChildren {
   TTenantSessionsIndexRoute: typeof TTenantSessionsIndexRoute
   TTenantSettingsIndexRoute: typeof TTenantSettingsIndexRoute
   TTenantUsersIndexRoute: typeof TTenantUsersIndexRoute
+  TTenantWebhooksIndexRoute: typeof TTenantWebhooksIndexRoute
 }
 
 const TTenantRouteChildren: TTenantRouteChildren = {
@@ -910,7 +1012,11 @@ const TTenantRouteChildren: TTenantRouteChildren = {
   TTenantEmailSmtpRoute: TTenantEmailSmtpRoute,
   TTenantRolesRoleNameRoute: TTenantRolesRoleNameRoute,
   TTenantRolesNewRoute: TTenantRolesNewRoute,
+  TTenantSettingsConfigRoute: TTenantSettingsConfigRoute,
+  TTenantSettingsRegistrationRoute: TTenantSettingsRegistrationRoute,
   TTenantUsersUserIdRoute: TTenantUsersUserIdRoute,
+  TTenantWebhooksWebhookIdRoute: TTenantWebhooksWebhookIdRoute,
+  TTenantWebhooksNewRoute: TTenantWebhooksNewRoute,
   TTenantAttributesIndexRoute: TTenantAttributesIndexRoute,
   TTenantAuditIndexRoute: TTenantAuditIndexRoute,
   TTenantBrandingIndexRoute: TTenantBrandingIndexRoute,
@@ -921,6 +1027,7 @@ const TTenantRouteChildren: TTenantRouteChildren = {
   TTenantSessionsIndexRoute: TTenantSessionsIndexRoute,
   TTenantSettingsIndexRoute: TTenantSettingsIndexRoute,
   TTenantUsersIndexRoute: TTenantUsersIndexRoute,
+  TTenantWebhooksIndexRoute: TTenantWebhooksIndexRoute,
 }
 
 const TTenantRouteWithChildren =

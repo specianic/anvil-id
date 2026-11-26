@@ -9,6 +9,12 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
 const PAGE_SIZE = 50;
+
+const SOURCE_LABELS: Record<ClientView["registration_source"], string> = {
+  static: "Static",
+  dynamic: "Dynamic",
+  cimd: "CIMD",
+};
 const col = createColumnHelper<DataTableFeatures, ClientView>();
 
 function columnsFor(tenant: string) {
@@ -29,6 +35,24 @@ function columnsFor(tenant: string) {
     col.accessor("client_type", {
       header: "Type",
       cell: (info) => <Badge variant="secondary">{info.getValue()}</Badge>,
+    }),
+    col.accessor("registration_source", {
+      header: "Source",
+      cell: (info) => (
+        <Badge
+          variant={info.getValue() === "static" ? "outline" : "default"}
+          title={
+            info.getValue() === "dynamic"
+              ? "Registered through dynamic client registration (RFC 7591)"
+              : info.getValue() === "cimd"
+                ? "Created from a Client ID Metadata Document (the client ID is its URL)"
+                : "Created by an administrator"
+          }
+          data-testid={`client-source-${info.row.original.client_id}`}
+        >
+          {SOURCE_LABELS[info.getValue()]}
+        </Badge>
+      ),
     }),
     col.accessor("auth_method", {
       header: "Auth method",
