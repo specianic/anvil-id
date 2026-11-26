@@ -10,9 +10,13 @@
 //! SameSite=Lax because the provider returns with a cross-site top-level navigation, on which the
 //! Strict flow cookie is not sent.
 //!
-//! `{t}` is the tenant short id (first 12 hex characters of the tenant UUID): path-based tenants
-//! share one host, and `__Host-` cookies cannot be scoped by path, so the tenant is part of the
-//! name. No cookie ever has a `Domain` attribute.
+//! `{t}` is the tenant cookie id: the first 16 hex characters (64 bits) of the SHA-256 of the
+//! tenant UUID's 16 bytes. Path-based tenants share one host, and `__Host-` cookies cannot be
+//! scoped by path, so the tenant is part of the name. The id is derived from the whole UUID: the
+//! leading characters of a UUIDv7 are its millisecond timestamp, so two tenants created in the
+//! same millisecond would otherwise share cookie names (0.3 changed this; earlier releases used
+//! the first 12 hex characters, see docs/UPGRADING.md). It is stable for the life of the tenant.
+//! No cookie ever has a `Domain` attribute.
 
 use anvil_core::model::Tenant;
 use axum_extra::extract::cookie::{Cookie, SameSite};
@@ -24,11 +28,16 @@ pub struct CookiePolicy {
     secure: bool,
 }
 
-/// First 12 hex characters of the tenant UUID (simple form).
+/// The tenant cookie id: first 16 hex characters of SHA-256(tenant UUID bytes) (module docs).
 fn short_id(t: &Tenant) -> String {
-    let mut s = t.id.0.simple().to_string();
-    s.truncate(12);
-    s
+    use std::fmt::Write as _;
+    let digest = anvil_jose::encoding::sha256(t.id.0.as_bytes());
+    digest[..8]
+        .iter()
+        .fold(String::with_capacity(16), |mut s, b| {
+            let _ = write!(s, "{b:02x}");
+            s
+        })
 }
 
 impl CookiePolicy {
@@ -118,9 +127,16 @@ mod tests {
     use time::OffsetDateTime;
     use uuid::Uuid;
 
+    /// The cookie id of [`tenant`] (pinned: changing the derivation renames every cookie).
+    const ID: &str = "18f890a451dcc086";
+
     fn tenant() -> Tenant {
+        tenant_with("0192f0c4-7a1b-7c3d-8e9f-0123456789ab")
+    }
+
+    fn tenant_with(id: &str) -> Tenant {
         Tenant {
-            id: TenantId(Uuid::parse_str("0192f0c4-7a1b-7c3d-8e9f-0123456789ab").expect("uuid")),
+            id: TenantId(Uuid::parse_str(id).expect("uuid")),
             slug: "acme".into(),
             display_name: "Acme".into(),
             host: None,
@@ -133,8 +149,8 @@ mod tests {
     fn prod_cookies_are_host_prefixed_and_secure() {
         let p = CookiePolicy::new(true);
         let t = tenant();
-        assert_eq!(p.session_name(&t), "__Host-anvil_session_0192f0c47a1b");
-        assert_eq!(p.flow_name(&t), "__Host-anvil_flow_0192f0c47a1b");
+        assert_eq!(p.session_name(&t), format!("__Host-anvil_session_{ID}"));
+        assert_eq!(p.flow_name(&t), format!("__Host-anvil_flow_{ID}"));
         let s = p.session_cookie(&t, "v");
         assert!(s.name().starts_with("__Host-"));
         assert_eq!(s.secure(), Some(true));
@@ -160,12 +176,12 @@ mod tests {
         let p = CookiePolicy::new(false);
         let t = tenant();
         let s = p.session_cookie(&t, "v");
-        assert_eq!(s.name(), "anvil_session_0192f0c47a1b");
+        assert_eq!(s.name(), format!("anvil_session_{ID}"));
         assert_ne!(s.secure(), Some(true));
         assert_eq!(s.http_only(), Some(true));
         assert_eq!(s.same_site(), Some(SameSite::Lax));
         let f = p.flow_cookie(&t, "v");
-        assert_eq!(f.name(), "anvil_flow_0192f0c47a1b");
+        assert_eq!(f.name(), format!("anvil_flow_{ID}"));
         assert_ne!(f.secure(), Some(true));
         assert_eq!(f.same_site(), Some(SameSite::Strict));
         assert!(!f.to_string().contains("Secure"));
@@ -176,7 +192,7 @@ mod tests {
         let p = CookiePolicy::new(true);
         let t = tenant();
         let c = p.upstream_binding_cookie(&t, "v");
-        assert_eq!(c.name(), "__Host-anvil_upstream_0192f0c47a1b");
+        assert_eq!(c.name(), format!("__Host-anvil_upstream_{ID}"));
         assert_eq!(c.same_site(), Some(SameSite::Lax));
         assert_eq!(c.secure(), Some(true));
         assert_eq!(c.http_only(), Some(true));
@@ -187,8 +203,31 @@ mod tests {
         assert_eq!(cleared.max_age(), Some(Duration::ZERO));
         assert_eq!(cleared.value(), "");
         let dev = CookiePolicy::new(false).upstream_binding_cookie(&t, "v");
-        assert_eq!(dev.name(), "anvil_upstream_0192f0c47a1b");
+        assert_eq!(dev.name(), format!("anvil_upstream_{ID}"));
         assert_ne!(dev.secure(), Some(true));
+    }
+
+    #[test]
+    fn tenants_created_in_the_same_millisecond_get_distinct_cookie_names() {
+        // Same 48-bit UUIDv7 timestamp (first 12 hex characters), different random parts.
+        let a = tenant_with("0192f0c4-7a1b-7c3d-8e9f-0123456789ab");
+        let b = tenant_with("0192f0c4-7a1b-7000-8000-000000000001");
+        for p in [CookiePolicy::new(true), CookiePolicy::new(false)] {
+            assert_ne!(p.session_name(&a), p.session_name(&b));
+            assert_ne!(p.flow_name(&a), p.flow_name(&b));
+            assert_ne!(p.upstream_name(&a), p.upstream_name(&b));
+        }
+        // Stable: the same tenant always gets the same names, and the id is 16 hex characters.
+        let p = CookiePolicy::new(false);
+        assert_eq!(p.session_name(&a), p.session_name(&tenant()));
+        let suffix = p.session_name(&a)["anvil_session_".len()..].to_owned();
+        assert_eq!(suffix.len(), 16);
+        assert!(
+            suffix
+                .bytes()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+        );
+        assert!(!suffix.starts_with("0192f0c47a1b"));
     }
 
     #[test]
