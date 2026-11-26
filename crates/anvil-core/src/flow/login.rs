@@ -60,6 +60,7 @@
 //! `login.passkey_failed`.
 
 use serde::{Deserialize, Serialize};
+use time::{Duration, OffsetDateTime};
 
 use super::email_code::{self, EmailCodeState};
 use super::engine::{
@@ -68,7 +69,7 @@ use super::engine::{
 };
 use super::form::{FieldKind, FormDescription, FormMessage, MessageLevel};
 use super::upstream::{PendingLink, PendingUpstream};
-use crate::model::{MfaPolicy, SessionId, UserId, normalize_email};
+use crate::model::{ConnectionId, MfaPolicy, SessionId, UserId, normalize_email};
 use crate::policy::mfa::{AcrRequest, MfaRequirement, mfa_requirement};
 
 /// Id of the second-factor form.
@@ -131,6 +132,10 @@ pub struct LoginState {
     /// factor ends in [`SessionAuth::EmailCodeSecondFactor`].
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub email_primary: bool,
+    /// A started SAML sign-in ([`SamlPending`], 06-18): the pending `AuthnRequest`, then the
+    /// verified identity until the continue step takes it out with a compare-and-swap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub saml: Option<Box<SamlPending>>,
 }
 
 /// Where the login stands.
@@ -470,6 +475,62 @@ pub fn link_confirmation(link: PendingLink) -> (FlowState, FormDescription) {
     };
     let f = form(&state, Vec::new());
     (FlowState::Login(state), f)
+}
+
+/// How long a pending SAML request (and the verified identity after the ACS) stays usable.
+pub const SAML_PENDING_TTL: Duration = Duration::minutes(10);
+
+/// A SAML sign-in started from this login flow (06-18). Only hashes and a sealed value:
+///
+/// - `request_id`: the `AuthnRequest` ID; both `InResponseTo`s must equal it (not a secret);
+/// - `relay_state_hash`: hash of the RelayState sent with the request (`{flow}.{nonce}`): the
+///   IdP's cross-site POST carries no cookie, so the flow is found through RelayState and the
+///   hash proves the value was issued for this request;
+/// - `binding_hash`: hash of the browser-binding cookie (SameSite=Lax) set at the start; the
+///   continue step requires it, so a response posted in another browser signs nobody in;
+/// - `identity_sealed`: `None` while the request is pending; the ACS takes the pending request
+///   out (single use), verifies the response and puts it back with the verified identity
+///   sealed with the KEK, which the continue step takes out again.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SamlPending {
+    pub connection_id: ConnectionId,
+    pub request_id: String,
+    pub relay_state_hash: String,
+    pub binding_hash: String,
+    /// Unix seconds of the start; the request and the identity expire [`SAML_PENDING_TTL`] after.
+    pub created_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity_sealed: Option<String>,
+}
+
+impl SamlPending {
+    /// Whether the request (or the identity it produced) is still usable at `now`.
+    pub fn is_fresh(&self, now: OffsetDateTime) -> bool {
+        now.unix_timestamp()
+            < self
+                .created_at
+                .saturating_add(SAML_PENDING_TTL.whole_seconds())
+    }
+}
+
+/// The state holding a new pending SAML request (replacing an earlier SAML or upstream one).
+/// `None` unless the login is in its identify step and not a step-up: a SAML sign-in is a
+/// primary authentication.
+pub fn with_saml(state: LoginState, pending: SamlPending) -> Option<LoginState> {
+    if state.step != LoginStep::Identify || state.step_up_session.is_some() {
+        return None;
+    }
+    Some(LoginState {
+        saml: Some(Box::new(pending)),
+        upstream: None,
+        ..state
+    })
+}
+
+/// Takes the SAML sign-in out of `state` (the caller swaps the stored state to the result before
+/// using it, so it is single use).
+pub fn take_saml(state: &mut LoginState) -> Option<SamlPending> {
+    state.saml.take().map(|b| *b)
 }
 
 pub(super) fn invalid_input(state: LoginState) -> (FlowState, Vec<Effect>) {
@@ -1596,5 +1657,76 @@ mod tests {
                 auth: SessionAuth::Passkey
             } if s == session
         ));
+    }
+
+    fn saml_pending() -> SamlPending {
+        SamlPending {
+            connection_id: ConnectionId::new_v7(),
+            request_id: "_00112233445566778899aabbccddeeff".into(),
+            relay_state_hash: "relay".into(),
+            binding_hash: "binding".into(),
+            created_at: 1_000,
+            identity_sealed: None,
+        }
+    }
+
+    #[test]
+    fn saml_pending_is_only_stored_in_the_identify_step() {
+        let pending = saml_pending();
+        let identify = LoginState {
+            identifier: Some("a@example.test".into()),
+            ..LoginState::default()
+        };
+        let stored = with_saml(identify, pending.clone()).expect("identify step");
+        assert_eq!(stored.saml.as_deref(), Some(&pending));
+        assert_eq!(stored.identifier.as_deref(), Some("a@example.test"));
+
+        let user = UserId::new_v7();
+        let second = LoginState {
+            step: LoginStep::SecondFactor {
+                user_id: user,
+                methods: SecondFactorMethods::default(),
+            },
+            ..LoginState::default()
+        };
+        assert!(with_saml(second, pending.clone()).is_none());
+        let enroll = LoginState {
+            step: LoginStep::Enroll { user_id: user },
+            ..LoginState::default()
+        };
+        assert!(with_saml(enroll, pending.clone()).is_none());
+        let step_up = LoginState {
+            step_up_session: Some(SessionId::new_v7()),
+            ..LoginState::default()
+        };
+        assert!(with_saml(step_up, pending).is_none());
+    }
+
+    #[test]
+    fn saml_pending_is_taken_once_and_round_trips() {
+        let pending = saml_pending();
+        let mut state = with_saml(LoginState::default(), pending.clone()).expect("identify");
+        let json = serde_json::to_string(&FlowState::Login(state.clone())).expect("encode");
+        assert!(json.contains("\"saml\""));
+        assert!(!json.contains("identity_sealed"));
+        let FlowState::Login(decoded) = serde_json::from_str(&json).expect("decode") else {
+            panic!("login state");
+        };
+        assert_eq!(decoded, state);
+        assert_eq!(take_saml(&mut state), Some(pending));
+        assert_eq!(take_saml(&mut state), None);
+        // Release 0.4 flow JSON (no `saml`) still decodes.
+        let old: FlowState =
+            serde_json::from_str(r#"{"kind":"login","identifier":null}"#).expect("old json");
+        assert!(matches!(old, FlowState::Login(s) if s.saml.is_none()));
+    }
+
+    #[test]
+    fn saml_pending_expires_after_ten_minutes() {
+        let p = saml_pending();
+        let at = |s: i64| OffsetDateTime::from_unix_timestamp(s).expect("ts");
+        assert!(p.is_fresh(at(1_000)));
+        assert!(p.is_fresh(at(1_000 + 599)));
+        assert!(!p.is_fresh(at(1_000 + 600)));
     }
 }
