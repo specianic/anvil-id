@@ -703,7 +703,7 @@ function UserPage() {
   const tenant = useTenant();
   const { userId } = Route.useParams();
   const { tab = "overview" } = Route.useSearch();
-  const navigate = useNavigate({ from: "/users/$userId" });
+  const navigate = useNavigate({ from: "/t/$tenant/users/$userId" });
   const query = useQuery({
     queryKey: ["user", tenant, userId],
     queryFn: async ({ signal }) =>
