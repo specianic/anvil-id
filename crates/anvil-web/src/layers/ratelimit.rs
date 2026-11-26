@@ -21,6 +21,7 @@
 //! | `/token`, `/introspect`, `/revoke` (any method) | `Token` |
 //! | `/api/admin` and below (any method) | `Admin` |
 //! | `POST` to `/ui/login`, `/ui/registration`, `/ui/recovery`, `/setup` and below | `Auth` |
+//! | `/register` and below (RFC 7591/7592, any method) | `Auth` |
 //! | everything else (including `GET` of the auth pages) | `Default` |
 
 use std::time::Duration;
@@ -51,11 +52,14 @@ const TOKEN: &[&str] = &["/token", "/introspect", "/revoke"];
 const ADMIN: &[&str] = &["/api/admin"];
 /// Auth-class paths (`POST` only; rendering the page is `Default`).
 const AUTH_POST: &[&str] = &["/ui/login", "/ui/registration", "/ui/recovery", "/setup"];
+/// Auth-class paths (any method): dynamic client registration and its management endpoint.
+const AUTH_ANY: &[&str] = &["/register"];
 /// Paths whose 429 is an OAuth-style JSON body (protocol endpoints, not browser pages).
 const PROTOCOL: &[&str] = &[
     "/token",
     "/introspect",
     "/revoke",
+    "/register",
     "/userinfo",
     "/jwks",
     "/.well-known",
@@ -86,7 +90,7 @@ pub fn classify(method: &Method, path: &str) -> Option<RouteClass> {
     if under_any(path, ADMIN) {
         return Some(RouteClass::Admin);
     }
-    if method == Method::POST && under_any(path, AUTH_POST) {
+    if under_any(path, AUTH_ANY) || (method == Method::POST && under_any(path, AUTH_POST)) {
         return Some(RouteClass::Auth);
     }
     Some(RouteClass::Default)
@@ -346,6 +350,11 @@ mod tests {
             (&post, "/ui/recovery", Some(RouteClass::Auth)),
             (&post, "/ui/recovery/reset", Some(RouteClass::Auth)),
             (&post, "/setup", Some(RouteClass::Auth)),
+            (&post, "/register", Some(RouteClass::Auth)),
+            (&get, "/register/abc", Some(RouteClass::Auth)),
+            (&Method::PUT, "/register/abc", Some(RouteClass::Auth)),
+            (&Method::DELETE, "/register/abc", Some(RouteClass::Auth)),
+            (&post, "/registers", Some(RouteClass::Default)),
             (&get, "/ui/login", Some(RouteClass::Default)),
             (&get, "/ui/registration", Some(RouteClass::Default)),
             (&get, "/setup", Some(RouteClass::Default)),
@@ -370,6 +379,8 @@ mod tests {
     fn surfaces() {
         assert_eq!(Surface::of("/token"), Surface::Protocol);
         assert_eq!(Surface::of("/userinfo"), Surface::Protocol);
+        assert_eq!(Surface::of("/register"), Surface::Protocol);
+        assert_eq!(Surface::of("/register/abc"), Surface::Protocol);
         assert_eq!(Surface::of("/.well-known/jwks.json"), Surface::Protocol);
         assert_eq!(Surface::of("/api/admin/users"), Surface::Admin);
         assert_eq!(Surface::of("/ui/login"), Surface::Browser);

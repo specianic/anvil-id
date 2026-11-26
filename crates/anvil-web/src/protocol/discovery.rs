@@ -18,11 +18,17 @@
 //!   `consent`, `select_account`, plus `create` (Initiating User Registration 1.0) only when the
 //!   tenant's registration is open, which is exactly what `/authorize` accepts.
 //! - `acr_values_supported` lists the single-factor and the multi-factor `acr`.
+//! - `registration_endpoint` (RFC 8414 §2) is `{issuer}/register`, present only when the
+//!   tenant's effective dynamic registration policy is not `disabled` (never for the system
+//!   tenant), exactly when the endpoint exists.
+//! - `scopes_supported` is [`DEFAULT_DCR_SCOPES`], the standard scopes (also what a dynamically
+//!   registered client may ask for when the tenant lists none).
 
-use anvil_core::model::{ACR_MFA, ACR_PWD, CimdPolicy, Tenant};
+use anvil_core::model::{ACR_MFA, ACR_PWD, CimdPolicy, DcrPolicy, Tenant};
 use anvil_core::oauth::authorize_request::supported_prompt_values;
 use anvil_core::oauth::response_mode;
 use anvil_core::service::key_rotation::enabled_algs;
+use anvil_core::service::registration::{DEFAULT_DCR_SCOPES, effective_settings};
 use axum::Router;
 use axum::extract::State;
 use axum::http::{HeaderValue, header};
@@ -133,6 +139,10 @@ struct ProviderMetadata {
     /// (`true`) only when the tenant's effective CIMD policy is not `disabled`.
     #[serde(skip_serializing_if = "Option::is_none")]
     client_id_metadata_document_supported: Option<bool>,
+    /// RFC 7591 registration endpoint; present only when the tenant's effective DCR policy is
+    /// not `disabled`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    registration_endpoint: Option<String>,
 }
 
 impl ProviderMetadata {
@@ -154,7 +164,7 @@ impl ProviderMetadata {
             revocation_endpoint: endpoint("/revoke"),
             end_session_endpoint: endpoint("/logout"),
             issuer: issuer.to_owned(),
-            scopes_supported: &["openid", "profile", "email", "address", "phone"],
+            scopes_supported: DEFAULT_DCR_SCOPES,
             response_types_supported: &["code"],
             response_modes_supported: response_mode::SUPPORTED,
             grant_types_supported: &["authorization_code", "refresh_token", "client_credentials"],
@@ -178,6 +188,7 @@ impl ProviderMetadata {
             backchannel_logout_supported: true,
             backchannel_logout_session_supported: true,
             client_id_metadata_document_supported: None,
+            registration_endpoint: None,
         }
     }
 }
@@ -203,6 +214,9 @@ async fn metadata(State(state): State<AppState>, tenant: ResolvedTenant) -> Resp
     );
     if tenant.tenant.effective_cimd().policy != CimdPolicy::Disabled {
         doc.client_id_metadata_document_supported = Some(true);
+    }
+    if effective_settings(&tenant.tenant).policy != DcrPolicy::Disabled {
+        doc.registration_endpoint = Some(format!("{}/register", tenant.issuer));
     }
     let mut resp = axum::Json(doc).into_response();
     resp.headers_mut().insert(

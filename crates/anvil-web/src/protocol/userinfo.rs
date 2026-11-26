@@ -42,8 +42,9 @@ fn invalid_token() -> CoreError {
     CoreError::InvalidToken("the access token is invalid or expired".to_owned())
 }
 
-/// The token of an `Authorization: Bearer <token>` header (scheme case-insensitive).
-fn bearer_from_header(value: &str) -> Result<String, CoreError> {
+/// The token of an `Authorization: Bearer <token>` header (scheme case-insensitive). Also
+/// parses the initial and registration access tokens of `protocol::registration`.
+pub(crate) fn bearer_from_header(value: &str) -> Result<String, CoreError> {
     let (scheme, token) = value.trim().split_once(' ').ok_or_else(invalid_token)?;
     let token = token.trim();
     if !scheme.eq_ignore_ascii_case("bearer") || token.is_empty() || token.contains(' ') {

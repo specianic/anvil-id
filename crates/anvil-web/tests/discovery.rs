@@ -424,3 +424,78 @@ async fn jwks_is_per_tenant() {
             .all(|k| k["kid"] != default_kid.as_str())
     );
 }
+
+/// RFC 7591 registration endpoint: published only when the tenant's effective DCR policy is not
+/// `disabled` (the default document stays within [`ALLOWED_METADATA`] either way).
+#[tokio::test]
+async fn registration_endpoint_follows_the_tenant_policy() {
+    use anvil_core::model::{DcrPolicy, TenantUpdate};
+    let app = TestApp::new().await;
+    let doc = json(&app.get("/.well-known/openid-configuration").await);
+    assert!(
+        doc.get("registration_endpoint").is_none(),
+        "disabled by default"
+    );
+
+    let tenant = app.default.as_ref().expect("default tenant").tenant.clone();
+    for policy in [DcrPolicy::Open, DcrPolicy::AllowListed, DcrPolicy::Disabled] {
+        let mut settings = tenant.settings.clone();
+        settings.dcr.policy = policy;
+        app.storage()
+            .tenants()
+            .update(
+                tenant.id,
+                &TenantUpdate {
+                    settings: Some(settings),
+                    ..TenantUpdate::default()
+                },
+            )
+            .await
+            .expect("tenant update")
+            .expect("tenant exists");
+        for path in [
+            "/.well-known/openid-configuration",
+            "/.well-known/oauth-authorization-server",
+        ] {
+            let doc = json(&app.get(path).await);
+            if policy == DcrPolicy::Disabled {
+                assert!(doc.get("registration_endpoint").is_none(), "{path}");
+            } else {
+                assert_eq!(
+                    doc["registration_endpoint"],
+                    format!("{}/register", app.issuer(None)),
+                    "{policy:?} {path}"
+                );
+            }
+            for key in doc.as_object().expect("object").keys() {
+                assert!(
+                    ALLOWED_METADATA.contains(&key.as_str()),
+                    "unregistered metadata field {key}"
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn registration_endpoint_never_published_for_the_system_tenant() {
+    use anvil_core::model::{DcrPolicy, TenantUpdate};
+    let app = TestApp::new().await;
+    let system = app.system.as_ref().expect("system tenant").tenant.clone();
+    let mut settings = system.settings.clone();
+    settings.dcr.policy = DcrPolicy::Open;
+    app.storage()
+        .tenants()
+        .update(
+            system.id,
+            &TenantUpdate {
+                settings: Some(settings),
+                ..TenantUpdate::default()
+            },
+        )
+        .await
+        .expect("tenant update")
+        .expect("tenant exists");
+    let doc = json(&app.get("/t/system/.well-known/openid-configuration").await);
+    assert!(doc.get("registration_endpoint").is_none());
+}
