@@ -23,13 +23,14 @@ use crate::model::{
     TokenFormat, TokenTarget, User, UserId, UserStatus,
 };
 use crate::oauth::resource;
+use crate::policy::org_claims::bound_org_admin_scope;
 use crate::ports::{
     AttributeSchemaCheck, ClientMetadataFetcher, Clock, ConsumeOutcome, RotateOutcome, Storage,
 };
 use crate::service::audit::AuditService;
 use crate::service::claims::{
     ACCESS_TOKEN_TTL, AccessTokenInput, IdTokenInput, access_token_claims, id_token_claims,
-    merge_access_token_extras, requested_claims,
+    merge_access_token_extras, merge_org_claims, requested_claims,
 };
 use crate::service::client_auth::{ClientAuthInput, ClientAuthenticator};
 use crate::service::key::{KeyService, TOKEN_ALG};
@@ -355,17 +356,21 @@ pub fn sign_access_token(
     signer: &SigningKey,
     input: &AccessTokenInput,
 ) -> Result<String, CoreError> {
-    sign_access_token_with(signer, input, Map::new())
+    sign_access_token_with(signer, input, Map::new(), Map::new())
 }
 
-/// Signs an access token with mapped extra claims (roles, permissions, attributes); extras
-/// never override or add reserved claims ([`merge_access_token_extras`]).
+/// Signs an access token with mapped extra claims (roles, permissions, attributes) and the
+/// active org's claims. Extras never override or add reserved claims
+/// ([`merge_access_token_extras`]); the org claims come only from
+/// [`org_claims_json`](crate::policy::org_claims::org_claims_json) ([`merge_org_claims`]).
 pub fn sign_access_token_with(
     signer: &SigningKey,
     input: &AccessTokenInput,
     extra: Map<String, Value>,
+    org: Map<String, Value>,
 ) -> Result<String, CoreError> {
     let mut claims = access_token_claims(input);
+    merge_org_claims(&mut claims, org);
     merge_access_token_extras(&mut claims, extra);
     signer
         .sign_jwt(Some(ACCESS_TOKEN_TYP), &claims)
@@ -373,14 +378,17 @@ pub fn sign_access_token_with(
 }
 
 /// The scope user tokens are issued with. In the system tenant admin scopes are bounded by the
-/// user's roles (decision Q3, [`bound_admin_scope`]); elsewhere the granted scope unchanged.
-/// The refresh token keeps the full grant, so a role change applies at the next refresh.
+/// user's roles (decision Q3, [`bound_admin_scope`]); in every tenant `org:admin` stays only
+/// when the user holds the `org:admin` permission in the grant's active org
+/// ([`UserClaimSource::bound_org_admin`], decision Q1). The refresh token keeps the full grant,
+/// so a role change applies at the next refresh (in both directions, never beyond the grant).
 pub fn issued_scope(tenant: &Tenant, granted: &Scope, source: &UserClaimSource) -> Scope {
-    if tenant.slug == SYSTEM_TENANT_SLUG {
+    let scope = if tenant.slug == SYSTEM_TENANT_SLUG {
         bound_admin_scope(granted, &source.effective_admin_scopes(tenant))
     } else {
         granted.clone()
-    }
+    };
+    source.bound_org_admin(&scope)
 }
 
 /// The stored form of a new opaque access token: only the SHA-256 of `raw` is kept, linked to
@@ -408,8 +416,19 @@ pub fn new_opaque_access_token(
 
 /// Signs an ID token (`typ: JWT`).
 pub fn sign_id_token(signer: &SigningKey, input: &IdTokenInput) -> Result<String, CoreError> {
+    sign_id_token_with(signer, input, Map::new())
+}
+
+/// Signs an ID token carrying the active org's claims ([`merge_org_claims`]).
+pub fn sign_id_token_with(
+    signer: &SigningKey,
+    input: &IdTokenInput,
+    org: Map<String, Value>,
+) -> Result<String, CoreError> {
+    let mut claims = id_token_claims(input);
+    merge_org_claims(&mut claims, org);
     signer
-        .sign_jwt(Some(ID_TOKEN_TYP), &id_token_claims(input))
+        .sign_jwt(Some(ID_TOKEN_TYP), &claims)
         .map_err(signing_error)
 }
 
@@ -612,7 +631,10 @@ impl TokenService {
         };
         let user = check_user(self.storage.users().get(tenant.id, code.user_id).await?)?;
         let scope = Scope::parse(&code.scope).unwrap_or_default();
-        let source = self.claim_source(tenant, &user).await?;
+        if code.org_id != family.org_id {
+            return Err(invalid_grant());
+        }
+        let source = self.claim_source(tenant, &user, &family, now).await?;
         let issued = issued_scope(tenant, &scope, &source);
 
         let minted = self
@@ -704,8 +726,9 @@ impl TokenService {
             }
             RotateOutcome::NotFound => return Err(invalid_grant()),
         };
-        // Roles and attributes are read again at every refresh: changes apply here.
-        let source = self.claim_source(tenant, &user).await?;
+        // Roles, attributes and the org membership are read again at every refresh: changes
+        // apply here.
+        let source = self.claim_source(tenant, &user, &family, now).await?;
         let issued = issued_scope(tenant, &scope, &source);
         let minted = self
             .mint_user_tokens(
@@ -724,6 +747,9 @@ impl TokenService {
         selected: &[String],
     ) -> Result<TokenResponse, CoreError> {
         let now = self.clock.now();
+        // No user, so no org: `org:admin` is never issued to a client on its own behalf, even
+        // when the client is allowed to request it, and no org claim is ever set.
+        let scope = bound_org_admin_scope(&scope, None);
         let access_token = match client.token_format {
             TokenFormat::Opaque => {
                 self.opaque_access_token(tenant.id, client, None, None, &scope, selected, now)
@@ -758,19 +784,33 @@ impl TokenService {
         ))
     }
 
-    /// The user's roles and (when the schema check is wired) attribute data for this issuance.
+    /// The user's roles, (when the schema check is wired) attribute data and the family's org
+    /// claims for this issuance. A family whose org is gone or which the user left is revoked
+    /// and refused with the single `invalid_grant` (belt and braces: removing a member already
+    /// revokes the member's families in that org).
     async fn claim_source(
         &self,
         tenant: &Tenant,
         user: &User,
+        family: &TokenFamily,
+        now: OffsetDateTime,
     ) -> Result<UserClaimSource, CoreError> {
-        UserClaimSource::load(
+        let source = UserClaimSource::load(
             self.storage.as_ref(),
             tenant.id,
             user.id,
             self.attribute_check.is_some(),
+            family.org_id,
         )
-        .await
+        .await?;
+        if source.lost_active_org() {
+            self.storage
+                .grants()
+                .revoke_family(tenant.id, family.id, RevokeReason::Admin, now)
+                .await?;
+            return Err(invalid_grant());
+        }
+        Ok(source)
     }
 
     #[expect(
@@ -823,6 +863,7 @@ impl TokenService {
                         resource: selected,
                     },
                     source.claims(tenant, scope, TokenTarget::AccessToken, check),
+                    source.org_claims(tenant, scope, TokenTarget::AccessToken),
                 )?;
                 at_signer = Some(signer);
                 token
@@ -847,7 +888,11 @@ impl TokenService {
             for (k, v) in source.claims(tenant, scope, TokenTarget::IdToken, check) {
                 input.extra.entry(k).or_insert(v);
             }
-            Some(sign_id_token(&id_signer, &input)?)
+            Some(sign_id_token_with(
+                &id_signer,
+                &input,
+                source.org_claims(tenant, scope, TokenTarget::IdToken),
+            )?)
         } else {
             None
         };

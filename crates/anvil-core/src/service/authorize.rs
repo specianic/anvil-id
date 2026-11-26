@@ -31,6 +31,12 @@
 //! `auth_request_id`. That state can never approve a consent (the consent screen refuses a flow
 //! without a pending request), and it grants nothing beyond what the same user's own pages allow.
 //!
+//! Organizations (ORG-02): right before a code is issued (after the session, step-up and consent
+//! decisions) the active org is resolved from the client's organization policy, the request's
+//! `organization` parameter and the user's memberships
+//! ([`resolve_active_org`](crate::policy::org_claims::resolve_active_org), [`bind_active_org`])
+//! and bound to the code and its token family. It never comes from a cookie or the session.
+//!
 //! The protocol decisions live in pure functions ([`crate::oauth::authorize_request::validate`],
 //! [`crate::oauth::decision::decide`], [`build_code`], [`AuthorizationResponse`]);
 //! this service only orchestrates the ports. It is tested end to end over HTTP on both backends.
@@ -51,14 +57,15 @@ use crate::flow::consent::{ConsentDecision, ConsentState, requested_scopes};
 use crate::flow::login::SecondFactorMethods;
 use crate::model::{
     AuthRequestId, AuthorizationParams, BrowserSession, Client, FlowId, FlowKind, GrantType,
-    NewAuthorizationCode, NewAuthorizationRequest, NewFlow, NewTokenFamily, SecretHash, Tenant,
-    TenantId, TokenFamilyId, UserId, UserStatus,
+    NewAuthorizationCode, NewAuthorizationRequest, NewFlow, NewTokenFamily, OrgId, SecretHash,
+    Tenant, TenantId, TokenFamilyId, UserId, UserStatus,
 };
 use crate::oauth::authorize_request::{AuthorizeError, PROMPT_CREATE, RawParams, validate};
 use crate::oauth::decision::{MfaContext, SessionDecision, decide, requested_acr, session_is_mfa};
 use crate::oauth::redirect::redirect_matches;
 use crate::oauth::response_mode::AuthorizationResponse;
 use crate::policy::mfa::effective_policy;
+use crate::policy::org_claims::{ActiveOrg, resolve_active_org};
 use crate::ports::{ClientMetadataFetcher, Clock, Storage};
 use crate::service::client_resolver::{ClientResolver, is_url_client_id};
 
@@ -247,6 +254,44 @@ pub fn build_code(
         org_id: None,
     };
     (SecretString::from(plaintext), code, family)
+}
+
+/// Why an authorization cannot be bound to an org.
+#[derive(Debug)]
+pub enum OrgRefusal {
+    /// Answer the client with this error through the response mode.
+    Error(CoreError),
+    /// The user must pick one of several orgs (no `prompt=none`).
+    SelectionRequired,
+}
+
+/// Maps the active-org decision to the org bound to the code and family:
+///
+/// | decision | result |
+/// |---|---|
+/// | `NoOrg` | `Ok(None)` |
+/// | `Selected(org)` | `Ok(Some(org.id))` |
+/// | `Denied` (not a member, or `required` without any membership) | `access_denied` |
+/// | `Refused` (the client's policy is `off`) | `invalid_request` |
+/// | `NeedsChoice` with `prompt=none` | `interaction_required` |
+/// | `NeedsChoice` otherwise | [`OrgRefusal::SelectionRequired`] |
+///
+/// An org is never picked silently.
+pub fn bind_active_org(active: ActiveOrg, prompt_none: bool) -> Result<Option<OrgId>, OrgRefusal> {
+    match active {
+        ActiveOrg::NoOrg => Ok(None),
+        ActiveOrg::Selected(org) => Ok(Some(org.id)),
+        ActiveOrg::Denied => Err(OrgRefusal::Error(CoreError::AccessDenied(
+            "the user is not a member of the requested organization".to_owned(),
+        ))),
+        ActiveOrg::Refused => Err(OrgRefusal::Error(CoreError::InvalidRequest(
+            "this client does not accept the organization parameter".to_owned(),
+        ))),
+        ActiveOrg::NeedsChoice if prompt_none => {
+            Err(OrgRefusal::Error(CoreError::InteractionRequired))
+        }
+        ActiveOrg::NeedsChoice => Err(OrgRefusal::SelectionRequired),
+    }
 }
 
 /// Where a stored authorization request continues from.
@@ -466,7 +511,14 @@ impl AuthorizeService {
                     .await?
                 {
                     Ok(ConsentDecision::Skip) => {
-                        self.issue(tenant, issuer, &client, &params, &session, now)
+                        let org = match self
+                            .active_org(tenant, issuer, &client, &params, &session)
+                            .await?
+                        {
+                            Ok(org) => org,
+                            Err(answer) => return Ok(answer),
+                        };
+                        self.issue(tenant, issuer, &client, &params, &session, org, now)
                             .await
                     }
                     Ok(ConsentDecision::Required) => {
@@ -638,7 +690,14 @@ impl AuthorizeService {
                 {
                     return Ok(flow_expired());
                 }
-                self.issue(tenant, issuer, &client, &params, &session, now)
+                let org = match self
+                    .active_org(tenant, issuer, &client, &params, &session)
+                    .await?
+                {
+                    Ok(org) => org,
+                    Err(answer) => return Ok(answer),
+                };
+                self.issue(tenant, issuer, &client, &params, &session, org, now)
                     .await
             }
             SessionDecision::RequireLogin | SessionDecision::StepUp => {
@@ -790,6 +849,44 @@ impl AuthorizeService {
         }
     }
 
+    /// The org this authorization is bound to, from the client's policy, the request's
+    /// `organization` parameter and `session`'s user's memberships ([`bind_active_org`]).
+    /// `Err` carries the answer when no org can be bound.
+    async fn active_org(
+        &self,
+        tenant: &Tenant,
+        issuer: &str,
+        client: &Client,
+        params: &AuthorizationParams,
+        session: &BrowserSession,
+    ) -> Result<Result<Option<OrgId>, AuthorizeOutcome>, CoreError> {
+        let requested = params.organization.as_deref();
+        let memberships = if client.organization.is_off() {
+            // `off` never selects an org, whatever the memberships.
+            Vec::new()
+        } else {
+            self.storage
+                .organizations()
+                .memberships_of_user(tenant.id, session.user_id)
+                .await?
+        };
+        let active = resolve_active_org(client.organization, requested, &memberships);
+        let prompt_none = params.prompt.iter().any(|p| p == "none");
+        Ok(match bind_active_org(active, prompt_none) {
+            Ok(org) => Ok(org),
+            Err(OrgRefusal::Error(error)) => Err(error_response(params, &error, issuer)),
+            // TRANSITIONAL(06-19): the organization switcher page replaces this error page.
+            Err(OrgRefusal::SelectionRequired) => Err(AuthorizeOutcome::ErrorPage {
+                error_key: "invalid_request",
+                detail: "organization selection required".to_owned(),
+            }),
+        })
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "internal helper; every argument is a distinct input of the issued code"
+    )]
     async fn issue(
         &self,
         tenant: &Tenant,
@@ -797,9 +894,13 @@ impl AuthorizeService {
         client: &Client,
         params: &AuthorizationParams,
         session: &BrowserSession,
+        org: Option<OrgId>,
         now: OffsetDateTime,
     ) -> Result<AuthorizeOutcome, CoreError> {
-        let (plaintext, code, family) = build_code(client, params, session, issuer, now);
+        let (plaintext, mut code, mut family) = build_code(client, params, session, issuer, now);
+        // The active org is bound to the grant (code and family), never to the session.
+        code.org_id = org;
+        family.org_id = org;
         self.storage
             .grants()
             .create_code(tenant.id, &code, &family)
@@ -1027,6 +1128,91 @@ mod tests {
         assert!(
             r.to_redirect_url()
                 .starts_with("https://rp.example.test/cb?error=login_required")
+        );
+    }
+
+    fn org(slug: &str) -> crate::model::Organization {
+        crate::model::Organization {
+            id: OrgId::new_v7(),
+            tenant_id: TenantId::new_v7(),
+            slug: slug.to_owned(),
+            display_name: slug.to_owned(),
+            mfa_policy: None,
+            settings: crate::model::OrgSettings::default(),
+            metadata: serde_json::json!({}),
+            created_at: NOW,
+            updated_at: NOW,
+        }
+    }
+
+    fn error_code(r: Result<Option<OrgId>, OrgRefusal>) -> &'static str {
+        match r {
+            Err(OrgRefusal::Error(e)) => e.oauth_error(),
+            other => panic!("expected an error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn active_org_binding() {
+        use crate::model::OrgClientPolicy::{Off, Optional, Required};
+        let (a, b) = (org("a"), org("b"));
+        let one = std::slice::from_ref(&a);
+        let two = [a.clone(), b.clone()];
+        // A member asking by slug gets that org on the grant.
+        assert_eq!(
+            bind_active_org(resolve_active_org(Optional, Some("b"), &two), false).unwrap(),
+            Some(b.id)
+        );
+        // Not a member: access_denied.
+        assert_eq!(
+            error_code(bind_active_org(
+                resolve_active_org(Optional, Some("c"), &two),
+                false
+            )),
+            "access_denied"
+        );
+        // Required with one membership and no parameter: that org.
+        assert_eq!(
+            bind_active_org(resolve_active_org(Required, None, one), false).unwrap(),
+            Some(a.id)
+        );
+        // Required without membership: access_denied.
+        assert_eq!(
+            error_code(bind_active_org(
+                resolve_active_org(Required, None, &[]),
+                false
+            )),
+            "access_denied"
+        );
+        // Required with several memberships: interaction_required under prompt=none, the
+        // selection page otherwise; never a silent pick.
+        assert_eq!(
+            error_code(bind_active_org(
+                resolve_active_org(Required, None, &two),
+                true
+            )),
+            "interaction_required"
+        );
+        assert!(matches!(
+            bind_active_org(resolve_active_org(Required, None, &two), false),
+            Err(OrgRefusal::SelectionRequired)
+        ));
+        // Off with a parameter (policy changed since validation): invalid_request.
+        assert_eq!(
+            error_code(bind_active_org(
+                resolve_active_org(Off, Some("a"), one),
+                false
+            )),
+            "invalid_request"
+        );
+        // Optional without parameter and off without parameter: no org.
+        assert_eq!(
+            bind_active_org(resolve_active_org(Optional, None, &two), false).unwrap(),
+            None
+        );
+        assert_eq!(
+            bind_active_org(resolve_active_org(Off, None, &two), true).unwrap(),
+            None
         );
     }
 }

@@ -17,8 +17,9 @@
 //! - **Escalation**: in the system tenant, a caller may only create, edit, assign or unassign a
 //!   role whose admin-scope permissions its own token scopes cover ([`check_escalation`]).
 //! - [`UserClaimSource`]: the per-issuance load of a user's roles and attributes for
-//!   [`claims_mapping::mapped_claims`](crate::policy::claims_mapping::mapped_claims); used by the
-//!   token service (code exchange and every refresh) and UserInfo.
+//!   [`claims_mapping::mapped_claims`](crate::policy::claims_mapping::mapped_claims), and of the
+//!   active organization's membership and org roles ([`OrgClaims`]); used by the token service
+//!   (code exchange and every refresh), UserInfo and introspection.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -28,11 +29,13 @@ use serde_json::{Map, Value};
 use crate::clock::Clock;
 use crate::error::CoreError;
 use crate::model::{
-    AttributeDefinition, AuditAction, AuditActor, AuditDetails, AuditOutcome, NewRole, Page,
-    PageRequest, RequestContext, Role, RoleId, RoleUpdate, SYSTEM_TENANT_SLUG, Scope, Tenant,
-    TenantId, TokenTarget, User, UserId, UserStatus, normalize_permissions, validate_role_name,
+    AttributeDefinition, AuditAction, AuditActor, AuditDetails, AuditOutcome, NewRole, OrgClaims,
+    OrgId, Page, PageRequest, RequestContext, Role, RoleId, RoleUpdate, SYSTEM_TENANT_SLUG, Scope,
+    Tenant, TenantId, TokenTarget, User, UserId, UserStatus, normalize_permissions,
+    validate_role_name,
 };
 use crate::policy::claims_mapping::{ClaimInputs, mapped_claims};
+use crate::policy::org_claims::{bound_org_admin_scope, org_claims_json};
 use crate::ports::{AttributeSchemaCheck, Storage, StorageError};
 use crate::service::admin_scope::{ADMIN_READ, ADMIN_WRITE, ALL_ADMIN_SCOPES, is_admin_scope};
 use crate::service::audit::AuditService;
@@ -159,24 +162,35 @@ fn map_conflict(e: StorageError) -> CoreError {
 // Claims
 // ---------------------------------------------------------------------------------------------
 
-/// A user's roles and attribute data, loaded once per issuance.
+/// A user's roles and attribute data, and the active organization's claims, loaded once per
+/// issuance.
 #[derive(Debug, Clone, Default)]
 pub struct UserClaimSource {
+    /// Tenant-wide roles (never assignments made inside an org).
     pub roles: Vec<Role>,
     role_names: Vec<String>,
     permissions: Vec<String>,
     attributes: Vec<AttributeDefinition>,
     values: Map<String, Value>,
+    /// The active org's claims: `Some` only when an org was asked for and the user is still a
+    /// member of it.
+    pub org: Option<OrgClaims>,
+    /// An org was asked for, but it no longer exists or the user is no longer a member.
+    org_lost: bool,
 }
 
 impl UserClaimSource {
-    /// Loads the user's roles and, when `with_attributes` and some attribute definition has a
-    /// claim rule, the definitions and the user's values.
+    /// Loads the user's tenant-wide roles and, when `with_attributes` and some attribute
+    /// definition has a claim rule, the definitions and the user's values. With `active_org`
+    /// (the org bound to the grant) it also checks the membership and loads the roles the user
+    /// holds **in** that org ([`OrgClaims`]); a vanished org or membership leaves `org` empty
+    /// and sets [`Self::lost_active_org`], which every caller turns into a refusal.
     pub async fn load(
         storage: &dyn Storage,
         tenant: TenantId,
         user: UserId,
         with_attributes: bool,
+        active_org: Option<OrgId>,
     ) -> Result<Self, CoreError> {
         let roles = storage.roles().roles_for_user(tenant, user).await?;
         let role_names = roles.iter().map(|r| r.name.clone()).collect();
@@ -205,13 +219,42 @@ impl UserClaimSource {
         } else {
             (Vec::new(), Map::new())
         };
+        let (org, org_lost) = match active_org {
+            None => (None, false),
+            Some(org_id) => load_org_claims(storage, tenant, user, org_id)
+                .await?
+                .map_or((None, true), |c| (Some(c), false)),
+        };
         Ok(Self {
             roles,
             role_names,
             permissions,
             attributes,
             values,
+            org,
+            org_lost,
         })
+    }
+
+    /// Whether the grant's org is gone or the user left it: the grant must not be used.
+    pub fn lost_active_org(&self) -> bool {
+        self.org_lost
+    }
+
+    /// The org claims for one token ([`org_claims_json`]): empty without an active org.
+    pub fn org_claims(
+        &self,
+        tenant: &Tenant,
+        granted: &Scope,
+        target: TokenTarget,
+    ) -> Map<String, Value> {
+        org_claims_json(self.org.as_ref(), &tenant.settings.claims, target, granted)
+    }
+
+    /// `granted` with `org:admin` kept only when the user's permissions in the active org
+    /// include it ([`bound_org_admin_scope`]); never without an active org.
+    pub fn bound_org_admin(&self, granted: &Scope) -> Scope {
+        bound_org_admin_scope(granted, self.org.as_ref().map(|o| o.permissions.as_slice()))
     }
 
     /// The mapped claims for one token. Attribute claims need `check` (each value is validated
@@ -248,6 +291,40 @@ impl UserClaimSource {
     pub fn effective_admin_scopes(&self, tenant: &Tenant) -> BTreeSet<String> {
         effective_admin_scopes(tenant, &self.roles)
     }
+}
+
+/// The org claims of `user` in `org`: `None` when the org does not exist (in this tenant) or the
+/// user is not a member. Roles are the ones held in the org only
+/// ([`RoleRepo::roles_for_user_in_org`](crate::ports::RoleRepo::roles_for_user_in_org)).
+async fn load_org_claims(
+    storage: &dyn Storage,
+    tenant: TenantId,
+    user: UserId,
+    org_id: OrgId,
+) -> Result<Option<OrgClaims>, CoreError> {
+    let Some(org) = storage.organizations().get(tenant, org_id).await? else {
+        return Ok(None);
+    };
+    if !storage
+        .organizations()
+        .is_member(tenant, org_id, user)
+        .await?
+    {
+        return Ok(None);
+    }
+    let roles = storage
+        .roles()
+        .roles_for_user_in_org(tenant, user, org_id)
+        .await?;
+    Ok(Some(OrgClaims {
+        org_id,
+        org_slug: org.slug,
+        roles: roles.iter().map(|r| r.name.clone()).collect(),
+        permissions: roles
+            .iter()
+            .flat_map(|r| r.permissions.iter().cloned())
+            .collect(),
+    }))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -785,5 +862,60 @@ mod tests {
         assert!(check_escalation(&scope("admin:read"), &perms(&["admin:users:write"])).is_err());
         // Non-admin permissions are never escalation.
         assert!(check_escalation(&scope("admin:users:write"), &perms(&["docs:write"])).is_ok());
+    }
+
+    fn org_source(perms: &[&str]) -> UserClaimSource {
+        UserClaimSource {
+            org: Some(OrgClaims {
+                org_id: OrgId::new_v7(),
+                org_slug: "acme".into(),
+                roles: vec!["member".into()],
+                permissions: perms.iter().map(|p| (*p).to_owned()).collect(),
+            }),
+            ..UserClaimSource::default()
+        }
+    }
+
+    #[test]
+    fn org_admin_scope_follows_the_active_org_permissions() {
+        let requested = scope("openid org:admin");
+        assert_eq!(
+            strs(&org_source(&["org:admin"]).bound_org_admin(&requested)),
+            ["openid", "org:admin"]
+        );
+        assert_eq!(
+            strs(&org_source(&["docs:read"]).bound_org_admin(&requested)),
+            ["openid"]
+        );
+        // Never without an active org, whatever the tenant-wide roles say.
+        let t = tenant("acme");
+        let no_org = UserClaimSource {
+            roles: vec![role(&t, &["org:admin"])],
+            permissions: vec!["org:admin".into()],
+            ..UserClaimSource::default()
+        };
+        assert_eq!(strs(&no_org.bound_org_admin(&requested)), ["openid"]);
+    }
+
+    #[test]
+    fn org_claims_only_with_an_active_org() {
+        let t = tenant("acme");
+        let granted = scope("openid roles");
+        assert!(
+            UserClaimSource::default()
+                .org_claims(&t, &granted, TokenTarget::AccessToken)
+                .is_empty()
+        );
+        let src = org_source(&["docs:read"]);
+        let at = src.org_claims(&t, &granted, TokenTarget::AccessToken);
+        assert_eq!(at["org_slug"], "acme");
+        assert_eq!(at["org_roles"], serde_json::json!(["member"]));
+        assert_eq!(at["org_permissions"], serde_json::json!(["docs:read"]));
+        let id = src.org_claims(&t, &granted, TokenTarget::IdToken);
+        assert!(id.contains_key("org_id") && !id.contains_key("org_permissions"));
+        // Org roles never leak into the tenant-wide claims.
+        let tenant_claims = src.claims(&t, &granted, TokenTarget::AccessToken, None);
+        assert!(!tenant_claims.contains_key("roles"), "{tenant_claims:?}");
+        assert!(!src.lost_active_org());
     }
 }

@@ -258,9 +258,11 @@ pub struct UserInfoService {
 }
 
 impl UserInfoService {
-    /// `sub`, the claims of the token's scopes, the family's `claims.userinfo` requests and the
-    /// tenant's mapped role, permission and attribute claims for UserInfo (read now, so role
-    /// changes show at once). Mapped claims never replace standard or protocol claims.
+    /// `sub`, the claims of the token's scopes, the family's `claims.userinfo` requests, the
+    /// tenant's mapped role, permission and attribute claims for UserInfo and the org claims of
+    /// the family's org (all read now, so role and membership changes show at once; one
+    /// [`UserClaimSource`] load for JWT and opaque tokens alike). Mapped claims never replace
+    /// standard or protocol claims. A token whose org the user left is `invalid_token`.
     pub async fn userinfo(
         &self,
         tenant: &Tenant,
@@ -304,8 +306,13 @@ impl UserInfoService {
             tenant.id,
             user.id,
             self.attribute_check.is_some(),
+            family.org_id,
         )
         .await?;
+        // The grant's org is gone or the user left it: the token no longer speaks for anyone.
+        if source.lost_active_org() {
+            return Err(invalid_token());
+        }
         let mapped = source.claims(
             tenant,
             &claims.scope,
@@ -315,6 +322,8 @@ impl UserInfoService {
         for (k, v) in mapped {
             out.entry(k).or_insert(v);
         }
+        // The org claims (ORG-02) are set by AnvilID itself and win over everything else.
+        out.extend(source.org_claims(tenant, &claims.scope, TokenTarget::Userinfo));
         out.insert("sub".to_owned(), Value::String(claims.sub));
         Ok(out)
     }

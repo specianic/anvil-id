@@ -67,6 +67,16 @@ pub fn merge_access_token_extras(claims: &mut Map<String, Value>, extra: Map<Str
     }
 }
 
+/// Adds the active org's claims (`org_id`, `org_slug`, the org role and permission rules) to
+/// built token claims. They come only from
+/// [`org_claims_json`](crate::policy::org_claims::org_claims_json), never from a mapping rule or
+/// a user attribute; a name the builder already set (a protocol claim) is never replaced.
+pub fn merge_org_claims(claims: &mut Map<String, Value>, org: Map<String, Value>) {
+    for (k, v) in org {
+        claims.entry(k).or_insert(v);
+    }
+}
+
 fn opt_str(v: Option<&String>) -> Option<Value> {
     v.map(|s| Value::String(s.clone()))
 }
@@ -626,5 +636,27 @@ pub(crate) mod tests {
             extra: Map::new(),
         });
         assert_eq!(m["aud"], serde_json::json!(["rp"]));
+    }
+
+    #[test]
+    fn org_claims_never_replace_protocol_claims() {
+        let mut m: Map<String, Value> =
+            serde_json::from_value(serde_json::json!({"sub": "u1", "scope": "openid"})).unwrap();
+        let org: Map<String, Value> = serde_json::from_value(serde_json::json!({
+            "org_id": "o1",
+            "org_slug": "acme",
+            "sub": "spoofed",
+        }))
+        .unwrap();
+        merge_org_claims(&mut m, org);
+        assert_eq!(m["sub"], "u1");
+        assert_eq!(m["org_id"], "o1");
+        assert_eq!(m["org_slug"], "acme");
+        // Mapped extras never set org claims (they are reserved).
+        let extra: Map<String, Value> =
+            serde_json::from_value(serde_json::json!({"org_id": "x", "org_roles": ["y"]})).unwrap();
+        merge_access_token_extras(&mut m, extra);
+        assert_eq!(m["org_id"], "o1");
+        assert!(!m.contains_key("org_roles"));
     }
 }

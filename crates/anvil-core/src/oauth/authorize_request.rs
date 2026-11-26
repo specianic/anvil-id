@@ -13,7 +13,9 @@
 //! confidential clients may omit both PKCE and nonce) → scope → redirect_uri required for OpenID
 //! requests → prompt (values supported by the tenant: `create` only with open registration;
 //! `none` and `create`/`select_account` exclusive) / max_age → claims → resource (the only parameter that may repeat;
-//! RFC 8707 §2.1, errors are `invalid_target`).
+//! RFC 8707 §2.1, errors are `invalid_target`) → organization (at most
+//! [`MAX_ORGANIZATION_LEN`] bytes, refused for clients whose organization policy is `off`; a
+//! repeated value is a duplicated parameter like any other).
 
 use crate::error::CoreError;
 use crate::model::{AuthorizationParams, Client, ClientType, RegistrationMode, Scope};
@@ -23,6 +25,9 @@ use crate::oauth::response_mode::ResponseMode;
 
 /// The only authorization request parameter that may repeat (RFC 8707 §2).
 const REPEATABLE: &str = "resource";
+
+/// Longest accepted `organization` value (an org id or slug), in bytes.
+pub const MAX_ORGANIZATION_LEN: usize = 128;
 
 /// Raw authorization request parameters, in arrival order, from the query (GET) or the form
 /// body (POST). Built by the web layer or by [`parse_raw`].
@@ -350,6 +355,23 @@ pub fn validate(
     crate::oauth::resource::validate_resources(&resource, &client.allowed_resources)
         .map_err(&fail)?;
 
+    // 13. organization (ORG-02): an org id or slug, resolved against the user's memberships
+    // only after sign-in. A client that does not use organizations never accepts one.
+    let organization = match raw.get("organization") {
+        None => None,
+        Some(o) if o.len() > MAX_ORGANIZATION_LEN || o.chars().any(char::is_control) => {
+            return Err(invalid(&format!(
+                "organization must be at most {MAX_ORGANIZATION_LEN} bytes without control characters"
+            )));
+        }
+        Some(_) if client.organization.is_off() => {
+            return Err(invalid(
+                "this client does not accept the organization parameter",
+            ));
+        }
+        Some(o) => Some(o.to_owned()),
+    };
+
     let acr_values = raw
         .get("acr_values")
         .map(|a| a.split_whitespace().map(str::to_owned).collect())
@@ -371,7 +393,7 @@ pub fn validate(
             claims,
             response_mode,
             resource,
-            organization: None,
+            organization,
         },
         id_token_hint: raw.get("id_token_hint").map(str::to_owned),
     })
@@ -1359,5 +1381,90 @@ pub(crate) mod tests {
             page_key(validate(&raw(&p), Some(&c), RegistrationMode::Open)),
             "redirect_uri_mismatch"
         );
+    }
+
+    fn org_client(policy: crate::model::OrgClientPolicy) -> Client {
+        let mut c = client();
+        c.organization = policy;
+        c
+    }
+
+    #[test]
+    fn organization_is_parsed_for_org_clients() {
+        use crate::model::OrgClientPolicy::{Optional, Required};
+        for policy in [Optional, Required] {
+            let c = org_client(policy);
+            let ok = validate(&raw(&base()), Some(&c), RegistrationMode::Open).unwrap();
+            assert_eq!(ok.params.organization, None);
+            let ok = validate(
+                &with(&[("organization", Some("acme"))]),
+                Some(&c),
+                RegistrationMode::Open,
+            )
+            .unwrap();
+            assert_eq!(ok.params.organization.as_deref(), Some("acme"));
+            // An empty value is treated as omitted (RFC 6749 §3.1).
+            let ok = validate(
+                &with(&[("organization", Some(""))]),
+                Some(&c),
+                RegistrationMode::Open,
+            )
+            .unwrap();
+            assert_eq!(ok.params.organization, None);
+            let max = "a".repeat(MAX_ORGANIZATION_LEN);
+            let ok = validate(
+                &with_owned(&[], &[("organization", max.clone())]),
+                Some(&c),
+                RegistrationMode::Open,
+            )
+            .unwrap();
+            assert_eq!(ok.params.organization, Some(max));
+        }
+    }
+
+    #[test]
+    fn repeated_organization_is_invalid_request() {
+        let c = org_client(crate::model::OrgClientPolicy::Optional);
+        let mut p = base();
+        p.push(("organization", "acme"));
+        p.push(("organization", "other"));
+        assert_eq!(
+            redirect_err(validate(&raw(&p), Some(&c), RegistrationMode::Open)),
+            ("invalid_request", Some("st".to_owned()))
+        );
+    }
+
+    #[test]
+    fn oversized_or_control_organization_is_invalid_request() {
+        let c = org_client(crate::model::OrgClientPolicy::Required);
+        for bad in [
+            "a".repeat(MAX_ORGANIZATION_LEN + 1),
+            "acme\u{0}".to_owned(),
+            "ac\nme".to_owned(),
+        ] {
+            assert_eq!(
+                redirect_err(validate(
+                    &with_owned(&[], &[("organization", bad)]),
+                    Some(&c),
+                    RegistrationMode::Open
+                )),
+                ("invalid_request", Some("st".to_owned()))
+            );
+        }
+    }
+
+    #[test]
+    fn organization_is_refused_for_clients_without_organizations() {
+        let c = org_client(crate::model::OrgClientPolicy::Off);
+        assert_eq!(
+            redirect_err(validate(
+                &with(&[("organization", Some("acme"))]),
+                Some(&c),
+                RegistrationMode::Open
+            )),
+            ("invalid_request", Some("st".to_owned()))
+        );
+        // Without the parameter the client works as before.
+        assert!(validate(&raw(&base()), Some(&c), RegistrationMode::Open).is_ok());
     }
 }
