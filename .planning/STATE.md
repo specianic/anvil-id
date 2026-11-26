@@ -6,15 +6,15 @@ current_phase: 05
 current_phase_name: release 0 4 operate it
 current_plan: 33
 status: executing
-stopped_at: Completed 06-06-PLAN.md
-last_updated: "2026-11-26T09:48:43.842Z"
+stopped_at: Completed 06-04-PLAN.md
+last_updated: "2026-11-26T10:02:11.025Z"
 last_activity: 2026-11-26
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 162
-  completed_plans: 138
-  percent: 85
+  completed_plans: 139
+  percent: 86
 ---
 
 # Project State
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 **Status:** Ready to execute
 **Last Activity:** 2026-11-26
 **Last Activity Description:** 05-28 phase gate complete (632-pair security map, 0.4 plaintext scan, anvilid 0.4.0, 0.4 migrations pinned, every workflow incl. load and deploy green on f80dcb4)
-**Progress:** [█████████░] 85%
+**Progress:** [█████████░] 86%
 
 Phase 5 has 33 plans (05-01 through 05-33). Every plan except 05-29 (release v0.4.0 after owner sign-off) has a
 SUMMARY. Current Plan counts plans in execution order: 05-29 is the 33rd and last. Phase 4 still has one open plan, 04-33 (manual real-provider checklist, then tag v0.3.0); it must be
@@ -195,6 +195,7 @@ done before 05-29 tags v0.4.0.
 | Phase 06 P02 | 60min | 4 tasks | 80 files |
 | Phase 06 P05 | 20min | 3 tasks | 12 files |
 | Phase 06 P06 | 30min | 1 tasks | 3 files |
+| Phase 06 P04 | 60min | 3 tasks | 65 files |
 
 ## Accumulated Context
 
@@ -454,6 +455,8 @@ Recent decisions affecting current work:
 - [Phase 06]: 06-02: validate_org_slug uses the tenant slug rule (2-63 chars)
 - [Phase 06]: 06-05: SamlAssertionData.has_conditions added so missing Conditions has its own SAML reason code; 06-09 must set it
 - [Phase 06]: 06-06: second-factor allowCredentials injected into options JSON in core from PasskeyCredential.credential_id; no port change, finish path unchanged
+- [Phase 06]: 06-04: OrgRepo::add_member returns AddMemberOutcome {Added, AlreadyMember, NotFound}; storage-level not-found stays bool/Option (no StorageError::NotFound)
+- [Phase 06]: 06-04: operator keys saml_experimental (off; warning via Config.warnings) and domain_verification_resolvers (ip or ip:port, port 53 default, empty = system)
 
 ### Pending Todos
 
@@ -466,6 +469,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-26T09:48:43.839Z
-Stopped at: Completed 06-06-PLAN.md
+Last session: 2026-11-26T10:02:11.023Z
+Stopped at: Completed 06-04-PLAN.md
 Resume file: None
