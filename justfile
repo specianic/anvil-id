@@ -9,7 +9,7 @@ default: ci
 
 # The single command contributors run (needs Docker for the Postgres tests and Node >= 22.12 for
 # the console check).
-ci: fmt-check lint deny deps migrations-check test test-pg test-redis release-graph security-tests console-check fuzz-check
+ci: fmt-check lint doc deny deps migrations-check test test-pg test-redis release-graph security-tests console-check fuzz-check
 
 # Check formatting.
 fmt-check:
@@ -22,6 +22,11 @@ fmt:
 # Clippy on every crate and target, warnings are errors.
 lint:
     cargo clippy --workspace --all-targets --locked -- -D warnings
+
+# API docs build with no broken or private intra-doc links (warnings in other lints stay
+# warnings).
+doc:
+    RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links -D rustdoc::private_intra_doc_links" cargo doc --workspace --no-deps --locked
 
 # Advisories, licenses, bans and sources.
 deny:

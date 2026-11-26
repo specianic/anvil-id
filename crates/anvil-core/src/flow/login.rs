@@ -30,7 +30,7 @@
 //! # MFA policy (AUTH-08)
 //!
 //! After the password, [`after_primary_auth`] applies
-//! [`mfa_requirement`](crate::policy::mfa::mfa_requirement) to the effective policy (strictest of
+//! [`mfa_requirement`] to the effective policy (strictest of
 //! tenant and client), the authorization request's `acr` and the user's factors: `Off` never
 //! prompts, `Optional` prompts users who have a factor, `Required` prompts or forces enrolment.
 //! An essential `acr` that cannot be met still signs the user in single-factor (truthful `acr`);
@@ -96,7 +96,7 @@ use crate::policy::mfa::{AcrRequest, MfaRequirement, mfa_requirement};
 /// Id of the second-factor form.
 pub const SECOND_FACTOR_FORM_ID: &str = "second-factor";
 /// Name of the hidden marker field of the second-factor form that offers a passkey
-/// ([`second_factor_form`]).
+/// (`second_factor_form`).
 pub const SECOND_FACTOR_PASSKEY_FIELD: &str = "passkey";
 /// Id of the in-flow enrolment form.
 pub const ENROLL_FORM_ID: &str = "mfa-enroll";

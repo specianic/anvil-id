@@ -2,7 +2,7 @@
 //!
 //! - [`classify`] maps a request (method + tenant-relative path) to a [`RouteClass`], or to
 //!   `None` for paths that are never limited (health probes, static assets).
-//! - [`layer`] runs inside the tenant-routed service (after tenant resolution, so paths are
+//! - `layer` runs inside the tenant-routed service (after tenant resolution, so paths are
 //!   tenant-relative). It keys every classified request by the client IP from the trusted-proxy
 //!   extractor ([`crate::client_ip`]) and answers 429 with `Retry-After` when the class quota of
 //!   that IP is exhausted. Handlers never sleep.

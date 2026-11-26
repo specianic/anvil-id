@@ -34,6 +34,8 @@ jobs:
       - name: Migration lint
         run: scripts/check-migrations.sh && scripts/check-migrations.sh --self-test
       - run: just fmt-check lint
+      # Rustdoc: no broken or private intra-doc links (gate 06-26).
+      - run: just doc
 
   deny:
     name: cargo deny

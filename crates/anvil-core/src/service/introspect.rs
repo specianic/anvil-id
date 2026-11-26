@@ -9,7 +9,7 @@
 //! may not see — is exactly `{"active":false}`, so the response never tells a caller why.
 //!
 //! Access tokens are checked by the single
-//! [`AccessTokenVerifier`](crate::service::userinfo::AccessTokenVerifier); refresh tokens by
+//! [`AccessTokenVerifier`]; refresh tokens by
 //! [`refresh_active`]. `token_type_hint` only changes the lookup order; an unknown hint value is
 //! ignored (RFC 7662 §2.1).
 //!

@@ -1,7 +1,7 @@
 //! Client ID Metadata Document fetcher on the SSRF-guarded outbound client
 //! (`ports::ClientMetadataFetcher`, AGT-02).
 //!
-//! [`OutboundMetadataFetcher`] GETs a client id URL through the single [`OutboundClient`]: its
+//! [`OutboundMetadataFetcher`] GETs a client id URL through the single [`OutboundClient`](crate::adapters::outbound::OutboundClient): its
 //! destination policy (private and loopback addresses blocked unless allow-listed, plain http only
 //! in development mode and only to allow-listed destinations), no redirects (a 3xx is a status
 //! error), no proxies and the outbound timeouts all apply unchanged. On top of that:
@@ -16,7 +16,7 @@
 //!   key's tenant is the nil id, which no tenant has (tenant ids are UUIDv7). An exhausted budget
 //!   is reported as status 429, a transient failure;
 //! - **concurrency cap:** at most `CIMD_FETCH_PERMITS` fetches in flight
-//!   ([`AppState::cimd_fetch_permits`]); waiting longer than the outbound total timeout for a
+//!   (`AppState::cimd_fetch_permits`); waiting longer than the outbound total timeout for a
 //!   permit is a timeout.
 //!
 //! [`ClientMetadataFetcher::allow_http_loopback`] is the installation's development-mode outbound

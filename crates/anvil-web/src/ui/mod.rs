@@ -1,7 +1,7 @@
 //! Browser-facing self-service pages. Every route here is behind the Fetch-Metadata CSRF layer,
-//! except the upstream sign-in callback ([`upstream::callback_routes`]): a provider may return with
+//! except the upstream sign-in callback (`upstream::callback_routes`): a provider may return with
 //! a cross-site `form_post`; that callback is protected by state, binding cookie and nonce. The
-//! SAML assertion consumer service ([`saml::callback_routes`]) is exempt for the same reason (the
+//! SAML assertion consumer service (`saml::callback_routes`) is exempt for the same reason (the
 //! HTTP-POST binding is a cross-site form post).
 
 mod account_apps;

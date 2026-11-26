@@ -3,7 +3,7 @@
 //! Built on `jsonschema` with default features off (no HTTP or file resolver is compiled in):
 //!
 //! - Draft 2020-12 only; a `$schema` naming anything else is refused.
-//! - Every external reference is refused by [`RefuseExternal`]; only references inside the
+//! - Every external reference is refused by `RefuseExternal`; only references inside the
 //!   schema (`#/$defs/...`) resolve. No network or file access can happen.
 //! - `pattern` / `patternProperties` use the `regex` engine (linear time, no backtracking, so
 //!   no ReDoS); constructs it cannot compile (look-around, back-references) are refused.

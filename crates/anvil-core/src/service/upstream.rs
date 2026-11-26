@@ -31,7 +31,7 @@
 //! - existing link: sign in; verified + trusted email of a verified local account with tenant
 //!   `auto_link`: link (`identity_linked`, mode `auto`) and sign in;
 //! - other email match: continue in a fresh login flow holding a [`PendingLink`]; signing in to
-//!   an existing account there links it ([`confirm_link`], mode `confirmed`);
+//!   an existing account there links it (`confirm_link`, mode `confirmed`);
 //! - no match: just-in-time registration when [`jit_allowed`]: always for an org connection whose
 //!   email is trusted for the org (one of its verified domains), otherwise when
 //!   `upstream_registration` allows it (unset = registration mode `open`); email verified only for
@@ -59,7 +59,7 @@
 //! # Enterprise (organization) connections
 //!
 //! Every `Login` identity, OIDC/OAuth from the callback today and SAML (06-18) from its own
-//! continue step, goes through one completion path, [`UpstreamService::complete_identity`]: link
+//! continue step, goes through one completion path, `UpstreamService::complete_identity`: link
 //! decision, just-in-time registration, org membership, `require_verified_email`, then MFA and
 //! the session through `FlowService::upstream_primary`. For a connection owned by an
 //! organization (`Connection.org_id`):

@@ -13,7 +13,7 @@
 //! ## Unknown-host negative cache (QUAL-05)
 //!
 //! A request whose `Host` is not the public host costs a tenant lookup by host. Hosts that are
-//! **not** a tenant host are remembered in [`AppState::unknown_hosts`] for
+//! **not** a tenant host are remembered in `AppState::unknown_hosts` for
 //! [`AppConfig::unknown_host_ttl`](crate::config::AppConfig::unknown_host_ttl) (default 5 s,
 //! bounded to [`UNKNOWN_HOSTS_CAPACITY`](crate::state::UNKNOWN_HOSTS_CAPACITY) entries). A miss
 //! only means "not a host tenant", so serving it from the cache is safe; the one visible effect is

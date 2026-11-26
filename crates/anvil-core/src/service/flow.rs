@@ -78,10 +78,10 @@
 //! # Upstream sign-in (AUTH-07, AUTH-11)
 //!
 //! `service::upstream` runs the provider round trip and then hands the established user to
-//! [`FlowService::upstream_primary`]: the same MFA policy applies, a single-factor upstream
+//! `FlowService::upstream_primary`: the same MFA policy applies, a single-factor upstream
 //! sign-in gets `[fed]` and a second factor after it `[fed, otp, mfa]`. The provider's return
 //! carries neither the flow cookie nor the CSRF token, so a login that needs another form
-//! continues in a fresh flow ([`FlowService::continue_login`]). A login flow holding a pending
+//! continues in a fresh flow (`FlowService::continue_login`). A login flow holding a pending
 //! link (`flow::upstream::PendingLink`) links the waiting identity to the account signed in to
 //! there, right before the session is created (`service::upstream::confirm_link`).
 //!
@@ -317,7 +317,7 @@ impl SubmitResult {
     }
 }
 
-/// Where a finished sign-in continues ([`FlowService::continuation`]: the authorization request
+/// Where a finished sign-in continues (`FlowService::continuation`: the authorization request
 /// bound to the flow always wins over a return target).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Continue {

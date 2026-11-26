@@ -34,7 +34,7 @@
 //! Organizations (ORG-02): right before a code is issued (after the session, step-up and consent
 //! decisions) the active org is resolved from the client's organization policy, the request's
 //! `organization` parameter and the user's memberships
-//! ([`resolve_active_org`](crate::policy::org_claims::resolve_active_org), [`bind_active_org`])
+//! ([`resolve_active_org`], [`bind_active_org`])
 //! and bound to the code and its token family. It never comes from a cookie or the session.
 //! When the client requires an org and the user belongs to several, none was requested and the
 //! request is interactive, the request is stored and the user picks one on the organization

@@ -340,7 +340,7 @@ pub struct Prechecked {
 }
 
 /// The strict SAML profile check (module docs, step 3). Runs before any bergshamra call and
-/// touches nothing outside `doc`. Expects [`document_rules`] to have passed.
+/// touches nothing outside `doc`. Expects `document_rules` to have passed.
 pub fn precheck(doc: &Document<'_>) -> Result<Prechecked, R> {
     let root = doc.document_element().ok_or(R::Structure)?;
     if !is_el(doc, root, NS_PROTOCOL, "Response") || attr(doc, root, "Version") != Some("2.0") {

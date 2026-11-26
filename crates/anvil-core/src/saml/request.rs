@@ -1,7 +1,7 @@
 //! SP-initiated `AuthnRequest`, RelayState and SP metadata (ORG-03).
 //!
 //! Every document is written from a fixed template; each input value goes through
-//! [`super::xml_escape`]. The `AuthnRequest` is unsigned (1.0 profile) and travels over the
+//! `super::xml_escape`. The `AuthnRequest` is unsigned (1.0 profile) and travels over the
 //! HTTP-Redirect binding (DEFLATE, base64 and URL encoding happen in the web adapter); the
 //! Response is requested over HTTP-POST.
 

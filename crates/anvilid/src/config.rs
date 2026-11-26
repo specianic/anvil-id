@@ -156,7 +156,7 @@ pub struct CliOverrides {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kek_file: Option<PathBuf>,
 
-    /// Sender address of outgoing email [default: AnvilID <no-reply@{public host}>].
+    /// Sender address of outgoing email (default: `AnvilID <no-reply@{public host}>`).
     #[arg(long, value_name = "MAILBOX")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub smtp_from: Option<String>,
@@ -181,7 +181,7 @@ pub struct CliOverrides {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub breach_check: Option<String>,
 
-    /// Base URL of the HIBP range API [default: https://api.pwnedpasswords.com].
+    /// Base URL of the HIBP range API (default: `https://api.pwnedpasswords.com`).
     #[arg(long, value_name = "URL")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub breach_check_url: Option<String>,

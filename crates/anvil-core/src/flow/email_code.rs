@@ -2,7 +2,7 @@
 //!
 //! # Steps
 //!
-//! From the identify step the user asks for a sign-in email ([`request`]). The login moves to
+//! From the identify step the user asks for a sign-in email (`request`). The login moves to
 //! [`LoginStep::EmailCode`] holding an [`EmailCodeState`] and the page always says "if an account
 //! exists for that address, we sent a code" (no account enumeration). Only an active user with a
 //! verified address gets the `login_code` email (a 6-digit code and a magic link,
@@ -20,7 +20,7 @@
 //! and the routes (which also refuse a method switched off after the send). With the link only,
 //! the "check your email" form has no `code` field ([`form_for`]).
 //!
-//! The code ([`verify`]) or the link ([`link`]) is then the primary authentication: single factor
+//! The code (`verify`) or the link (`link`) is then the primary authentication: single factor
 //! (`amr` `[otp]`, pwd `acr`, never `mfa`), followed by the effective MFA policy like a password
 //! (`flow::login::after_primary_auth`).
 //!

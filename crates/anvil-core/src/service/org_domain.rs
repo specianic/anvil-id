@@ -5,7 +5,7 @@
 //!   (refusals name the reason, field `domain`) and stores a **pending** claim with a fresh
 //!   random challenge token. Several orgs of a tenant may hold pending claims on one domain.
 //! - [`OrgDomainService::verify`] runs the single DNS check,
-//!   [`domain_check::check_domain`](crate::service::domain_check::check_domain). Every failure
+//!   [`domain_check::check_domain`]. Every failure
 //!   (no record, wrong value, lookup error) gives the same [`VerifyOutcome::Pending`]; a match
 //!   marks the claim verified, unless another org of the tenant already verified the domain
 //!   (`Conflict`, decided by the storage's unique index). Only someone who published the record

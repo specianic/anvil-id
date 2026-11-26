@@ -5,7 +5,7 @@
 //! on the same origin as the management API it calls.
 //!
 //! - Vite writes `.br`/`.gz` sidecars next to compressible files (`admin-ui/scripts/compress.mjs`).
-//!   rust-embed's own `compression` feature does not negotiate, so [`negotiate`] picks the sidecar
+//!   rust-embed's own `compression` feature does not negotiate, so `negotiate` picks the sidecar
 //!   from `Accept-Encoding` here (`Content-Encoding` + `Vary: Accept-Encoding`).
 //! - Hashed build output under `assets/` is immutable for a year; `index.html` and everything else
 //!   is `no-cache`. The ETag is the quoted hex SHA-256 of the embedded file that is sent, so each

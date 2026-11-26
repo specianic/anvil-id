@@ -1,7 +1,7 @@
 //! SAML 2.0 SP sign-in (ORG-03, experimental behind the operator flag `saml_experimental`):
 //! SP-initiated only, HTTP-Redirect `AuthnRequest` (unsigned), HTTP-POST `Response` with a signed
 //! `Assertion`. Mirrors [`UpstreamService`] and ends in its shared completion
-//! ([`UpstreamService::complete_identity`]).
+//! (`UpstreamService::complete_identity`).
 //!
 //! # Start
 //!

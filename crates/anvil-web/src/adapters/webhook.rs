@@ -8,7 +8,7 @@
 //!   ([`WebhookRepo::claim_due`](anvil_core::ports::WebhookRepo::claim_due)), so concurrent nodes
 //!   never deliver the same row twice and a crashed node's rows come back after the lease.
 //! - **Lease rule.** A worker claims at most [`WEBHOOK_BATCH`] rows and sends them
-//!   [`WEBHOOK_CONCURRENCY`] at a time, each bounded by [`WEBHOOK_TIMEOUT`], so a batch finishes
+//!   [`WEBHOOK_CONCURRENCY`](anvil_core::model::WEBHOOK_CONCURRENCY) at a time, each bounded by [`WEBHOOK_TIMEOUT`], so a batch finishes
 //!   well inside [`WEBHOOK_LEASE`] (the model asserts `lease >= ceil(batch / concurrency) x
 //!   timeout + 30 s`). A row is never claimed that cannot be sent within one lease.
 //! - **Signing at send time.** `webhook-id` = the delivery id (stable across retries, so

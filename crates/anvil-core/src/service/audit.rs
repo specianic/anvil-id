@@ -12,7 +12,7 @@
 //!
 //! The audit event is the single event path for webhooks (ADM-05). [`AuditService::record`]
 //! computes the ids-only webhook payload with the pure
-//! [`webhook_event`](crate::policy::webhook_event::webhook_event) (lifecycle actions with a
+//! [`webhook_event`] (lifecycle actions with a
 //! success outcome only) and sets `NewAuditEvent::webhook`; storage then enqueues one delivery
 //! per enabled, subscribed endpoint of the tenant **in the audit transaction**. The payload names
 //! the tenant by id (the data already in the event), so recording needs no extra read.
@@ -20,7 +20,7 @@
 //! # Stdout mirror
 //!
 //! The core has no logging dependency. The binary installs an
-//! [`AuditMirror`](crate::ports::AuditMirror) once ([`install_mirror`]) that emits
+//! [`AuditMirror`] once ([`install_mirror`]) that emits
 //! `tracing::info!(target: "audit", event = %json)`; without one, events are only stored.
 //! The JSON ([`event_json`]) holds only the typed fields of the event; details can only be built
 //! from typed constructors without secrets ([`AuditDetails`]).

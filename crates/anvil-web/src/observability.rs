@@ -12,12 +12,12 @@
 //!
 //! # How the pieces fit
 //!
-//! - [`observe`] wraps the whole router (outermost after the request id). It opens span
+//! - `observe` wraps the whole router (outermost after the request id). It opens span
 //!   `http.request`, runs the request inside it and, when the response is back, records the
 //!   fields, writes the access log line and updates the HTTP metrics.
-//! - [`record_route`] is a route layer on the inner (tenant-relative) and outer routers. Only
+//! - `record_route` is a route layer on the inner (tenant-relative) and outer routers. Only
 //!   there is axum's `MatchedPath` known; it hands the template back on the response.
-//! - [`tenant_context`] runs right after tenant resolution: it records the tenant slug on the
+//! - `tenant_context` runs right after tenant resolution: it records the tenant slug on the
 //!   current span and hands the tenant-relative route class back on the response.
 //! - Incoming trace context (`traceparent`) is continued only when the TCP peer is a trusted
 //!   proxy ([`AppConfig::trusted_proxies`](crate::AppConfig)) and the binary installed a
@@ -29,7 +29,7 @@
 //!
 //! | Metric | Labels | Owner |
 //! | ------ | ------ | ----- |
-//! | [`HTTP_REQUESTS_TOTAL`], [`HTTP_REQUEST_DURATION_SECONDS`] | `route_class`, `status_class` / `route_class` | [`observe`] |
+//! | [`HTTP_REQUESTS_TOTAL`], [`HTTP_REQUEST_DURATION_SECONDS`] | `route_class`, `status_class` / `route_class` | `observe` |
 //! | [`RATELIMIT_REJECTIONS_TOTAL`] | `route_class` | `layers::ratelimit` (layer and `guard_attempt`) |
 //! | [`AUTH_ATTEMPTS_TOTAL`] | `outcome` | `layers::ratelimit::record_attempt` |
 //! | [`JOBS_RUNS_TOTAL`] | `job`, `outcome` | the binary's lease runner (`anvilid` jobs) |
