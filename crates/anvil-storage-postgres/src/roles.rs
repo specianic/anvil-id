@@ -3,7 +3,11 @@
 //! Tenant isolation is enforced by the schema: assignments reference the role and the user through
 //! composite `(tenant_id, id)` foreign keys, so a role or user of another tenant can never be
 //! paired. Tenant-level role names are unique per tenant (partial unique index
-//! `WHERE org_id IS NULL`); duplicates surface as `Conflict`.
+//! `WHERE org_id IS NULL`), org-owned role names per org; duplicates surface as `Conflict`.
+//!
+//! One assignment table holds both levels: `org_id` NULL is a tenant-wide assignment (0.4
+//! semantics, the only one the 0.4 methods see), `org_id` set holds only in that org and
+//! references the membership, so ending the membership removes it.
 
 use anvil_core::model::{
     NewRole, OrgId, Page, PageRequest, Role, RoleAssignment, RoleId, RoleUpdate, SYSTEM_ADMIN_ROLE,
@@ -15,6 +19,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::convert::{fetch_limit, into_page, map_err};
+use crate::organizations::{fk_conflict, is_fk_violation};
 use crate::users::UserRow;
 
 /// Permissions of the system tenant's administrator role (also written by the 0006 backfill).
@@ -51,8 +56,9 @@ impl RoleRow {
     }
 }
 
-/// Inserts a role on any executor (`updated_at = created_at`). `Conflict` on a duplicate id or
-/// tenant-level name.
+/// Inserts a role on any executor (`updated_at = created_at`). `Conflict` on a duplicate id, a
+/// duplicate tenant-level name, a duplicate name among the roles of the same org, or an `org_id`
+/// that is not an org of `tenant` (composite foreign key).
 pub(crate) async fn insert_role<'e, E>(
     exec: E,
     tenant: TenantId,
@@ -61,19 +67,13 @@ pub(crate) async fn insert_role<'e, E>(
 where
     E: sqlx::PgExecutor<'e>,
 {
-    // TRANSITIONAL(06-08): org-owned roles need the 1.0 schema (composite FK to organization,
-    // per-org name index); refused until 06-08 migrates it.
-    if role.org_id.is_some() {
-        return Err(StorageError::Unsupported("org-owned roles (06-08)"));
-    }
-    let org_id: Option<Uuid> = None;
     sqlx::query!(
         "INSERT INTO role
              (id, tenant_id, org_id, name, description, permissions, created_at, updated_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $7)",
         role.id.0,
         tenant.0,
-        org_id,
+        role.org_id.map(|o| o.0),
         role.name,
         role.description,
         &role.permissions,
@@ -81,12 +81,13 @@ where
     )
     .execute(exec)
     .await
-    .map_err(map_err)?;
+    .map_err(|e| fk_conflict(e, "the organization does not exist in this tenant"))?;
     Ok(())
 }
 
-/// Assigns a role on any executor (idempotent). `true` if `user` holds `role` afterwards,
-/// `false` (nothing stored) if the role or the user is not in `tenant`.
+/// Assigns a tenant role tenant-wide on any executor (idempotent). `true` if `user` holds `role`
+/// afterwards, `false` (nothing stored) if the role or the user is not in `tenant` or the role is
+/// org-owned.
 pub(crate) async fn assign_role<'e, E>(
     exec: E,
     tenant: TenantId,
@@ -100,11 +101,11 @@ where
     // `DO UPDATE` (a no-op keeping created_at) rather than `DO NOTHING`, so an existing or a
     // concurrently inserted assignment still returns its row: `true` means "held afterwards".
     let row = sqlx::query_scalar!(
-        "INSERT INTO role_assignment (tenant_id, role_id, user_id, created_at)
-         SELECT $1, $2, $3, $4
-          WHERE EXISTS (SELECT 1 FROM role WHERE tenant_id = $1 AND id = $2)
+        "INSERT INTO role_assignment (tenant_id, role_id, user_id, org_id, created_at)
+         SELECT $1, $2, $3, NULL, $4
+          WHERE EXISTS (SELECT 1 FROM role WHERE tenant_id = $1 AND id = $2 AND org_id IS NULL)
             AND EXISTS (SELECT 1 FROM \"user\" WHERE tenant_id = $1 AND id = $3)
-         ON CONFLICT (tenant_id, role_id, user_id) DO UPDATE
+         ON CONFLICT (tenant_id, role_id, user_id) WHERE org_id IS NULL DO UPDATE
             SET created_at = role_assignment.created_at
       RETURNING user_id",
         tenant.0,
@@ -116,6 +117,46 @@ where
     .await
     .map_err(map_err)?;
     Ok(row.is_some())
+}
+
+/// Assigns `role` to `user` within `org` on any executor (idempotent). `true` if the user holds
+/// the role in that org afterwards; `false` (nothing stored) if the role is not a tenant role or
+/// a role of `org`, or `user` is not a member of `org` (the assignment references the
+/// membership; a membership removed concurrently fails the foreign key and is also `false`).
+pub(crate) async fn assign_role_in_org<'e, E>(
+    exec: E,
+    tenant: TenantId,
+    role: RoleId,
+    user: UserId,
+    org: OrgId,
+    now: OffsetDateTime,
+) -> Result<bool, StorageError>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    let row = sqlx::query_scalar!(
+        "INSERT INTO role_assignment (tenant_id, role_id, user_id, org_id, created_at)
+         SELECT r.tenant_id, r.id, $3, $4, $5
+           FROM role r
+          WHERE r.tenant_id = $1 AND r.id = $2 AND (r.org_id IS NULL OR r.org_id = $4)
+            AND EXISTS (SELECT 1 FROM org_membership m
+                         WHERE m.tenant_id = $1 AND m.org_id = $4 AND m.user_id = $3)
+         ON CONFLICT (tenant_id, role_id, user_id, org_id) WHERE org_id IS NOT NULL DO UPDATE
+            SET created_at = role_assignment.created_at
+      RETURNING user_id",
+        tenant.0,
+        role.0,
+        user.0,
+        org.0,
+        now,
+    )
+    .fetch_optional(exec)
+    .await;
+    match row {
+        Ok(row) => Ok(row.is_some()),
+        Err(e) if is_fk_violation(&e) => Ok(false),
+        Err(e) => Err(map_err(e)),
+    }
 }
 
 /// Creates the tenant's [`SYSTEM_ADMIN_ROLE`] role on the caller's transaction
@@ -152,7 +193,7 @@ pub(crate) async fn assign_admin_role(
            FROM role r
            JOIN \"user\" u ON u.tenant_id = r.tenant_id
           WHERE r.tenant_id = $1 AND r.name = $2 AND r.org_id IS NULL AND u.id = $3
-         ON CONFLICT (tenant_id, role_id, user_id) DO UPDATE
+         ON CONFLICT (tenant_id, role_id, user_id) WHERE org_id IS NULL DO UPDATE
             SET created_at = role_assignment.created_at
       RETURNING user_id",
         tenant.0,
@@ -226,7 +267,7 @@ impl RoleRepo for PgRoles {
             RoleRow,
             "SELECT id, tenant_id, org_id, name, description, permissions, created_at, updated_at
                FROM role
-              WHERE tenant_id = $1
+              WHERE tenant_id = $1 AND org_id IS NULL
               ORDER BY name COLLATE \"C\", id",
             tenant.0,
         )
@@ -298,7 +339,8 @@ impl RoleRepo for PgRoles {
         user: UserId,
     ) -> Result<bool, StorageError> {
         let done = sqlx::query!(
-            "DELETE FROM role_assignment WHERE tenant_id = $1 AND role_id = $2 AND user_id = $3",
+            "DELETE FROM role_assignment
+              WHERE tenant_id = $1 AND role_id = $2 AND user_id = $3 AND org_id IS NULL",
             tenant.0,
             role.0,
             user.0,
@@ -320,7 +362,8 @@ impl RoleRepo for PgRoles {
                     r.created_at, r.updated_at
                FROM role_assignment a
                JOIN role r ON r.tenant_id = a.tenant_id AND r.id = a.role_id
-              WHERE a.tenant_id = $1 AND a.user_id = $2
+              WHERE a.tenant_id = $1 AND a.user_id = $2 AND a.org_id IS NULL
+                AND r.org_id IS NULL
               ORDER BY r.name COLLATE \"C\", r.id",
             tenant.0,
             user.0,
@@ -346,7 +389,8 @@ impl RoleRepo for PgRoles {
                     u.created_at, u.updated_at, u.last_login_at
                FROM role_assignment a
                JOIN \"user\" u ON u.tenant_id = a.tenant_id AND u.id = a.user_id
-              WHERE a.tenant_id = $1 AND a.role_id = $2 AND ($3::uuid IS NULL OR u.id > $3)
+              WHERE a.tenant_id = $1 AND a.role_id = $2 AND a.org_id IS NULL
+                AND ($3::uuid IS NULL OR u.id > $3)
               ORDER BY u.id
               LIMIT $4",
             tenant.0,
@@ -374,7 +418,8 @@ impl RoleRepo for PgRoles {
                FROM role_assignment a
                JOIN role r ON r.tenant_id = a.tenant_id AND r.id = a.role_id
                JOIN \"user\" u ON u.tenant_id = a.tenant_id AND u.id = a.user_id
-              WHERE a.tenant_id = $1 AND $2 = ANY (r.permissions) AND u.status = $3",
+              WHERE a.tenant_id = $1 AND a.org_id IS NULL AND r.org_id IS NULL
+                AND $2 = ANY (r.permissions) AND u.status = $3",
             tenant.0,
             permission,
             UserStatus::Active.as_str(),
@@ -386,73 +431,137 @@ impl RoleRepo for PgRoles {
             .map_err(|_| StorageError::Corrupt(format!("role holder count: negative {count}")))
     }
 
-    // TRANSITIONAL(06-08): organization-level roles and assignments need the 1.0 schema
-    // (`role_assignment.org_id`, org foreign keys). Until 06-08 migrates it every org method is
-    // refused explicitly; nothing is read or written.
-
     async fn list_org_roles(
         &self,
-        _tenant: TenantId,
-        _org: OrgId,
+        tenant: TenantId,
+        org: OrgId,
     ) -> Result<Vec<Role>, StorageError> {
-        Err(StorageError::Unsupported("organization roles (06-08)"))
+        Ok(sqlx::query_as!(
+            RoleRow,
+            "SELECT id, tenant_id, org_id, name, description, permissions, created_at, updated_at
+               FROM role
+              WHERE tenant_id = $1 AND org_id = $2
+              ORDER BY name COLLATE \"C\", id",
+            tenant.0,
+            org.0,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_err)?
+        .into_iter()
+        .map(RoleRow::into_model)
+        .collect())
     }
 
     async fn assign_in_org(
         &self,
-        _tenant: TenantId,
-        _role: RoleId,
-        _user: UserId,
-        _org: OrgId,
-        _now: OffsetDateTime,
+        tenant: TenantId,
+        role: RoleId,
+        user: UserId,
+        org: OrgId,
+        now: OffsetDateTime,
     ) -> Result<bool, StorageError> {
-        Err(StorageError::Unsupported(
-            "organization role assignments (06-08)",
-        ))
+        assign_role_in_org(&self.pool, tenant, role, user, org, now).await
     }
 
     async fn unassign_in_org(
         &self,
-        _tenant: TenantId,
-        _role: RoleId,
-        _user: UserId,
-        _org: OrgId,
+        tenant: TenantId,
+        role: RoleId,
+        user: UserId,
+        org: OrgId,
     ) -> Result<bool, StorageError> {
-        Err(StorageError::Unsupported(
-            "organization role assignments (06-08)",
-        ))
+        let done = sqlx::query!(
+            "DELETE FROM role_assignment
+              WHERE tenant_id = $1 AND role_id = $2 AND user_id = $3 AND org_id = $4",
+            tenant.0,
+            role.0,
+            user.0,
+            org.0,
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(map_err)?;
+        Ok(done.rows_affected() > 0)
     }
 
     async fn roles_for_user_in_org(
         &self,
-        _tenant: TenantId,
-        _user: UserId,
-        _org: OrgId,
+        tenant: TenantId,
+        user: UserId,
+        org: OrgId,
     ) -> Result<Vec<Role>, StorageError> {
-        Err(StorageError::Unsupported(
-            "organization role assignments (06-08)",
-        ))
+        // One row per (role, user, org) by the partial unique index, so no duplicates.
+        Ok(sqlx::query_as!(
+            RoleRow,
+            "SELECT r.id, r.tenant_id, r.org_id, r.name, r.description, r.permissions,
+                    r.created_at, r.updated_at
+               FROM role_assignment a
+               JOIN role r ON r.tenant_id = a.tenant_id AND r.id = a.role_id
+              WHERE a.tenant_id = $1 AND a.user_id = $2 AND a.org_id = $3
+                AND (r.org_id IS NULL OR r.org_id = $3)
+              ORDER BY r.name COLLATE \"C\", r.id",
+            tenant.0,
+            user.0,
+            org.0,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_err)?
+        .into_iter()
+        .map(RoleRow::into_model)
+        .collect())
     }
 
     async fn org_assignments(
         &self,
-        _tenant: TenantId,
-        _org: OrgId,
-        _user: UserId,
+        tenant: TenantId,
+        org: OrgId,
+        user: UserId,
     ) -> Result<Vec<RoleAssignment>, StorageError> {
-        Err(StorageError::Unsupported(
-            "organization role assignments (06-08)",
-        ))
+        Ok(sqlx::query!(
+            "SELECT role_id, user_id
+               FROM role_assignment
+              WHERE tenant_id = $1 AND org_id = $2 AND user_id = $3
+              ORDER BY role_id",
+            tenant.0,
+            org.0,
+            user.0,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_err)?
+        .into_iter()
+        .map(|r| RoleAssignment {
+            role_id: RoleId(r.role_id),
+            user_id: UserId(r.user_id),
+            org_id: Some(org),
+        })
+        .collect())
     }
 
     async fn org_holders_of_permission(
         &self,
-        _tenant: TenantId,
-        _org: OrgId,
-        _permission: &str,
+        tenant: TenantId,
+        org: OrgId,
+        permission: &str,
     ) -> Result<u64, StorageError> {
-        Err(StorageError::Unsupported(
-            "organization role assignments (06-08)",
-        ))
+        let count = sqlx::query_scalar!(
+            "SELECT count(DISTINCT a.user_id) AS \"count!\"
+               FROM role_assignment a
+               JOIN role r ON r.tenant_id = a.tenant_id AND r.id = a.role_id
+               JOIN \"user\" u ON u.tenant_id = a.tenant_id AND u.id = a.user_id
+              WHERE a.tenant_id = $1 AND a.org_id = $2 AND (r.org_id IS NULL OR r.org_id = $2)
+                AND $3 = ANY (r.permissions) AND u.status = $4",
+            tenant.0,
+            org.0,
+            permission,
+            UserStatus::Active.as_str(),
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(map_err)?;
+        u64::try_from(count)
+            .map_err(|_| StorageError::Corrupt(format!("org role holder count: negative {count}")))
     }
 }

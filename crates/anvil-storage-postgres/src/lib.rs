@@ -20,9 +20,8 @@ mod keys;
 mod logout;
 mod mail_settings;
 pub mod migrate;
+mod organizations;
 mod outbox;
-// TRANSITIONAL(06-08): OrgRepo refusals until the 1.0 schema lands.
-mod pending;
 mod registration;
 mod roles;
 mod sessions;
@@ -51,8 +50,8 @@ use crate::jobs::PgJobs;
 use crate::keys::PgKeys;
 use crate::logout::PgLogout;
 use crate::mail_settings::PgMailSettings;
+use crate::organizations::PgOrgs;
 use crate::outbox::PgOutbox;
-use crate::pending::PendingOrgs;
 use crate::registration::PgRegistration;
 use crate::roles::PgRoles;
 use crate::sessions::PgSessions;
@@ -89,7 +88,7 @@ pub struct PostgresStorage {
     attributes: PgAttributes,
     webhooks: PgWebhooks,
     registration: PgRegistration,
-    organizations: PendingOrgs,
+    organizations: PgOrgs,
 }
 
 impl PostgresStorage {
@@ -124,7 +123,7 @@ impl PostgresStorage {
             attributes: PgAttributes { pool: pool.clone() },
             webhooks: PgWebhooks { pool: pool.clone() },
             registration: PgRegistration { pool: pool.clone() },
-            organizations: PendingOrgs,
+            organizations: PgOrgs { pool: pool.clone() },
             pool,
         }
     }

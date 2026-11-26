@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE org_domain\n                SET status = $3, verified_at = NULL, failing_since = NULL, last_checked_at = $4\n              WHERE tenant_id = $1 AND id = $2 AND verified_at IS NOT NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c3a3b384e6d0e50c0b27f6c54b3f7f072489324e9937b1d7bac34f036d37b121"
+}

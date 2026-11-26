@@ -1,0 +1,27 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO token_family\n             (id, tenant_id, client_id, user_id, scope, auth_time, acr, amr, session_id,\n              claims, created_at, absolute_expires_at, resource, org_id)\n         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Text",
+        "Timestamptz",
+        "Text",
+        "TextArray",
+        "Uuid",
+        "Jsonb",
+        "Timestamptz",
+        "Timestamptz",
+        "Jsonb",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a57a00c249d2dff6e82269a17bd46241a119a30529a51797251bd9b2342aaaee"
+}

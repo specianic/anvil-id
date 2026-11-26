@@ -72,12 +72,6 @@ impl MailSettingsRepo for PgMailSettings {
     }
 
     async fn put_template(&self, tenant: TenantId, t: &EmailTemplate) -> Result<(), StorageError> {
-        // TRANSITIONAL(06-08): `org_invitation` is not in the email_template kind CHECK yet.
-        if t.kind == EmailKind::OrgInvitation {
-            return Err(StorageError::Unsupported(
-                "org_invitation templates (06-08)",
-            ));
-        }
         sqlx::query!(
             "INSERT INTO email_template
                  (tenant_id, kind, subject, body_html, body_text, updated_at)

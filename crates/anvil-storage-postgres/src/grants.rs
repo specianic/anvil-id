@@ -9,8 +9,8 @@
 use anvil_core::model::{
     AccessTokenRecord, AuthRequestId, AuthorizationCode, AuthorizationRequest, CodeHash,
     ConsentGrant, NewAccessToken, NewAuthorizationCode, NewAuthorizationRequest, NewConsent,
-    NewRefreshToken, NewTokenFamily, RefreshToken, ReplayKind, RevokeReason, SecretHash, SessionId,
-    TenantId, TokenFamily, TokenFamilyId, UserId,
+    NewRefreshToken, NewTokenFamily, OrgId, RefreshToken, ReplayKind, RevokeReason, SecretHash,
+    SessionId, TenantId, TokenFamily, TokenFamilyId, UserId,
 };
 use anvil_core::ports::{ConsumeOutcome, GrantRepo, JtiOutcome, RotateOutcome, StorageError};
 use sqlx::PgPool;
@@ -42,6 +42,7 @@ struct FamilyRow {
     revoked_at: Option<OffsetDateTime>,
     revoked_reason: Option<String>,
     resource: serde_json::Value,
+    org_id: Option<Uuid>,
 }
 
 impl FamilyRow {
@@ -66,7 +67,7 @@ impl FamilyRow {
                 .map(|r| enum_from("token_family.revoked_reason", r, RevokeReason::parse))
                 .transpose()?,
             resource: from_json("token_family.resource", self.resource)?,
-            org_id: None,
+            org_id: self.org_id.map(OrgId),
         })
     }
 }
@@ -82,7 +83,7 @@ where
     sqlx::query_as!(
         FamilyRow,
         "SELECT id, tenant_id, client_id, user_id, scope, auth_time, acr, amr, session_id, claims,
-                created_at, absolute_expires_at, revoked_at, revoked_reason, resource
+                created_at, absolute_expires_at, revoked_at, revoked_reason, resource, org_id
            FROM token_family
           WHERE tenant_id = $1 AND id = $2",
         tenant.0,
@@ -95,16 +96,6 @@ where
     .transpose()
 }
 
-/// TRANSITIONAL(06-08): org-bound codes and token families need the 1.0 columns
-/// (`authorization_code.org_id`, `token_family.org_id`); refused until 06-08 adds them, never
-/// stored without their org.
-fn refuse_org_grant(org_id: Option<anvil_core::model::OrgId>) -> Result<(), StorageError> {
-    if org_id.is_some() {
-        return Err(StorageError::Unsupported("org-bound grants (06-08)"));
-    }
-    Ok(())
-}
-
 /// Inserts a token family on any executor. `Conflict` on a duplicate id.
 async fn insert_family<'e, E>(
     exec: E,
@@ -114,7 +105,6 @@ async fn insert_family<'e, E>(
 where
     E: sqlx::PgExecutor<'e>,
 {
-    refuse_org_grant(family.org_id)?;
     let resource = to_json("token_family.resource", &family.resource)?;
     let claims = family
         .claims
@@ -124,8 +114,8 @@ where
     sqlx::query!(
         "INSERT INTO token_family
              (id, tenant_id, client_id, user_id, scope, auth_time, acr, amr, session_id,
-              claims, created_at, absolute_expires_at, resource)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+              claims, created_at, absolute_expires_at, resource, org_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
         family.id.0,
         tenant.0,
         family.client_id,
@@ -139,6 +129,7 @@ where
         family.created_at,
         family.absolute_expires_at,
         resource,
+        family.org_id.map(|o| o.0),
     )
     .execute(exec)
     .await
@@ -250,7 +241,6 @@ impl GrantRepo for PgGrants {
         code: &NewAuthorizationCode,
         family: &NewTokenFamily,
     ) -> Result<(), StorageError> {
-        refuse_org_grant(code.org_id)?;
         let resource = to_json("authorization_code.resource", &code.resource)?;
         if code.token_family_id != family.id {
             return Err(StorageError::Conflict(
@@ -265,9 +255,9 @@ impl GrantRepo for PgGrants {
             "INSERT INTO authorization_code
                  (code_hash, tenant_id, client_id, user_id, session_id, redirect_uri, scope,
                   nonce, code_challenge, auth_time, acr, amr, token_family_id, expires_at,
-                  consumed_at, created_at, resource)
+                  consumed_at, created_at, resource, org_id)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NULL, $15,
-                     $16)",
+                     $16, $17)",
             code.code_hash.as_bytes().as_slice(),
             tenant.0,
             code.client_id,
@@ -284,6 +274,7 @@ impl GrantRepo for PgGrants {
             code.expires_at,
             code.created_at,
             resource,
+            code.org_id.map(|o| o.0),
         )
         .execute(&mut *tx)
         .await
@@ -316,7 +307,7 @@ impl GrantRepo for PgGrants {
                 AND consumed_at IS NULL AND expires_at > $3
           RETURNING code_hash, tenant_id, client_id, user_id, session_id, redirect_uri, scope,
                     nonce, code_challenge, auth_time, acr, amr, token_family_id, expires_at,
-                    created_at, resource",
+                    created_at, resource, org_id",
             tenant.0,
             hash_bytes,
             now,
@@ -343,7 +334,7 @@ impl GrantRepo for PgGrants {
                 expires_at: r.expires_at,
                 created_at: r.created_at,
                 resource: from_json("authorization_code.resource", r.resource)?,
-                org_id: None,
+                org_id: r.org_id.map(OrgId),
             }));
         }
 
@@ -525,12 +516,6 @@ impl GrantRepo for PgGrants {
         expires_at: OffsetDateTime,
         now: OffsetDateTime,
     ) -> Result<JtiOutcome, StorageError> {
-        // TRANSITIONAL(06-08): `saml_assertion_id` is not in the replay_guard kind CHECK yet.
-        if kind == ReplayKind::SamlAssertionId {
-            return Err(StorageError::Unsupported(
-                "saml assertion replay guard (06-08)",
-            ));
-        }
         // Insert-or-fail; an expired entry is replaced in the same statement. A concurrent
         // inserter of the same key waits for the first one's commit and then hits the conflict.
         let row = sqlx::query!(
@@ -685,19 +670,5 @@ impl GrantRepo for PgGrants {
         now: OffsetDateTime,
     ) -> Result<bool, StorageError> {
         consent::revoke_consent(&self.pool, tenant, user, client_id, now).await
-    }
-}
-
-#[cfg(test)]
-mod transitional_tests {
-    use super::*;
-
-    #[test]
-    fn org_bound_grants_are_refused() {
-        assert!(matches!(
-            refuse_org_grant(Some(anvil_core::model::OrgId::new_v7())),
-            Err(StorageError::Unsupported(_))
-        ));
-        assert!(refuse_org_grant(None).is_ok());
     }
 }

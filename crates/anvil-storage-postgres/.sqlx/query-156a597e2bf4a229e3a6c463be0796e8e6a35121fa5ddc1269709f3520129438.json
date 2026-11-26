@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT role_id, user_id\n               FROM role_assignment\n              WHERE tenant_id = $1 AND org_id = $2 AND user_id = $3\n              ORDER BY role_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "role_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "role_assignment",
+            "name": "role_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "role_assignment",
+            "name": "user_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "156a597e2bf4a229e3a6c463be0796e8e6a35121fa5ddc1269709f3520129438"
+}

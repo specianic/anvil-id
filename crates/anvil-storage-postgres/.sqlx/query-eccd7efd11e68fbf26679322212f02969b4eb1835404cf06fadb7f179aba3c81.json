@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE org_invitation SET accepted_at = $3, accepted_user_id = $4\n          WHERE tenant_id = $1 AND id = $2\n            AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > $3\n      RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "org_invitation",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Timestamptz",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "eccd7efd11e68fbf26679322212f02969b4eb1835404cf06fadb7f179aba3c81"
+}

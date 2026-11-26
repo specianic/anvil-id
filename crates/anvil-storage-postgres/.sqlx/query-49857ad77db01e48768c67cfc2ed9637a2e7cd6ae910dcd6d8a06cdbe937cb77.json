@@ -1,0 +1,317 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT d.id, d.tenant_id, d.org_id, d.domain, d.token, d.status,\n                  d.connection_id, d.routing, d.allow_local_password, d.verified_at,\n                  d.last_checked_at, d.failing_since, d.created_at,\n                  c.id AS c_id, c.tenant_id AS c_tenant_id, c.slug AS c_slug,\n                  c.display_name AS c_display_name, c.kind AS c_kind, c.enabled AS c_enabled,\n                  c.config AS c_config, c.secret_enc AS c_secret_enc,\n                  c.trust_email_verified AS c_trust_email_verified,\n                  c.created_at AS c_created_at, c.updated_at AS c_updated_at,\n                  c.org_id AS c_org_id\n             FROM org_domain d\n             JOIN connection c\n               ON c.tenant_id = d.tenant_id AND c.org_id = d.org_id AND c.id = d.connection_id\n            WHERE d.tenant_id = $1 AND d.domain = $2 AND d.verified_at IS NOT NULL\n              AND d.routing AND c.enabled",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "tenant_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "org_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "org_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "domain",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "domain"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "token",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "token"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "connection_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "connection_id"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "routing",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "routing"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "allow_local_password",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "allow_local_password"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "verified_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "verified_at"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "last_checked_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "last_checked_at"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "failing_since",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "failing_since"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "c_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "connection",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "c_tenant_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "connection",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "c_slug",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "connection",
+            "name": "slug"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "c_display_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "connection",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "ordinal": 17,
+        "name": "c_kind",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "connection",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "ordinal": 18,
+        "name": "c_enabled",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "connection",
+            "name": "enabled"
+          }
+        }
+      },
+      {
+        "ordinal": 19,
+        "name": "c_config",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "connection",
+            "name": "config"
+          }
+        }
+      },
+      {
+        "ordinal": 20,
+        "name": "c_secret_enc",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "connection",
+            "name": "secret_enc"
+          }
+        }
+      },
+      {
+        "ordinal": 21,
+        "name": "c_trust_email_verified",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "connection",
+            "name": "trust_email_verified"
+          }
+        }
+      },
+      {
+        "ordinal": 22,
+        "name": "c_created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "connection",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 23,
+        "name": "c_updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "connection",
+            "name": "updated_at"
+          }
+        }
+      },
+      {
+        "ordinal": 24,
+        "name": "c_org_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "connection",
+            "name": "org_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "49857ad77db01e48768c67cfc2ed9637a2e7cd6ae910dcd6d8a06cdbe937cb77"
+}

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE org_domain SET connection_id = NULL\n              WHERE tenant_id = $1 AND connection_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ba6de7940a3dda3d6f7334cac24476b549c731a5a01e40b8ad2d546896c10b2f"
+}

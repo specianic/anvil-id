@@ -1,0 +1,132 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE organization\n                SET slug = COALESCE($3, slug),\n                    display_name = COALESCE($4, display_name),\n                    mfa_policy = CASE WHEN $5 THEN $6 ELSE mfa_policy END,\n                    settings = COALESCE($7, settings),\n                    metadata = COALESCE($8, metadata),\n                    updated_at = $9\n              WHERE tenant_id = $1 AND id = $2\n          RETURNING id, tenant_id, slug, display_name, mfa_policy, settings, metadata,\n                    created_at, updated_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "organization",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "tenant_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "organization",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "slug",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "organization",
+            "name": "slug"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "display_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "organization",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "mfa_policy",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "organization",
+            "name": "mfa_policy"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "settings",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "organization",
+            "name": "settings"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "metadata",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "organization",
+            "name": "metadata"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "organization",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "organization",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Bool",
+        "Text",
+        "Jsonb",
+        "Jsonb",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "bb956ae55565967ca6381d99f231fac792946b137529e843dd14b6ec4d2f960d"
+}

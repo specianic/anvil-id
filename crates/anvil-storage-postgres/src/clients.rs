@@ -2,8 +2,8 @@
 
 use anvil_core::model::{
     ApplicationType, BrandingScope, Client, ClientAuthMethod, ClientId, ClientSource, ClientType,
-    ClientUpdate, ConsentMode, GrantType, MfaPolicy, NewClient, Page, PageRequest, RevokeReason,
-    SecretHash, TenantId, TokenFormat,
+    ClientUpdate, ConsentMode, GrantType, MfaPolicy, NewClient, OrgClientPolicy, Page, PageRequest,
+    RevokeReason, SecretHash, TenantId, TokenFormat,
 };
 use anvil_core::ports::{ClientRepo, StorageError};
 use sqlx::PgPool;
@@ -48,6 +48,7 @@ pub(crate) struct ClientRow {
     registration_source: String,
     metadata_expires_at: Option<OffsetDateTime>,
     registration_access_token_hash: Option<Vec<u8>>,
+    organization: String,
 }
 
 impl ClientRow {
@@ -110,7 +111,11 @@ impl ClientRow {
                 &self.registration_source,
                 ClientSource::parse,
             )?,
-            organization: anvil_core::model::OrgClientPolicy::Off,
+            organization: enum_from(
+                "client.organization",
+                &self.organization,
+                OrgClientPolicy::parse,
+            )?,
         })
     }
 }
@@ -149,19 +154,6 @@ pub(crate) fn client_from_new(tenant: TenantId, c: &NewClient) -> Client {
     }
 }
 
-/// TRANSITIONAL(06-08): the client organization policy needs the 1.0 `client.organization`
-/// column; any value but `off` is refused until 06-08 adds it, never silently dropped.
-fn refuse_org_policy(
-    policy: Option<anvil_core::model::OrgClientPolicy>,
-) -> Result<(), StorageError> {
-    if policy.is_some_and(|p| p != anvil_core::model::OrgClientPolicy::Off) {
-        return Err(StorageError::Unsupported(
-            "client organization policy (06-08)",
-        ));
-    }
-    Ok(())
-}
-
 /// Inserts a client on any executor. `Conflict` on a duplicate (tenant, client_id).
 pub(crate) async fn insert_client<'e, E>(
     exec: E,
@@ -171,7 +163,6 @@ pub(crate) async fn insert_client<'e, E>(
 where
     E: sqlx::PgExecutor<'e>,
 {
-    refuse_org_policy(Some(c.organization))?;
     let post_logout = to_json(
         "client.post_logout_redirect_uris",
         &c.post_logout_redirect_uris,
@@ -186,9 +177,10 @@ where
               token_format, consent_mode, id_token_signed_response_alg, can_introspect,
               created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,
               backchannel_logout_session_required, allowed_resources, mfa_policy,
-              registration_source, metadata_expires_at, registration_access_token_hash)
+              registration_source, metadata_expires_at, registration_access_token_hash,
+              organization)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-                 $18, $18, $19, $20, $21, $22, $23, $24, $25, $26)",
+                 $18, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)",
         c.id.0,
         tenant.0,
         c.client_id,
@@ -217,6 +209,7 @@ where
         c.registration_access_token_hash
             .as_ref()
             .map(|h| h.as_bytes().as_slice()),
+        c.organization.as_str(),
     )
     .execute(exec)
     .await
@@ -239,7 +232,8 @@ impl ClientRepo for PgClients {
                     token_format, consent_mode, id_token_signed_response_alg, can_introspect,
                     created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,
                     backchannel_logout_session_required, allowed_resources, mfa_policy,
-                    registration_source, metadata_expires_at, registration_access_token_hash
+                    registration_source, metadata_expires_at, registration_access_token_hash,
+                    organization
                FROM client
               WHERE tenant_id = $1 AND client_id = $2",
             tenant.0,
@@ -265,7 +259,8 @@ impl ClientRepo for PgClients {
                     token_format, consent_mode, id_token_signed_response_alg, can_introspect,
                     created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,
                     backchannel_logout_session_required, allowed_resources, mfa_policy,
-                    registration_source, metadata_expires_at, registration_access_token_hash
+                    registration_source, metadata_expires_at, registration_access_token_hash,
+                    organization
                FROM client
               WHERE tenant_id = $1 AND ($2::uuid IS NULL OR id > $2)
               ORDER BY id
@@ -291,7 +286,6 @@ impl ClientRepo for PgClients {
         update: &ClientUpdate,
         now: OffsetDateTime,
     ) -> Result<Option<Client>, StorageError> {
-        refuse_org_policy(update.organization)?;
         let post_logout = update
             .post_logout_redirect_uris
             .as_ref()
@@ -354,6 +348,7 @@ impl ClientRepo for PgClients {
                     metadata_expires_at = CASE WHEN $23 THEN $24 ELSE metadata_expires_at END,
                     registration_access_token_hash =
                       CASE WHEN $25 THEN $26 ELSE registration_access_token_hash END,
+                    organization = COALESCE($27, organization),
                     updated_at = $10
               WHERE tenant_id = $1 AND client_id = $2
           RETURNING id, tenant_id, client_id, name, client_type, application_type, auth_method,
@@ -361,7 +356,8 @@ impl ClientRepo for PgClients {
                     token_format, consent_mode, id_token_signed_response_alg, can_introspect,
                     created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,
                     backchannel_logout_session_required, allowed_resources, mfa_policy,
-                    registration_source, metadata_expires_at, registration_access_token_hash",
+                    registration_source, metadata_expires_at, registration_access_token_hash,
+                    organization",
             tenant.0,
             client_id,
             update.name,
@@ -388,6 +384,7 @@ impl ClientRepo for PgClients {
             expiry,
             set_rat,
             rat,
+            update.organization.map(|o| o.as_str()),
         )
         .fetch_optional(&self.pool)
         .await
@@ -474,7 +471,6 @@ impl ClientRepo for PgClients {
         metadata_expires_at: OffsetDateTime,
         now: OffsetDateTime,
     ) -> Result<Client, StorageError> {
-        refuse_org_policy(Some(c.organization))?;
         // One statement: insert, or replace the metadata of an existing CIMD client. The
         // conflict update only applies to CIMD rows; for a static or dynamic client holding the
         // `client_id` the WHERE fails, nothing changes and no row comes back (`Conflict`).
@@ -497,9 +493,10 @@ impl ClientRepo for PgClients {
                   token_format, consent_mode, id_token_signed_response_alg, can_introspect,
                   created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,
                   backchannel_logout_session_required, allowed_resources, mfa_policy,
-                  registration_source, metadata_expires_at, registration_access_token_hash)
+                  registration_source, metadata_expires_at, registration_access_token_hash,
+                  organization)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-                     $18, $18, $19, $20, $21, $22, $23, 'cimd', $24, $25)
+                     $18, $18, $19, $20, $21, $22, $23, 'cimd', $24, $25, $26)
              ON CONFLICT (tenant_id, client_id) DO UPDATE
                 SET name = EXCLUDED.name,
                     client_type = EXCLUDED.client_type,
@@ -523,14 +520,16 @@ impl ClientRepo for PgClients {
                     allowed_resources = EXCLUDED.allowed_resources,
                     mfa_policy = EXCLUDED.mfa_policy,
                     metadata_expires_at = EXCLUDED.metadata_expires_at,
-                    registration_access_token_hash = EXCLUDED.registration_access_token_hash
+                    registration_access_token_hash = EXCLUDED.registration_access_token_hash,
+                    organization = EXCLUDED.organization
               WHERE client.registration_source = 'cimd'
           RETURNING id, tenant_id, client_id, name, client_type, application_type, auth_method,
                     secret_hash, jwks, redirect_uris, grant_types, scopes, require_pkce,
                     token_format, consent_mode, id_token_signed_response_alg, can_introspect,
                     created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,
                     backchannel_logout_session_required, allowed_resources, mfa_policy,
-                    registration_source, metadata_expires_at, registration_access_token_hash",
+                    registration_source, metadata_expires_at, registration_access_token_hash,
+                    organization",
             c.id.0,
             tenant.0,
             c.client_id,
@@ -556,6 +555,7 @@ impl ClientRepo for PgClients {
             c.mfa_policy.map(|m| m.as_str()),
             metadata_expires_at,
             rat,
+            c.organization.as_str(),
         )
         .fetch_optional(&self.pool)
         .await
@@ -581,7 +581,8 @@ impl ClientRepo for PgClients {
                     token_format, consent_mode, id_token_signed_response_alg, can_introspect,
                     created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,
                     backchannel_logout_session_required, allowed_resources, mfa_policy,
-                    registration_source, metadata_expires_at, registration_access_token_hash
+                    registration_source, metadata_expires_at, registration_access_token_hash,
+                    organization
                FROM client
               WHERE tenant_id = $1 AND client_id = $2 AND registration_source = 'dynamic'
                 AND registration_access_token_hash = $3",
@@ -615,23 +616,5 @@ impl ClientRepo for PgClients {
         .await
         .map_err(map_err)?;
         Ok(done.rows_affected() > 0)
-    }
-}
-
-#[cfg(test)]
-mod transitional_tests {
-    use super::*;
-    use anvil_core::model::OrgClientPolicy;
-
-    #[test]
-    fn non_default_org_policy_is_refused() {
-        for p in [OrgClientPolicy::Optional, OrgClientPolicy::Required] {
-            assert!(matches!(
-                refuse_org_policy(Some(p)),
-                Err(StorageError::Unsupported(_))
-            ));
-        }
-        assert!(refuse_org_policy(Some(OrgClientPolicy::Off)).is_ok());
-        assert!(refuse_org_policy(None).is_ok());
     }
 }

@@ -1,0 +1,177 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE org_domain\n                SET connection_id = CASE WHEN $3 THEN $4 ELSE connection_id END,\n                    routing = COALESCE($5, routing),\n                    allow_local_password = COALESCE($6, allow_local_password)\n              WHERE tenant_id = $1 AND id = $2\n          RETURNING id, tenant_id, org_id, domain, token, status, connection_id, routing,\n                    allow_local_password, verified_at, last_checked_at, failing_since,\n                    created_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "tenant_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "org_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "org_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "domain",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "domain"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "token",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "token"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "connection_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "connection_id"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "routing",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "routing"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "allow_local_password",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "allow_local_password"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "verified_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "verified_at"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "last_checked_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "last_checked_at"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "failing_since",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "failing_since"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Bool",
+        "Uuid",
+        "Bool",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "88962c0a74a2a07826ca92ebe1eadfed1fffa51c0f8982a019cdbfcc3b416d16"
+}

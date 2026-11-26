@@ -3,37 +3,22 @@
 //! `config` is the tagged `ConnectionConfig` JSON (jsonb); `kind` is derived from it on write
 //! and cross-checked on read. The sealed client secret (`secret_enc`) is stored exactly as given;
 //! storage never sees the plaintext. Identity links reference their user and connection through
-//! composite `(tenant_id, …)` foreign keys, so a link can never cross tenants.
+//! composite `(tenant_id, …)` foreign keys, so a link can never cross tenants. An organization
+//! connection (`org_id` set) references its org through a composite foreign key and goes with it.
 
 use anvil_core::model::{
     Connection, ConnectionConfig, ConnectionId, ConnectionKind, ConnectionUpdate, IdentityLink,
     IdentityLinkId, NewConnection, NewEmail, NewIdentityLink, NewMembership, NewSelfServiceToken,
     NewUser, OrgId, TenantId, User, UserId,
 };
-use anvil_core::ports::{ConnectionRepo, DeleteLinkOutcome, StorageError};
+use anvil_core::ports::{AddMemberOutcome, ConnectionRepo, DeleteLinkOutcome, StorageError};
 
-/// TRANSITIONAL(06-08): organization connections and SAML configs need the 1.0 schema
-/// (`connection.org_id`, `saml` in the kind CHECK). Until 06-08 migrates it they are refused,
-/// never silently stored without their org or kind.
-fn refuse_unmigrated(
-    org_id: Option<anvil_core::model::OrgId>,
-    config: Option<&ConnectionConfig>,
-) -> Result<(), StorageError> {
-    if org_id.is_some() {
-        return Err(StorageError::Unsupported(
-            "organization connections (06-08)",
-        ));
-    }
-    if matches!(config, Some(ConnectionConfig::Saml(_))) {
-        return Err(StorageError::Unsupported("saml connections (06-08)"));
-    }
-    Ok(())
-}
 use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::convert::{enum_from, from_json, map_err, to_json};
+use crate::organizations::{fk_conflict, insert_membership};
 use crate::outbox::enqueue_email;
 use crate::users::{insert_self_service_token, insert_user, user_from_new};
 
@@ -42,22 +27,23 @@ pub(crate) struct PgConnections {
     pub(crate) pool: PgPool,
 }
 
-struct ConnectionRow {
-    id: Uuid,
-    tenant_id: Uuid,
-    slug: String,
-    display_name: String,
-    kind: String,
-    enabled: bool,
-    config: serde_json::Value,
-    secret_enc: Option<Vec<u8>>,
-    trust_email_verified: bool,
-    created_at: OffsetDateTime,
-    updated_at: OffsetDateTime,
+pub(crate) struct ConnectionRow {
+    pub(crate) id: Uuid,
+    pub(crate) tenant_id: Uuid,
+    pub(crate) slug: String,
+    pub(crate) display_name: String,
+    pub(crate) kind: String,
+    pub(crate) enabled: bool,
+    pub(crate) config: serde_json::Value,
+    pub(crate) secret_enc: Option<Vec<u8>>,
+    pub(crate) trust_email_verified: bool,
+    pub(crate) created_at: OffsetDateTime,
+    pub(crate) updated_at: OffsetDateTime,
+    pub(crate) org_id: Option<Uuid>,
 }
 
 impl ConnectionRow {
-    fn into_model(self) -> Result<Connection, StorageError> {
+    pub(crate) fn into_model(self) -> Result<Connection, StorageError> {
         let kind = enum_from("connection.kind", &self.kind, ConnectionKind::parse)?;
         let config: ConnectionConfig = from_json("connection.config", self.config)?;
         if config.kind() != kind {
@@ -78,7 +64,7 @@ impl ConnectionRow {
             trust_email_verified: self.trust_email_verified,
             created_at: self.created_at,
             updated_at: self.updated_at,
-            org_id: None,
+            org_id: self.org_id.map(OrgId),
         })
     }
 }
@@ -173,13 +159,12 @@ impl ConnectionRepo for PgConnections {
         tenant: TenantId,
         c: &NewConnection,
     ) -> Result<Connection, StorageError> {
-        refuse_unmigrated(c.org_id, Some(&c.config))?;
         let config = to_json("connection.config", &c.config)?;
         sqlx::query!(
             "INSERT INTO connection
                  (id, tenant_id, slug, display_name, kind, enabled, config, secret_enc,
-                  trust_email_verified, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)",
+                  trust_email_verified, created_at, updated_at, org_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, $11)",
             c.id.0,
             tenant.0,
             c.slug,
@@ -190,10 +175,11 @@ impl ConnectionRepo for PgConnections {
             c.secret_enc.as_deref(),
             c.trust_email_verified,
             c.created_at,
+            c.org_id.map(|o| o.0),
         )
         .execute(&self.pool)
         .await
-        .map_err(map_err)?;
+        .map_err(|e| fk_conflict(e, "the organization does not exist in this tenant"))?;
         Ok(Connection {
             id: c.id,
             tenant_id: tenant,
@@ -205,7 +191,7 @@ impl ConnectionRepo for PgConnections {
             trust_email_verified: c.trust_email_verified,
             created_at: c.created_at,
             updated_at: c.created_at,
-            org_id: None,
+            org_id: c.org_id,
         })
     }
 
@@ -217,7 +203,7 @@ impl ConnectionRepo for PgConnections {
         sqlx::query_as!(
             ConnectionRow,
             "SELECT id, tenant_id, slug, display_name, kind, enabled, config, secret_enc,
-                    trust_email_verified, created_at, updated_at
+                    trust_email_verified, created_at, updated_at, org_id
                FROM connection
               WHERE tenant_id = $1 AND id = $2",
             tenant.0,
@@ -238,7 +224,7 @@ impl ConnectionRepo for PgConnections {
         sqlx::query_as!(
             ConnectionRow,
             "SELECT id, tenant_id, slug, display_name, kind, enabled, config, secret_enc,
-                    trust_email_verified, created_at, updated_at
+                    trust_email_verified, created_at, updated_at, org_id
                FROM connection
               WHERE tenant_id = $1 AND slug = $2",
             tenant.0,
@@ -255,7 +241,7 @@ impl ConnectionRepo for PgConnections {
         sqlx::query_as!(
             ConnectionRow,
             "SELECT id, tenant_id, slug, display_name, kind, enabled, config, secret_enc,
-                    trust_email_verified, created_at, updated_at
+                    trust_email_verified, created_at, updated_at, org_id
                FROM connection
               WHERE tenant_id = $1
               ORDER BY slug COLLATE \"C\"",
@@ -276,7 +262,6 @@ impl ConnectionRepo for PgConnections {
         update: &ConnectionUpdate,
         now: OffsetDateTime,
     ) -> Result<Option<Connection>, StorageError> {
-        refuse_unmigrated(None, update.config.as_ref())?;
         let config = update
             .config
             .as_ref()
@@ -295,7 +280,7 @@ impl ConnectionRepo for PgConnections {
                     updated_at = $8
               WHERE tenant_id = $1 AND id = $2
           RETURNING id, tenant_id, slug, display_name, kind, enabled, config, secret_enc,
-                    trust_email_verified, created_at, updated_at",
+                    trust_email_verified, created_at, updated_at, org_id",
             tenant.0,
             id.0,
             update.display_name,
@@ -334,36 +319,68 @@ impl ConnectionRepo for PgConnections {
     }
 
     async fn delete(&self, tenant: TenantId, id: ConnectionId) -> Result<bool, StorageError> {
-        // Identity links go by ON DELETE CASCADE in the same statement.
+        // One transaction: domains routed to the connection lose their routing target (the
+        // claim and its verification stay), then the connection goes, and its identity links
+        // with it (ON DELETE CASCADE).
+        let mut tx = self.pool.begin().await.map_err(map_err)?;
+        sqlx::query!(
+            "UPDATE org_domain SET connection_id = NULL
+              WHERE tenant_id = $1 AND connection_id = $2",
+            tenant.0,
+            id.0,
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(map_err)?;
         let done = sqlx::query!(
             "DELETE FROM connection WHERE tenant_id = $1 AND id = $2",
             tenant.0,
             id.0,
         )
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(map_err)?;
+        tx.commit().await.map_err(map_err)?;
         Ok(done.rows_affected() > 0)
     }
 
     async fn list_for_org(
         &self,
-        _tenant: TenantId,
-        _org: OrgId,
+        tenant: TenantId,
+        org: OrgId,
     ) -> Result<Vec<Connection>, StorageError> {
-        // TRANSITIONAL(06-08): needs `connection.org_id` (1.0 schema).
-        Err(StorageError::Unsupported(
-            "organization connections (06-08)",
-        ))
+        sqlx::query_as!(
+            ConnectionRow,
+            "SELECT id, tenant_id, slug, display_name, kind, enabled, config, secret_enc,
+                    trust_email_verified, created_at, updated_at, org_id
+               FROM connection
+              WHERE tenant_id = $1 AND org_id = $2
+              ORDER BY slug COLLATE \"C\"",
+            tenant.0,
+            org.0,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_err)?
+        .into_iter()
+        .map(ConnectionRow::into_model)
+        .collect()
     }
 
     async fn has_links(
         &self,
-        _tenant: TenantId,
-        _connection: ConnectionId,
+        tenant: TenantId,
+        connection: ConnectionId,
     ) -> Result<bool, StorageError> {
-        // TRANSITIONAL(06-08): implemented with the 1.0 connection queries.
-        Err(StorageError::Unsupported("connection has_links (06-08)"))
+        sqlx::query_scalar!(
+            r#"SELECT EXISTS (SELECT 1 FROM identity_link
+                               WHERE tenant_id = $1 AND connection_id = $2) AS "exists!""#,
+            tenant.0,
+            connection.0,
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(map_err)
     }
 
     async fn find_link(
@@ -514,16 +531,14 @@ impl ConnectionRepo for PgConnections {
         email: Option<&NewEmail>,
         membership: Option<&NewMembership>,
     ) -> Result<User, StorageError> {
-        // TRANSITIONAL(06-08): org memberships need the 1.0 schema; JIT provisioning into an org
-        // is refused (nothing written) until 06-08 migrates it. `None` keeps the 0.4 behaviour.
-        if membership.is_some() {
-            return Err(StorageError::Unsupported(
-                "organization membership on sign-up (06-08)",
-            ));
-        }
         if link.user_id != user.id {
             return Err(StorageError::Conflict(
                 "identity link user_id does not match the new user".to_owned(),
+            ));
+        }
+        if membership.is_some_and(|m| m.user_id != user.id) {
+            return Err(StorageError::Conflict(
+                "membership user_id does not match the new user".to_owned(),
             ));
         }
         // One transaction; any error drops `tx` and rolls every insert back.
@@ -533,37 +548,19 @@ impl ConnectionRepo for PgConnections {
         if let Some(t) = token {
             insert_self_service_token(&mut *tx, tenant, t).await?;
         }
+        if let Some(m) = membership {
+            // A new user cannot already be a member: anything but `Added` is an unknown org or
+            // a role that cannot be assigned in it, and rolls everything back.
+            if insert_membership(&mut tx, tenant, m).await? != AddMemberOutcome::Added {
+                return Err(StorageError::Conflict(
+                    "the organization or one of its roles does not exist in this tenant".to_owned(),
+                ));
+            }
+        }
         if let Some(e) = email {
             enqueue_email(&mut *tx, tenant, e).await?;
         }
         tx.commit().await.map_err(map_err)?;
         Ok(user_from_new(tenant, user))
-    }
-}
-
-#[cfg(test)]
-mod transitional_tests {
-    use super::*;
-
-    #[test]
-    fn org_and_saml_connections_are_refused() {
-        let org = Some(anvil_core::model::OrgId::new_v7());
-        assert!(matches!(
-            refuse_unmigrated(org, None),
-            Err(StorageError::Unsupported(_))
-        ));
-        let saml = ConnectionConfig::Saml(anvil_core::model::SamlConfig {
-            idp_entity_id: "e".into(),
-            sso_url: "https://idp.example.test/sso".into(),
-            signing_certs: vec![],
-            name_id_format: Default::default(),
-            attributes: Default::default(),
-            metadata_url: None,
-        });
-        assert!(matches!(
-            refuse_unmigrated(None, Some(&saml)),
-            Err(StorageError::Unsupported(_))
-        ));
-        assert!(refuse_unmigrated(None, None).is_ok());
     }
 }

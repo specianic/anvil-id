@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT domain\n               FROM org_domain\n              WHERE tenant_id = $1 AND org_id = $2 AND verified_at IS NOT NULL\n              ORDER BY domain COLLATE \"C\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "domain",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "org_domain",
+            "name": "domain"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "af6d5b81bf660a0d0206b02f217b7843a72d3fed77196dd7f94bf351260cfa8b"
+}

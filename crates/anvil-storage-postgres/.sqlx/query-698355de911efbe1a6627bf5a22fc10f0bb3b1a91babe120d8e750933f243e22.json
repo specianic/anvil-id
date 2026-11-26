@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO organization\n                 (id, tenant_id, slug, display_name, mfa_policy, settings, metadata, created_at,\n                  updated_at)\n             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Jsonb",
+        "Jsonb",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "698355de911efbe1a6627bf5a22fc10f0bb3b1a91babe120d8e750933f243e22"
+}
