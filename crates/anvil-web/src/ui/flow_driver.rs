@@ -52,7 +52,7 @@ use anvil_core::service::flow::{
 use axum_extra::extract::cookie::CookieJar;
 
 use super::login::{current_browser_session, tenant_relying_party, ui_base};
-use super::upstream::UpstreamButton;
+use super::upstream::SignInChoices;
 use crate::adapters::captcha::{CaptchaError, CaptchaVerifier, DEFAULT_TIMEOUT, open_secret};
 use crate::layers::ratelimit::{attempt_keys, guard_attempt, record_attempt};
 use crate::state::AppState;
@@ -938,7 +938,7 @@ pub(crate) enum LoginMethod {
 pub(super) fn login_methods(
     form: &FormDescription,
     tenant: &ResolvedTenant,
-    upstream: &[UpstreamButton],
+    upstream: &SignInChoices,
 ) -> Vec<LoginMethod> {
     let id = form.id.as_str();
     let bound = super::login::flow_of(form).is_some();
@@ -947,8 +947,11 @@ pub(super) fn login_methods(
     if form.fields.iter().any(|f| f.name == "password") {
         methods.push(LoginMethod::Password);
     }
+    // A link confirmation without any method has no fields: no passkey form either.
+    let link_without_method = id == UPSTREAM_LINK_FORM_ID && form.fields.is_empty();
     if bound
         && matches!(id, "login" | UPSTREAM_LINK_FORM_ID | IDENTIFY_FORM_ID)
+        && !link_without_method
         && tenant_relying_party(tenant).is_ok()
     {
         methods.push(LoginMethod::Passkey);
@@ -961,8 +964,14 @@ pub(super) fn login_methods(
             methods.push(LoginMethod::MagicLink);
         }
     }
-    if matches!(id, "login" | IDENTIFY_FORM_ID) {
-        methods.extend(upstream.iter().map(|b| LoginMethod::Upstream {
+    // Link confirmation: the code only (the magic link may open in another browser).
+    if bound && id == UPSTREAM_LINK_FORM_ID && settings.email_otp && upstream.link_email_code {
+        methods.push(LoginMethod::EmailCode);
+    }
+    // The link confirmation lists only the candidate's own linked connections
+    // (`ui::upstream::upstream_buttons`).
+    if matches!(id, "login" | IDENTIFY_FORM_ID | UPSTREAM_LINK_FORM_ID) {
+        methods.extend(upstream.buttons.iter().map(|b| LoginMethod::Upstream {
             slug: b.slug.clone(),
             name: b.name.clone(),
         }));
@@ -1162,6 +1171,7 @@ mod tests {
     use anvil_core::model::{Tenant, TenantBase, TenantSettings};
     use time::OffsetDateTime;
 
+    use super::super::upstream::UpstreamButton;
     use super::*;
 
     const FLOW: &str = "0190a6d4-0000-7000-8000-000000000001";
@@ -1215,6 +1225,13 @@ mod tests {
         )
     }
 
+    fn choices(buttons: Vec<UpstreamButton>) -> SignInChoices {
+        SignInChoices {
+            buttons,
+            link_email_code: false,
+        }
+    }
+
     fn button(slug: &str, name: &str) -> UpstreamButton {
         UpstreamButton {
             slug: slug.into(),
@@ -1229,7 +1246,7 @@ mod tests {
     fn password_only_tenant_offers_password_and_passkey() {
         let t = tenant(ISSUER, TenantSettings::default());
         assert_eq!(
-            login_methods(&password_form(), &t, &[]),
+            login_methods(&password_form(), &t, &SignInChoices::default()),
             vec![LoginMethod::Password, LoginMethod::Passkey]
         );
     }
@@ -1238,7 +1255,7 @@ mod tests {
     fn an_issuer_that_cannot_be_a_relying_party_offers_no_passkey() {
         let t = tenant("http://127.0.0.1:8080", TenantSettings::default());
         assert_eq!(
-            login_methods(&password_form(), &t, &[]),
+            login_methods(&password_form(), &t, &SignInChoices::default()),
             vec![LoginMethod::Password]
         );
     }
@@ -1252,7 +1269,7 @@ mod tests {
         };
         let t = tenant(ISSUER, settings);
         assert_eq!(
-            login_methods(&password_form(), &t, &[]),
+            login_methods(&password_form(), &t, &SignInChoices::default()),
             vec![
                 LoginMethod::Password,
                 LoginMethod::Passkey,
@@ -1263,18 +1280,18 @@ mod tests {
         let mut unbound = password_form();
         unbound.action = "https://id.example.com/t/acme/ui/login".into();
         assert_eq!(
-            login_methods(&unbound, &t, &[]),
+            login_methods(&unbound, &t, &SignInChoices::default()),
             vec![LoginMethod::Password],
             "no flow, no passkey or email form"
         );
         let registration = form("registration", vec![field("email", FieldKind::Email)]);
-        assert!(login_methods(&registration, &t, &[]).is_empty());
+        assert!(login_methods(&registration, &t, &SignInChoices::default()).is_empty());
     }
 
     #[test]
     fn upstream_buttons_become_methods_on_sign_in_forms() {
         let t = tenant(ISSUER, TenantSettings::default());
-        let buttons = [button("github", "GitHub"), button("google", "Google")];
+        let buttons = choices(vec![button("github", "GitHub"), button("google", "Google")]);
         assert_eq!(
             login_methods(&password_form(), &t, &buttons),
             vec![
@@ -1295,10 +1312,57 @@ mod tests {
             vec![field("password", FieldKind::Password)],
         );
         assert_eq!(
-            login_methods(&link, &t, &buttons),
+            login_methods(&link, &t, &SignInChoices::default()),
             vec![LoginMethod::Password, LoginMethod::Passkey],
-            "the link-account step lists no upstream buttons"
+            "an unrevealed candidate: no upstream buttons"
         );
+        let mine = choices(vec![button("github", "GitHub")]);
+        assert_eq!(
+            login_methods(&link, &t, &mine),
+            vec![
+                LoginMethod::Password,
+                LoginMethod::Passkey,
+                LoginMethod::Upstream {
+                    slug: "github".into(),
+                    name: "GitHub".into()
+                },
+            ],
+            "the candidate's linked connections confirm the link"
+        );
+    }
+
+    #[test]
+    fn link_confirmation_offers_the_code_only_when_the_candidate_may_get_one() {
+        let settings = TenantSettings {
+            email_otp: true,
+            magic_link: true,
+            ..TenantSettings::default()
+        };
+        let t = tenant(ISSUER, settings);
+        let link = form(
+            UPSTREAM_LINK_FORM_ID,
+            vec![field("password", FieldKind::Password)],
+        );
+        assert_eq!(
+            login_methods(&link, &t, &SignInChoices::default()),
+            vec![LoginMethod::Password, LoginMethod::Passkey]
+        );
+        let offered = SignInChoices {
+            link_email_code: true,
+            ..SignInChoices::default()
+        };
+        assert_eq!(
+            login_methods(&link, &t, &offered),
+            vec![
+                LoginMethod::Password,
+                LoginMethod::Passkey,
+                LoginMethod::EmailCode
+            ],
+            "the code, never the magic link"
+        );
+        // No method at all: no fields, no passkey form.
+        let empty = form(UPSTREAM_LINK_FORM_ID, Vec::new());
+        assert!(login_methods(&empty, &t, &SignInChoices::default()).is_empty());
     }
 
     #[test]
@@ -1312,7 +1376,7 @@ mod tests {
             IDENTIFY_FORM_ID,
             vec![field("identifier", FieldKind::Email)],
         );
-        let buttons = [button("github", "GitHub")];
+        let buttons = choices(vec![button("github", "GitHub")]);
         assert_eq!(
             login_methods(&identify, &t, &buttons),
             vec![

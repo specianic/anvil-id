@@ -28,11 +28,13 @@
 
 use anvil_core::error::CoreError;
 use anvil_core::flow::form::FormDescription;
+use anvil_core::flow::login::{IDENTIFY_FORM_ID, UPSTREAM_LINK_FORM_ID};
 use anvil_core::flow::upstream::PostedResponse;
+use anvil_core::model::Connection;
 use anvil_core::model::RequestContext;
 use anvil_core::service::account::SettingsBinding;
 use anvil_core::service::upstream::{
-    CallbackParams, CallbackResult, StartResult, UpstreamOutcome, UpstreamService,
+    CallbackParams, CallbackResult, StartResult, UpstreamOutcome, UpstreamService, link_choices,
 };
 use axum::Router;
 use axum::extract::rejection::{FormRejection, QueryRejection};
@@ -79,41 +81,76 @@ pub(super) struct UpstreamButton {
     pub(super) action: String,
 }
 
-/// The enabled connections of the tenant as buttons for a bound sign-in form (`login` or the
-/// email-first `login-identify` page).
+/// The upstream choices of a bound sign-in form ([`upstream_buttons`]).
+#[derive(Debug, Clone, Default)]
+pub(super) struct SignInChoices {
+    /// One button per connection the form offers.
+    pub(super) buttons: Vec<UpstreamButton>,
+    /// The link confirmation page offers an emailed code to the revealed candidate
+    /// (`anvil_core::service::upstream::LinkChoices::email_code`).
+    pub(super) link_email_code: bool,
+}
+
+/// The upstream choices of a bound sign-in form:
+///
+/// - the combined form and the email-first page (`login-identify`): the tenant's enabled
+///   connections (not org connections);
+/// - the link confirmation page (`upstream-link`): only the revealed candidate's enabled linked
+///   connections ("Continue with … to confirm") and whether an emailed code is offered
+///   (`anvil_core::service::upstream::link_choices`); nothing when the candidate may not be
+///   revealed.
+///
 /// A storage failure shows no buttons (logged): password sign-in keeps working.
 pub(super) async fn upstream_buttons(
     state: &AppState,
     tenant: &ResolvedTenant,
     loc: &Locale,
     form: &FormDescription,
-) -> Vec<UpstreamButton> {
-    // The combined form, or the email-first page of home-realm discovery (06-22).
-    if form.id != "login" && form.id != anvil_core::flow::login::IDENTIFY_FORM_ID {
-        return Vec::new();
-    }
+) -> SignInChoices {
     let Some(flow) = flow_of(form) else {
-        return Vec::new();
+        return SignInChoices::default();
     };
     let base = ui_base(tenant);
+    let button = |c: Connection| UpstreamButton {
+        action: carry_ui_locales(
+            &format!("{base}/login/upstream/{}?flow={flow}", c.slug),
+            loc,
+        ),
+        slug: c.slug,
+        name: c.display_name,
+    };
+    if form.id == UPSTREAM_LINK_FORM_ID {
+        let choices =
+            link_choices(state.storage(), &tenant.tenant, flow, state.clock().now()).await;
+        return match choices {
+            Ok(c) => SignInChoices {
+                buttons: c.connections.into_iter().map(button).collect(),
+                link_email_code: c.email_code,
+            },
+            Err(e) => {
+                tracing::warn!(error = %e, "listing link confirmation choices failed");
+                SignInChoices::default()
+            }
+        };
+    }
+    // The combined form, or the email-first page of home-realm discovery (06-22).
+    if form.id != "login" && form.id != IDENTIFY_FORM_ID {
+        return SignInChoices::default();
+    }
     match state.storage().connections().list(tenant.tenant.id).await {
-        Ok(list) => list
-            .into_iter()
-            // Org connections (enterprise SSO) are reached through home-realm discovery or the
-            // `organization` parameter, never as buttons on the tenant's sign-in page.
-            .filter(|c| c.enabled && c.org_id.is_none())
-            .map(|c| UpstreamButton {
-                action: carry_ui_locales(
-                    &format!("{base}/login/upstream/{}?flow={flow}", c.slug),
-                    loc,
-                ),
-                slug: c.slug,
-                name: c.display_name,
-            })
-            .collect(),
+        Ok(list) => SignInChoices {
+            buttons: list
+                .into_iter()
+                // Org connections (enterprise SSO) are reached through home-realm discovery or
+                // the `organization` parameter, never as buttons on the tenant's sign-in page.
+                .filter(|c| c.enabled && c.org_id.is_none())
+                .map(button)
+                .collect(),
+            link_email_code: false,
+        },
         Err(e) => {
             tracing::warn!(error = %e, "listing connections for the sign-in page failed");
-            Vec::new()
+            SignInChoices::default()
         }
     }
 }

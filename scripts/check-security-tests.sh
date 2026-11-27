@@ -403,6 +403,12 @@ linking: inactive link refused|crates/anvil-core/src/upstream/linking.rs|existin
 linking: one identity, one user|$W/security_linking.rs|an_identity_linked_to_one_user_cannot_be_linked_to_another
 linking: one identity, one user|$W/account_linked.rs|connect_refuses_an_identity_linked_to_another_user
 linking: account-page link needs the owner, re-auth and the binding|$W/security_linking.rs|link_from_the_account_page_needs_the_owner_signed_in
+linking: link confirmation only through an identity linked to the candidate|$W/security_linking.rs|confirming_with_an_identity_of_another_user_links_nothing
+linking: link confirmation only through an identity linked to the candidate|$W/security_linking.rs|confirming_with_an_unlinked_identity_links_nothing
+linking: link confirmation only through an identity linked to the candidate|$W/security_linking.rs|confirmation_buttons_are_hidden_when_the_account_may_not_be_revealed
+linking: link confirmation keeps the second factor|$W/security_linking.rs|confirmation_through_a_linked_provider_still_needs_the_second_factor
+linking: confirmation code only to the verified candidate address|$W/security_linking.rs|emailed_code_for_another_address_cannot_confirm_the_link
+linking: confirmation code only to the verified candidate address|crates/anvil-core/src/flow/email_code.rs|link_confirmation_sends_a_code_only_to_the_offered_candidate_address
 linking: account-page link needs the owner, re-auth and the binding|$W/account_linked.rs|connect_needs_a_recent_sign_in_and_the_binding
 linking: unlink keeps a sign-in method|$W/account_linked.rs|unlink_of_the_only_sign_in_method_is_refused
 linking: unlink keeps a sign-in method|crates/anvil-storage/src/contract/connections.rs|delete_link_keeps_a_sign_in_method

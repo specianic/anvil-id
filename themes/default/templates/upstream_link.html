@@ -1,16 +1,56 @@
 {% extends "base.html" %}
 {% import "form.html" as forms %}
 {#- Link confirmation (AUTH-11): an upstream sign-in found an existing account it may not link
-    automatically. The user signs in to the existing account (password, or the passkey form) to
-    connect the provider; any required second factor follows as usual. Variables besides `page`
-    and `form` (form id `upstream-link`, fields `identifier` and `password`; the first message,
-    `upstream.link_explain`, names the provider; the identifier is prefilled only when the
-    matching account may be revealed): `passkey` (as on the sign-in page). Selectors: form
-    `upstream-link`, button `upstream-link-submit`, link `link-cancel` (back to the sign-in page,
-    nothing is linked). -#}
+    automatically. The user proves the existing account to connect the provider; any required
+    second factor follows as usual, and the link is made right before the session. Variables
+    besides `page` and `form` (form id `upstream-link`, fields `identifier` and `password`; the
+    first message, `upstream.link_explain`, names the provider; the identifier is prefilled only
+    when the matching account may be revealed):
+    - `passkey` (as on the sign-in page);
+    - `upstream` (list of {slug, name, action}): only when the account may be revealed, the
+      providers it is already linked to; signing in with one of them confirms. Selectors: form
+      `upstream-{slug}-form`, button `upstream-{slug}` (`data-connection` = slug);
+    - `email_code` ({action, value} or none): an emailed sign-in code to the revealed account's
+      verified address (selectors as on the sign-in page: `email-code-request`, ...);
+    - `account_linked`: the account's linked-accounts page, the way out when nothing here can
+      confirm (link `link-account-linked`).
+    When the revealed account has no way at all to confirm here, the form has no fields: the page
+    shows its messages (incl. `upstream.link_no_method`) in `upstream-link` and the way out.
+    Selectors: form `upstream-link`, button `upstream-link-submit`, link `link-cancel` (back to the
+    sign-in page, nothing is linked). Works without JavaScript (only the passkey button needs
+    it). -#}
 {% block heading %}{{ t("title.upstream_link") }}{% endblock %}
 {% block content %}
+{% if form.fields %}
 {{ forms.render(form, t("upstream.link_submit")) }}
+{% else %}
+<div id="{{ form.id }}" class="anvil-form-messages">
+{{ forms.messages(form.messages, form.id) }}
+</div>
+{% endif %}
+{% if email_code %}
+<details class="anvil-disclosure" id="email-code-toggle">
+<summary>{{ t("email_code.request_toggle") }}</summary>
+<form id="email-code-request" method="post" action="{{ email_code.action }}" novalidate>
+<input type="hidden" name="csrf_token" value="{{ form.csrf_token }}">
+<div class="anvil-field">
+<label for="email-code-email">{{ t("field.email") }}</label>
+<input id="email-code-email" name="email" type="email" required autocomplete="username" aria-describedby="email-code-request-hint"{% if email_code.value %} value="{{ email_code.value }}"{% endif %}>
+<p class="anvil-muted" id="email-code-request-hint">{{ t("email_code.request_hint") }}</p>
+</div>
+<button type="submit" id="email-code-request-submit" class="anvil-secondary">{{ t("email_code.request") }}</button>
+</form>
+</details>
+{% endif %}{% if upstream %}
+<div class="anvil-upstream" role="group" aria-label="{{ t("upstream.confirm_group_label") }}">
+{% for c in upstream %}
+<form id="upstream-{{ c.slug }}-form" method="post" action="{{ c.action }}">
+<input type="hidden" name="csrf_token" value="{{ form.csrf_token }}">
+<button type="submit" id="upstream-{{ c.slug }}" class="anvil-secondary" data-connection="{{ c.slug }}">{{ t("upstream.confirm_with", provider=c.name) }}</button>
+</form>
+{% endfor %}
+</div>
+{% endif %}
 {% if passkey %}
 <form id="login-passkey" class="anvil-passkey" method="post" action="{{ passkey.action }}" data-webauthn="authenticate" data-options-url="{{ passkey.options_url }}" data-webauthn-msg-cancelled="{{ t("login.webauthn.cancelled") }}" data-webauthn-msg-failed="{{ t("login.webauthn.failed") }}">
 <input type="hidden" name="csrf_token" value="{{ form.csrf_token }}">
@@ -19,6 +59,9 @@
 <p id="login-passkey-status" class="anvil-muted" data-webauthn-status aria-live="polite"></p>
 </form>
 <script src="{{ page.asset_base }}/webauthn.js" defer></script>
+{% endif %}
+{% if account_linked %}
+<p class="anvil-muted" id="link-other-way">{{ t("upstream.link_other_way") }} <a id="link-account-linked" href="{{ account_linked }}">{{ t("upstream.link_account_page") }}</a></p>
 {% endif %}
 {% if page.links.login %}
 <nav class="anvil-links" aria-label="{{ t("nav.other_options") }}">

@@ -149,7 +149,7 @@ use super::authorize::{mfa_context, second_factor_methods};
 use super::hash_profile::HashProfileService;
 use super::saml::SamlService;
 use super::session::{NewSessionCookie, SessionService};
-use super::upstream::{StartResult, UpstreamService, confirm_link};
+use super::upstream::{StartResult, UpstreamService, confirm_link, reseal_link};
 use crate::error::CoreError;
 use crate::flow::email_code::{self, Check, EmailCodeState};
 use crate::flow::engine::{
@@ -166,7 +166,7 @@ use crate::flow::login::{
     take_second_factor_passkey, with_passkey_enrolment, with_second_factor_passkey,
 };
 use crate::flow::settings::DEFAULT_PASSKEY_LABEL;
-use crate::flow::upstream::upstream_aad;
+use crate::flow::upstream::{PendingLink, upstream_aad};
 use crate::model::{
     ActorKind, AuditAction, AuditActor, AuditDetails, AuditOutcome, AuthRequestId, BrowserSession,
     Connection, ConnectionKind, CounterOutcome, CredentialId, CredentialKind, Flow, FlowId,
@@ -2160,6 +2160,11 @@ impl FlowService {
     /// continues in a fresh flow at the second-factor or enrolment step (whose second factor
     /// then signs in with `[fed, otp, mfa]`). `state` is the login state without its pending
     /// upstream authorization.
+    ///
+    /// `link`: the pending link this upstream sign-in confirmed (an identity already linked to
+    /// the candidate, `service::upstream`). It is linked right before the session is created,
+    /// like after a password: at once, or after the second factor or enrolment in the fresh flow
+    /// (the identity is resealed under that flow).
     pub(crate) async fn upstream_primary(
         &self,
         cx: &FlowContext<'_>,
@@ -2167,6 +2172,7 @@ impl FlowService {
         state: LoginState,
         user: &User,
         current_session: Option<SessionId>,
+        link: Option<PendingLink>,
     ) -> Result<UpstreamPrimary, CoreError> {
         let state = LoginState {
             federated: true,
@@ -2184,6 +2190,7 @@ impl FlowService {
             current_session,
             SessionAuth::Federated,
             "upstream",
+            link,
         )
         .await
     }
@@ -2200,16 +2207,41 @@ impl FlowService {
         &self,
         cx: &FlowContext<'_>,
         flow: &Flow,
-        state: LoginState,
+        mut state: LoginState,
         user: &User,
         current_session: Option<SessionId>,
         auth: SessionAuth,
         method: &'static str,
+        link: Option<PendingLink>,
     ) -> Result<UpstreamPrimary, CoreError> {
         let tenant = cx.tenant.id;
         let methods = self.second_factor_methods(tenant, user.id).await?;
         let (policy, acr) = self.flow_mfa(cx, flow).await?;
-        match after_primary_auth(policy, acr, methods) {
+        let after = after_primary_auth(policy, acr, methods);
+        // A confirmed pending link: linked now, or carried (resealed) into the fresh flow of the
+        // second factor or enrolment, whose `CreateSession` links it.
+        let next_id = FlowId::new_v7();
+        match (&link, &after) {
+            (Some(l), AfterPrimary::SignIn) => {
+                confirm_link(
+                    self.storage.as_ref(),
+                    &self.kek,
+                    &self.audit(),
+                    cx,
+                    flow.id,
+                    l,
+                    user.id,
+                )
+                .await?;
+            }
+            (Some(l), _) => {
+                state.pending_link = Some(Box::new(reseal_link(
+                    &self.kek, tenant, flow.id, next_id, l,
+                )?));
+            }
+            (None, _) => {}
+        }
+        match after {
             AfterPrimary::SignIn => {
                 let cookie = self
                     .create_signed_in_session(cx, user.id, auth, false, current_session, method)
@@ -2223,13 +2255,13 @@ impl FlowService {
             AfterPrimary::SecondFactor(methods) => {
                 let (next, form) = second_factor_required(state, user.id, methods);
                 let mut started = self
-                    .continue_login(cx, Some(flow), FlowId::new_v7(), &next, form)
+                    .continue_login(cx, Some(flow), next_id, &next, form)
                     .await?;
                 started.factor_user = Some(user.id);
                 Ok(UpstreamPrimary::Continue(started))
             }
             AfterPrimary::Enroll => {
-                let id = FlowId::new_v7();
+                let id = next_id;
                 let secret = PendingSecret::generate();
                 let display = enrolment(cx.tenant, user, &secret)?;
                 let sealed = seal_pending_totp(&self.kek, id, &secret)?;
@@ -2347,6 +2379,8 @@ impl FlowService {
             email_primary: true,
             email_code: None,
             passkey_challenge: None,
+            // A link confirmation never sends the magic link (`send_email_code`).
+            pending_link: None,
             ..s
         };
         Ok(
@@ -2359,6 +2393,7 @@ impl FlowService {
                     current_session,
                     SessionAuth::EmailCode,
                     "magic_link",
+                    None,
                 )
                 .await?
             {
@@ -2406,7 +2441,26 @@ impl FlowService {
         let token = random_token();
         let code_hash = email_code::code_hash(&self.kek, flow.id, &code)
             .ok_or_else(|| CoreError::Internal("generated email code is malformed".into()))?;
-        let (with_code, with_link) = (cx.tenant.settings.email_otp, cx.tenant.settings.magic_link);
+        // Link confirmation (AUTH-11): the code only. The magic link may open in another
+        // browser, where the pending link is not.
+        let confirming = s.pending_link.is_some();
+        let (with_code, with_link) = (
+            cx.tenant.settings.email_otp,
+            cx.tenant.settings.magic_link && !confirming,
+        );
+        if confirming && !with_code {
+            let f = crate::flow::engine::current_form(
+                &FlowState::Login(s),
+                vec![FormMessage::error("flow.invalid_input")],
+                &self.env(cx),
+            );
+            return Ok(Step::Done(Box::new(FlowOutcome::Render(bind_form(
+                f,
+                cx,
+                flow.id,
+                exec.csrf_token,
+            )))));
+        }
         let next = EmailCodeState::issue(
             s.email_code.as_deref(),
             email,

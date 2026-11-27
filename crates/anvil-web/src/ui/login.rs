@@ -616,7 +616,7 @@ async fn identify_buttons(
     tenant: &ResolvedTenant,
     loc: &Locale,
     form: &FormDescription,
-) -> Vec<super::upstream::UpstreamButton> {
+) -> super::upstream::SignInChoices {
     super::upstream::upstream_buttons(state, tenant, loc, form).await
 }
 
@@ -1251,8 +1251,8 @@ pub(super) struct Extras<'a> {
     pub(super) factor_token: Option<String>,
     /// The pending authenticator-app secret of the enrolment form.
     pub(super) totp: Option<&'a TotpEnrolment>,
-    /// Upstream sign-in buttons of the sign-in form ([`super::upstream::upstream_buttons`]).
-    pub(super) upstream: Vec<super::upstream::UpstreamButton>,
+    /// Upstream choices of the sign-in form ([`super::upstream::upstream_buttons`]).
+    pub(super) upstream: super::upstream::SignInChoices,
 }
 
 /// URLs of a passkey form (webauthn.js `data-options-url` and form action): the sign-in form,
@@ -1321,15 +1321,16 @@ pub(super) fn render_tenant_form_with(
     let upstream: Vec<super::upstream::UpstreamButton> = methods
         .iter()
         .filter_map(|m| match m {
-            LoginMethod::Upstream { slug, name } => {
-                extras.upstream.iter().find(|b| &b.slug == slug).map(|b| {
-                    super::upstream::UpstreamButton {
-                        slug: slug.clone(),
-                        name: name.clone(),
-                        action: b.action.clone(),
-                    }
-                })
-            }
+            LoginMethod::Upstream { slug, name } => extras
+                .upstream
+                .buttons
+                .iter()
+                .find(|b| &b.slug == slug)
+                .map(|b| super::upstream::UpstreamButton {
+                    slug: slug.clone(),
+                    name: name.clone(),
+                    action: b.action.clone(),
+                }),
             _ => None,
         })
         .collect();
@@ -1428,10 +1429,15 @@ pub(super) fn render_tenant_form_with(
             email,
         });
     }
+    // Link confirmation: the way out when the page cannot confirm (sign in another way, then
+    // connect the provider from the account page).
+    let account_linked = (form.id == UPSTREAM_LINK_FORM_ID)
+        .then(|| carry_ui_locales(&tenant.ui_url("/ui/account/linked"), loc));
     form.action = carry_ui_locales(&form.action, loc);
     let ctx = minijinja::context! {
         page => page.into_value(),
         form => Value::from(Serde(&form)),
+        account_linked => account_linked,
         change_email => Value::from(Serde(&change_email)),
         passkey => Value::from(Serde(&passkey)),
         passkey_enroll => Value::from(Serde(&passkey_enroll)),

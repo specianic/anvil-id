@@ -157,6 +157,23 @@ Use any standards-based OpenID provider you control, for example a second AnvilI
       continues to the client. "Cancel" links nothing.
 - [ ] **Confirmation with MFA:** enrol TOTP for Alice and repeat. Expected: the second factor is
       asked after the password, then the link is made.
+- [ ] **Confirmation without a password (social-only account):** create Bob by signing in with
+      GitHub (no password). With auto-link off, sign in with a Google (or Microsoft) account whose
+      verified email equals Bob's. Expected: the page offers "Continue with GitHub to confirm"
+      (only providers Bob is linked to); signing in there with Bob's GitHub account links Google
+      (audit `identity_linked`, mode `confirmed`), asks the second factor first if Bob has one,
+      and signs in. Signing in there with a GitHub account of another user, or one not linked to
+      anybody, links nothing (audit `upstream_login_failed`, reason `link_confirm_mismatch`).
+- [ ] **Confirmation by emailed code:** with email sign-in codes on (SMTP configured), repeat the
+      previous check. Expected: the page also offers "Email me a sign-in code" for Bob's address
+      only; the email carries a code and no link; the code links and signs in.
+- [ ] **No way to confirm:** for an account with no password, passkey, linked provider or email
+      code, expected: the page says so, points to "Go to linked accounts" (sign in another way,
+      then connect the provider there) and "Cancel" returns to the sign-in page. With an
+      untrusted email (the account may not be revealed) no providers and no such verdict appear.
+- [ ] **Back after signing in:** after a completed upstream sign-in, press the browser's back
+      button to the provider's return URL. Expected: "This sign-in was already completed or has
+      expired. Please start again." (audit reason `flow_expired`), not the generic error.
 - [ ] **Connect from the account page:** signed in as a user without links, open
       `/ui/account/linked` and use **Connect** for a provider. Expected: back on the page with the
       provider listed (audit mode `account`).

@@ -720,7 +720,9 @@ failures never cached).
   as a canonical lowercase UUID, pinned to the tenant for single-tenant connections; Google `hd`
   allow-list), `aud`/`azp`, time, nonce, subject. GitHub and OAuth 2 use the profile API instead;
   GitHub takes only the primary verified email. Every failure is audited as
-  `upstream_login_failed` with a reason code and shown as one generic error.
+  `upstream_login_failed` with a reason code and shown as one generic error. The one exception is
+  a callback whose login flow is gone (already completed, or expired; reason `flow_expired`): the
+  restarted sign-in says "This sign-in was already completed or has expired" (`upstream.flow_expired`).
 - The callback continues in a **fresh** login flow when another step follows (second factor,
   enrolment, link confirmation), because the provider's return carries neither the `Strict` flow
   cookie nor the CSRF token.
@@ -735,12 +737,24 @@ failures never cached).
   | Identity already linked, user active | Sign in as that user |
   | Identity already linked, user blocked | Refuse |
   | Not linked, trusted verified email matches a verified local account, tenant `auto_link` on, not Microsoft | Link automatically (`identity_linked`, mode `auto`) and sign in |
-  | Not linked, any other email match | Confirmation: the user signs in to the existing account (password or passkey, plus any required second factor); the link is made right before the session (mode `confirmed`) |
+  | Not linked, any other email match | Confirmation: the user proves the existing account (password, passkey, an upstream identity already linked to it, or an emailed code, plus any required second factor); the link is made right before the session (mode `confirmed`) |
   | Not linked, no match, upstream registration allowed | Create the user just in time with the link (one transaction) |
   | Not linked, no match, registration not allowed | Refuse |
 
   An unverified or untrusted email never links automatically and never reveals whether an account
-  exists. The account page links the signed-in user (mode `account`, §10.2) and then returns to
+  exists. **Confirmation without a password.** When the matching account may be revealed (trusted,
+  verified upstream email: the page prefills its address), the confirmation page also offers the
+  account's enabled linked OAuth/OIDC connections ("Continue with GitHub to confirm") and, when the
+  tenant has `email_otp` on and the address is verified, an emailed code (never the magic link,
+  which may open in another browser). Such a start goes through the normal upstream start and
+  keeps the pending link in the flow; its callback links only when the returned identity is
+  already linked through that connection to exactly the revealed account (anything else: audited
+  `link_confirm_mismatch`, nothing linked or created). The code goes only to that address. A
+  revealed account with none of these methods (no password or passkey either) gets a page that
+  says so; every confirmation page points to signing in another way and connecting the provider
+  on `/ui/account/linked`, plus "Cancel". An unrevealed account shows no providers and no verdict.
+  A confirmation that needs a second factor carries the pending link, resealed, into the fresh
+  flow. The account page links the signed-in user (mode `account`, §10.2) and then returns to
   `/ui/account/linked` (303); an identity linked to another user is refused. Unlinking is refused
   when it would leave the user without a sign-in method: a password, a passkey, another link, or
   tenant email sign-in (`email_otp` or `magic_link`) with a verified address. The check and the

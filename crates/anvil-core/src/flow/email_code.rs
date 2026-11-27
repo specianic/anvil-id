@@ -268,11 +268,28 @@ pub fn limit_subject(kek: &Kek, tenant: TenantId, email: &str, user: Option<User
 }
 
 /// Whether the method can be used in this login state: the identify step (or the email step for a
-/// new code), not a step-up, not while an upstream identity waits for link confirmation.
+/// new code), not a step-up. While an upstream identity waits for link confirmation only when the
+/// confirmation offers it ([`super::upstream::LinkConfirmMethods::email_code`]: a revealed
+/// candidate with a verified address), and then only for that address ([`link_address_ok`]).
 fn available(state: &LoginState) -> bool {
     matches!(state.step, LoginStep::Identify | LoginStep::EmailCode)
         && state.step_up_session.is_none()
-        && state.pending_link.is_none()
+        && state.pending_link.as_ref().is_none_or(|l| {
+            l.confirm.as_ref().is_some_and(|c| c.email_code) && l.candidate_email.is_some()
+        })
+}
+
+/// A code requested while a link waits for confirmation goes only to the candidate's address
+/// (normalised comparison); without a pending link any address may ask.
+fn link_address_ok(state: &LoginState, email: &str) -> bool {
+    match &state.pending_link {
+        None => true,
+        Some(l) => l
+            .candidate_email
+            .as_deref()
+            .and_then(|c| normalize_email(c).ok())
+            .is_some_and(|c| c == email),
+    }
 }
 
 /// A sign-in email is requested for `email` (`None`: a new code to the address of the current
@@ -305,6 +322,9 @@ pub(super) fn request(
             _ => return super::login::invalid_input(state),
         },
     };
+    if !link_address_ok(&state, &email) {
+        return super::login::invalid_input(state);
+    }
     if let Some(ec) = state.email_code.as_deref()
         && ec.sends >= MAX_SENDS
     {
@@ -445,6 +465,52 @@ mod tests {
         );
         let FlowState::Login(s) = state else { panic!() };
         assert_eq!(s.identifier.as_deref(), Some("Alice@Example.com"));
+    }
+
+    #[test]
+    fn link_confirmation_sends_a_code_only_to_the_offered_candidate_address() {
+        use super::super::upstream::{LinkConfirmMethods, PendingLink};
+        let link = |email_code: bool, candidate: Option<&str>| LoginState {
+            pending_link: Some(Box::new(PendingLink {
+                connection_id: crate::model::ConnectionId::new_v7(),
+                identity_sealed: "sealed".into(),
+                candidate_user: candidate.map(|_| UserId::new_v7()),
+                provider_name: "Example ID".into(),
+                candidate_email: candidate.map(str::to_owned),
+                confirm: candidate.map(|_| LinkConfirmMethods {
+                    email_code,
+                    ..LinkConfirmMethods::default()
+                }),
+            })),
+            ..LoginState::default()
+        };
+        let request = |s: LoginState, email: &str| {
+            transition(
+                FlowState::Login(s),
+                FlowInput::EmailCodeRequest {
+                    email: Some(email.into()),
+                },
+                &env(),
+            )
+            .1
+        };
+        let sent = |effects: &[Effect]| matches!(effects, [Effect::SendEmailCode { email }] if email == "alice@example.com");
+        assert!(sent(&request(
+            link(true, Some("alice@example.com")),
+            " Alice@Example.com"
+        )));
+        // Another address, a candidate not offered the code, an unrevealed candidate: refused.
+        for (s, email) in [
+            (link(true, Some("alice@example.com")), "bob@example.com"),
+            (link(false, Some("alice@example.com")), "alice@example.com"),
+            (link(true, None), "alice@example.com"),
+        ] {
+            let effects = request(s, email);
+            assert!(
+                matches!(&effects[..], [Effect::Render(f)] if all_keys(f).iter().any(|k| k == "flow.invalid_input")),
+                "{effects:?}"
+            );
+        }
     }
 
     #[test]

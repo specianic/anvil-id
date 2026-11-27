@@ -25,7 +25,12 @@
 //! continues in a fresh login flow holding a [`PendingLink`]: the upstream identity sealed with
 //! the KEK ([`UPSTREAM_IDENTITY_PURPOSE`], AAD [`upstream_aad`] of that flow). Signing in to an
 //! existing account in that flow (password or passkey, plus any required second factor) links
-//! the identity to the account just proved.
+//! the identity to the account just proved. When the candidate account may be revealed, the flow
+//! also records how it can confirm ([`LinkConfirmMethods`]): an upstream connection it is
+//! already linked to (started from the same flow, which keeps the pending link; the callback
+//! confirms only an identity linked to exactly that candidate) or an emailed sign-in code. A
+//! candidate with none of them gets a page saying how to go on instead of a dead end. When the
+//! second factor continues in a fresh flow, the identity is resealed under that flow.
 //!
 //! Pure: no I/O.
 
@@ -124,6 +129,38 @@ pub struct PendingLink {
     /// The matching account's email, set only together with `candidate_user`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub candidate_email: Option<String>,
+    /// How the revealed candidate can prove the account, set only together with
+    /// `candidate_user` (an unrevealed candidate reveals nothing, not even its methods).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confirm: Option<LinkConfirmMethods>,
+}
+
+/// The ways a revealed candidate account can confirm a [`PendingLink`], decided when the link
+/// confirmation starts (`service::upstream`). Proving the account links it; the password and
+/// passkey forms are always the flow's own sign-in, the others are:
+///
+/// - `connections`: enabled OAuth/OIDC connections the candidate is already linked to. Signing in
+///   through one of them from the confirmation page confirms only when the returned identity is
+///   linked to exactly the candidate (checked again by the callback);
+/// - `email_code`: an emailed sign-in code to the candidate's verified address (tenant
+///   `email_otp`; never the magic link, which may open in another browser).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct LinkConfirmMethods {
+    #[serde(default)]
+    pub password: bool,
+    #[serde(default)]
+    pub passkey: bool,
+    #[serde(default)]
+    pub email_code: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub connections: Vec<ConnectionId>,
+}
+
+impl LinkConfirmMethods {
+    /// The candidate has no way at all to confirm on the page (the page then says how to go on).
+    pub fn none_available(&self) -> bool {
+        !self.password && !self.passkey && !self.email_code && self.connections.is_empty()
+    }
 }
 
 /// Serialisable form of an [`UpstreamIdentity`] (sealed into a [`PendingLink`]).

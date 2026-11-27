@@ -31,7 +31,14 @@
 //! - existing link: sign in; verified + trusted email of a verified local account with tenant
 //!   `auto_link`: link (`identity_linked`, mode `auto`) and sign in;
 //! - other email match: continue in a fresh login flow holding a [`PendingLink`]; signing in to
-//!   an existing account there links it (`confirm_link`, mode `confirmed`);
+//!   an existing account there links it (`confirm_link`, mode `confirmed`). A revealed candidate
+//!   (verified and trusted upstream email) also gets its confirmation methods recorded
+//!   ([`LinkConfirmMethods`]): its enabled linked connections, offered as "Continue with … to
+//!   confirm" ([`link_choices`]), and an emailed code. Starting one of those connections from the
+//!   confirmation flow keeps the pending link, and its callback confirms only an identity
+//!   already linked through that connection to exactly the candidate (otherwise
+//!   `link_confirm_mismatch`: nothing is linked or created); the sign-in then continues like an
+//!   existing link (MFA included) and links right before the session is created;
 //! - no match: just-in-time registration when [`jit_allowed`]: always for an org connection whose
 //!   email is trusted for the org (one of its verified domains), otherwise when
 //!   `upstream_registration` allows it (unset = registration mode `open`); email verified only for
@@ -85,7 +92,8 @@
 //! refused.
 //!
 //! Every failure is audited `upstream_login_failed` with a reason code only (never a token,
-//! code, email or provider message) and shown as one generic error.
+//! code, email or provider message) and shown as one generic error, except a callback whose flow
+//! is gone (`flow_expired`: already completed or expired), which says so ([`FLOW_EXPIRED_KEY`]).
 
 use std::sync::Arc;
 
@@ -109,9 +117,9 @@ use crate::flow::form::{FormMessage, MessageLevel};
 use crate::flow::login::link_confirmation;
 use crate::flow::settings::{SettingsState, is_recent_auth};
 use crate::flow::upstream::{
-    PendingLink, PendingUpstream, PostedResponse, SealedIdentity, UPSTREAM_IDENTITY_PURPOSE,
-    UPSTREAM_PKCE_PURPOSE, UPSTREAM_RESPONSE_PURPOSE, UpstreamPurpose, check_callback, is_fresh,
-    split_state, upstream_aad, value_hash,
+    LinkConfirmMethods, PendingLink, PendingUpstream, PostedResponse, SealedIdentity,
+    UPSTREAM_IDENTITY_PURPOSE, UPSTREAM_PKCE_PURPOSE, UPSTREAM_RESPONSE_PURPOSE, UpstreamPurpose,
+    check_callback, is_fresh, split_state, upstream_aad, value_hash,
 };
 use crate::model::{
     ActorKind, AuditAction, AuditActor, AuditDetails, AuditOutcome, AuthRequestId, BrowserSession,
@@ -141,6 +149,9 @@ pub const FAILED_KEY: &str = "upstream.failed";
 pub const LINK_FAILED_KEY: &str = "upstream.link_failed";
 /// Message key: the provider identity is already linked to another account.
 pub const ALREADY_LINKED_KEY: &str = "upstream.already_linked";
+/// Message key of a callback whose login flow is gone (already completed, or expired): audit
+/// reason `flow_expired`.
+pub const FLOW_EXPIRED_KEY: &str = "upstream.flow_expired";
 
 /// Where the browser goes next after a successful start.
 #[derive(Debug)]
@@ -484,6 +495,85 @@ pub(crate) async fn confirm_link(
     }
 }
 
+/// `link` (whose identity is sealed under flow `from`) with its identity resealed under flow `to`:
+/// a confirmed link that continues at the second factor or enrolment in a fresh flow.
+pub(crate) fn reseal_link(
+    kek: &Kek,
+    tenant: TenantId,
+    from: FlowId,
+    to: FlowId,
+    link: &PendingLink,
+) -> Result<PendingLink, CoreError> {
+    let raw = open(
+        kek,
+        UPSTREAM_IDENTITY_PURPOSE,
+        tenant,
+        from,
+        &link.identity_sealed,
+    )
+    .ok_or_else(|| CoreError::Internal("pending upstream identity does not open".into()))?;
+    Ok(PendingLink {
+        identity_sealed: seal(kek, UPSTREAM_IDENTITY_PURPOSE, tenant, to, &raw)?,
+        ..link.clone()
+    })
+}
+
+/// What the link confirmation page of a login flow offers besides its password and passkey
+/// forms (`LinkConfirmMethods` of a revealed candidate; nothing for an unrevealed one).
+#[derive(Debug, Default)]
+pub struct LinkChoices {
+    /// The candidate's linked connections that are still enabled ("Continue with … to confirm").
+    pub connections: Vec<Connection>,
+    /// An emailed code to the candidate's verified address (tenant `email_otp` still on).
+    pub email_code: bool,
+}
+
+/// The [`LinkChoices`] of login flow `flow` (empty unless it holds a pending link whose candidate
+/// may be revealed). Read only, for rendering the confirmation page of a flow the caller just
+/// produced or checked; the start and the callback check everything again.
+pub async fn link_choices(
+    storage: &dyn Storage,
+    tenant: &crate::model::Tenant,
+    flow: FlowId,
+    now: OffsetDateTime,
+) -> Result<LinkChoices, CoreError> {
+    let Some(flow) = storage.flows().get(tenant.id, flow, now).await? else {
+        return Ok(LinkChoices::default());
+    };
+    let Some(Opened {
+        rest: Rest::Login(state),
+        ..
+    }) = open_pending(&flow)?
+    else {
+        return Ok(LinkChoices::default());
+    };
+    let Some(confirm) = state
+        .pending_link
+        .filter(|l| l.candidate_user.is_some())
+        .and_then(|l| l.confirm)
+    else {
+        return Ok(LinkChoices::default());
+    };
+    let mut connections = Vec::with_capacity(confirm.connections.len());
+    for id in &confirm.connections {
+        if let Some(c) = storage.connections().get(tenant.id, *id).await?
+            && confirmable(&c)
+        {
+            connections.push(c);
+        }
+    }
+    Ok(LinkChoices {
+        connections,
+        email_code: confirm.email_code && tenant.settings.email_otp,
+    })
+}
+
+/// A connection that can confirm a pending link: enabled, and started by this module (SAML has
+/// its own start).
+fn confirmable(c: &Connection) -> bool {
+    c.enabled && !matches!(c.config, ConnectionConfig::Saml(_))
+}
+
 /// Orchestrates upstream sign-in and linking over the ports.
 pub struct UpstreamService<'a> {
     /// Sessions, MFA policy and the login flows the callback continues in.
@@ -572,7 +662,18 @@ impl UpstreamService<'_> {
         self.audit_failure(cx, conn, reason).await?;
         Ok(match to {
             FailTo::Login(old) => UpstreamOutcome::Continue {
-                started: self.flows.restart_login_with(cx, old, FAILED_KEY).await?,
+                started: self
+                    .flows
+                    .restart_login_with(
+                        cx,
+                        old,
+                        if reason == "flow_expired" {
+                            FLOW_EXPIRED_KEY
+                        } else {
+                            FAILED_KEY
+                        },
+                    )
+                    .await?,
                 request: old.and_then(|f| f.auth_request_id),
             },
             FailTo::Link => UpstreamOutcome::LinkFailed {
@@ -1230,6 +1331,12 @@ impl UpstreamService<'_> {
         let now = self.clock().now();
         let to = FailTo::Login(Some(flow));
         let storage = self.storage();
+        // Started from a link confirmation page: this sign-in can only confirm that link.
+        if let Some(link) = state.pending_link.clone() {
+            return self
+                .confirm_through_link(cx, flow, state, conn, &identity, *link, current)
+                .await;
+        }
         let org = match owning_org(storage, tenant, conn).await? {
             None => None,
             Some(None) => return self.fail(cx, Some(conn), to, "connection_disabled").await,
@@ -1412,6 +1519,81 @@ impl UpstreamService<'_> {
                 return self.fail(cx, Some(conn), to, "no_account").await;
             }
         };
+        self.finish_login(cx, flow, state, conn, &user, just_created, current, None)
+            .await
+    }
+
+    /// A `Login` from a login flow holding a pending link (the confirmation page offered the
+    /// candidate's linked connections): the returned identity must already be linked, through
+    /// this connection, to exactly the revealed candidate, who must be active. Anything else
+    /// (another user's identity, an unlinked identity, no revealed candidate) links nothing and
+    /// creates no account: audited `upstream_login_failed` (`link_confirm_mismatch`) and the
+    /// sign-in restarts. A match signs in like an existing link (`require_verified_email`, JIT
+    /// membership, MFA) and links the waiting identity right before the session is created.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the callback's checked inputs, passed through once"
+    )]
+    async fn confirm_through_link(
+        &self,
+        cx: &FlowContext<'_>,
+        flow: &Flow,
+        state: LoginState,
+        conn: &Connection,
+        identity: &UpstreamIdentity,
+        link: PendingLink,
+        current: Option<&BrowserSession>,
+    ) -> Result<UpstreamOutcome, CoreError> {
+        let tenant = cx.tenant.id;
+        let to = FailTo::Login(Some(flow));
+        let storage = self.storage();
+        let Some(candidate) = link.candidate_user else {
+            return self.fail(cx, Some(conn), to, "link_confirm_mismatch").await;
+        };
+        let Some(existing) = storage
+            .connections()
+            .find_link(tenant, conn.id, &identity.subject)
+            .await?
+            .filter(|l| l.user_id == candidate)
+        else {
+            return self.fail(cx, Some(conn), to, "link_confirm_mismatch").await;
+        };
+        let Some(user) = storage
+            .users()
+            .get(tenant, candidate)
+            .await?
+            .filter(|u| u.status == UserStatus::Active)
+        else {
+            return self.fail(cx, Some(conn), to, "inactive").await;
+        };
+        storage
+            .connections()
+            .touch_link(tenant, existing.id, self.clock().now())
+            .await?;
+        self.finish_login(cx, flow, state, conn, &user, false, current, Some(link))
+            .await
+    }
+
+    /// The common end of a `Login` that established `user`: `require_verified_email`, JIT
+    /// membership (`just_created` users got it with the account), then MFA and the session
+    /// through `FlowService::upstream_primary` (which links a confirmed `link`).
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the established sign-in's inputs, passed through once"
+    )]
+    async fn finish_login(
+        &self,
+        cx: &FlowContext<'_>,
+        flow: &Flow,
+        state: LoginState,
+        conn: &Connection,
+        user: &User,
+        just_created: bool,
+        current: Option<&BrowserSession>,
+        link: Option<PendingLink>,
+    ) -> Result<UpstreamOutcome, CoreError> {
+        let to = FailTo::Login(Some(flow));
+        let storage = self.storage();
         if cx.tenant.settings.require_verified_email && !user.email_verified {
             // Like a password or passkey sign-in: no session until the address is verified.
             self.audit_failure(cx, Some(conn), "email_not_verified")
@@ -1439,7 +1621,7 @@ impl UpstreamService<'_> {
         Ok(
             match self
                 .flows
-                .upstream_primary(cx, flow, state, &user, current.map(|s| s.id))
+                .upstream_primary(cx, flow, state, user, current.map(|s| s.id), link)
                 .await?
             {
                 UpstreamPrimary::SignedIn {
@@ -1471,6 +1653,10 @@ impl UpstreamService<'_> {
         let id = FlowId::new_v7();
         let json = serde_json::to_vec(&SealedIdentity::from(identity))
             .map_err(|e| CoreError::Internal(format!("encoding the identity failed: {e}")))?;
+        let confirm = match candidate {
+            Some(u) => Some(self.confirm_methods(cx, u).await?),
+            None => None,
+        };
         let link = PendingLink {
             connection_id: conn.id,
             identity_sealed: seal(
@@ -1483,6 +1669,7 @@ impl UpstreamService<'_> {
             candidate_user: candidate.map(|u| u.id),
             provider_name: conn.display_name.clone(),
             candidate_email: candidate.map(|u| u.email.clone()),
+            confirm,
         };
         let (state, form) = link_confirmation(link);
         let started = self
@@ -1492,6 +1679,44 @@ impl UpstreamService<'_> {
         Ok(UpstreamOutcome::Continue {
             started,
             request: flow.auth_request_id,
+        })
+    }
+
+    /// How the revealed candidate `user` can confirm a pending link ([`LinkConfirmMethods`]): a
+    /// password, a passkey (when the issuer can be a relying party), its enabled linked
+    /// OAuth/OIDC connections, an emailed code (tenant `email_otp`, active user, verified address).
+    async fn confirm_methods(
+        &self,
+        cx: &FlowContext<'_>,
+        user: &User,
+    ) -> Result<LinkConfirmMethods, CoreError> {
+        let tenant = cx.tenant.id;
+        let storage = self.storage();
+        let users = storage.users();
+        let password = users.password(tenant, user.id).await?.is_some();
+        let passkey = cx.rp.is_ok() && !users.passkeys(tenant, user.id).await?.is_empty();
+        let mut connections = Vec::new();
+        for l in storage
+            .connections()
+            .links_for_user(tenant, user.id)
+            .await?
+        {
+            if connections.contains(&l.connection_id) {
+                continue;
+            }
+            if let Some(c) = storage.connections().get(tenant, l.connection_id).await?
+                && confirmable(&c)
+            {
+                connections.push(c.id);
+            }
+        }
+        Ok(LinkConfirmMethods {
+            password,
+            passkey,
+            email_code: cx.tenant.settings.email_otp
+                && user.status == UserStatus::Active
+                && user.email_verified,
+            connections,
         })
     }
 
@@ -1593,6 +1818,43 @@ mod tests {
         );
         assert_eq!(open(&kek, UPSTREAM_IDENTITY_PURPOSE, t, f, &sealed), None);
         assert_eq!(open(&kek, UPSTREAM_PKCE_PURPOSE, t, f, "!!"), None);
+    }
+
+    #[test]
+    fn a_resealed_link_opens_only_in_the_new_flow() {
+        let kek = Kek::generate();
+        let t = TenantId::new_v7();
+        let (from, to) = (FlowId::new_v7(), FlowId::new_v7());
+        let link = PendingLink {
+            connection_id: crate::model::ConnectionId::new_v7(),
+            identity_sealed: seal(&kek, UPSTREAM_IDENTITY_PURPOSE, t, from, b"identity").unwrap(),
+            candidate_user: Some(UserId::new_v7()),
+            provider_name: "Example ID".into(),
+            candidate_email: Some("alice@example.com".into()),
+            confirm: None,
+        };
+        let moved = reseal_link(&kek, t, from, to, &link).unwrap();
+        assert_eq!(moved.candidate_user, link.candidate_user);
+        let opened = open(
+            &kek,
+            UPSTREAM_IDENTITY_PURPOSE,
+            t,
+            to,
+            &moved.identity_sealed,
+        );
+        assert_eq!(opened.as_deref(), Some(&b"identity"[..]));
+        assert_eq!(
+            open(
+                &kek,
+                UPSTREAM_IDENTITY_PURPOSE,
+                t,
+                from,
+                &moved.identity_sealed
+            ),
+            None
+        );
+        // A link that does not open under `from` is not moved.
+        assert!(reseal_link(&kek, t, to, from, &link).is_err());
     }
 
     #[test]

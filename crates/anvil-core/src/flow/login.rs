@@ -897,21 +897,38 @@ pub(super) fn enroll_form(messages: Vec<FormMessage>) -> FormDescription {
     )
 }
 
+/// Message key of a link confirmation whose revealed candidate has no way to confirm on the page.
+pub const LINK_NO_METHOD: &str = "upstream.link_no_method";
+
 /// The sign-in form of the identify step. While an upstream identity waits for link
 /// confirmation it is the [`UPSTREAM_LINK_FORM_ID`] form: the same fields, introduced by
-/// `upstream.link_explain` (argument `provider`).
+/// `upstream.link_explain` (argument `provider`). When the revealed candidate has no way to
+/// confirm at all ([`super::upstream::LinkConfirmMethods::none_available`]) the form has no
+/// fields and says so ([`LINK_NO_METHOD`], argument `provider`): the page then points to signing
+/// in another way and linking from the account page.
 pub(super) fn form(state: &LoginState, messages: Vec<FormMessage>) -> FormDescription {
+    let mut no_method = false;
     let (id, messages) = match &state.pending_link {
         Some(link) => {
             let mut all = vec![
                 FormMessage::new(MessageLevel::Info, "upstream.link_explain")
                     .with_arg("provider", &link.provider_name),
             ];
+            if link.confirm.as_ref().is_some_and(|c| c.none_available()) {
+                no_method = true;
+                all.push(
+                    FormMessage::new(MessageLevel::Info, LINK_NO_METHOD)
+                        .with_arg("provider", &link.provider_name),
+                );
+            }
             all.extend(messages);
             (UPSTREAM_LINK_FORM_ID, all)
         }
         None => ("login", messages),
     };
+    if no_method {
+        return build_form(id, "login", Vec::new(), messages);
+    }
     // After the email page the address is fixed: carried in a hidden field, shown by the page.
     let locked = state.email_first && state.pending_link.is_none();
     build_form(
@@ -1050,7 +1067,28 @@ mod tests {
             candidate_user: email.map(|_| UserId::new_v7()),
             provider_name: "Example ID".into(),
             candidate_email: email.map(str::to_owned),
+            confirm: None,
         }
+    }
+
+    #[test]
+    fn link_confirmation_without_any_method_has_no_fields_and_says_so() {
+        use super::super::upstream::LinkConfirmMethods;
+        let mut link = pending_link(Some("alice@example.com"));
+        link.confirm = Some(LinkConfirmMethods::default());
+        let (_, f) = link_confirmation(link.clone());
+        assert_eq!(f.id, UPSTREAM_LINK_FORM_ID);
+        assert!(f.fields.is_empty());
+        assert_eq!(f.messages[1].key, LINK_NO_METHOD);
+        assert_eq!(f.messages[1].args["provider"], "Example ID");
+        // Any method keeps the sign-in form without the message.
+        link.confirm = Some(LinkConfirmMethods {
+            connections: vec![crate::model::ConnectionId::new_v7()],
+            ..LinkConfirmMethods::default()
+        });
+        let (_, f) = link_confirmation(link);
+        assert!(f.fields.iter().any(|x| x.name == "password"));
+        assert!(f.messages.iter().all(|m| m.key != LINK_NO_METHOD));
     }
 
     #[test]
