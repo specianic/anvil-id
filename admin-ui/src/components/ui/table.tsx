@@ -2,10 +2,17 @@ import * as React from "react"
 import { cn } from "@/lib/utils"
 
 function Table({ className, ...props }: React.ComponentProps<"table">) {
+  // The container scrolls horizontally when a table is wider than the viewport (long key ids,
+  // narrow screens). A scrollable region must be reachable by keyboard (WCAG 2.1.1, axe
+  // scrollable-region-focusable), so the container is focusable and, when the table is named,
+  // exposed as a named region.
+  const label = props["aria-label"]
   return (
     <div
       data-slot="table-container"
-      className="relative w-full overflow-x-auto"
+      className="relative w-full overflow-x-auto focus-visible:outline-2 focus-visible:outline-ring"
+      tabIndex={0}
+      {...(label ? { role: "region", "aria-label": label } : {})}
     >
       <table
         data-slot="table"
