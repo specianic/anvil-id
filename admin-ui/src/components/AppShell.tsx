@@ -1,5 +1,7 @@
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
+import { api, unwrap } from "@/api/client";
 import { useAuth } from "@/auth/AuthProvider";
 import { TenantSwitcher } from "@/components/TenantSwitcher";
 import { Button } from "@/components/ui/button";
@@ -15,6 +17,26 @@ const NAV = [
 ] as const;
 
 const focusRing = "focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none";
+
+// The running server version, from the admin-only GET /api/admin/v1/system/info. The shell renders
+// only for a signed-in administrator, so the version never reaches the unauthenticated console;
+// on any error (e.g. a token without admin scopes) the footer shows nothing.
+function VersionFooter() {
+  const { data } = useQuery({
+    queryKey: ["system", "info"],
+    queryFn: async ({ signal }) => unwrap(await api.GET("/api/admin/v1/system/info", { signal })),
+    staleTime: Number.POSITIVE_INFINITY,
+    retry: false,
+  });
+  if (!data?.version) return null;
+  return (
+    <footer className="mx-auto max-w-6xl px-4 pb-6">
+      <p className="text-muted-foreground text-xs" data-testid="console-version">
+        AnvilID {data.version}
+      </p>
+    </footer>
+  );
+}
 
 export function AppShell({ children }: { children: ReactNode }) {
   const { user, signOut } = useAuth();
@@ -62,6 +84,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <main id="main" tabIndex={-1} className="mx-auto max-w-6xl px-4 py-6 focus:outline-none">
         {children}
       </main>
+      <VersionFooter />
     </div>
   );
 }

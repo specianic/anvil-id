@@ -72,6 +72,20 @@ test('admin console: users, sessions, audit, clients, email and SMTP', async ({ 
     await expectNoA11yViolations(page);
   });
 
+  await test.step('the footer shows the running version to the signed-in admin only', async () => {
+    const info = await fetch(`${anvilUrl()}/api/admin/v1/system/info`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(info.status).toBe(200);
+    const { version } = (await info.json()) as { version: string };
+    expect(version).not.toBe('');
+    await expect(page.getByTestId('console-version')).toHaveText(`AnvilID ${version}`);
+    // The unauthenticated console shell and the public API never carry it.
+    const shell = await fetch(`${anvilUrl()}/console/`);
+    expect(await shell.text()).not.toContain(version);
+    expect((await fetch(`${anvilUrl()}/api/admin/v1/system/info`)).status).toBe(401);
+  });
+
   await test.step('users list shows the created user', async () => {
     const link = page.getByRole('link', { name: userEmail });
     await findInPagedTable(page, link);

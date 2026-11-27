@@ -28,6 +28,10 @@ Contents: [What to back up](#what-to-back-up) ·
 [SAML (experimental)](#saml-experimental) ·
 [Domain verification and the daily re-check](#domain-verification-and-the-daily-re-check)
 
+Running version: `anvilid --version` on the host, or the console footer (signed-in console
+administrators only, from `GET /api/admin/v1/system/info`). No public endpoint, page or header
+discloses it.
+
 ## What to back up
 
 An installation has two parts, and a backup needs both:
