@@ -482,6 +482,6 @@ organization in their details.
 - **Organization admins use the API.** The admin console is for system administrators; there is no
   organization-admin console or self-service SSO setup portal in 1.0.
 - **Tenant-restricted system administrators** (system roles limited to a list of tenants) are
-  deferred to Phase 7.
+  planned for a later 1.x release.
 - Tenant YAML documents do not contain organizations or anything they own
   ([CONFIG-YAML.md](CONFIG-YAML.md#organizations-are-not-part-of-the-document)).
