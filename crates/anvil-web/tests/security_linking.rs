@@ -18,22 +18,33 @@
 //! - the UserInfo fallback refuses a UserInfo `sub` that differs from the ID token's;
 //! - an organization's IdP is trusted only for its own org's verified domains: org A's IdP
 //!   asserting an address on a domain verified by org B never auto-links to the org B user and
-//!   never makes that account a member of org A.
+//!   never makes that account a member of org A;
+//! - link confirmation without a password: only an identity already linked to the revealed
+//!   candidate account (or an emailed code to its verified address) confirms; an identity of
+//!   another user, an unlinked identity, a crafted start for an unrevealed candidate or a code to
+//!   another address links nothing, the providers are not shown when the candidate may not be
+//!   revealed, and a required second factor still comes first.
 
+mod email_code_support;
 mod support;
 mod ui_helpers;
 mod upstream_flow;
 mod upstream_support;
 
 use anvil_core::model::{
-    AuditAction, ConnectionConfig, EndpointOverrides, SocialConfig, SocialProvider,
+    AuditAction, Connection, ConnectionConfig, CredentialId, EndpointOverrides, MfaPolicy, NewTotp,
+    NewUser, SocialConfig, SocialProvider, StandardClaims, TOTP_SEED_PURPOSE, User, UserId,
+    UserStatus, credential_aad,
 };
 use anvil_core::ports::Clock as _;
+use anvil_core::service::account::new_recovery_codes;
+use anvil_jose::otp::TotpSecret;
+use aws_lc_rs::hmac;
 use serde_json::json;
 use support::{TestResponse, csrf_from};
 use ui_helpers::*;
 use upstream_flow::*;
-use upstream_support::{MOCK_CLIENT_ID, MOCK_EMAIL, MockKind, MockProvider};
+use upstream_support::{MOCK_CLIENT_ID, MOCK_EMAIL, MOCK_SUBJECT, MockKind, MockProvider};
 
 const PASSWORD: &str = "correct horse battery";
 
@@ -807,5 +818,404 @@ async fn tenant_connection_trust_is_unchanged_by_org_domains() {
     assert!(
         !is_member(&u.app, &org, &pat).await,
         "tenant connections add no membership"
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Link confirmation without a password: an already-linked provider or an emailed code proves the
+// candidate account; nothing else links (AUTH-11, 1.0.0-rc.1 fix)
+// ---------------------------------------------------------------------------------------------
+
+/// Slug and name of a second connection (to the same mock) the candidate may already be linked to.
+const SECOND: &str = "second-id";
+const SECOND_NAME: &str = "Second ID";
+
+async fn second_connection(u: &Upstream, slug: &str, name: &str) -> Connection {
+    add_connection(&u.app, slug, name, mock_oidc_config(&u.mock), true).await
+}
+
+/// Alice's account was created through social login: no password, no passkey, a verified email.
+async fn social_only_alice(u: &Upstream) -> User {
+    let now = u.app.clock().now();
+    u.app
+        .storage()
+        .users()
+        .create(
+            tenant(&u.app).id,
+            &NewUser {
+                id: UserId::new_v7(),
+                email: MOCK_EMAIL.into(),
+                email_verified: true,
+                username: None,
+                claims: StandardClaims::default(),
+                status: UserStatus::Active,
+                created_at: now,
+            },
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("create alice")
+}
+
+/// The upstream sign-in through [`SLUG`] lands on the link confirmation page (auto-link off).
+async fn link_page(u: &Upstream) -> String {
+    tenant_settings(&u.app, |s| s.auto_link = false).await;
+    let resp = sign_in(u, json!({})).await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let html = resp.html();
+    assert_eq!(form_id(&html), "upstream-link", "{html}");
+    html
+}
+
+/// Presses the confirmation button of `slug` on the link page and returns from the provider as
+/// `subject` (with an unrelated email, so no email match can play a part).
+async fn confirm_with(u: &Upstream, page: &str, slug: &str, subject: &str) -> TestResponse {
+    let action = button_action(&u.app, page, slug);
+    let started = post_start(&u.app, &action, &csrf_from(page)).await;
+    reply_for(
+        u,
+        &started,
+        json!({ "sub": subject, "email": "mallory@example.net" }),
+    );
+    callback_at(u, slug, &started).await
+}
+
+/// Nothing new is linked to Alice and no `identity_linked` was recorded.
+async fn assert_nothing_linked(u: &Upstream, alice: &User, before: usize) {
+    assert_eq!(links(&u.app, alice).await.len(), before);
+    assert!(audit(&u.app, AuditAction::IdentityLinked).await.is_empty());
+    assert!(user(&u.app, "mallory@example.net").await.is_none());
+}
+
+#[tokio::test]
+async fn linked_provider_confirms_the_link_of_a_social_only_account() {
+    let u = setup(true).await;
+    let second = second_connection(&u, SECOND, SECOND_NAME).await;
+    // A third connection Alice is not linked to is never offered.
+    second_connection(&u, "third-id", "Third ID").await;
+    let alice = social_only_alice(&u).await;
+    link_identity(&u.app, &alice, &second, "alice-second").await;
+
+    let page = link_page(&u).await;
+    assert!(page.contains("id=\"upstream-second-id-form\""), "{page}");
+    assert!(!page.contains("upstream-third-id"), "{page}");
+    assert!(!page.contains("upstream-acme-id-form"), "{page}");
+    assert!(session(&u.app).await.is_none());
+
+    let resp = confirm_with(&u, &page, SECOND, "alice-second").await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_eq!(session(&u.app).await.expect("session").user_id, alice.id);
+    let l = links(&u.app, &alice).await;
+    assert_eq!(l.len(), 2, "{l:?}");
+    assert!(
+        l.iter()
+            .any(|l| l.connection_id == u.conn.id && l.subject == MOCK_SUBJECT)
+    );
+    let linked = audit(&u.app, AuditAction::IdentityLinked).await;
+    assert_eq!(linked.len(), 1);
+    assert_eq!(linked[0].details.as_map()["mode"], "confirmed");
+
+    // From now on the first provider alone signs Alice in.
+    u.app.clear_cookies();
+    let again = sign_in(&u, json!({})).await;
+    assert_eq!(again.status, 200, "{}", again.text());
+    assert_eq!(session(&u.app).await.expect("session").user_id, alice.id);
+}
+
+#[tokio::test]
+async fn confirming_with_an_identity_of_another_user_links_nothing() {
+    let u = setup(true).await;
+    let second = second_connection(&u, SECOND, SECOND_NAME).await;
+    let alice = social_only_alice(&u).await;
+    link_identity(&u.app, &alice, &second, "alice-second").await;
+    register(&u.app, "", "bob@example.com", PASSWORD).await;
+    let bob = user(&u.app, "bob@example.com").await.expect("bob");
+    link_identity(&u.app, &bob, &second, "bob-second").await;
+    u.app.clear_cookies();
+
+    let page = link_page(&u).await;
+    let resp = confirm_with(&u, &page, SECOND, "bob-second").await;
+    assert_rejected(&u, &resp, "link_confirm_mismatch").await;
+    assert_nothing_linked(&u, &alice, 1).await;
+    assert_eq!(links(&u.app, &bob).await.len(), 1);
+}
+
+#[tokio::test]
+async fn confirming_with_an_unlinked_identity_links_nothing() {
+    let u = setup(true).await;
+    let second = second_connection(&u, SECOND, SECOND_NAME).await;
+    let alice = social_only_alice(&u).await;
+    link_identity(&u.app, &alice, &second, "alice-second").await;
+
+    let page = link_page(&u).await;
+    let resp = confirm_with(&u, &page, SECOND, "nobody-second").await;
+    assert_rejected(&u, &resp, "link_confirm_mismatch").await;
+    assert_nothing_linked(&u, &alice, 1).await;
+}
+
+#[tokio::test]
+async fn confirmation_buttons_are_hidden_when_the_account_may_not_be_revealed() {
+    // Untrusted connection: the candidate is not revealed, so neither are its providers.
+    let u = setup(false).await;
+    let second = second_connection(&u, SECOND, SECOND_NAME).await;
+    let alice = social_only_alice(&u).await;
+    link_identity(&u.app, &alice, &second, "alice-second").await;
+
+    let page = link_page(&u).await;
+    assert!(!page.contains("upstream-second-id"), "{page}");
+    assert!(!page.contains(SECOND_NAME), "{page}");
+    assert!(!page.contains(MOCK_EMAIL), "{page}");
+    // Not the "no method" verdict either (that would reveal the account), but the way out.
+    let keys = message_keys(&page);
+    assert!(
+        !keys.contains(&"upstream.link_no_method".to_owned()),
+        "{page}"
+    );
+    assert!(page.contains("id=\"link-account-linked\""), "{page}");
+
+    // A crafted start of the linked provider from this flow cannot link either.
+    let action = url::Url::parse(&format!("https://op.test{}", form_action(&u.app, &page)))
+        .expect("form action");
+    let flow = action
+        .query_pairs()
+        .find(|(k, _)| k == "flow")
+        .map(|(_, v)| v.into_owned())
+        .expect("flow");
+    let started = post_start(
+        &u.app,
+        &format!("/ui/login/upstream/{SECOND}?flow={flow}"),
+        &csrf_from(&page),
+    )
+    .await;
+    reply_for(&u, &started, json!({ "sub": "alice-second" }));
+    let resp = callback_at(&u, SECOND, &started).await;
+    assert_rejected(&u, &resp, "link_confirm_mismatch").await;
+    assert_eq!(links(&u.app, &alice).await.len(), 1);
+    assert!(audit(&u.app, AuditAction::IdentityLinked).await.is_empty());
+}
+
+/// RFC 6238 code (SHA-1, 6 digits, 30 s) of `seed` at `unix` (test implementation).
+fn totp_code(seed: &[u8], unix: i64) -> String {
+    let key = hmac::Key::new(hmac::HMAC_SHA1_FOR_LEGACY_USE_ONLY, seed);
+    let counter = u64::try_from(unix / 30).expect("positive time");
+    let tag = hmac::sign(&key, &counter.to_be_bytes());
+    let h = tag.as_ref();
+    let off = usize::from(h[h.len() - 1] & 0x0f);
+    let bin = (u32::from(h[off]) & 0x7f) << 24
+        | u32::from(h[off + 1]) << 16
+        | u32::from(h[off + 2]) << 8
+        | u32::from(h[off + 3]);
+    format!("{:06}", bin % 1_000_000)
+}
+
+#[tokio::test]
+async fn confirmation_through_a_linked_provider_still_needs_the_second_factor() {
+    let u = setup(true).await;
+    let second = second_connection(&u, SECOND, SECOND_NAME).await;
+    let alice = social_only_alice(&u).await;
+    link_identity(&u.app, &alice, &second, "alice-second").await;
+    let id = CredentialId::new_v7();
+    let seed = TotpSecret::generate();
+    let secret_enc = u
+        .app
+        .kek()
+        .seal(TOTP_SEED_PURPOSE, &credential_aad(id), seed.as_bytes())
+        .expect("seal");
+    let (_, hashes) = new_recovery_codes(u.app.kek()).expect("codes");
+    let now = u.app.clock().now();
+    u.app
+        .storage()
+        .users()
+        .create_totp(
+            tenant(&u.app).id,
+            alice.id,
+            &NewTotp {
+                id,
+                secret_enc,
+                created_at: now,
+            },
+            &hashes,
+            now,
+        )
+        .await
+        .expect("totp");
+    tenant_settings(&u.app, |s| s.mfa_policy = MfaPolicy::Required).await;
+
+    let page = link_page(&u).await;
+    let resp = confirm_with(&u, &page, SECOND, "alice-second").await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let html = resp.html();
+    assert_eq!(form_id(&html), "second-factor", "{html}");
+    assert!(
+        session(&u.app).await.is_none(),
+        "no session before the factor"
+    );
+    assert_eq!(
+        links(&u.app, &alice).await.len(),
+        1,
+        "no link before the factor"
+    );
+
+    let action = form_action(&u.app, &html);
+    let csrf = csrf_from(&html);
+    let factor = hidden_inputs(&html)
+        .into_iter()
+        .find(|(n, _)| n == "factor_token")
+        .expect("factor token")
+        .1;
+    // A wrong code links nothing.
+    let wrong = u
+        .app
+        .post_form(
+            &action,
+            &[
+                ("csrf_token", &csrf),
+                ("factor_token", &factor),
+                ("code", "000000"),
+            ],
+        )
+        .await;
+    assert_eq!(wrong.status, 400, "{}", wrong.text());
+    assert_eq!(links(&u.app, &alice).await.len(), 1);
+    assert!(session(&u.app).await.is_none());
+
+    let code = totp_code(seed.as_bytes(), now.unix_timestamp());
+    let ok = u
+        .app
+        .post_form(
+            &action,
+            &[
+                ("csrf_token", &csrf),
+                ("factor_token", &factor),
+                ("code", &code),
+            ],
+        )
+        .await;
+    assert_eq!(ok.status, 200, "{}", ok.text());
+    assert_eq!(session(&u.app).await.expect("session").user_id, alice.id);
+    assert_eq!(links(&u.app, &alice).await.len(), 2);
+    let linked = audit(&u.app, AuditAction::IdentityLinked).await;
+    assert_eq!(linked.len(), 1);
+    assert_eq!(linked[0].details.as_map()["mode"], "confirmed");
+}
+
+#[tokio::test]
+async fn link_page_without_any_confirmation_method_says_how_to_continue() {
+    // Alice has no password, no passkey, no other linked provider and email sign-in is off.
+    let u = setup(true).await;
+    let alice = social_only_alice(&u).await;
+    let page = link_page(&u).await;
+    let keys = message_keys(&page);
+    assert!(
+        keys.contains(&"upstream.link_no_method".to_owned()),
+        "{page}"
+    );
+    assert!(!page.contains("name=\"password\""), "{page}");
+    assert!(page.contains("id=\"link-account-linked\""), "{page}");
+    assert!(page.contains("/ui/account/linked"), "{page}");
+    // The cancel link leads back to a working sign-in page; nothing was linked.
+    let marker = "id=\"link-cancel\" href=\"";
+    let i = page.find(marker).expect("cancel link") + marker.len();
+    let href = &page[i..i + page[i..].find('"').expect("quoted")];
+    let back = u
+        .app
+        .get(&to_path(&u.app, &href.replace("&amp;", "&")))
+        .await;
+    assert_eq!(back.status, 200, "{}", back.text());
+    assert_eq!(form_id(&back.html()), "login");
+    assert!(links(&u.app, &alice).await.is_empty());
+    assert!(session(&u.app).await.is_none());
+}
+
+#[tokio::test]
+async fn emailed_code_confirms_the_link_of_a_social_only_account() {
+    let u = setup(true).await;
+    tenant_settings(&u.app, |s| {
+        s.email_otp = true;
+        s.magic_link = true;
+    })
+    .await;
+    let alice = social_only_alice(&u).await;
+    let page = link_page(&u).await;
+    assert!(page.contains("id=\"email-code-request\""), "{page}");
+    assert!(!message_keys(&page).contains(&"upstream.link_no_method".to_owned()));
+    let action = email_code_support::action_of(&u.app, &page, "email-code-request");
+    let sent = u
+        .app
+        .post_form(
+            &action,
+            &[("csrf_token", &csrf_from(&page)), ("email", MOCK_EMAIL)],
+        )
+        .await;
+    assert_eq!(sent.status, 200, "{}", sent.text());
+    let mail = email_code_support::one_code(&u.app).await;
+    assert_eq!(mail.to, MOCK_EMAIL);
+    // Only the code: the magic link cannot carry the pending link to another browser.
+    assert!(mail.link.is_empty(), "{mail:?}");
+    let ok = email_code_support::submit_code(&u.app, &sent, &mail.code).await;
+    assert_eq!(ok.status, 200, "{}", ok.text());
+    assert_eq!(session(&u.app).await.expect("session").user_id, alice.id);
+    let l = links(&u.app, &alice).await;
+    assert_eq!(l.len(), 1);
+    assert_eq!(l[0].subject, MOCK_SUBJECT);
+    let linked = audit(&u.app, AuditAction::IdentityLinked).await;
+    assert_eq!(linked[0].details.as_map()["mode"], "confirmed");
+}
+
+#[tokio::test]
+async fn emailed_code_for_another_address_cannot_confirm_the_link() {
+    let u = setup(true).await;
+    tenant_settings(&u.app, |s| s.email_otp = true).await;
+    let alice = social_only_alice(&u).await;
+    register(&u.app, "", "bob@example.com", PASSWORD).await;
+    mark_verified(&u.app, "bob@example.com").await;
+    take_emails(&u.app).await;
+    u.app.clear_cookies();
+    let page = link_page(&u).await;
+    let action = email_code_support::action_of(&u.app, &page, "email-code-request");
+    let resp = u
+        .app
+        .post_form(
+            &action,
+            &[
+                ("csrf_token", &csrf_from(&page)),
+                ("email", "bob@example.com"),
+            ],
+        )
+        .await;
+    assert_eq!(resp.status, 400, "{}", resp.text());
+    assert!(email_code_support::login_codes(&u.app).await.is_empty());
+    assert!(links(&u.app, &alice).await.is_empty());
+    assert!(session(&u.app).await.is_none());
+
+    // An unverified candidate address is not offered a code at all.
+    let u = setup(true).await;
+    tenant_settings(&u.app, |s| s.email_otp = true).await;
+    register(&u.app, "", MOCK_EMAIL, PASSWORD).await;
+    let page = link_page(&u).await;
+    assert!(!page.contains("id=\"email-code-request\""), "{page}");
+}
+
+#[tokio::test]
+async fn callback_of_a_finished_sign_in_says_it_was_already_completed() {
+    let u = setup(true).await;
+    let started = start(&u.app, SLUG).await;
+    reply_for(&u, &started, json!({}));
+    let first = callback(&u, &started).await;
+    assert_eq!(first.status, 200, "{}", first.text());
+    // The browser goes back and the provider's return is loaded again: the flow is gone.
+    u.app.clear_cookies();
+    let again = callback(&u, &started).await;
+    assert_eq!(again.status, 400, "{}", again.text());
+    let html = again.html();
+    assert_eq!(form_id(&html), "login", "{html}");
+    let keys = message_keys(&html);
+    assert!(keys.contains(&"upstream.flow_expired".to_owned()), "{html}");
+    assert!(!keys.contains(&"upstream.failed".to_owned()), "{html}");
+    assert_eq!(
+        failure_reasons(&u.app).await.first().map(String::as_str),
+        Some("flow_expired")
     );
 }
