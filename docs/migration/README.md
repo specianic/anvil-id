@@ -8,6 +8,13 @@ Guides for specific sources:
 
 - [From Firebase Authentication](firebase.md)
 - [From another AnvilID installation](anvilid.md)
+- [From Auth0](auth0.md) (passwords kept, via Auth0's password hash export)
+- [From Keycloak](keycloak.md) (passwords kept)
+- [From Supabase Auth](supabase.md) (passwords kept)
+- [From Clerk](clerk.md) (passwords kept for supported hashers)
+- [From Amazon Cognito](cognito.md) (profiles only; users set a new password)
+- [From Okta](okta.md) (profiles only; users set a new password)
+- [From Microsoft Entra External ID / Azure AD B2C](entra.md) (profiles only; users set a new password)
 - Any other system: convert its export to the record format below. The
   [password schemes](../IMPORT-EXPORT.md#password-schemes) cover bcrypt, Argon2, scrypt,
   PBKDF2 (raw, Django and passlib formats) and salted SHA-256/SHA-512.

@@ -2,7 +2,7 @@
 phase: 07-release-1-0-certification
 plan: 22
 subsystem: docs
-status: checkpoint-pending
+status: complete
 tags: [docs, mdbook, migration, install, guides, architecture, security-policy]
 requires: ["07-01", "07-06", "07-07", "07-10", "07-13", "07-14", "07-16", "07-17", "07-18", "07-19", "07-21"]
 provides:
@@ -57,7 +57,11 @@ is still open: Task 1 is a real owner checkpoint.
 
 ## Owner vendor decision (Q12)
 
-Owner decision (verbatim): _not yet given_.
+Owner decision (verbatim, 2026-11-27): "let's do Auth0, Keycloak, AWS Cognito, Okta, Supabase Auth, Clerk and
+Microsoft Entra (Azure AD B2C)". The owner chose these after being told that, as far as known before verification,
+Cognito, Okta and Entra do not export password hashes: their guides cover moving users and profile data with a
+password reset (or other first-sign-in path) instead of keeping passwords. Each guide is verified against the vendor's
+current public documentation (URL + date footer).
 
 Question asked: which source providers get dedicated migration guides in 1.0, beyond the generic
 format overview, Firebase and AnvilID-to-AnvilID? Reply "none" or a list of vendors. Each named
@@ -161,3 +165,11 @@ does not exist. Both are one-line fixes for the gate (07-23) or 07-27.
 
 - FOUND: docs/INSTALL.md, docs/guides/{oidc-app,spa,native-app}.md, docs/migration/{README,firebase,anvilid}.md, docs/security.md, docs/reference.md
 - FOUND: commits 8ce24fb, 59beb0f
+
+## Vendor guides (Task 1 resumed, 2026-11-27)
+
+Written after the owner's decision, each verified against the vendor's current public docs (footer per guide) and
+tested on synthetic example.test data imported into a scratch AnvilID build:
+docs/migration/auth0.md, keycloak.md, supabase.md, clerk.md (passwords kept) and cognito.md, okta.md, entra.md
+(profiles only; hashes not exportable or no export documented). Linked from docs/SUMMARY.md and docs/migration/README.md.
+mdBook 0.5.4 build of a research-free copy passes scripts/check-docs-site.sh.

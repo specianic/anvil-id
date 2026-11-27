@@ -21,3 +21,5 @@ Items found during execution, dispositioned at the 07-23 gate.
 - (07-21) docs/SUMMARY.md needs COMPATIBILITY.md; ARCHITECTURE.md (~L1440, ~L1463) and OPERATIONS.md "Limitations in 1.0" still say tenant-restricted admins are "deferred to Phase 7" (now: later 1.x, Q8); COMPATIBILITY.md mentions a CHANGELOG that doesn't exist (07-22). UPGRADING.md anchors unverified until the docs CI build.
 - (07-21) API baselines were captured at 0ab478f (pre-rc); 07-23 should re-confirm they equal the rc documents (additions since are allowed; anything else is a break).
 - (07-20) Tenant switcher doesn't keep the Password hash profiles section (TENANT_PAGES in lib/tenant.ts not extended).
+- (07-22 vendor guides) Product gap: no admin-triggered recovery/welcome email for imported users without a password (Cognito/Okta/Entra paths rely on users starting recovery themselves). 1.x candidate.
+- (07-22 vendor guides) Keycloak pbkdf2-sha1 at its documented default (1.3M iterations, 64-byte key = 4 SHA-1 blocks = 5.2M work) exceeds AnvilID's 5,000,000 PBKDF2 work cap -> over_cap; the guide routes those users to a reset. Gate/owner: keep the cap, or raise it to admit this default.
