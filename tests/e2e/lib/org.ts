@@ -188,23 +188,39 @@ interface SamlMetadataView {
   idp_entity_id: string;
   sso_url: string;
   signing_certs: string[];
+  metadata_url?: string | null;
+}
+
+/** Where the IdP metadata comes from: pasted XML (the mock IdP) or an https URL (a real IdP). */
+export type SamlMetadataSource = Pick<MockSamlIdp, 'metadataXml'> | { metadataUrl: string };
+
+/** Optional connection settings that differ from the mock IdP's. */
+export interface SamlConnectionOverrides {
+  name_id_format?: string;
+  attributes?: Record<string, string>;
 }
 
 /**
- * Creates an org SAML connection from the mock IdP's metadata: the metadata goes through the import
- * endpoint (which refuses a non-https sign-in URL: start the mock with `https: true`), then the
- * connection is created from the imported values with the mock's attribute names.
+ * Creates an org SAML connection from IdP metadata: the metadata goes through the import endpoint
+ * (pasted XML, or an https URL fetched by AnvilID's guarded outbound client; it refuses a non-https
+ * sign-in URL: start the mock with `https: true`), then the connection is created from the imported
+ * values. Defaults: `persistent` NameID and the mock's attribute names (email/given_name/family_name).
  */
 export async function createOrgSamlConnection(
   token: string,
   slug: string,
   org: string,
-  idp: Pick<MockSamlIdp, 'metadataXml'>,
+  idp: SamlMetadataSource,
   c: { slug: string; display_name: string },
+  overrides: SamlConnectionOverrides = {},
 ): Promise<OrgConnectionView> {
-  const meta = await adminCall<SamlMetadataView>(token, 'POST', orgPath(slug, org, '/connections/saml-metadata'), {
-    xml: idp.metadataXml,
-  });
+  const source = 'metadataUrl' in idp ? { url: idp.metadataUrl } : { xml: idp.metadataXml };
+  const meta = await adminCall<SamlMetadataView>(
+    token,
+    'POST',
+    orgPath(slug, org, '/connections/saml-metadata'),
+    source,
+  );
   const created = await adminCall<OrgConnectionView>(
     token,
     'POST',
@@ -217,8 +233,9 @@ export async function createOrgSamlConnection(
         idp_entity_id: meta.idp_entity_id,
         sso_url: meta.sso_url,
         signing_certs: meta.signing_certs,
-        name_id_format: 'persistent',
-        attributes: { email: 'email', given_name: 'given_name', family_name: 'family_name' },
+        name_id_format: overrides.name_id_format ?? 'persistent',
+        attributes: overrides.attributes ?? { email: 'email', given_name: 'given_name', family_name: 'family_name' },
+        ...('metadataUrl' in idp ? { metadata_url: idp.metadataUrl } : {}),
       },
     },
     201,
@@ -294,4 +311,11 @@ export async function expectPasswordStep(page: Page, email: string): Promise<voi
   await expect(page.locator('#password')).toBeVisible();
   await expect(page.locator('#login-email-locked')).toContainText(email.toLowerCase());
   await expect(page.locator('#login-sso-continue')).toHaveCount(0);
+}
+
+/** On the email page: a routed address, then "Continue with single sign-on" (to the IdP). */
+export async function chooseSso(page: Page, email: string): Promise<void> {
+  await submitEmailFirst(page, email);
+  await expectSsoChoice(page, email);
+  await page.locator('#login-sso-continue').click();
 }

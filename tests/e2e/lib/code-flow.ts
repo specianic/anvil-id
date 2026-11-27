@@ -73,7 +73,8 @@ export function jwtClaims(token: string): Record<string, unknown> {
 /**
  * Runs an authorization request with `scope` in `page`, lets `signIn` complete the hosted pages
  * (login, consent, ...), exchanges the code and returns the token response. The ID token's nonce
- * is checked when one is returned. `issuer` defaults to the default tenant.
+ * is checked when one is returned. `issuer` defaults to the default tenant. `extraParams` are added
+ * to the authorization request (for example `{ prompt: 'login' }`).
  */
 export async function authorizationCodeFlow(
   page: Page,
@@ -81,6 +82,7 @@ export async function authorizationCodeFlow(
   scope: string,
   signIn: (page: Page) => Promise<void>,
   issuer: string = anvilUrl(),
+  extraParams: Record<string, string> = {},
 ): Promise<TokenSet> {
   const discovery = await discover(issuer);
   const verifier = randomBytes(32).toString('base64url');
@@ -97,6 +99,7 @@ export async function authorizationCodeFlow(
     nonce,
     code_challenge: challenge,
     code_challenge_method: 'S256',
+    ...extraParams,
   }).toString();
 
   const pattern = `${client.redirect_uri}**`;
