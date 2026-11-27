@@ -632,9 +632,16 @@ async fn yaml_v10_fields_round_trip_and_refusals() {
     let out = a.run(&["tenant", "export", "default", "-o", "export.yaml"], &[]);
     assert!(out.status.success(), "{}", text(&out));
     let exported = yaml(&a.path("export.yaml"));
-    assert_eq!(exported["clients"][0]["client_kind"], "agent");
+    // The export sorts clients by client_id; the billing client's id is generated, so find it.
+    let bi = exported["clients"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|c| c["client_id"] == client_id.as_str())
+        .expect("billing client exported");
+    assert_eq!(exported["clients"][bi]["client_kind"], "agent");
     assert_eq!(
-        exported["clients"][0]["require_pushed_authorization_requests"],
+        exported["clients"][bi]["require_pushed_authorization_requests"],
         true
     );
     let native = exported["clients"]
@@ -658,7 +665,7 @@ async fn yaml_v10_fields_round_trip_and_refusals() {
 
     // An agent that skips consent, a wildcard origin and a path origin are refused by path.
     let mut bad = exported.clone();
-    bad["clients"][0]["consent_mode"] = json!("skip_first_party");
+    bad["clients"][bi]["consent_mode"] = json!("skip_first_party");
     bad["tenant"]["settings"]["headless"]["allowed_origins"] =
         json!(["https://*.example.test", "https://a.example.test/path"]);
     write_yaml(&a.path("bad.yaml"), &bad);
@@ -666,11 +673,11 @@ async fn yaml_v10_fields_round_trip_and_refusals() {
     assert!(!out.status.success(), "{}", text(&out));
     let printed = text(&out);
     for path in [
-        "clients[0].consent_mode",
-        "tenant.settings.headless.allowed_origins[0]",
-        "tenant.settings.headless.allowed_origins[1]",
+        format!("clients[{bi}].consent_mode"),
+        "tenant.settings.headless.allowed_origins[0]".to_owned(),
+        "tenant.settings.headless.allowed_origins[1]".to_owned(),
     ] {
-        assert!(printed.contains(path), "{path}: {printed}");
+        assert!(printed.contains(&path), "{path}: {printed}");
     }
     let tenant = a.tenant("default").await;
     assert_eq!(

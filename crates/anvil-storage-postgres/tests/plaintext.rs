@@ -1230,7 +1230,7 @@ async fn release_1_0_final_secrets_never_stored_plaintext() {
         .create_pushed_request(
             t,
             &NewPushedRequest {
-                request_uri_hash: uri_hash.clone(),
+                request_uri_hash: uri_hash,
                 client_id: client.client_id.clone(),
                 params: serde_json::json!({
                     "response_type": "code",
@@ -1251,7 +1251,7 @@ async fn release_1_0_final_secrets_never_stored_plaintext() {
     let flow_token = random_token();
     let flow_hash = SecretHash(secret_hash(&flow_token));
     let mut flow = new_flow(None, Duration::minutes(10));
-    flow.cookie_hash = flow_hash.clone();
+    flow.cookie_hash = flow_hash;
     flow.state = serde_json::to_string(&FlowState::Login(LoginState {
         binding: FlowBindingKind::Token,
         ..LoginState::default()
