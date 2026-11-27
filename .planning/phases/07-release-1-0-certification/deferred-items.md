@@ -6,7 +6,7 @@ Items found during execution, dispositioned at the 07-23 gate.
 - (07-10) No second-factor happy-path test through the headless API (wired through the same flow_driver call as ui::mfa, untested). 07-18 or the gate should add it.
 - (07-10) `GET /api/flows/v1/{unknown}` returns 405 with empty body (router limitation); unknown kinds on other paths get JSON 404.
 - (07-01) RESOLVED 2026-11-27: owner approved the scrypt/bcrypt crypto exception.
-- (07-06) Owner action pending: enable GitHub private vulnerability reporting; decide the SECURITY.md alternative contact.
+- (07-06) RESOLVED 2026-11-27: private vulnerability reporting enabled; GitHub only (placeholder removed).
 - (07-15) `anvilid users export` without --out disables tracing so the stdout audit mirror doesn't corrupt the NDJSON; consider routing the CLI audit mirror to stderr instead.
 - (07-13) docs/ARCHITECTURE.md ~L236 says authorization_request is "also used for PAR"; PAR has its own table since 07-08 (07-22 docs pass).
 - (07-13) docs/SUMMARY.md needs entries for PAR.md, HEADLESS.md, IMPORT-EXPORT.md (07-22).

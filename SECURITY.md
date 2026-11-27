@@ -37,8 +37,6 @@ Report it privately through **GitHub private vulnerability reporting**:
 2. Choose **Report a vulnerability**.
 3. Fill in the form. The report is visible only to you and the maintainers.
 
-<!-- OWNER: optional alternative contact (leave out to use GitHub private reporting only) -->
-
 A useful report contains:
 
 - the affected version (`anvilid --version`) or commit, and the storage backend (SQLite or PostgreSQL);

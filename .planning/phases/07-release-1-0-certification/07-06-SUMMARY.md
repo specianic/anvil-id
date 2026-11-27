@@ -3,7 +3,7 @@ phase: 07-release-1-0-certification
 plan: 06
 subsystem: security-policy
 tags: [security, SEC-08, disclosure, threat-model, external-review]
-status: checkpoint-pending
+status: complete
 requires: []
 provides:
   - SECURITY.md (published security policy, owner placeholder pending)
@@ -85,8 +85,9 @@ deps check, release graph, release workflow and attestations).
 
 ## Owner confirmation
 
-Pending. To be recorded verbatim here after the owner replies "enabled; GitHub only" or
-"enabled; contact: TEXT", together with the API result after the change.
+2026-11-27. Owner reply (verbatim): "I enabled private vulnerability reporting". No alternative contact was
+given, so the SECURITY.md placeholder was removed (GitHub private reporting only).
+`gh api repos/{owner}/{repo}/private-vulnerability-reporting` returned `{"enabled":true}`.
 
 ## Deviations from Plan
 
