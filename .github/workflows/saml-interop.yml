@@ -1,0 +1,81 @@
+# Real-IdP SAML interop (07-28): AnvilID signs in through Keycloak, SimpleSAMLphp and Shibboleth IdP
+# containers (pinned by tag and digest in tests/saml-interop/compose.yml), provisioned per run with
+# generated keys and passwords. The job calls the same recipe as local runs (`just saml-interop`).
+# One storage backend is enough: the SAML path is storage independent, and the Postgres replay
+# guard is covered by crates/anvil-web/tests/saml_login.rs.
+name: saml-interop
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "crates/**"
+      - "themes/**"
+      - "examples/**"
+      - "tests/e2e/**"
+      - "tests/saml-interop/**"
+      - "scripts/**"
+      - "Dockerfile"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "justfile"
+      - ".github/workflows/saml-interop.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  saml-interop:
+    name: SAML interop (Keycloak, SimpleSAMLphp, Shibboleth)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - run: npm ci --prefix tests/e2e
+      - run: npx --prefix tests/e2e playwright install --with-deps chromium
+      # Pull on its own step so the pull time is visible; the references come from compose.yml.
+      - name: Pull the pinned IdP images
+        run: docker compose -p anvil-saml-interop -f tests/saml-interop/compose.yml pull --quiet
+        env:
+          SAML_INTEROP_RUN_DIR: /tmp
+      - run: just saml-interop sqlite
+      # The results file holds IdP images, scenarios, checklist rows and algorithm URIs only.
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: saml-interop-results
+          path: saml-interop-results/results.json
+          if-no-files-found: warn
+          retention-days: ${{ startsWith(github.ref, 'refs/tags/') && 90 || 0 }}
+      - name: Upload e2e results and IdP logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: saml-interop-failure
+          path: |
+            e2e-results/
+            saml-interop-results/logs/
+          if-no-files-found: warn
+      - name: Remove IdP containers
+        if: always()
+        run: just saml-interop-clean

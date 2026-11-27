@@ -97,7 +97,8 @@
 #     the agent consent and step-up screens, and the console user import, hash profile and client
 #     pages): Playwright specs under
 #     tests/e2e/specs, run by the e2e workflow, plus the OpenID conformance plans (conformance
-#     workflow).
+#     workflow); and the real-IdP SAML interop journeys (tests/e2e/specs/saml-interop.spec.ts,
+#     saml-interop workflow, against Keycloak, SimpleSAMLphp and Shibboleth).
 #   - JIT sign-up racing a concurrent registration of the same email cannot be produced over HTTP;
 #     its atomicity is the create_user_with_link_* contract tests mapped above.
 #

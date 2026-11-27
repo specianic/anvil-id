@@ -198,10 +198,72 @@ the membership and default roles; another organization's domain never auto-links
 - **Fuzzing:** `saml_response_parse` and `saml_metadata_parse` run in the nightly fuzz workflow.
 - **Browser e2e:** `tests/e2e/specs/saml.spec.ts` signs in through a local mock IdP
   (`tests/e2e/lib/mock-saml-idp.ts`).
+- **Real-IdP interop:** `tests/e2e/specs/saml-interop.spec.ts` signs in through Keycloak,
+  SimpleSAMLphp and Shibboleth IdP containers in CI; see
+  [Automated interop (CI)](#automated-interop-ci).
 
 A green corpus proves that the attacks we know about fail. It does not prove that none we have not
 thought of succeeds, and it says nothing about interoperability with real IdPs. Hence the
 experimental flag, the external review and the checklist below.
+
+## Automated interop (CI)
+
+The `saml-interop` workflow runs on every pull request that touches code, on every push to `main`
+and on release tags. It starts three SAML IdPs from pinned container images, provisions them
+without interaction from the templates in `tests/saml-interop/` with keys and passwords generated
+for that run, and has a real browser sign in to AnvilID through each IdP's own login page. Run it
+locally with `just saml-interop` (Docker and Node.js needed), and free the disk afterwards with
+`just saml-interop-clean images=1`. Each run uploads a results file listing every scenario per
+IdP, with the observed signature algorithms and NameID format.
+
+| IdP | Image | Version | Signing setups exercised | Checklist rows automated |
+|---|---|---|---|---|
+| Keycloak | `quay.io/keycloak/keycloak:26.8.2` | 26.8.2 | assertion signed; Response and assertion signed (accepted); Response only, nothing signed, RSA-SHA1, encrypted assertion (refused) | 1-10, 12-16 |
+| SimpleSAMLphp | `cirrusid/simplesamlphp:v2.5.3.1.20261023T014150` | 2.5.3.1 | Response and assertion signed; assertion only (accepted); Response only, encrypted assertion (refused) | 1-10, 13, 14, 16 |
+| Shibboleth IdP | `i2incommon/shib-idp:5.2.3_20261117_rocky9_multiarch` | 5.2.3 | Response and assertion signed (accepted); the default Response-only signing (refused) | 1-10, 14, 16 |
+
+The images are pinned by digest in `tests/saml-interop/compose.yml`. For each IdP the tests
+prove: metadata import by https URL (row 2); the AuthnRequest AnvilID sends (Issuer, ACS,
+`persistent` NameID policy, `ForceAuthn` only with `prompt=login`); a just-in-time user with the
+mapped email, given and family name, the email trusted on the organization's verified domain, the
+membership with the organization's default role and the organization in the token (rows 1, 4-6);
+the same link and `sub` on a second sign-in in a fresh browser (row 7); `prompt=login` makes the
+IdP ask for credentials again (row 8); IdP-initiated sign-in from the IdP's own endpoint is refused
+(row 9); the captured response replayed after the sign-in is refused (row 10; audited
+`relay_state`, because that sign-in's flow is finished; the assertion-id replay guard itself is
+covered by `saml_login.rs`); the assertion is signed with SHA-256 or stronger
+(row 3); and every success and refusal is audited with its reason (row 16). For Keycloak only, they
+also prove certificate rollover in the order above and the refusal of a connection pinned only to
+the retired key (row 12), the organization's MFA policy after a SAML sign-in (row 15), and that an
+asserted address outside the organization's verified domains gets no account in a tenant with
+closed registration.
+
+**IdP settings the tests use** (what each IdP needed to work with AnvilID's profile):
+
+- **Keycloak:** in the SAML client, turn off "Client signature required" (AnvilID sends unsigned
+  AuthnRequests), keep "Sign assertions" on, set the NameID format to `persistent` (with "Force
+  name ID format"), and add user-property mappers for email, first and last name. Keycloak's
+  `persistent` NameID stayed the same for one user across sign-ins.
+- **SimpleSAMLphp:** add the `saml:PersistentNameID` authentication filter to the hosted IdP. Its
+  default NameID is `transient`, which AnvilID refuses. Assertion signing is on by default.
+- **Shibboleth IdP:** set `signAssertions="true"` on the `SAML2.SSO` profile for the AnvilID
+  relying party. The default signs only the Response, which AnvilID refuses (`signature_profile`).
+  Turn encryption off for AnvilID (it has no encryption key), enable the persistent NameID
+  generator, and map the attributes by their `FriendlyName` (`mail`, `givenName`, `sn`).
+
+**Not automated, and why:**
+
+- Clock skew (row 11): none of the images can shift its clock.
+- Wrong audience or recipient, expired assertions, XML signature wrapping and the other attack
+  shapes: a correctly configured IdP cannot produce them. The attack corpus
+  (`security_saml.rs`) and the mock-IdP browser tests cover them.
+- Encryption, Single Logout, group mapping and automatic metadata refresh: AnvilID does not
+  support them. The tests prove only the refusals listed above.
+- Microsoft Entra ID, Okta and Google Workspace are cloud services and cannot run in CI; they stay
+  on the manual checklist.
+
+These automated runs complement the manual checklist below. They do not remove the experimental
+label; that stays the owner's decision (Q3).
 
 ## Dependencies and the `chrono` exception
 
