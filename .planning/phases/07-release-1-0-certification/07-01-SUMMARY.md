@@ -3,7 +3,7 @@ phase: 07-release-1-0-certification
 plan: 01
 subsystem: password-import-crypto
 tags: [crypto, deny, bcrypt, scrypt, firebase, pbkdf2, sha2, ADM-08]
-status: awaiting-owner-checkpoint
+status: complete
 requires: []
 provides:
   - "Workspace deps scrypt 0.12.0 (default-features = false) and bcrypt 0.19.3 (default-features = false, alloc), anvil-web only"
@@ -151,14 +151,14 @@ duplicate crate). `just deps`: `dependency rules OK` (one aws-lc-rs, one aws-lc-
 - Fuzz lock: `cargo update -p bcrypt` could not run (package not yet in the fuzz lock), so the plan's fallback
   `cargo check --manifest-path fuzz/Cargo.toml` was used.
 
-## Owner checkpoint (Task 3): PENDING
+## Owner checkpoint (Task 3): APPROVED (2026-11-27)
 
 Decision asked: approve RustCrypto scrypt 0.12.0 and bcrypt 0.19.3 (blowfish and salsa20 scoped through deny
 wrappers) as a verification-only exception to "single crypto backend: aws-lc-rs"? Options: **approve** or
 **reject** (reject -> the orchestrator creates a gap plan that removes the crates, the bcrypt/scrypt/Firebase
 verifiers and import paths, re-words ADM-08 with the owner's sign-off and documents the drop).
 
-Owner decision (verbatim): _not yet given_.
+Owner decision (verbatim): "I approve"
 
 Reminder: the chrono exception review (06-01, D4/Q2) is still pending and is decided in 07-26, not here.
 

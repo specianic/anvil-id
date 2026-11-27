@@ -88,8 +88,8 @@ must show `tsp-ltv` as the only parent. The bergshamra crates are built with
 (through `kryptering`), and the RustCrypto provider is not compiled. They bring RustCrypto encoding
 crates (`der`, `spki`, `pkcs8`, `x509-cert` 0.2) for certificate parsing only.
 
-A fourth exception, for legacy password-hash verification (1.0, ADM-08, decision Q1; **owner review
-pending (07-01)**): imported bcrypt, scrypt and Firebase scrypt hashes are verified with RustCrypto
+A fourth exception, for legacy password-hash verification (1.0, ADM-08, decision Q1;
+approved by the project owner on 2026-11-27): imported bcrypt, scrypt and Firebase scrypt hashes are verified with RustCrypto
 `scrypt` 0.12.0 (`default-features = false`) and `bcrypt` 0.19.3 (`default-features = false,
 features = ["alloc"]`), used only by `anvil-web` (`adapters/password/`). aws-lc-rs provides neither
 scrypt nor bcrypt, and calling its C scrypt through FFI would need `unsafe`, which the workspace

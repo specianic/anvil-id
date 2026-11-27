@@ -79,7 +79,7 @@ deny = [
   { crate = "chrono", wrappers = ["tsp-ltv"], reason = "bergshamra-keys -> tsp-ltv (X.509 trust facade) needs chrono; our code stays on `time` (ARCHITECTURE §2, decision Q2)" },
   # Legacy password-hash verification only (ADM-08): imported hashes are verified once, then re-hashed with
   # Argon2id. No key material is generated or stored by these crates. PBKDF2/SHA-2/AES-CTR stay on aws-lc-rs.
-  # Owner review pending (07-01 checkpoint). ARCHITECTURE.md §2.
+  # Approved by the project owner on 2026-11-27 (07-01). ARCHITECTURE.md §2.
   { crate = "blowfish", wrappers = ["bcrypt"], reason = "bcrypt verification of imported hashes only (ADM-08)" },
   { crate = "salsa20", wrappers = ["scrypt"], reason = "scrypt verification of imported hashes only (ADM-08)" },
   { crate = "samael", reason = "C XML security libs" },
