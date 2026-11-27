@@ -413,6 +413,11 @@ pub enum Effect {
     /// only for an active user, enqueue the sealed `login_code` email. Renders the same "check your
     /// email" form either way.
     SendEmailCode { email: String },
+    /// Terminal (`flow::email_code`), link confirmation whose matching account may not be
+    /// revealed: like [`Effect::SendEmailCode`] for the pending link's upstream address, but the
+    /// email goes only to the sealed matching account, and only when it is active with that
+    /// verified address. Same work and the same "check your email" form either way.
+    SendLinkEmailCode,
     /// Check the code against the stored hash (compare-and-swap: a right code clears the code and
     /// the link, a wrong one counts an attempt). Establishes the user. A code that does not sign in
     /// answers the email form with its message itself (no [`Failure`]).
@@ -493,6 +498,7 @@ impl std::fmt::Debug for Effect {
                 .debug_struct("SendEmailCode")
                 .field("email", email)
                 .finish(),
+            Self::SendLinkEmailCode => f.write_str("SendLinkEmailCode"),
             Self::VerifyEmailCode { .. } => f
                 .debug_struct("VerifyEmailCode")
                 .field("code", &REDACTED)

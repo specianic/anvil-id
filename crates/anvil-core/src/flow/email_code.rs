@@ -268,15 +268,26 @@ pub fn limit_subject(kek: &Kek, tenant: TenantId, email: &str, user: Option<User
 }
 
 /// Whether the method can be used in this login state: the identify step (or the email step for a
-/// new code), not a step-up. While an upstream identity waits for link confirmation only when the
-/// confirmation offers it ([`super::upstream::LinkConfirmMethods::email_code`]: a revealed
-/// candidate with a verified address), and then only for that address ([`link_address_ok`]).
+/// new code), not a step-up. While an upstream identity waits for link confirmation:
+///
+/// - revealed candidate: only when the confirmation offers it
+///   ([`super::upstream::LinkConfirmMethods::email_code`]: a verified address), and then only for
+///   that address ([`link_address_ok`]);
+/// - unrevealed: always (whatever account matched, so the page does not depend on it), but only
+///   without an address: the service sends the code to the sealed matching account's verified
+///   address, if any ([`Effect::SendLinkEmailCode`]).
 fn available(state: &LoginState) -> bool {
     matches!(state.step, LoginStep::Identify | LoginStep::EmailCode)
         && state.step_up_session.is_none()
         && state.pending_link.as_ref().is_none_or(|l| {
-            l.confirm.as_ref().is_some_and(|c| c.email_code) && l.candidate_email.is_some()
+            !l.revealed()
+                || (l.confirm.as_ref().is_some_and(|c| c.email_code) && l.candidate_email.is_some())
         })
+}
+
+/// The login waits for the confirmation of a link whose matching account may not be revealed.
+fn unrevealed_link(state: &LoginState) -> bool {
+    state.pending_link.as_ref().is_some_and(|l| !l.revealed())
 }
 
 /// A code requested while a link waits for confirmation goes only to the candidate's address
@@ -293,7 +304,8 @@ fn link_address_ok(state: &LoginState, email: &str) -> bool {
 }
 
 /// A sign-in email is requested for `email` (`None`: a new code to the address of the current
-/// code). Plans [`Effect::SendEmailCode`]; the service generates, hashes and stores the code and
+/// code). Plans [`Effect::SendEmailCode`] ([`Effect::SendLinkEmailCode`] while a link whose
+/// matching account may not be revealed waits for confirmation); the service generates, hashes and stores the code and
 /// sends the email only to an active user.
 pub(super) fn request(
     mut state: LoginState,
@@ -302,6 +314,20 @@ pub(super) fn request(
 ) -> (FlowState, Vec<Effect>) {
     if !env.email_code || !available(&state) {
         return super::login::invalid_input(state);
+    }
+    // Unrevealed link confirmation: no address may be typed (the code goes only to the sealed
+    // matching account); a first code and a new one are the same request.
+    if unrevealed_link(&state) {
+        if email.is_some() {
+            return super::login::invalid_input(state);
+        }
+        if let Some(ec) = state.email_code.as_deref()
+            && ec.sends >= MAX_SENDS
+        {
+            let f = form_for(Some(ec), vec![error(TOO_MANY_SENDS)]);
+            return (FlowState::Login(state), vec![Effect::Render(f)]);
+        }
+        return (FlowState::Login(state), vec![Effect::SendLinkEmailCode]);
     }
     let email = match email {
         Some(raw) => {
@@ -481,6 +507,7 @@ mod tests {
                     email_code,
                     ..LinkConfirmMethods::default()
                 }),
+                matched_sealed: None,
             })),
             ..LoginState::default()
         };
@@ -508,6 +535,61 @@ mod tests {
             let effects = request(s, email);
             assert!(
                 matches!(&effects[..], [Effect::Render(f)] if all_keys(f).iter().any(|k| k == "flow.invalid_input")),
+                "{effects:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn unrevealed_link_confirmation_sends_only_to_the_sealed_match_without_an_address() {
+        use super::super::upstream::PendingLink;
+        // Whether or not an account is sealed in the link, the request is the same.
+        for matched in [None, Some("sealed-match".to_owned())] {
+            let state = |step: LoginStep, sends: Option<u8>| LoginState {
+                step,
+                email_code: sends.map(|n| {
+                    let mut ec = issued(&kek(), FlowId::new_v7(), "123456", "token");
+                    ec.sends = n;
+                    Box::new(ec)
+                }),
+                pending_link: Some(Box::new(PendingLink {
+                    connection_id: crate::model::ConnectionId::new_v7(),
+                    identity_sealed: "sealed".into(),
+                    candidate_user: None,
+                    provider_name: "Example ID".into(),
+                    candidate_email: None,
+                    confirm: None,
+                    matched_sealed: matched.clone(),
+                })),
+                ..LoginState::default()
+            };
+            let request = |s: LoginState, email: Option<&str>| {
+                transition(
+                    FlowState::Login(s),
+                    FlowInput::EmailCodeRequest {
+                        email: email.map(str::to_owned),
+                    },
+                    &env(),
+                )
+                .1
+            };
+            // A first code and a new one: the address is the service's to find.
+            for s in [
+                state(LoginStep::Identify, None),
+                state(LoginStep::EmailCode, Some(1)),
+            ] {
+                assert!(matches!(&request(s, None)[..], [Effect::SendLinkEmailCode]));
+            }
+            // A typed address (any) is refused.
+            let effects = request(state(LoginStep::Identify, None), Some("alice@example.com"));
+            assert!(
+                matches!(&effects[..], [Effect::Render(f)] if all_keys(f).iter().any(|k| k == "flow.invalid_input")),
+                "{effects:?}"
+            );
+            // The send limit holds.
+            let effects = request(state(LoginStep::EmailCode, Some(MAX_SENDS)), None);
+            assert!(
+                matches!(&effects[..], [Effect::Render(f)] if all_keys(f).iter().any(|k| k == TOO_MANY_SENDS)),
                 "{effects:?}"
             );
         }

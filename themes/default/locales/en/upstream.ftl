@@ -15,3 +15,5 @@ upstream-confirm_with = Continue with { $provider } to confirm
 upstream-link_no_method = This account has no password, passkey or connected sign-in that can confirm it here. Sign in to it another way, then connect { $provider } from your account page.
 upstream-link_other_way = Can't confirm here? Sign in another way, then connect the provider under Linked accounts.
 upstream-link_account_page = Go to linked accounts
+upstream-link_email_code = Email me a code
+upstream-link_email_code_hint = If this email address belongs to an account, we send a sign-in code to it.

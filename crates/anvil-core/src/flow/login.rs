@@ -1068,6 +1068,7 @@ mod tests {
             provider_name: "Example ID".into(),
             candidate_email: email.map(str::to_owned),
             confirm: None,
+            matched_sealed: None,
         }
     }
 

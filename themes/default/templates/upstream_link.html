@@ -7,11 +7,16 @@
     first message, `upstream.link_explain`, names the provider; the identifier is prefilled only
     when the matching account may be revealed):
     - `passkey` (as on the sign-in page);
-    - `upstream` (list of {slug, name, action}): only when the account may be revealed, the
-      providers it is already linked to; signing in with one of them confirms. Selectors: form
-      `upstream-{slug}-form`, button `upstream-{slug}` (`data-connection` = slug);
-    - `email_code` ({action, value} or none): an emailed sign-in code to the revealed account's
-      verified address (selectors as on the sign-in page: `email-code-request`, ...);
+    - `upstream` (list of {slug, name, action}): when the account may be revealed, the providers
+      it is already linked to; when it may not, the tenant's other providers (the same list
+      whatever account matched). Signing in with one already linked to the account confirms.
+      Selectors: form `upstream-{slug}-form`, button `upstream-{slug}` (`data-connection` = slug);
+    - `email_code` ({action, value, hidden} or none): an emailed sign-in code. Revealed account:
+      to its verified address, with the address field (selectors as on the sign-in page:
+      `email-code-request`, ...). `hidden` (the account may not be revealed): a plain button
+      without any address, form `email-code-link-request` with button
+      `email-code-link-request-submit` and hint `email-code-link-hint`; the code goes to the
+      matching account's verified address, if any, and the next page is the same either way;
     - `account_linked`: the account's linked-accounts page, the way out when nothing here can
       confirm (link `link-account-linked`).
     When the revealed account has no way at all to confirm here, the form has no fields: the page
@@ -28,7 +33,13 @@
 {{ forms.messages(form.messages, form.id) }}
 </div>
 {% endif %}
-{% if email_code %}
+{% if email_code and email_code.hidden %}
+<form id="email-code-link-request" method="post" action="{{ email_code.action }}">
+<input type="hidden" name="csrf_token" value="{{ form.csrf_token }}">
+<p class="anvil-muted" id="email-code-link-hint">{{ t("upstream.link_email_code_hint") }}</p>
+<button type="submit" id="email-code-link-request-submit" class="anvil-secondary">{{ t("upstream.link_email_code") }}</button>
+</form>
+{% elif email_code %}
 <details class="anvil-disclosure" id="email-code-toggle">
 <summary>{{ t("email_code.request_toggle") }}</summary>
 <form id="email-code-request" method="post" action="{{ email_code.action }}" novalidate>

@@ -15,3 +15,5 @@ upstream-confirm_with = Mit { $provider } fortfahren und bestätigen
 upstream-link_no_method = Dieses Konto hat kein Passwort, keinen Passkey und keine verbundene Anmeldung, mit der es sich hier bestätigen lässt. Melden Sie sich auf andere Weise an und verbinden Sie { $provider } anschließend in Ihrem Konto.
 upstream-link_other_way = Bestätigung hier nicht möglich? Melden Sie sich auf andere Weise an und verbinden Sie den Anbieter anschließend unter „Verknüpfte Konten“.
 upstream-link_account_page = Zu den verknüpften Konten
+upstream-link_email_code = Code per E-Mail senden
+upstream-link_email_code_hint = Gehört diese E-Mail-Adresse zu einem Konto, senden wir einen Anmeldecode an sie.

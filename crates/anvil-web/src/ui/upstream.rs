@@ -86,19 +86,23 @@ pub(super) struct UpstreamButton {
 pub(super) struct SignInChoices {
     /// One button per connection the form offers.
     pub(super) buttons: Vec<UpstreamButton>,
-    /// The link confirmation page offers an emailed code to the revealed candidate
+    /// The link confirmation page offers an emailed code
     /// (`anvil_core::service::upstream::LinkChoices::email_code`).
     pub(super) link_email_code: bool,
+    /// ... without an address field: the matching account may not be revealed
+    /// (`anvil_core::service::upstream::LinkChoices::address_hidden`).
+    pub(super) link_email_hidden: bool,
 }
 
 /// The upstream choices of a bound sign-in form:
 ///
 /// - the combined form and the email-first page (`login-identify`): the tenant's enabled
 ///   connections (not org connections);
-/// - the link confirmation page (`upstream-link`): only the revealed candidate's enabled linked
-///   connections ("Continue with … to confirm") and whether an emailed code is offered
-///   (`anvil_core::service::upstream::link_choices`); nothing when the candidate may not be
-///   revealed.
+/// - the link confirmation page (`upstream-link`), "Continue with … to confirm"
+///   (`anvil_core::service::upstream::link_choices`): the revealed candidate's enabled linked
+///   connections, or, when the matching account may not be revealed, the tenant's connections
+///   above except the one being linked (the same whatever account matched); and whether an
+///   emailed code is offered (without an address field when unrevealed).
 ///
 /// A storage failure shows no buttons (logged): password sign-in keeps working.
 pub(super) async fn upstream_buttons(
@@ -126,6 +130,7 @@ pub(super) async fn upstream_buttons(
             Ok(c) => SignInChoices {
                 buttons: c.connections.into_iter().map(button).collect(),
                 link_email_code: c.email_code,
+                link_email_hidden: c.address_hidden,
             },
             Err(e) => {
                 tracing::warn!(error = %e, "listing link confirmation choices failed");
@@ -147,6 +152,7 @@ pub(super) async fn upstream_buttons(
                 .map(button)
                 .collect(),
             link_email_code: false,
+            link_email_hidden: false,
         },
         Err(e) => {
             tracing::warn!(error = %e, "listing connections for the sign-in page failed");

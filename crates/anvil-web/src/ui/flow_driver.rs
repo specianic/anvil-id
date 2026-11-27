@@ -1228,7 +1228,7 @@ mod tests {
     fn choices(buttons: Vec<UpstreamButton>) -> SignInChoices {
         SignInChoices {
             buttons,
-            link_email_code: false,
+            ..SignInChoices::default()
         }
     }
 

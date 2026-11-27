@@ -108,7 +108,7 @@ Other pages receive extra keys:
 | `mfa_enroll.html` (0.3) | Enrolment mode: `form` (id `mfa-enroll`, field `code`), `qr_svg`, `secret_groups`, `factor_token`; since 0.4 `passkey_enroll` (`{ options_url, action }` of the webauthn.js registration form, or null). Done mode: `codes`, `codes_text`, `continue_url` (recovery codes, shown once) |
 | `email_code.html` (0.3) | `form` (id `email-code`, field `code`), `factor_token` (or null), `resend_action` (or null) |
 | `magic_link.html` (0.3) | `action`, `csrf_token`, `token` (posted back by the button) |
-| `upstream_link.html` (0.3) | `form` (id `upstream-link`, fields `identifier`, `password`; the first message names the provider; no fields, with the message `upstream.link_no_method`, when the revealed account has no way to confirm), `passkey` (as on the sign-in page); since 1.0 `upstream` (the revealed account's linked providers, `{ slug, name, action }`), `email_code` (`{ action, value }` or null) and `account_linked` (URL of `/ui/account/linked`) |
+| `upstream_link.html` (0.3) | `form` (id `upstream-link`, fields `identifier`, `password`; the first message names the provider; no fields, with the message `upstream.link_no_method`, when the revealed account has no way to confirm), `passkey` (as on the sign-in page); since 1.0 `upstream` (`{ slug, name, action }`: the revealed account's linked providers, or, when the account may not be revealed, the tenant's other providers, the same list whatever account matched), `email_code` (`{ action, value, hidden }` or null; `hidden`: the account may not be revealed, render a plain "Email me a code" button without any address field) and `account_linked` (URL of `/ui/account/linked`) |
 | `select_account.html` (0.3) | `client_name`, `user_name` (or null), `user_email`, `messages`, `csrf_token`, `action` |
 | `logout_confirm.html` (0.3) | `client_name` (or null), `csrf_token`, `action`, `cancel_url` |
 | `logged_out.html` (0.3) | `heading_key`, `message_key`, `message`, `error` (bool); signed-out page and sign-out error page |
@@ -254,8 +254,10 @@ Release 0.3 pages:
   without fields the messages sit in an element with that id), button `upstream-link-submit`, the
   passkey form as on the sign-in page (`login-passkey`, …), confirming providers
   `upstream-{slug}-form` / `upstream-{slug}`, the email code form as on the sign-in page
-  (`email-code-request`, …), `link-other-way` with link `link-account-linked`, link `link-cancel`
-  (back to sign-in, nothing is linked).
+  (`email-code-request`, …) or, when the account may not be revealed (`email_code.hidden`), the
+  button-only form `email-code-link-request` with hint `email-code-link-hint` and button
+  `email-code-link-request-submit`, `link-other-way` with link `link-account-linked`, link
+  `link-cancel` (back to sign-in, nothing is linked).
 - MFA enrolment during sign-in (`mfa_enroll.html`): notice `mfa-enroll-required`, `totp-qr`,
   `totp-manual`, `totp-secret`, `totp-instructions`, form `mfa-enroll` with input `code` and
   `mfa-enroll-submit`, messages `mfa-enroll-msg-{n}`; after confirmation `recovery-codes`,

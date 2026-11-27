@@ -29,8 +29,16 @@
 //! also records how it can confirm ([`LinkConfirmMethods`]): an upstream connection it is
 //! already linked to (started from the same flow, which keeps the pending link; the callback
 //! confirms only an identity linked to exactly that candidate) or an emailed sign-in code. A
-//! candidate with none of them gets a page saying how to go on instead of a dead end. When the
-//! second factor continues in a fresh flow, the identity is resealed under that flow.
+//! candidate with none of them gets a page saying how to go on instead of a dead end.
+//!
+//! When the matching account may not be revealed (an unverified or untrusted upstream email, e.g.
+//! every Microsoft address), its id is still kept, sealed like the identity
+//! ([`UPSTREAM_MATCH_PURPOSE`], [`PendingLink::matched_sealed`]) and never rendered. The page then
+//! offers what does not depend on the account: the tenant's other connections and, with
+//! `email_otp`, an emailed code to the matching account's verified address without showing it.
+//! Signing in through one of those connections confirms only an identity already linked to
+//! exactly the sealed account; the code reaches only that account's verified address. When the
+//! second factor continues in a fresh flow, both sealed values are resealed under that flow.
 //!
 //! Pure: no I/O.
 
@@ -47,6 +55,10 @@ pub const UPSTREAM_PKCE_PURPOSE: &str = "anvilid/upstream-pkce/v1";
 
 /// KEK purpose of an upstream identity awaiting link confirmation.
 pub const UPSTREAM_IDENTITY_PURPOSE: &str = "anvilid/upstream-identity/v1";
+
+/// KEK purpose of the id of the account matching a pending link that may not be revealed
+/// ([`PendingLink::matched_sealed`]).
+pub const UPSTREAM_MATCH_PURPOSE: &str = "anvilid/upstream-match/v1";
 
 /// KEK purpose of an authorization response posted by the provider (`form_post`) and kept until
 /// the browser comes back with the binding cookie.
@@ -133,6 +145,20 @@ pub struct PendingLink {
     /// `candidate_user` (an unrevealed candidate reveals nothing, not even its methods).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confirm: Option<LinkConfirmMethods>,
+    /// The matching account when it may not be revealed (no `candidate_user`): its id sealed
+    /// with the KEK ([`UPSTREAM_MATCH_PURPOSE`], AAD [`upstream_aad`] of the flow). Only the
+    /// service opens it, to confirm through an identity already linked to that account or to
+    /// send a code to its verified address; it is never rendered and never decides what the page
+    /// shows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matched_sealed: Option<String>,
+}
+
+impl PendingLink {
+    /// The matching account may be revealed (verified and trusted upstream email).
+    pub fn revealed(&self) -> bool {
+        self.candidate_user.is_some()
+    }
 }
 
 /// The ways a revealed candidate account can confirm a [`PendingLink`], decided when the link

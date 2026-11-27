@@ -107,6 +107,10 @@
 //! token, their hashes stored in the flow with a compare-and-swap) and enqueues the sealed
 //! `login_code` email only for an active user with a verified address (an unverified address is
 //! treated like an unknown one); the page is the same either way.
+//! [`Effect::SendLinkEmailCode`] is the same for a link confirmation whose matching account may
+//! not be revealed: the address is the pending link's upstream email and the email goes only to
+//! the sealed matching account (`service::upstream::link_target`) when it still has that address,
+//! verified; the page is the same whether or not anything was sent.
 //! [`Effect::VerifyEmailCode`] checks the code against the stored HMAC and stores the verdict with
 //! a compare-and-swap (a right code clears the code and the link, so it works once; the fifth
 //! wrong code invalidates both). The magic link goes through [`FlowService::email_link`]: bound to
@@ -149,7 +153,9 @@ use super::authorize::{mfa_context, second_factor_methods};
 use super::hash_profile::HashProfileService;
 use super::saml::SamlService;
 use super::session::{NewSessionCookie, SessionService};
-use super::upstream::{StartResult, UpstreamService, confirm_link, reseal_link};
+use super::upstream::{
+    StartResult, UpstreamService, confirm_link, link_target, link_upstream_email, reseal_link,
+};
 use crate::error::CoreError;
 use crate::flow::email_code::{self, Check, EmailCodeState};
 use crate::flow::engine::{
@@ -2418,9 +2424,7 @@ impl FlowService {
         email: &str,
     ) -> Result<Step, CoreError> {
         let tenant = cx.tenant.id;
-        let now = self.clock.now();
-        let flow = exec.flow;
-        let FlowState::Login(mut s) = decode_state(exec.state_json)? else {
+        let FlowState::Login(s) = decode_state(exec.state_json)? else {
             return Err(CoreError::Internal("email code outside a login".into()));
         };
         // A domain that forces SSO: refused before any account lookup (nothing is sent).
@@ -2437,6 +2441,58 @@ impl FlowService {
             .get_by_email(tenant, email)
             .await?
             .filter(email_code_recipient);
+        self.send_code(cx, exec, s, email, user).await
+    }
+
+    /// [`Effect::SendLinkEmailCode`]: the "Email me a code" of a link confirmation whose matching
+    /// account may not be revealed. The address is the pending link's upstream email (the one the
+    /// account was matched by, never shown); the email goes only to the sealed matching account
+    /// ([`link_target`]), and only when it is active and still has that address, verified.
+    /// Otherwise (no account, another address, unverified) the same work is done and the same
+    /// page shown, but nothing is sent. Code only (`send_code`: never the magic link while a
+    /// link waits).
+    async fn send_link_email_code(
+        &self,
+        cx: &FlowContext<'_>,
+        exec: &mut Exec<'_>,
+    ) -> Result<Step, CoreError> {
+        let tenant = cx.tenant.id;
+        let FlowState::Login(s) = decode_state(exec.state_json)? else {
+            return Err(CoreError::Internal("email code outside a login".into()));
+        };
+        let Some(link) = s.pending_link.as_deref().filter(|l| !l.revealed()) else {
+            return Err(CoreError::Internal(
+                "link email code without an unrevealed pending link".into(),
+            ));
+        };
+        let email = link_upstream_email(&self.kek, tenant, exec.flow.id, link).unwrap_or_default();
+        let target = link_target(&self.kek, tenant, exec.flow.id, link);
+        if self.local_sign_in_refused(tenant, &email).await? {
+            let state = FlowState::Login(s);
+            return self.refuse_local(cx, exec, &state, "email_code").await;
+        }
+        let user = match target {
+            Some(id) => self.storage.users().get(tenant, id).await?,
+            None => None,
+        }
+        .filter(|u| normalize_email(&u.email).is_ok_and(|e| e == email))
+        .filter(email_code_recipient);
+        self.send_code(cx, exec, s, &email, user).await
+    }
+
+    /// The common end of [`Effect::SendEmailCode`] and [`Effect::SendLinkEmailCode`] for `email`
+    /// (`user`: the recipient, if any): see the module docs.
+    async fn send_code(
+        &self,
+        cx: &FlowContext<'_>,
+        exec: &mut Exec<'_>,
+        mut s: LoginState,
+        email: &str,
+        user: Option<User>,
+    ) -> Result<Step, CoreError> {
+        let tenant = cx.tenant.id;
+        let now = self.clock.now();
+        let flow = exec.flow;
         let code = generate_email_code();
         let token = random_token();
         let code_hash = email_code::code_hash(&self.kek, flow.id, &code)
@@ -2927,6 +2983,7 @@ impl FlowService {
                 })))
             }
             Effect::SendEmailCode { email } => self.send_email_code(cx, exec, email).await,
+            Effect::SendLinkEmailCode => self.send_link_email_code(cx, exec).await,
             Effect::VerifyEmailCode { code } => self.verify_email_code(cx, exec, code).await,
             Effect::ConsumeEmailLink { .. } => Err(CoreError::Internal(
                 "ConsumeEmailLink runs only through email_link".into(),

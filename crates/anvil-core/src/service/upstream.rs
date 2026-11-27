@@ -38,7 +38,11 @@
 //!   confirmation flow keeps the pending link, and its callback confirms only an identity
 //!   already linked through that connection to exactly the candidate (otherwise
 //!   `link_confirm_mismatch`: nothing is linked or created); the sign-in then continues like an
-//!   existing link (MFA included) and links right before the session is created;
+//!   existing link (MFA included) and links right before the session is created. A matching
+//!   account that may not be revealed (every Microsoft address) is kept only sealed in the link
+//!   (`link_target`); its page offers the tenant's other connections and an emailed code
+//!   without an address field, the same whatever account matched, and confirms the same way
+//!   (an identity already linked to exactly that account, or a code to its verified address);
 //! - no match: just-in-time registration when [`jit_allowed`]: always for an org connection whose
 //!   email is trusted for the org (one of its verified domains), otherwise when
 //!   `upstream_registration` allows it (unset = registration mode `open`); email verified only for
@@ -118,8 +122,9 @@ use crate::flow::login::link_confirmation;
 use crate::flow::settings::{SettingsState, is_recent_auth};
 use crate::flow::upstream::{
     LinkConfirmMethods, PendingLink, PendingUpstream, PostedResponse, SealedIdentity,
-    UPSTREAM_IDENTITY_PURPOSE, UPSTREAM_PKCE_PURPOSE, UPSTREAM_RESPONSE_PURPOSE, UpstreamPurpose,
-    check_callback, is_fresh, split_state, upstream_aad, value_hash,
+    UPSTREAM_IDENTITY_PURPOSE, UPSTREAM_MATCH_PURPOSE, UPSTREAM_PKCE_PURPOSE,
+    UPSTREAM_RESPONSE_PURPOSE, UpstreamPurpose, check_callback, is_fresh, split_state,
+    upstream_aad, value_hash,
 };
 use crate::model::{
     ActorKind, AuditAction, AuditActor, AuditDetails, AuditOutcome, AuthRequestId, BrowserSession,
@@ -512,25 +517,115 @@ pub(crate) fn reseal_link(
         &link.identity_sealed,
     )
     .ok_or_else(|| CoreError::Internal("pending upstream identity does not open".into()))?;
+    let matched_sealed = match &link.matched_sealed {
+        Some(sealed) => {
+            let raw = open(kek, UPSTREAM_MATCH_PURPOSE, tenant, from, sealed)
+                .ok_or_else(|| CoreError::Internal("pending link match does not open".into()))?;
+            Some(seal(kek, UPSTREAM_MATCH_PURPOSE, tenant, to, &raw)?)
+        }
+        None => None,
+    };
     Ok(PendingLink {
         identity_sealed: seal(kek, UPSTREAM_IDENTITY_PURPOSE, tenant, to, &raw)?,
+        matched_sealed,
         ..link.clone()
     })
 }
 
-/// What the link confirmation page of a login flow offers besides its password and passkey
-/// forms (`LinkConfirmMethods` of a revealed candidate; nothing for an unrevealed one).
-#[derive(Debug, Default)]
-pub struct LinkChoices {
-    /// The candidate's linked connections that are still enabled ("Continue with … to confirm").
-    pub connections: Vec<Connection>,
-    /// An emailed code to the candidate's verified address (tenant `email_otp` still on).
-    pub email_code: bool,
+/// The account `link` (sealed under flow `flow`) may be confirmed for: the revealed candidate,
+/// else the sealed matching account ([`PendingLink::matched_sealed`]). `None`: no account.
+pub(crate) fn link_target(
+    kek: &Kek,
+    tenant: TenantId,
+    flow: FlowId,
+    link: &PendingLink,
+) -> Option<UserId> {
+    if let Some(u) = link.candidate_user {
+        return Some(u);
+    }
+    let raw = open(
+        kek,
+        UPSTREAM_MATCH_PURPOSE,
+        tenant,
+        flow,
+        link.matched_sealed.as_deref()?,
+    )?;
+    uuid::Uuid::from_slice(&raw).ok().map(UserId)
 }
 
-/// The [`LinkChoices`] of login flow `flow` (empty unless it holds a pending link whose candidate
-/// may be revealed). Read only, for rendering the confirmation page of a flow the caller just
-/// produced or checked; the start and the callback check everything again.
+/// The normalised upstream email of `link` (sealed under flow `flow`): the address the matching
+/// account was found by. `None` if it does not open or has no valid address.
+pub(crate) fn link_upstream_email(
+    kek: &Kek,
+    tenant: TenantId,
+    flow: FlowId,
+    link: &PendingLink,
+) -> Option<String> {
+    let raw = open(
+        kek,
+        UPSTREAM_IDENTITY_PURPOSE,
+        tenant,
+        flow,
+        &link.identity_sealed,
+    )?;
+    serde_json::from_slice::<SealedIdentity>(&raw)
+        .ok()?
+        .email
+        .and_then(|e| normalize_email(&e).ok())
+}
+
+/// The upstream address of the link waiting in login flow `flow` when its matching account may
+/// not be revealed (the "Email me a code" request of the confirmation page counts its sends
+/// against that address, like a code requested for it on the sign-in page). `None` when the flow
+/// holds no such link. The address is the one the user's own provider asserted; it is never
+/// shown.
+pub async fn unrevealed_link_address(
+    storage: &dyn Storage,
+    kek: &Kek,
+    tenant: TenantId,
+    flow: FlowId,
+    now: OffsetDateTime,
+) -> Result<Option<String>, CoreError> {
+    let Some(f) = storage.flows().get(tenant, flow, now).await? else {
+        return Ok(None);
+    };
+    let Some(Opened {
+        rest: Rest::Login(state),
+        ..
+    }) = open_pending(&f)?
+    else {
+        return Ok(None);
+    };
+    Ok(state
+        .pending_link
+        .filter(|l| !l.revealed())
+        .and_then(|l| link_upstream_email(kek, tenant, flow, &l)))
+}
+
+/// What the link confirmation page of a login flow offers besides its password and passkey
+/// forms:
+///
+/// - revealed candidate: its `LinkConfirmMethods` (its own linked connections, a code to its
+///   address);
+/// - matching account that may not be revealed: what does not depend on the account at all, so
+///   the page is the same whatever account matched: the tenant's enabled connections that the
+///   sign-in page lists (no org connections, no SAML), except the one being linked, and, with
+///   `email_otp`, an emailed code without an address field (`address_hidden`).
+#[derive(Debug, Default)]
+pub struct LinkChoices {
+    /// Connections offered as "Continue with … to confirm".
+    pub connections: Vec<Connection>,
+    /// An emailed code (tenant `email_otp` on): to the revealed candidate's verified address, or
+    /// (unrevealed) to the sealed matching account's verified address, if any.
+    pub email_code: bool,
+    /// The code is requested without an address field and the page shows no address
+    /// (unrevealed matching account).
+    pub address_hidden: bool,
+}
+
+/// The [`LinkChoices`] of login flow `flow` (empty unless it holds a pending link). Read only,
+/// for rendering the confirmation page of a flow the caller just produced or checked; the start
+/// and the callback check everything again.
 pub async fn link_choices(
     storage: &dyn Storage,
     tenant: &crate::model::Tenant,
@@ -547,11 +642,25 @@ pub async fn link_choices(
     else {
         return Ok(LinkChoices::default());
     };
-    let Some(confirm) = state
-        .pending_link
-        .filter(|l| l.candidate_user.is_some())
-        .and_then(|l| l.confirm)
-    else {
+    let Some(link) = state.pending_link else {
+        return Ok(LinkChoices::default());
+    };
+    if !link.revealed() {
+        // Never the sealed match: the same choices whatever account matched.
+        let connections = storage
+            .connections()
+            .list(tenant.id)
+            .await?
+            .into_iter()
+            .filter(|c| c.org_id.is_none() && confirmable(c) && c.id != link.connection_id)
+            .collect();
+        return Ok(LinkChoices {
+            connections,
+            email_code: tenant.settings.email_otp,
+            address_hidden: true,
+        });
+    }
+    let Some(confirm) = link.confirm else {
         return Ok(LinkChoices::default());
     };
     let mut connections = Vec::with_capacity(confirm.connections.len());
@@ -565,6 +674,7 @@ pub async fn link_choices(
     Ok(LinkChoices {
         connections,
         email_code: confirm.email_code && tenant.settings.email_otp,
+        address_hidden: false,
     })
 }
 
@@ -1429,9 +1539,9 @@ impl UpstreamService<'_> {
                 u
             }
             LinkDecision::PendingLink { candidate } => {
-                let candidate = matched.filter(|u| candidate == Some(u.id));
+                let revealed = matched.as_ref().filter(|u| candidate == Some(u.id));
                 return self
-                    .pending_link(cx, flow, conn, &identity, candidate.as_ref())
+                    .pending_link(cx, flow, conn, &identity, revealed, matched.as_ref())
                     .await;
             }
             LinkDecision::JitCreate { email_verified } => {
@@ -1524,12 +1634,16 @@ impl UpstreamService<'_> {
     }
 
     /// A `Login` from a login flow holding a pending link (the confirmation page offered the
-    /// candidate's linked connections): the returned identity must already be linked, through
-    /// this connection, to exactly the revealed candidate, who must be active. Anything else
-    /// (another user's identity, an unlinked identity, no revealed candidate) links nothing and
-    /// creates no account: audited `upstream_login_failed` (`link_confirm_mismatch`) and the
-    /// sign-in restarts. A match signs in like an existing link (`require_verified_email`, JIT
-    /// membership, MFA) and links the waiting identity right before the session is created.
+    /// candidate's linked connections, or for an unrevealed match the tenant's connections): the
+    /// returned identity must already be linked, through this connection, to exactly the
+    /// revealed candidate or the sealed matching account ([`link_target`]), which must be active.
+    /// Anything else (another user's identity, an unlinked identity, no account) links nothing and
+    /// creates no account: audited `upstream_login_failed` (`link_confirm_mismatch`; `inactive`
+    /// for a revealed candidate that is no longer active) and the sign-in restarts with the
+    /// generic error. The link lookup runs first in every case, so an unrevealed failure does the
+    /// same work whether another account or none matched. A match signs in like an existing link
+    /// (`require_verified_email`, JIT membership, MFA) and links the waiting identity right before
+    /// the session is created.
     #[expect(
         clippy::too_many_arguments,
         reason = "the callback's checked inputs, passed through once"
@@ -1547,24 +1661,27 @@ impl UpstreamService<'_> {
         let tenant = cx.tenant.id;
         let to = FailTo::Login(Some(flow));
         let storage = self.storage();
-        let Some(candidate) = link.candidate_user else {
-            return self.fail(cx, Some(conn), to, "link_confirm_mismatch").await;
-        };
+        let target = link_target(self.kek(), tenant, flow.id, &link);
         let Some(existing) = storage
             .connections()
             .find_link(tenant, conn.id, &identity.subject)
             .await?
-            .filter(|l| l.user_id == candidate)
+            .filter(|l| Some(l.user_id) == target)
         else {
             return self.fail(cx, Some(conn), to, "link_confirm_mismatch").await;
         };
         let Some(user) = storage
             .users()
-            .get(tenant, candidate)
+            .get(tenant, existing.user_id)
             .await?
             .filter(|u| u.status == UserStatus::Active)
         else {
-            return self.fail(cx, Some(conn), to, "inactive").await;
+            let reason = if link.revealed() {
+                "inactive"
+            } else {
+                "link_confirm_mismatch"
+            };
+            return self.fail(cx, Some(conn), to, reason).await;
         };
         storage
             .connections()
@@ -1641,7 +1758,8 @@ impl UpstreamService<'_> {
 
     /// Continues in a fresh login flow holding the sealed identity: the user signs in to an
     /// existing account to link it. `candidate` (and its email) only when the decision exposed
-    /// it (verified and trusted upstream email).
+    /// it (verified and trusted upstream email); otherwise the `matched` account's id is only
+    /// sealed into the link ([`PendingLink::matched_sealed`]), never shown.
     async fn pending_link(
         &self,
         cx: &FlowContext<'_>,
@@ -1649,6 +1767,7 @@ impl UpstreamService<'_> {
         conn: &Connection,
         identity: &UpstreamIdentity,
         candidate: Option<&User>,
+        matched: Option<&User>,
     ) -> Result<UpstreamOutcome, CoreError> {
         let id = FlowId::new_v7();
         let json = serde_json::to_vec(&SealedIdentity::from(identity))
@@ -1656,6 +1775,16 @@ impl UpstreamService<'_> {
         let confirm = match candidate {
             Some(u) => Some(self.confirm_methods(cx, u).await?),
             None => None,
+        };
+        let matched_sealed = match (candidate, matched) {
+            (None, Some(u)) => Some(seal(
+                self.kek(),
+                UPSTREAM_MATCH_PURPOSE,
+                cx.tenant.id,
+                id,
+                u.id.0.as_bytes(),
+            )?),
+            _ => None,
         };
         let link = PendingLink {
             connection_id: conn.id,
@@ -1670,6 +1799,7 @@ impl UpstreamService<'_> {
             provider_name: conn.display_name.clone(),
             candidate_email: candidate.map(|u| u.email.clone()),
             confirm,
+            matched_sealed,
         };
         let (state, form) = link_confirmation(link);
         let started = self
@@ -1832,6 +1962,7 @@ mod tests {
             provider_name: "Example ID".into(),
             candidate_email: Some("alice@example.com".into()),
             confirm: None,
+            matched_sealed: None,
         };
         let moved = reseal_link(&kek, t, from, to, &link).unwrap();
         assert_eq!(moved.candidate_user, link.candidate_user);
@@ -1855,6 +1986,60 @@ mod tests {
         );
         // A link that does not open under `from` is not moved.
         assert!(reseal_link(&kek, t, to, from, &link).is_err());
+    }
+
+    #[test]
+    fn an_unrevealed_match_opens_only_in_its_flow_and_moves_with_the_link() {
+        let kek = Kek::generate();
+        let t = TenantId::new_v7();
+        let (from, to) = (FlowId::new_v7(), FlowId::new_v7());
+        let matched = UserId::new_v7();
+        let link = PendingLink {
+            connection_id: crate::model::ConnectionId::new_v7(),
+            identity_sealed: seal(
+                &kek,
+                UPSTREAM_IDENTITY_PURPOSE,
+                t,
+                from,
+                br#"{"subject":"s","email":" Alice@Example.com"}"#,
+            )
+            .unwrap(),
+            candidate_user: None,
+            provider_name: "Microsoft".into(),
+            candidate_email: None,
+            confirm: None,
+            matched_sealed: Some(
+                seal(&kek, UPSTREAM_MATCH_PURPOSE, t, from, matched.0.as_bytes()).unwrap(),
+            ),
+        };
+        assert!(!link.revealed());
+        assert_eq!(link_target(&kek, t, from, &link), Some(matched));
+        assert_eq!(
+            link_upstream_email(&kek, t, from, &link).as_deref(),
+            Some("alice@example.com")
+        );
+        // Another flow, tenant or key opens nothing.
+        assert_eq!(link_target(&kek, t, to, &link), None);
+        assert_eq!(link_target(&kek, TenantId::new_v7(), from, &link), None);
+        assert_eq!(link_target(&Kek::generate(), t, from, &link), None);
+        // The identity blob is not a match (distinct purposes).
+        let swapped = PendingLink {
+            matched_sealed: Some(link.identity_sealed.clone()),
+            ..link.clone()
+        };
+        assert_eq!(link_target(&kek, t, from, &swapped), None);
+        // Resealed for the second-factor flow: opens there only.
+        let moved = reseal_link(&kek, t, from, to, &link).unwrap();
+        assert_eq!(link_target(&kek, t, to, &moved), Some(matched));
+        assert_eq!(link_target(&kek, t, from, &moved), None);
+        // A revealed candidate is its own target.
+        let candidate = UserId::new_v7();
+        let revealed = PendingLink {
+            candidate_user: Some(candidate),
+            matched_sealed: None,
+            ..link
+        };
+        assert_eq!(link_target(&kek, t, from, &revealed), Some(candidate));
     }
 
     #[test]

@@ -1269,6 +1269,10 @@ struct EmailCodeView {
     action: String,
     /// Prefilled address (the identifier field's value: echoed input or `login_hint`).
     value: Option<String>,
+    /// Link confirmation whose matching account may not be revealed: a plain "Email me a code"
+    /// button without an address field (the code goes to the matching account's verified
+    /// address, if any, which is never shown).
+    hidden: bool,
 }
 
 /// The email entered on the email-first page, shown read-only on the password step and the
@@ -1406,13 +1410,15 @@ pub(super) fn render_tenant_form_with(
     if (has(&LoginMethod::EmailCode) || has(&LoginMethod::MagicLink))
         && let Some(flow) = flow_of(&form)
     {
+        let hidden = form.id == UPSTREAM_LINK_FORM_ID && extras.upstream.link_email_hidden;
         email_code = Some(EmailCodeView {
             action: carry_ui_locales(&format!("{base}/login/email-code?flow={flow}"), loc),
             value: form
                 .fields
                 .iter()
-                .find(|f| f.name == "identifier")
+                .find(|f| f.name == "identifier" && !hidden)
                 .and_then(|f| f.value.clone()),
+            hidden,
         });
     }
     // After the email page the address is fixed (hidden field): show it with a way back.

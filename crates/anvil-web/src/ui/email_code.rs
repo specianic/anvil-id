@@ -2,7 +2,7 @@
 //!
 //! | Route | |
 //! |---|---|
-//! | `POST /ui/login/email-code?flow=` | `email` (from the sign-in page), or nothing plus `factor_token` (a new code from the email page) |
+//! | `POST /ui/login/email-code?flow=` | `email` (from the sign-in page), or nothing plus `factor_token` (a new code from the email page), or nothing at all (the "Email me a code" button of a link confirmation whose matching account may not be revealed: counted against the pending link's upstream address) |
 //! | `POST /ui/login/email-code/verify?flow=` | `code` plus `factor_token` |
 //! | `GET  /ui/login/email-link?flow=&token=` | the emailed link: only a "Continue signing in" button (consumes nothing) |
 //! | `POST /ui/login/email-link?flow=` | `token` plus the page's `csrf_token`: consumes the link in the browser holding the flow cookie |
@@ -26,7 +26,12 @@
 //! so the email page carries a `factor_token`: the rate-limit subject (the user, or a keyed pseudo
 //! id for an address without an account) and the address hash, sealed with the KEK (purpose
 //! [`EMAIL_TOKEN_PURPOSE`], AAD tenant and flow). It names limiter keys only; the flow state
-//! decides everything else. A missing or tampered token restarts the sign-in.
+//! decides everything else. A missing or tampered token restarts the sign-in. The "Email me a
+//! code" button of a link confirmation whose matching account may not be revealed carries no
+//! address: the handler asks the core for the pending link's upstream address
+//! (`anvil_core::service::upstream::unrevealed_link_address`), so the send counts against the
+//! same keys as a code requested for that address on the sign-in page, whether or not an account
+//! gets it.
 //!
 //! # Magic link
 //!
@@ -41,6 +46,7 @@ use anvil_core::flow::email_code::{EMAIL_CODE_FORM_ID, OTHER_BROWSER, link_csrf}
 use anvil_core::flow::engine::FlowInput;
 use anvil_core::model::{FlowId, TenantId, UserId, normalize_email};
 use anvil_core::service::flow::{AuthAttempt, EmailLinkOutcome, FlowOutcome, email_code_enabled};
+use anvil_core::service::upstream::unrevealed_link_address;
 use anvil_jose::Kek;
 use anvil_jose::encoding::{b64url, b64url_decode};
 use axum::Router;
@@ -165,7 +171,9 @@ async fn request(
     };
     let tenant_id = tenant.tenant.id;
     let posted = form.email.clone().filter(|e| !e.trim().is_empty());
-    // The address the send counts against: the posted one, or (a new code) the token's.
+    // The address the send counts against: the posted one, (a new code) the token's, or (the
+    // "Email me a code" button of a link confirmation that may not reveal the account) the
+    // pending link's upstream address, never shown.
     let ident = match &posted {
         Some(raw) => normalize_email(raw.trim()).ok().map(|e| send_ident(&e)),
         None => match form
@@ -174,7 +182,19 @@ async fn request(
             .and_then(|t| open_email_token(state.kek(), tenant_id, flow_id, t))
         {
             Some((_, ident)) => Some(ident),
-            None => return restart_login(&state, &tenant, &loc).await,
+            None => match unrevealed_link_address(
+                state.storage(),
+                state.kek(),
+                tenant_id,
+                flow_id,
+                state.clock().now(),
+            )
+            .await
+            {
+                Ok(Some(email)) => Some(send_ident(&email)),
+                Ok(None) => return restart_login(&state, &tenant, &loc).await,
+                Err(e) => return core_error_page_in(&state, Some(&tenant), &loc, &e),
+            },
         },
     };
     let input = FlowInput::EmailCodeRequest { email: posted };

@@ -741,18 +741,46 @@ failures never cached).
   | Not linked, no match, upstream registration allowed | Create the user just in time with the link (one transaction) |
   | Not linked, no match, registration not allowed | Refuse |
 
-  An unverified or untrusted email never links automatically and never reveals whether an account
-  exists. **Confirmation without a password.** When the matching account may be revealed (trusted,
-  verified upstream email: the page prefills its address), the confirmation page also offers the
-  account's enabled linked OAuth/OIDC connections ("Continue with GitHub to confirm") and, when the
-  tenant has `email_otp` on and the address is verified, an emailed code (never the magic link,
-  which may open in another browser). Such a start goes through the normal upstream start and
-  keeps the pending link in the flow; its callback links only when the returned identity is
-  already linked through that connection to exactly the revealed account (anything else: audited
-  `link_confirm_mismatch`, nothing linked or created). The code goes only to that address. A
-  revealed account with none of these methods (no password or passkey either) gets a page that
-  says so; every confirmation page points to signing in another way and connecting the provider
-  on `/ui/account/linked`, plus "Cancel". An unrevealed account shows no providers and no verdict.
+  An unverified or untrusted email never links automatically. **Confirmation without a
+  password.** When the matching account may be revealed (trusted, verified upstream email: the
+  page prefills its address), the confirmation page also offers the account's enabled linked
+  OAuth/OIDC connections ("Continue with GitHub to confirm") and, when the tenant has `email_otp`
+  on and the address is verified, an emailed code (never the magic link, which may open in
+  another browser). Such a start goes through the normal upstream start and keeps the pending
+  link in the flow; its callback links only when the returned identity is already linked through
+  that connection to exactly the revealed account (anything else: audited `link_confirm_mismatch`,
+  nothing linked or created). The code goes only to that address. A revealed account with none of
+  these methods (no password or passkey either) gets a page that says so; every confirmation page
+  points to signing in another way and connecting the provider on `/ui/account/linked`, plus
+  "Cancel".
+
+  **Unrevealed match** (unverified or untrusted upstream email; every Microsoft address). The
+  matching account (same rule: the normalised upstream email) is kept only as a KEK-sealed id in
+  the pending link (`PendingLink::matched_sealed`, purpose `anvilid/upstream-match/v1`, AAD tenant
+  ‖ flow id); it is never rendered, never put in the identifier field and never decides what the
+  page shows. The page offers what does not depend on the account: the tenant's enabled
+  connections that the sign-in page lists (no org connections, no SAML) except the one being
+  linked, as "Continue with X to confirm", and, with `email_otp`, an "Email me a code" button
+  without an address field ("If this email address belongs to an account, we send a sign-in code
+  to it"). A provider sign-in from there links only when the returned identity is already linked
+  through that connection to exactly the sealed account and that account is active; anything else
+  is audited `link_confirm_mismatch`, links nothing, creates nothing and restarts the sign-in
+  with the generic error. The link lookup runs first in every case, so a mismatch does the same
+  work and gives the same answer whether another account or none matched. The code goes only to
+  the sealed account, only when it still has the upstream address, verified and active; otherwise
+  the same work is done (code and hashes stored, the send counted against the upstream address
+  like a code requested for it on the sign-in page) and the same "check your email" page is shown,
+  but nothing is sent. Only a proof of control links: a password or passkey of an account, an
+  identity already linked to the sealed account, or its mailbox.
+
+  *Trade-off.* As before, the confirmation page itself (rather than a just-in-time account or a
+  refusal) tells the person holding the upstream identity that an account with the address their
+  provider asserted exists; the unrevealed page adds nothing to that: it is the same for every
+  matching account (same buttons, same texts, whatever methods or links the account has or
+  whether its address is verified), and a failed confirmation or a code request answers the same
+  whether the sealed account still exists or not. Offering every tenant connection means a user
+  may try a provider that is not linked to the account; that attempt fails closed with the
+  generic error.
   A confirmation that needs a second factor carries the pending link, resealed, into the fresh
   flow. The account page links the signed-in user (mode `account`, §10.2) and then returns to
   `/ui/account/linked` (303); an identity linked to another user is refused. Unlinking is refused

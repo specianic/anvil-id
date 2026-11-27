@@ -158,8 +158,8 @@ Use any standards-based OpenID provider you control, for example a second AnvilI
 - [ ] **Confirmation with MFA:** enrol TOTP for Alice and repeat. Expected: the second factor is
       asked after the password, then the link is made.
 - [ ] **Confirmation without a password (social-only account):** create Bob by signing in with
-      GitHub (no password). With auto-link off, sign in with a Google (or Microsoft) account whose
-      verified email equals Bob's. Expected: the page offers "Continue with GitHub to confirm"
+      GitHub (no password). With auto-link off, sign in with a Google account whose verified
+      email equals Bob's. Expected: the page offers "Continue with GitHub to confirm"
       (only providers Bob is linked to); signing in there with Bob's GitHub account links Google
       (audit `identity_linked`, mode `confirmed`), asks the second factor first if Bob has one,
       and signs in. Signing in there with a GitHub account of another user, or one not linked to
@@ -169,8 +169,17 @@ Use any standards-based OpenID provider you control, for example a second AnvilI
       only; the email carries a code and no link; the code links and signs in.
 - [ ] **No way to confirm:** for an account with no password, passkey, linked provider or email
       code, expected: the page says so, points to "Go to linked accounts" (sign in another way,
-      then connect the provider there) and "Cancel" returns to the sign-in page. With an
-      untrusted email (the account may not be revealed) no providers and no such verdict appear.
+      then connect the provider there) and "Cancel" returns to the sign-in page.
+- [ ] **Microsoft (account not revealed):** with Bob as above (GitHub only, verified email), sign
+      in with a Microsoft account whose email equals Bob's. Expected: the page shows no address
+      and offers every other enabled provider of the tenant ("Continue with GitHub to confirm",
+      "Continue with Google to confirm", …, never Microsoft itself), plus "Email me a code" when
+      email sign-in codes are on. Signing in there with Bob's GitHub account links Microsoft
+      (mode `confirmed`, second factor first if Bob has one). Signing in with a provider account
+      linked to another user or to nobody links nothing (reason `link_confirm_mismatch`, generic
+      error). "Email me a code" sends a code (no link) to Bob's address only if it is verified;
+      the page after it is the same either way, and the code links and signs in. Repeat with an
+      account that has a password and no links: the page looks exactly the same.
 - [ ] **Back after signing in:** after a completed upstream sign-in, press the browser's back
       button to the provider's return URL. Expected: "This sign-in was already completed or has
       expired. Please start again." (audit reason `flow_expired`), not the generic error.

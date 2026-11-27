@@ -405,7 +405,15 @@ linking: one identity, one user|$W/account_linked.rs|connect_refuses_an_identity
 linking: account-page link needs the owner, re-auth and the binding|$W/security_linking.rs|link_from_the_account_page_needs_the_owner_signed_in
 linking: link confirmation only through an identity linked to the candidate|$W/security_linking.rs|confirming_with_an_identity_of_another_user_links_nothing
 linking: link confirmation only through an identity linked to the candidate|$W/security_linking.rs|confirming_with_an_unlinked_identity_links_nothing
-linking: link confirmation only through an identity linked to the candidate|$W/security_linking.rs|confirmation_buttons_are_hidden_when_the_account_may_not_be_revealed
+linking: link confirmation only through an identity linked to the candidate|$W/security_linking.rs|unrevealed_candidate_page_lists_the_tenant_providers_not_the_accounts
+linking: unrevealed confirmation only through an identity linked to the sealed match|$W/security_linking.rs|unrevealed_microsoft_match_confirms_through_a_provider_linked_to_the_account
+linking: unrevealed confirmation only through an identity linked to the sealed match|$W/security_linking.rs|unrevealed_confirmation_through_another_users_identity_looks_like_no_match
+linking: unrevealed confirmation only through an identity linked to the sealed match|crates/anvil-core/src/service/upstream.rs|an_unrevealed_match_opens_only_in_its_flow_and_moves_with_the_link
+linking: unrevealed confirmation page does not enumerate accounts|$W/security_linking.rs|unrevealed_link_page_is_the_same_whatever_account_matched
+linking: unrevealed confirmation keeps the second factor|$W/security_linking.rs|unrevealed_confirmation_still_needs_the_second_factor
+linking: unrevealed confirmation code only to the verified matching address|$W/security_linking.rs|unrevealed_emailed_code_confirms_only_the_matching_account
+linking: unrevealed confirmation code only to the verified matching address|$W/security_linking.rs|unrevealed_emailed_code_is_sent_only_to_a_verified_match_and_looks_the_same
+linking: unrevealed confirmation code only to the verified matching address|crates/anvil-core/src/flow/email_code.rs|unrevealed_link_confirmation_sends_only_to_the_sealed_match_without_an_address
 linking: link confirmation keeps the second factor|$W/security_linking.rs|confirmation_through_a_linked_provider_still_needs_the_second_factor
 linking: confirmation code only to the verified candidate address|$W/security_linking.rs|emailed_code_for_another_address_cannot_confirm_the_link
 linking: confirmation code only to the verified candidate address|crates/anvil-core/src/flow/email_code.rs|link_confirmation_sends_a_code_only_to_the_offered_candidate_address
