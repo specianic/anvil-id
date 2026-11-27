@@ -36,7 +36,7 @@ Source of truth for wording and detail: [docs/PRD.md](../docs/PRD.md) §8–9. I
 - [x] **OIDC-15**: Access tokens are RFC 9068 JWTs by default or opaque per client, audience-restricted [0.2]
 - [x] **OIDC-16**: Clients can request audience-bound tokens with resource indicators (RFC 8707) [0.3]
 - [x] **OIDC-17**: Clients can register dynamically (RFC 7591/7592) under an admin policy: disabled / allow-listed / open [0.4]
-- [ ] **OIDC-18**: Clients can use pushed authorization requests (RFC 9126) [1.0]
+- [x] **OIDC-18**: Clients can use pushed authorization requests (RFC 9126) [1.0]
 - [ ] **OIDC-23**: The OpenID conformance suite passes in CI for Basic OP, Config OP, Form Post, RP-Initiated Logout and Back-Channel Logout; certification filed [1.0]
 - [x] **OIDC-24**: Authorization responses include the `iss` parameter (RFC 9207) [0.1]
 - [x] **OIDC-25**: Authorization responses support `query` and `form_post` response modes [0.2]
@@ -63,7 +63,7 @@ Source of truth for wording and detail: [docs/PRD.md](../docs/PRD.md) §8–9. I
 - [x] **UI-02**: Login pages meet WCAG 2.2 AA, are responsive, and the password flow works without JavaScript [0.2]
 - [x] **UI-03**: Admin can theme pages (logo, colors, fonts, radius, custom CSS) live from the console, with per-tenant/org/client overrides [0.3]
 - [x] **UI-04**: Pages are translated, with language chosen from ui_locales or the browser [0.3]
-- [ ] **UI-05**: SPAs and native apps can drive flows through a versioned headless API that returns server-driven form descriptions [1.0]
+- [x] **UI-05**: SPAs and native apps can drive flows through a versioned headless API that returns server-driven form descriptions [1.0]
 - [x] **UI-07**: Admin can edit email templates per tenant and configure SMTP with a test send [0.2]
 
 ### Tenants, organizations and roles
@@ -83,14 +83,14 @@ Source of truth for wording and detail: [docs/PRD.md](../docs/PRD.md) §8–9. I
 - [x] **ADM-05**: Integrators receive signed, retried webhooks for user and session lifecycle events [0.4]
 - [x] **ADM-06**: Operator can export and idempotently apply a tenant's configuration as YAML [0.4]
 - [x] **ADM-07**: Operator can use the `anvilid` CLI to serve, migrate, back up/restore, import/export, rotate keys and recover admin access [0.1+]
-- [ ] **ADM-08**: Admin can import users with password hashes (bcrypt, scrypt incl. Firebase, PBKDF2, Argon2, salted SHA-2) [1.0]
-- [ ] **ADM-09**: Admin can export users individually and in bulk, including a GDPR data-subject export [1.0]
+- [x] **ADM-08**: Admin can import users with password hashes (bcrypt, scrypt incl. Firebase, PBKDF2, Argon2, salted SHA-2) [1.0]
+- [x] **ADM-09**: Admin can export users individually and in bulk, including a GDPR data-subject export [1.0]
 
 ### Machine and agent identity
 
 - [x] **AGT-01**: MCP clients can obtain audience-bound tokens (RFC 8414 metadata, RFC 8707 resource indicators), with docs for publishing RFC 9728 resource metadata [0.4]
 - [x] **AGT-02**: Clients can identify themselves with Client ID Metadata Documents under admin policy [0.4]
-- [ ] **AGT-03**: The consent screen clearly identifies agent clients and requested scopes, and supports incremental scope step-up [1.0]
+- [x] **AGT-03**: The consent screen clearly identifies agent clients and requested scopes, and supports incremental scope step-up [1.0]
 
 ### Operations (PRD §9.1)
 
@@ -119,7 +119,7 @@ Source of truth for wording and detail: [docs/PRD.md](../docs/PRD.md) §8–9. I
 
 - [x] **QUAL-01**: Each security requirement has an automated negative test proving bad input is rejected
 - [x] **QUAL-02**: The same test suite runs against SQLite and Postgres
-- [ ] **QUAL-03**: Public APIs are versioned; breaking changes only in major versions
+- [x] **QUAL-03**: Public APIs are versioned; breaking changes only in major versions
 - [x] **QUAL-04**: Zero-config `docker run` → OIDC login in a sample app takes ≤ 2 minutes (scripted check)
 - [x] **QUAL-05**: Idle memory < 100 MB; token endpoint ≥ 1,000 req/s at p99 < 50 ms on 4 vCPU with Postgres
 
@@ -191,8 +191,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | OIDC-15 | Phase 3 | Complete |
 | OIDC-16 | Phase 4 | Complete |
 | OIDC-17 | Phase 5 | Complete |
-| OIDC-18 | Phase 7 | Pending |
-| OIDC-23 | Phase 7 | Pending |
+| OIDC-18 | Phase 7 | Complete |
+| OIDC-23 | Phase 7 | Pending (owner: certification submission, 07-24) |
 | OIDC-24 | Phase 2 | Complete |
 | OIDC-25 | Phase 3 | Complete |
 | AUTH-01 | Phase 2 | Complete |
@@ -212,7 +212,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | UI-02 | Phase 3 | Complete |
 | UI-03 | Phase 4 | Complete |
 | UI-04 | Phase 4 | Complete |
-| UI-05 | Phase 7 | Pending |
+| UI-05 | Phase 7 | Complete |
 | UI-07 | Phase 3 | Complete |
 | ORG-01 | Phase 5 | Complete |
 | ORG-02 | Phase 6 | Complete |
@@ -226,11 +226,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ADM-05 | Phase 5 | Complete |
 | ADM-06 | Phase 5 | Complete |
 | ADM-07 | Phase 5 | Complete |
-| ADM-08 | Phase 7 | Pending |
-| ADM-09 | Phase 7 | Pending |
+| ADM-08 | Phase 7 | Complete |
+| ADM-09 | Phase 7 | Complete |
 | AGT-01 | Phase 5 | Complete |
 | AGT-02 | Phase 5 | Complete |
-| AGT-03 | Phase 7 | Pending |
+| AGT-03 | Phase 7 | Complete |
 | OPS-01 | Phase 2 | Complete |
 | OPS-02 | Phase 2 | Complete |
 | OPS-03 | Phase 5 | Complete |
@@ -247,10 +247,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SEC-05 | Phase 3 | Complete |
 | SEC-06 | Phase 2 | Complete |
 | SEC-07 | Phase 2 | Complete |
-| SEC-08 | Phase 7 | Pending |
+| SEC-08 | Phase 7 | Pending (owner: external review + fixes, 07-25) |
 | QUAL-01 | Phase 2 | Complete |
 | QUAL-02 | Phase 2 | Complete |
-| QUAL-03 | Phase 7 | Pending |
+| QUAL-03 | Phase 7 | Complete |
 | QUAL-04 | Phase 2 | Complete |
 | QUAL-05 | Phase 5 | Complete |
 
