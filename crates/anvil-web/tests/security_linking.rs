@@ -19,11 +19,14 @@
 //! - an organization's IdP is trusted only for its own org's verified domains: org A's IdP
 //!   asserting an address on a domain verified by org B never auto-links to the org B user and
 //!   never makes that account a member of org A;
-//! - link confirmation without a password: only an identity already linked to the revealed
-//!   candidate account (or an emailed code to its verified address) confirms; an identity of
-//!   another user, an unlinked identity, a crafted start for an unrevealed candidate or a code to
-//!   another address links nothing, the providers are not shown when the candidate may not be
-//!   revealed, and a required second factor still comes first.
+//! - link confirmation without a password: only an identity already linked to the matching
+//!   account (or an emailed code to its verified address) confirms; an identity of another user,
+//!   an unlinked identity or a code to another address links nothing, and a required second
+//!   factor still comes first;
+//! - when the matching account may not be revealed (Microsoft, untrusted addresses) the page
+//!   offers the tenant's other providers and an emailed code without an address field, looks the
+//!   same whatever account matched, never shows the account's address or id, and a failed
+//!   confirmation looks the same whether another account or none matched.
 
 mod email_code_support;
 mod support;
@@ -958,17 +961,21 @@ async fn confirming_with_an_unlinked_identity_links_nothing() {
 }
 
 #[tokio::test]
-async fn confirmation_buttons_are_hidden_when_the_account_may_not_be_revealed() {
-    // Untrusted connection: the candidate is not revealed, so neither are its providers.
+async fn unrevealed_candidate_page_lists_the_tenant_providers_not_the_accounts() {
+    // Untrusted connection: the candidate is not revealed, so the page offers the tenant's other
+    // providers (the same list whatever the account is linked to), never the account's own.
     let u = setup(false).await;
     let second = second_connection(&u, SECOND, SECOND_NAME).await;
+    second_connection(&u, "third-id", "Third ID").await;
     let alice = social_only_alice(&u).await;
     link_identity(&u.app, &alice, &second, "alice-second").await;
 
     let page = link_page(&u).await;
-    assert!(!page.contains("upstream-second-id"), "{page}");
-    assert!(!page.contains(SECOND_NAME), "{page}");
+    assert!(page.contains("id=\"upstream-second-id-form\""), "{page}");
+    assert!(page.contains("id=\"upstream-third-id-form\""), "{page}");
+    assert!(!page.contains("id=\"upstream-acme-id-form\""), "{page}");
     assert!(!page.contains(MOCK_EMAIL), "{page}");
+    assert!(!page.contains(&alice.id.to_string()), "{page}");
     // Not the "no method" verdict either (that would reveal the account), but the way out.
     let keys = message_keys(&page);
     assert!(
@@ -977,22 +984,8 @@ async fn confirmation_buttons_are_hidden_when_the_account_may_not_be_revealed() 
     );
     assert!(page.contains("id=\"link-account-linked\""), "{page}");
 
-    // A crafted start of the linked provider from this flow cannot link either.
-    let action = url::Url::parse(&format!("https://op.test{}", form_action(&u.app, &page)))
-        .expect("form action");
-    let flow = action
-        .query_pairs()
-        .find(|(k, _)| k == "flow")
-        .map(|(_, v)| v.into_owned())
-        .expect("flow");
-    let started = post_start(
-        &u.app,
-        &format!("/ui/login/upstream/{SECOND}?flow={flow}"),
-        &csrf_from(&page),
-    )
-    .await;
-    reply_for(&u, &started, json!({ "sub": "alice-second" }));
-    let resp = callback_at(&u, SECOND, &started).await;
+    // A provider the account is not linked to cannot confirm.
+    let resp = confirm_with(&u, &page, "third-id", "alice-third").await;
     assert_rejected(&u, &resp, "link_confirm_mismatch").await;
     assert_eq!(links(&u.app, &alice).await.len(), 1);
     assert!(audit(&u.app, AuditAction::IdentityLinked).await.is_empty());
@@ -1012,12 +1005,8 @@ fn totp_code(seed: &[u8], unix: i64) -> String {
     format!("{:06}", bin % 1_000_000)
 }
 
-#[tokio::test]
-async fn confirmation_through_a_linked_provider_still_needs_the_second_factor() {
-    let u = setup(true).await;
-    let second = second_connection(&u, SECOND, SECOND_NAME).await;
-    let alice = social_only_alice(&u).await;
-    link_identity(&u.app, &alice, &second, "alice-second").await;
+/// Gives `user` an authenticator app (with recovery codes); returns its seed.
+async fn give_totp(u: &Upstream, user: &User) -> TotpSecret {
     let id = CredentialId::new_v7();
     let seed = TotpSecret::generate();
     let secret_enc = u
@@ -1032,7 +1021,7 @@ async fn confirmation_through_a_linked_provider_still_needs_the_second_factor() 
         .users()
         .create_totp(
             tenant(&u.app).id,
-            alice.id,
+            user.id,
             &NewTotp {
                 id,
                 secret_enc,
@@ -1043,6 +1032,17 @@ async fn confirmation_through_a_linked_provider_still_needs_the_second_factor() 
         )
         .await
         .expect("totp");
+    seed
+}
+
+#[tokio::test]
+async fn confirmation_through_a_linked_provider_still_needs_the_second_factor() {
+    let u = setup(true).await;
+    let second = second_connection(&u, SECOND, SECOND_NAME).await;
+    let alice = social_only_alice(&u).await;
+    link_identity(&u.app, &alice, &second, "alice-second").await;
+    let seed = give_totp(&u, &alice).await;
+    let now = u.app.clock().now();
     tenant_settings(&u.app, |s| s.mfa_policy = MfaPolicy::Required).await;
 
     let page = link_page(&u).await;
@@ -1219,5 +1219,388 @@ async fn callback_of_a_finished_sign_in_says_it_was_already_completed() {
     assert_eq!(
         failure_reasons(&u.app).await.first().map(String::as_str),
         Some("flow_expired")
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Link confirmation when the matching account may not be revealed (Microsoft: its addresses are
+// never trusted). The matching account stays server-side; the page offers the tenant's other
+// providers and an emailed code to the matching account's verified address, and looks the same
+// whatever account matched (AUTH-11, 1.0.0-rc.3 fix)
+// ---------------------------------------------------------------------------------------------
+
+/// Slug of the Microsoft connection next to [`setup`]'s [`SLUG`].
+const MS: &str = "ms";
+
+/// [`setup`] (trusted OIDC connection [`SLUG`]) plus a Microsoft connection [`MS`] to its own
+/// mock. Auto-link is on: Microsoft never auto-links anyway.
+async fn microsoft_tenant() -> (Upstream, MockProvider, Connection) {
+    let u = setup(true).await;
+    let ms = MockProvider::start(MockKind::Microsoft).await;
+    ms.set_now(u.app.clock().now().unix_timestamp());
+    let config = ConnectionConfig::Social(SocialConfig {
+        provider: SocialProvider::Microsoft,
+        client_id: MOCK_CLIENT_ID.into(),
+        scopes: vec![],
+        endpoints: EndpointOverrides {
+            issuer: Some(ms.issuer_template()),
+            authorization_endpoint: Some(ms.authorization_endpoint()),
+            token_endpoint: Some(ms.token_endpoint()),
+            userinfo_endpoint: Some(ms.userinfo_endpoint()),
+            jwks_uri: Some(ms.jwks_uri()),
+            api_base_url: None,
+        },
+        microsoft_tenant: None,
+        allowed_tenants: vec![],
+        hosted_domains: vec![],
+        apple: None,
+    });
+    let conn = add_connection(&u.app, MS, "Microsoft", config, true).await;
+    email_code_support::update_settings(&u.app, |s| s.auto_link = true).await;
+    (u, ms, conn)
+}
+
+/// A Microsoft sign-in asserting [`MOCK_EMAIL`]: the link confirmation page.
+async fn ms_link_page(u: &Upstream, ms: &MockProvider) -> String {
+    let started = start(&u.app, MS).await;
+    let mut claims = json!({ "nonce": started.nonce.clone().expect("nonce") });
+    claims["email"] = json!(MOCK_EMAIL);
+    ms.respond_with_id_token(claims);
+    let resp = u
+        .app
+        .get(&callback_path(
+            MS,
+            &[("code", "code-1"), ("state", &started.state)],
+        ))
+        .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let html = resp.html();
+    assert_eq!(form_id(&html), "upstream-link", "{html}");
+    html
+}
+
+/// The page names neither the matching account's address nor its id, and the identifier field
+/// is empty.
+fn assert_unrevealed(page: &str, matched: &User) {
+    assert!(!page.contains(MOCK_EMAIL), "{page}");
+    assert!(!page.contains(&matched.id.to_string()), "{page}");
+    let identifier = page
+        .split("id=\"identifier\"")
+        .nth(1)
+        .and_then(|rest| rest.split('>').next())
+        .unwrap_or_default();
+    assert!(!identifier.contains("value="), "{identifier}");
+}
+
+/// Nothing at all is linked to the Microsoft connection.
+async fn assert_no_ms_link(u: &Upstream, ms_conn: &Connection, users: &[&User]) {
+    for user in users {
+        let l = links(&u.app, user).await;
+        assert!(l.iter().all(|l| l.connection_id != ms_conn.id), "{l:?}");
+    }
+    assert!(audit(&u.app, AuditAction::IdentityLinked).await.is_empty());
+}
+
+#[tokio::test]
+async fn unrevealed_microsoft_match_confirms_through_a_provider_linked_to_the_account() {
+    let (u, ms, ms_conn) = microsoft_tenant().await;
+    let alice = social_only_alice(&u).await;
+    link_identity(&u.app, &alice, &u.conn, "alice-acme").await;
+
+    let page = ms_link_page(&u, &ms).await;
+    assert_unrevealed(&page, &alice);
+    assert!(page.contains("id=\"upstream-acme-id-form\""), "{page}");
+    assert!(page.contains("Continue with Acme ID to confirm"), "{page}");
+    // Never the connection being linked.
+    assert!(!page.contains("id=\"upstream-ms-form\""), "{page}");
+    assert!(session(&u.app).await.is_none());
+
+    let resp = confirm_with(&u, &page, SLUG, "alice-acme").await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_eq!(session(&u.app).await.expect("session").user_id, alice.id);
+    let l = links(&u.app, &alice).await;
+    assert_eq!(l.len(), 2, "{l:?}");
+    assert!(l.iter().any(|l| l.connection_id == ms_conn.id));
+    let linked = audit(&u.app, AuditAction::IdentityLinked).await;
+    assert_eq!(linked.len(), 1);
+    assert_eq!(linked[0].details.as_map()["mode"], "confirmed");
+    assert!(user(&u.app, "mallory@example.net").await.is_none());
+}
+
+/// How an unrevealed confirmation through [`SLUG`] fails.
+#[derive(Clone, Copy, Debug)]
+enum Mismatch {
+    /// The returned identity is linked to another user (Bob).
+    AnotherUser,
+    /// The returned identity is linked to nobody.
+    Unlinked,
+    /// The matching account is gone by the time the confirmation returns (no account matches).
+    NoAccount,
+}
+
+/// The normalised failure answer of an unrevealed confirmation failing as `case`; checks that
+/// nothing was linked or created.
+async fn mismatch_answer(case: Mismatch) -> (u16, String) {
+    let (u, ms, ms_conn) = microsoft_tenant().await;
+    let alice = social_only_alice(&u).await;
+    link_identity(&u.app, &alice, &u.conn, "alice-acme").await;
+    register(&u.app, "", "bob@example.com", PASSWORD).await;
+    let bob = user(&u.app, "bob@example.com").await.expect("bob");
+    link_identity(&u.app, &bob, &u.conn, "bob-acme").await;
+    u.app.clear_cookies();
+
+    let page = ms_link_page(&u, &ms).await;
+    assert_unrevealed(&page, &alice);
+    let subject = match case {
+        Mismatch::AnotherUser => "bob-acme",
+        Mismatch::Unlinked => "nobody-acme",
+        Mismatch::NoAccount => {
+            assert!(
+                u.app
+                    .storage()
+                    .users()
+                    .delete(tenant(&u.app).id, alice.id)
+                    .await
+                    .expect("delete alice")
+            );
+            "alice-acme"
+        }
+    };
+    let resp = confirm_with(&u, &page, SLUG, subject).await;
+    assert_rejected(&u, &resp, "link_confirm_mismatch").await;
+    assert_no_ms_link(&u, &ms_conn, &[&bob]).await;
+    assert_eq!(links(&u.app, &bob).await.len(), 1);
+    if !matches!(case, Mismatch::NoAccount) {
+        assert_eq!(links(&u.app, &alice).await.len(), 1);
+    }
+    assert!(user(&u.app, "mallory@example.net").await.is_none());
+    assert!(user(&u.app, MOCK_EMAIL).await.is_none() == matches!(case, Mismatch::NoAccount));
+    (resp.status.as_u16(), normalize(&resp.html()))
+}
+
+#[tokio::test]
+async fn unrevealed_confirmation_through_another_users_identity_looks_like_no_match() {
+    let other = mismatch_answer(Mismatch::AnotherUser).await;
+    let unlinked = mismatch_answer(Mismatch::Unlinked).await;
+    let none = mismatch_answer(Mismatch::NoAccount).await;
+    assert_eq!(other, unlinked);
+    assert_eq!(other, none);
+}
+
+/// What the account matching the Microsoft address looks like.
+#[derive(Clone, Copy, Debug)]
+enum Matched {
+    /// Social only (no password), verified, linked through [`SLUG`].
+    SocialOnly,
+    /// A password account with an unverified address and no linked provider.
+    PasswordUnverified,
+    /// A verified password account; another user (Bob) is linked through [`SLUG`].
+    PasswordOtherLinked,
+}
+
+/// The normalised link page of a Microsoft sign-in matching an account like `case`.
+async fn unrevealed_page(case: Matched) -> String {
+    let (u, ms, _) = microsoft_tenant().await;
+    tenant_settings(&u.app, |s| s.email_otp = true).await;
+    match case {
+        Matched::SocialOnly => {
+            let alice = social_only_alice(&u).await;
+            link_identity(&u.app, &alice, &u.conn, "alice-acme").await;
+        }
+        Matched::PasswordUnverified => local_alice(&u, false).await,
+        Matched::PasswordOtherLinked => {
+            local_alice(&u, true).await;
+            register(&u.app, "", "bob@example.com", PASSWORD).await;
+            let bob = user(&u.app, "bob@example.com").await.expect("bob");
+            link_identity(&u.app, &bob, &u.conn, "bob-acme").await;
+        }
+    }
+    u.app.clear_cookies();
+    let alice = user(&u.app, MOCK_EMAIL).await.expect("alice");
+    let page = ms_link_page(&u, &ms).await;
+    assert_unrevealed(&page, &alice);
+    assert!(page.contains("id=\"upstream-acme-id-form\""), "{page}");
+    assert!(page.contains("id=\"email-code-link-request\""), "{page}");
+    // No address input: the code goes to the matching account's own address, if any.
+    assert!(!page.contains("id=\"email-code-request\""), "{page}");
+    assert!(
+        !message_keys(&page).contains(&"upstream.link_no_method".to_owned()),
+        "{page}"
+    );
+    assert!(page.contains("id=\"link-account-linked\""), "{page}");
+    assert!(page.contains("id=\"link-cancel\""), "{page}");
+    normalize(&page)
+}
+
+#[tokio::test]
+async fn unrevealed_link_page_is_the_same_whatever_account_matched() {
+    let social = unrevealed_page(Matched::SocialOnly).await;
+    assert_eq!(social, unrevealed_page(Matched::PasswordUnverified).await);
+    assert_eq!(social, unrevealed_page(Matched::PasswordOtherLinked).await);
+}
+
+#[tokio::test]
+async fn unrevealed_emailed_code_confirms_only_the_matching_account() {
+    let (u, ms, ms_conn) = microsoft_tenant().await;
+    tenant_settings(&u.app, |s| {
+        s.email_otp = true;
+        s.magic_link = true;
+    })
+    .await;
+    let alice = social_only_alice(&u).await;
+    register(&u.app, "", "bob@example.com", PASSWORD).await;
+    mark_verified(&u.app, "bob@example.com").await;
+    take_emails(&u.app).await;
+    u.app.clear_cookies();
+
+    let page = ms_link_page(&u, &ms).await;
+    let action = email_code_support::action_of(&u.app, &page, "email-code-link-request");
+    // A typed address is refused: the code goes only to the matching account.
+    let typed = u
+        .app
+        .post_form(
+            &action,
+            &[
+                ("csrf_token", &csrf_from(&page)),
+                ("email", "bob@example.com"),
+            ],
+        )
+        .await;
+    assert_eq!(typed.status, 400, "{}", typed.text());
+    assert!(email_code_support::login_codes(&u.app).await.is_empty());
+
+    let sent = u
+        .app
+        .post_form(&action, &[("csrf_token", &csrf_from(&page))])
+        .await;
+    assert_eq!(sent.status, 200, "{}", sent.text());
+    let sent_html = sent.html();
+    assert!(!sent_html.contains(MOCK_EMAIL), "{sent_html}");
+    assert!(
+        message_keys(&sent_html).contains(&"email_code.sent".to_owned()),
+        "{sent_html}"
+    );
+    let mail = email_code_support::one_code(&u.app).await;
+    assert_eq!(mail.to, MOCK_EMAIL);
+    // Only the code: the magic link cannot carry the pending link to another browser.
+    assert!(mail.link.is_empty(), "{mail:?}");
+    assert!(session(&u.app).await.is_none());
+
+    let ok = email_code_support::submit_code(&u.app, &sent, &mail.code).await;
+    assert_eq!(ok.status, 200, "{}", ok.text());
+    assert_eq!(session(&u.app).await.expect("session").user_id, alice.id);
+    let l = links(&u.app, &alice).await;
+    assert_eq!(l.len(), 1, "{l:?}");
+    assert_eq!(l[0].connection_id, ms_conn.id);
+    let linked = audit(&u.app, AuditAction::IdentityLinked).await;
+    assert_eq!(linked.len(), 1);
+    assert_eq!(linked[0].details.as_map()["mode"], "confirmed");
+    let bob = user(&u.app, "bob@example.com").await.expect("bob");
+    assert!(links(&u.app, &bob).await.is_empty());
+}
+
+/// What happens to the matching account before "Email me a code" is pressed.
+#[derive(Clone, Copy, Debug)]
+enum CodeCase {
+    /// A verified address: the code is sent.
+    Verified,
+    /// An unverified address: nothing is sent.
+    Unverified,
+    /// The account is gone: nothing is sent.
+    NoAccount,
+}
+
+/// The normalised "check your email" answer of an unrevealed code request in `case`, and the
+/// number of codes sent.
+async fn code_answer(case: CodeCase) -> (u16, String, usize) {
+    let (u, ms, ms_conn) = microsoft_tenant().await;
+    tenant_settings(&u.app, |s| s.email_otp = true).await;
+    let alice = social_only_alice(&u).await;
+    if matches!(case, CodeCase::Unverified) {
+        email_code_support::set_verified(&u.app, MOCK_EMAIL, false).await;
+    }
+    let page = ms_link_page(&u, &ms).await;
+    if matches!(case, CodeCase::NoAccount) {
+        assert!(
+            u.app
+                .storage()
+                .users()
+                .delete(tenant(&u.app).id, alice.id)
+                .await
+                .expect("delete alice")
+        );
+    }
+    let action = email_code_support::action_of(&u.app, &page, "email-code-link-request");
+    let sent = u
+        .app
+        .post_form(&action, &[("csrf_token", &csrf_from(&page))])
+        .await;
+    let codes = email_code_support::login_codes(&u.app).await;
+    for c in &codes {
+        assert_eq!(c.to, MOCK_EMAIL);
+    }
+    assert!(session(&u.app).await.is_none());
+    assert_no_ms_link(&u, &ms_conn, &[]).await;
+    (
+        sent.status.as_u16(),
+        email_code_support::normalized(&sent.html()),
+        codes.len(),
+    )
+}
+
+#[tokio::test]
+async fn unrevealed_emailed_code_is_sent_only_to_a_verified_match_and_looks_the_same() {
+    let (status, page, sent) = code_answer(CodeCase::Verified).await;
+    assert_eq!((status, sent), (200, 1), "{page}");
+    for case in [CodeCase::Unverified, CodeCase::NoAccount] {
+        let (s, p, n) = code_answer(case).await;
+        assert_eq!(n, 0, "{case:?}: nothing sent");
+        assert_eq!((s, p), (status, page.clone()), "{case:?}");
+    }
+}
+
+#[tokio::test]
+async fn unrevealed_confirmation_still_needs_the_second_factor() {
+    let (u, ms, ms_conn) = microsoft_tenant().await;
+    let alice = social_only_alice(&u).await;
+    link_identity(&u.app, &alice, &u.conn, "alice-acme").await;
+    let seed = give_totp(&u, &alice).await;
+    tenant_settings(&u.app, |s| s.mfa_policy = MfaPolicy::Required).await;
+
+    let page = ms_link_page(&u, &ms).await;
+    let resp = confirm_with(&u, &page, SLUG, "alice-acme").await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let html = resp.html();
+    assert_eq!(form_id(&html), "second-factor", "{html}");
+    assert!(
+        session(&u.app).await.is_none(),
+        "no session before the factor"
+    );
+    assert_no_ms_link(&u, &ms_conn, &[&alice]).await;
+
+    let code = totp_code(seed.as_bytes(), u.app.clock().now().unix_timestamp());
+    let factor = hidden_inputs(&html)
+        .into_iter()
+        .find(|(n, _)| n == "factor_token")
+        .expect("factor token")
+        .1;
+    let ok = u
+        .app
+        .post_form(
+            &form_action(&u.app, &html),
+            &[
+                ("csrf_token", &csrf_from(&html)),
+                ("factor_token", &factor),
+                ("code", &code),
+            ],
+        )
+        .await;
+    assert_eq!(ok.status, 200, "{}", ok.text());
+    assert_eq!(session(&u.app).await.expect("session").user_id, alice.id);
+    assert!(
+        links(&u.app, &alice)
+            .await
+            .iter()
+            .any(|l| l.connection_id == ms_conn.id)
     );
 }
