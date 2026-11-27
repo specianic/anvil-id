@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SAML interop (tests/saml-interop/run.sh): replaces the default attribute-resolver.xml of
+     Shibboleth IdP 5.2.3 (i2incommon/shib-idp 5.2.3_20261117). The test accounts have no directory:
+     every attribute is derived from the login name. Released with the default attribute registry's
+     names (urn:oid:... Name, mail/givenName/sn FriendlyName). -->
+<AttributeResolver
+        xmlns="urn:mace:shibboleth:2.0:resolver"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="urn:mace:shibboleth:2.0:resolver http://shibboleth.net/schema/idp/shibboleth-attribute-resolver.xsd">
+
+    <!-- The login name; also the persistent NameID source (never released itself). -->
+    <AttributeDefinition id="uid" xsi:type="PrincipalName" />
+
+    <AttributeDefinition id="mail" xsi:type="Template">
+        <InputAttributeDefinition ref="uid" />
+        <Template>${uid}@shib-ok.interop.example.com</Template>
+    </AttributeDefinition>
+
+    <AttributeDefinition id="givenName" xsi:type="Template">
+        <InputAttributeDefinition ref="uid" />
+        <Template>Interop</Template>
+    </AttributeDefinition>
+
+    <AttributeDefinition id="sn" xsi:type="Template">
+        <InputAttributeDefinition ref="uid" />
+        <Template>${uid}</Template>
+    </AttributeDefinition>
+
+</AttributeResolver>

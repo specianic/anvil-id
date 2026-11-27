@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SAML interop (tests/saml-interop/run.sh): replaces the default attribute-filter.xml of
+     Shibboleth IdP 5.2.3 (i2incommon/shib-idp 5.2.3_20261117). Releases mail, givenName and sn to
+     the two AnvilID connections and nothing to anyone else. -->
+<AttributeFilterPolicyGroup id="ShibbolethFilterPolicy"
+        xmlns="urn:mace:shibboleth:2.0:afp"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="urn:mace:shibboleth:2.0:afp http://shibboleth.net/schema/idp/shibboleth-afp.xsd">
+
+    <AttributeFilterPolicy id="anvilInterop">
+        <PolicyRequirementRule xsi:type="OR">
+            <Rule xsi:type="Requester" value="@@ISSUER@@/saml/shib-ok" />
+            <Rule xsi:type="Requester" value="@@ISSUER@@/saml/shib-default" />
+        </PolicyRequirementRule>
+        <AttributeRule attributeID="mail" permitAny="true" />
+        <AttributeRule attributeID="givenName" permitAny="true" />
+        <AttributeRule attributeID="sn" permitAny="true" />
+    </AttributeFilterPolicy>
+
+</AttributeFilterPolicyGroup>

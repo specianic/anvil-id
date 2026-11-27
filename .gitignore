@@ -23,6 +23,7 @@
 # Local tooling and test artifacts
 /suite/
 /conformance-results/
+/saml-interop-results/
 *.db
 *.db-shm
 *.db-wal

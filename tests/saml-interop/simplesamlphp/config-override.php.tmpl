@@ -1,0 +1,10 @@
+<?php
+// SAML interop (tests/saml-interop/run.sh): included last by the image's config-override-base.php.
+// Rendered per run; every value marked @@...@@ is replaced by run.sh, secrets come from the
+// container environment (SSP_ADMIN_PASSWORD, SSP_SECRET_SALT), never from this file.
+$config['baseurlpath'] = 'https://127.0.0.1:@@SSP_PORT@@/simplesaml/';
+$config['enable.saml20-idp'] = true;
+$config['module.enable']['exampleauth'] = true;
+$config['module.enable']['saml'] = true;
+$config['logging.handler'] = 'errorlog';
+$config['logging.level'] = SimpleSAML\Logger::INFO;

@@ -90,6 +90,17 @@ test-redis:
 e2e backend="sqlite":
     tests/e2e/run.sh {{backend}}
 
+# Real-IdP SAML interop (07-28): AnvilID signs in through Keycloak, SimpleSAMLphp and Shibboleth
+# IdP containers (pinned in tests/saml-interop/compose.yml; default: all three). Needs Docker,
+# Node.js and what `e2e` needs; runs in its own workflow (saml-interop.yml), not in `ci`.
+saml-interop backend="sqlite" *idps="":
+    tests/saml-interop/run.sh {{backend}} {{idps}}
+
+# Remove leftover SAML interop containers; `just saml-interop-clean images=1` (or `1`) also removes
+# the pinned IdP images (~1.2 GB).
+saml-interop-clean images="0":
+    tests/saml-interop/run.sh --clean {{ if images =~ '^(1|images|images=1)$' { "images" } else { "" } }}
+
 # QUAL-04 zero-config first-login script (plan 02-20).
 qual04 backend="sqlite":
     scripts/qual04.sh {{backend}}

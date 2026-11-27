@@ -1,0 +1,446 @@
+{
+  "realm": "interop",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": false,
+  "bruteForceProtected": false,
+  "users": [
+    {
+      "username": "alice",
+      "email": "alice@kc-ok.interop.example.com",
+      "firstName": "Alice",
+      "lastName": "Kc",
+      "enabled": true,
+      "emailVerified": true,
+      "requiredActions": [],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "@@USER_PASSWORD@@",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "bob",
+      "email": "bob@kc-ok.interop.example.com",
+      "firstName": "Bob",
+      "lastName": "Kc",
+      "enabled": true,
+      "emailVerified": true,
+      "requiredActions": [],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "@@USER_PASSWORD@@",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "mallory",
+      "email": "mallory@outside.example.test",
+      "firstName": "Mallory",
+      "lastName": "Outside",
+      "enabled": true,
+      "emailVerified": true,
+      "requiredActions": [],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "@@USER_PASSWORD@@",
+          "temporary": false
+        }
+      ]
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "@@ISSUER@@/saml/kc-ok",
+      "name": "kc-ok",
+      "protocol": "saml",
+      "enabled": true,
+      "publicClient": false,
+      "frontchannelLogout": false,
+      "fullScopeAllowed": false,
+      "redirectUris": [
+        "@@ISSUER@@/ui/login/saml/kc-ok/acs"
+      ],
+      "attributes": {
+        "saml_assertion_consumer_url_post": "@@ISSUER@@/ui/login/saml/kc-ok/acs",
+        "saml.client.signature": "false",
+        "saml.server.signature": "false",
+        "saml.assertion.signature": "true",
+        "saml.signature.algorithm": "RSA_SHA256",
+        "saml_signature_canonicalization_method": "http://www.w3.org/2001/10/xml-exc-c14n#",
+        "saml_name_id_format": "persistent",
+        "saml_force_name_id_format": "true",
+        "saml.force.post.binding": "true",
+        "saml.authnstatement": "true",
+        "saml.encrypt": "false",
+        "saml.onetimeuse.condition": "false",
+        "saml_idp_initiated_sso_url_name": "kc-ok"
+      },
+      "protocolMappers": [
+        {
+          "name": "email",
+          "protocol": "saml",
+          "protocolMapper": "saml-user-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "email",
+            "attribute.name": "email",
+            "attribute.nameformat": "Basic",
+            "friendly.name": "email"
+          }
+        },
+        {
+          "name": "given_name",
+          "protocol": "saml",
+          "protocolMapper": "saml-user-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "firstName",
+            "attribute.name": "given_name",
+            "attribute.nameformat": "Basic",
+            "friendly.name": "given_name"
+          }
+        },
+        {
+          "name": "family_name",
+          "protocol": "saml",
+          "protocolMapper": "saml-user-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "lastName",
+            "attribute.name": "family_name",
+            "attribute.nameformat": "Basic",
+            "friendly.name": "family_name"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "@@ISSUER@@/saml/kc-both",
+      "name": "kc-both",
+      "protocol": "saml",
+      "enabled": true,
+      "publicClient": false,
+      "frontchannelLogout": false,
+      "fullScopeAllowed": false,
+      "redirectUris": [
+        "@@ISSUER@@/ui/login/saml/kc-both/acs"
+      ],
+      "attributes": {
+        "saml_assertion_consumer_url_post": "@@ISSUER@@/ui/login/saml/kc-both/acs",
+        "saml.client.signature": "false",
+        "saml.server.signature": "true",
+        "saml.assertion.signature": "true",
+        "saml.signature.algorithm": "RSA_SHA256",
+        "saml_signature_canonicalization_method": "http://www.w3.org/2001/10/xml-exc-c14n#",
+        "saml_name_id_format": "persistent",
+        "saml_force_name_id_format": "true",
+        "saml.force.post.binding": "true",
+        "saml.authnstatement": "true",
+        "saml.encrypt": "false",
+        "saml.onetimeuse.condition": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "email",
+          "protocol": "saml",
+          "protocolMapper": "saml-user-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "email",
+            "attribute.name": "email",
+            "attribute.nameformat": "Basic",
+            "friendly.name": "email"
+          }
+        },
+        {
+          "name": "given_name",
+          "protocol": "saml",
+          "protocolMapper": "saml-user-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "firstName",
+            "attribute.name": "given_name",
+            "attribute.nameformat": "Basic",
+            "friendly.name": "given_name"
+          }
+        },
+        {
+          "name": "family_name",
+          "protocol": "saml",
+          "protocolMapper": "saml-user-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "lastName",
+            "attribute.name": "family_name",
+            "attribute.nameformat": "Basic",
+            "friendly.name": "family_name"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "@@ISSUER@@/saml/kc-resp-only",
+      "name": "kc-resp-only",
+      "protocol": "saml",
+      "enabled": true,
+      "publicClient": false,
+      "frontchannelLogout": false,
+      "fullScopeAllowed": false,
+      "redirectUris": [
+        "@@ISSUER@@/ui/login/saml/kc-resp-only/acs"
+      ],
+      "attributes": {
+        "saml_assertion_consumer_url_post": "@@ISSUER@@/ui/login/saml/kc-resp-only/acs",
+        "saml.client.signature": "false",
+        "saml.server.signature": "true",
+        "saml.assertion.signature": "false",
+        "saml.signature.algorithm": "RSA_SHA256",
+        "saml_signature_canonicalization_method": "http://www.w3.org/2001/10/xml-exc-c14n#",
+        "saml_name_id_format": "persistent",
+        "saml_force_name_id_format": "true",
+        "saml.force.post.binding": "true",
+        "saml.authnstatement": "true",
+        "saml.encrypt": "false",
+        "saml.onetimeuse.condition": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "email",
+          "protocol": "saml",
+          "protocolMapper": "saml-user-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "email",
+            "attribute.name": "email",
+            "attribute.nameformat": "Basic",
+            "friendly.name": "email"
+          }
+        },
+        {
+          "name": "given_name",
+          "protocol": "saml",
+          "protocolMapper": "saml-user-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "firstName",
+            "attribute.name": "given_name",
+            "attribute.nameformat": "Basic",
+            "friendly.name": "given_name"
+          }
+        },
+        {
+          "name": "family_name",
+          "protocol": "saml",
+          "protocolMapper": "saml-user-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "lastName",
+            "attribute.name": "family_name",
+            "attribute.nameformat": "Basic",
+            "friendly.name": "family_name"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "@@ISSUER@@/saml/kc-unsigned",
+      "name": "kc-unsigned",
+      "protocol": "saml",
+      "enabled": true,
+      "publicClient": false,
+      "frontchannelLogout": false,
+      "fullScopeAllowed": false,
+      "redirectUris": [
+        "@@ISSUER@@/ui/login/saml/kc-unsigned/acs"
+      ],
+      "attributes": {
+        "saml_assertion_consumer_url_post": "@@ISSUER@@/ui/login/saml/kc-unsigned/acs",
+        "saml.client.signature": "false",
+        "saml.server.signature": "false",
+        "saml.assertion.signature": "false",
+        "saml.signature.algorithm": "RSA_SHA256",
+        "saml_signature_canonicalization_method": "http://www.w3.org/2001/10/xml-exc-c14n#",
+        "saml_name_id_format": "persistent",
+        "saml_force_name_id_format": "true",
+        "saml.force.post.binding": "true",
+        "saml.authnstatement": "true",
+        "saml.encrypt": "false",
+        "saml.onetimeuse.condition": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "email",
+          "protocol": "saml",
+          "protocolMapper": "saml-user-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "email",
+            "attribute.name": "email",
+            "attribute.nameformat": "Basic",
+            "friendly.name": "email"
+          }
+        },
+        {
+          "name": "given_name",
+          "protocol": "saml",
+          "protocolMapper": "saml-user-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "firstName",
+            "attribute.name": "given_name",
+            "attribute.nameformat": "Basic",
+            "friendly.name": "given_name"
+          }
+        },
+        {
+          "name": "family_name",
+          "protocol": "saml",
+          "protocolMapper": "saml-user-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "lastName",
+            "attribute.name": "family_name",
+            "attribute.nameformat": "Basic",
+            "friendly.name": "family_name"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "@@ISSUER@@/saml/kc-sha1",
+      "name": "kc-sha1",
+      "protocol": "saml",
+      "enabled": true,
+      "publicClient": false,
+      "frontchannelLogout": false,
+      "fullScopeAllowed": false,
+      "redirectUris": [
+        "@@ISSUER@@/ui/login/saml/kc-sha1/acs"
+      ],
+      "attributes": {
+        "saml_assertion_consumer_url_post": "@@ISSUER@@/ui/login/saml/kc-sha1/acs",
+        "saml.client.signature": "false",
+        "saml.server.signature": "false",
+        "saml.assertion.signature": "true",
+        "saml.signature.algorithm": "RSA_SHA1",
+        "saml_signature_canonicalization_method": "http://www.w3.org/2001/10/xml-exc-c14n#",
+        "saml_name_id_format": "persistent",
+        "saml_force_name_id_format": "true",
+        "saml.force.post.binding": "true",
+        "saml.authnstatement": "true",
+        "saml.encrypt": "false",
+        "saml.onetimeuse.condition": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "email",
+          "protocol": "saml",
+          "protocolMapper": "saml-user-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "email",
+            "attribute.name": "email",
+            "attribute.nameformat": "Basic",
+            "friendly.name": "email"
+          }
+        },
+        {
+          "name": "given_name",
+          "protocol": "saml",
+          "protocolMapper": "saml-user-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "firstName",
+            "attribute.name": "given_name",
+            "attribute.nameformat": "Basic",
+            "friendly.name": "given_name"
+          }
+        },
+        {
+          "name": "family_name",
+          "protocol": "saml",
+          "protocolMapper": "saml-user-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "lastName",
+            "attribute.name": "family_name",
+            "attribute.nameformat": "Basic",
+            "friendly.name": "family_name"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "@@ISSUER@@/saml/kc-enc",
+      "name": "kc-enc",
+      "protocol": "saml",
+      "enabled": true,
+      "publicClient": false,
+      "frontchannelLogout": false,
+      "fullScopeAllowed": false,
+      "redirectUris": [
+        "@@ISSUER@@/ui/login/saml/kc-enc/acs"
+      ],
+      "attributes": {
+        "saml_assertion_consumer_url_post": "@@ISSUER@@/ui/login/saml/kc-enc/acs",
+        "saml.client.signature": "false",
+        "saml.server.signature": "false",
+        "saml.assertion.signature": "true",
+        "saml.signature.algorithm": "RSA_SHA256",
+        "saml_signature_canonicalization_method": "http://www.w3.org/2001/10/xml-exc-c14n#",
+        "saml_name_id_format": "persistent",
+        "saml_force_name_id_format": "true",
+        "saml.force.post.binding": "true",
+        "saml.authnstatement": "true",
+        "saml.encrypt": "true",
+        "saml.onetimeuse.condition": "false",
+        "saml.encryption.certificate": "@@SP_ENC_CERT_B64@@"
+      },
+      "protocolMappers": [
+        {
+          "name": "email",
+          "protocol": "saml",
+          "protocolMapper": "saml-user-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "email",
+            "attribute.name": "email",
+            "attribute.nameformat": "Basic",
+            "friendly.name": "email"
+          }
+        },
+        {
+          "name": "given_name",
+          "protocol": "saml",
+          "protocolMapper": "saml-user-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "firstName",
+            "attribute.name": "given_name",
+            "attribute.nameformat": "Basic",
+            "friendly.name": "given_name"
+          }
+        },
+        {
+          "name": "family_name",
+          "protocol": "saml",
+          "protocolMapper": "saml-user-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "lastName",
+            "attribute.name": "family_name",
+            "attribute.nameformat": "Basic",
+            "friendly.name": "family_name"
+          }
+        }
+      ]
+    }
+  ]
+}

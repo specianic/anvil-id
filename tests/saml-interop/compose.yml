@@ -1,0 +1,88 @@
+# SAML interop IdPs (tests/saml-interop/run.sh). The ONLY place the IdP image references live:
+# run.sh, the CI workflow and docs/SAML.md read them from here (`docker compose config`).
+#
+# Every bind mount comes from the per-run directory SAML_INTEROP_RUN_DIR (mode 700, created and
+# removed by run.sh); nothing is mounted from the repository and no named volume exists, so
+# `down -v` leaves nothing behind. Ports are published on 127.0.0.1 only. Every per-run secret
+# arrives through the environment of run.sh (generated per run, never committed; run.sh always
+# sets them, the empty defaults only let `docker compose config` and `down` work without a run).
+#
+# Bump an image: pick the new tag, re-read its digest from the registry (see README.md), replace
+# the `name:tag@sha256:digest` reference below and the matching row in docs/SAML.md.
+name: anvil-saml-interop
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.2@sha256:7e66a96e4739239070aeaf72e4c5decf0f7f682cfc725b9f7ea2b336eaba38b3
+    labels:
+      dev.anvilid.test: saml-interop
+    command: ["start-dev", "--import-realm", "--https-port=8443"]
+    environment:
+      KC_HTTPS_CERTIFICATE_FILE: /run/interop-tls/tls.crt
+      KC_HTTPS_CERTIFICATE_KEY_FILE: /run/interop-tls/tls.key
+      KC_HOSTNAME: https://127.0.0.1:${SAML_INTEROP_KEYCLOAK_PORT:-18443}
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${SAML_INTEROP_KC_ADMIN_PASSWORD:-}
+    ports:
+      - "127.0.0.1:${SAML_INTEROP_KEYCLOAK_PORT:-18443}:8443"
+    volumes:
+      - ${SAML_INTEROP_RUN_DIR:?}/tls:/run/interop-tls:ro
+      - ${SAML_INTEROP_RUN_DIR:?}/keycloak/import:/opt/keycloak/data/import:ro
+
+  simplesamlphp:
+    image: cirrusid/simplesamlphp:v2.5.3.1.20261023T014150@sha256:ae33d1faa5ce1ca0171ffb30916261bdb90bc4e734154db254c9735de8696240
+    labels:
+      dev.anvilid.test: saml-interop
+    environment:
+      SSP_ENABLE_IDP: "true"
+      SSP_ENABLED_MODULES: "exampleauth saml"
+      SSP_ADMIN_PASSWORD: ${SAML_INTEROP_SSP_ADMIN_PASSWORD:-}
+      SSP_SECRET_SALT: ${SAML_INTEROP_SSP_SECRET_SALT:-}
+      APACHE_CERT_NAME: interop
+    ports:
+      - "127.0.0.1:${SAML_INTEROP_SSP_PORT:-18444}:443"
+    volumes:
+      - ${SAML_INTEROP_RUN_DIR:?}/tls/tls.crt:/etc/ssl/certs/interop.pem:ro
+      - ${SAML_INTEROP_RUN_DIR:?}/tls/tls.key:/etc/ssl/private/interop.key:ro
+      - ${SAML_INTEROP_RUN_DIR:?}/simplesamlphp/config-override.php:/var/simplesamlphp/config/config-override.php:ro
+      - ${SAML_INTEROP_RUN_DIR:?}/simplesamlphp/authsources.php:/var/simplesamlphp/config/authsources.php:ro
+      - ${SAML_INTEROP_RUN_DIR:?}/simplesamlphp/saml20-idp-hosted.php:/var/simplesamlphp/metadata/saml20-idp-hosted.php:ro
+      - ${SAML_INTEROP_RUN_DIR:?}/simplesamlphp/saml20-sp-remote.php:/var/simplesamlphp/metadata/saml20-sp-remote.php:ro
+      - ${SAML_INTEROP_RUN_DIR:?}/simplesamlphp/cert:/var/simplesamlphp/cert:ro
+
+  shibboleth:
+    image: i2incommon/shib-idp:5.2.3_20261117_rocky9_multiarch@sha256:2dacee78da07113856e6ccf5d8acdf7f00db4f8fdf4d3a617265fc38fb50d3c6
+    labels:
+      dev.anvilid.test: saml-interop
+    environment:
+      JAVA_OPTS: -Xmx1024m
+      # No daily usage beacon and no sealer rotation (the sealer is mounted read-only, per run).
+      TIER_BEACON_OPT_OUT: "True"
+      ENABLE_SEALER_KEY_ROTATION: "False"
+    ports:
+      - "127.0.0.1:${SAML_INTEROP_SHIB_PORT:-18445}:443"
+    volumes:
+      # Tomcat's TLS certificate (the image's server.xml reads these two PEM paths).
+      - ${SAML_INTEROP_RUN_DIR:?}/tls/tls.crt:/opt/certs/idp-default.crt:ro
+      - ${SAML_INTEROP_RUN_DIR:?}/tls/tls.key:/opt/certs/idp-default.key:ro
+      # Per-run credentials replace the ones baked into the image.
+      - ${SAML_INTEROP_RUN_DIR:?}/shibboleth/credentials/idp-signing.crt:/opt/shibboleth-idp/credentials/idp-signing.crt:ro
+      - ${SAML_INTEROP_RUN_DIR:?}/shibboleth/credentials/idp-signing.key:/opt/shibboleth-idp/credentials/idp-signing.key:ro
+      - ${SAML_INTEROP_RUN_DIR:?}/shibboleth/credentials/idp-encryption.crt:/opt/shibboleth-idp/credentials/idp-encryption.crt:ro
+      - ${SAML_INTEROP_RUN_DIR:?}/shibboleth/credentials/idp-encryption.key:/opt/shibboleth-idp/credentials/idp-encryption.key:ro
+      - ${SAML_INTEROP_RUN_DIR:?}/shibboleth/credentials/idp-backchannel.crt:/opt/shibboleth-idp/credentials/idp-backchannel.crt:ro
+      - ${SAML_INTEROP_RUN_DIR:?}/shibboleth/credentials/idp-backchannel.p12:/opt/shibboleth-idp/credentials/idp-backchannel.p12:ro
+      - ${SAML_INTEROP_RUN_DIR:?}/shibboleth/credentials/sealer.jks:/opt/shibboleth-idp/credentials/sealer.jks:ro
+      - ${SAML_INTEROP_RUN_DIR:?}/shibboleth/credentials/sealer.kver:/opt/shibboleth-idp/credentials/sealer.kver:ro
+      - ${SAML_INTEROP_RUN_DIR:?}/shibboleth/credentials/secrets.properties:/opt/shibboleth-idp/credentials/secrets.properties:ro
+      - ${SAML_INTEROP_RUN_DIR:?}/shibboleth/credentials/interop.htpasswd:/opt/shibboleth-idp/credentials/interop.htpasswd:ro
+      # Configuration overrides (rendered from tests/saml-interop/shibboleth/conf).
+      - ${SAML_INTEROP_RUN_DIR:?}/shibboleth/conf/idp.properties:/opt/shibboleth-idp/conf/idp.properties:ro
+      - ${SAML_INTEROP_RUN_DIR:?}/shibboleth/conf/relying-party.xml:/opt/shibboleth-idp/conf/relying-party.xml:ro
+      - ${SAML_INTEROP_RUN_DIR:?}/shibboleth/conf/metadata-providers.xml:/opt/shibboleth-idp/conf/metadata-providers.xml:ro
+      - ${SAML_INTEROP_RUN_DIR:?}/shibboleth/conf/attribute-resolver.xml:/opt/shibboleth-idp/conf/attribute-resolver.xml:ro
+      - ${SAML_INTEROP_RUN_DIR:?}/shibboleth/conf/attribute-filter.xml:/opt/shibboleth-idp/conf/attribute-filter.xml:ro
+      - ${SAML_INTEROP_RUN_DIR:?}/shibboleth/conf/saml-nameid.xml:/opt/shibboleth-idp/conf/saml-nameid.xml:ro
+      - ${SAML_INTEROP_RUN_DIR:?}/shibboleth/conf/authn/password-authn-config.xml:/opt/shibboleth-idp/conf/authn/password-authn-config.xml:ro
+      - ${SAML_INTEROP_RUN_DIR:?}/shibboleth/metadata/idp-metadata.xml:/opt/shibboleth-idp/metadata/idp-metadata.xml:ro
+      - ${SAML_INTEROP_RUN_DIR:?}/shibboleth/metadata/anvil-sp.xml:/opt/shibboleth-idp/metadata/anvil-sp.xml:ro

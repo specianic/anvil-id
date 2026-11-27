@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SAML interop (tests/saml-interop/run.sh): the AnvilID connections of tenant `interop` as SPs
+     (entity ID {issuer}/saml/{slug}, ACS {issuer}/ui/login/saml/{slug}/acs). No KeyDescriptor:
+     AnvilID holds no SP key (unsigned AuthnRequests, no encryption). -->
+<md:EntitiesDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" Name="urn:anvilid:saml-interop">
+    <md:EntityDescriptor entityID="@@ISSUER@@/saml/shib-ok">
+        <md:SPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">
+            <md:NameIDFormat>urn:oasis:names:tc:SAML:2.0:nameid-format:persistent</md:NameIDFormat>
+            <md:AssertionConsumerService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="@@ISSUER@@/ui/login/saml/shib-ok/acs" index="0" isDefault="true" />
+        </md:SPSSODescriptor>
+    </md:EntityDescriptor>
+    <md:EntityDescriptor entityID="@@ISSUER@@/saml/shib-default">
+        <md:SPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">
+            <md:NameIDFormat>urn:oasis:names:tc:SAML:2.0:nameid-format:persistent</md:NameIDFormat>
+            <md:AssertionConsumerService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="@@ISSUER@@/ui/login/saml/shib-default/acs" index="0" isDefault="true" />
+        </md:SPSSODescriptor>
+    </md:EntityDescriptor>
+</md:EntitiesDescriptor>

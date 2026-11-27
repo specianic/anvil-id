@@ -1,0 +1,16 @@
+<?php
+// SAML interop IdP (tests/saml-interop/run.sh). The signing key pair is generated per run.
+$metadata['https://127.0.0.1:@@SSP_PORT@@/simplesaml/module.php/saml/idp/metadata'] = [
+    'host' => '__DEFAULT__',
+    'privatekey' => 'idp.key',
+    'certificate' => 'idp.crt',
+    'auth' => 'interop-userpass',
+    'signature.algorithm' => 'http://www.w3.org/2001/04/xmldsig-more#rsa-sha256',
+    // The default NameID is transient, which AnvilID refuses: derive a persistent one from uid.
+    'authproc' => [
+        10 => [
+            'class' => 'saml:PersistentNameID',
+            'identifyingAttribute' => 'uid',
+        ],
+    ],
+];

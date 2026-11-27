@@ -1,0 +1,22 @@
+<?php
+// SAML interop test accounts (passwords generated per run by tests/saml-interop/run.sh).
+$config = [
+    'admin' => ['core:AdminPassword'],
+    'interop-userpass' => [
+        'exampleauth:UserPass',
+        'users' => [
+            'alice:@@USER_PASSWORD@@' => [
+                'uid' => ['alice'],
+                'mail' => ['alice@ssp-ok.interop.example.com'],
+                'givenName' => ['Alice'],
+                'sn' => ['Ssp'],
+            ],
+            'bob:@@USER_PASSWORD@@' => [
+                'uid' => ['bob'],
+                'mail' => ['bob@ssp-ok.interop.example.com'],
+                'givenName' => ['Bob'],
+                'sn' => ['Ssp'],
+            ],
+        ],
+    ],
+];

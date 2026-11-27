@@ -1,0 +1,25 @@
+<?php
+// AnvilID connections of tenant `interop` (SP entity ID {issuer}/saml/{slug}, ACS
+// {issuer}/ui/login/saml/{slug}/acs). AnvilID sends unsigned AuthnRequests and has no SP keys;
+// the encryption certificate of ssp-enc is a throwaway generated per run, only to make this IdP
+// encrypt (AnvilID refuses encrypted assertions).
+$sp = static function (string $slug, array $extra = []): array {
+    return $extra + [
+        'AssertionConsumerService' => [[
+            'Binding' => 'urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST',
+            'Location' => '@@ISSUER@@/ui/login/saml/' . $slug . '/acs',
+        ]],
+        'NameIDFormat' => 'urn:oasis:names:tc:SAML:2.0:nameid-format:persistent',
+        'attributes' => ['mail', 'givenName', 'sn'],
+        'attributes.NameFormat' => 'urn:oasis:names:tc:SAML:2.0:attrname-format:basic',
+        'validate.authnrequest' => false,
+    ];
+};
+
+$metadata['@@ISSUER@@/saml/ssp-ok'] = $sp('ssp-ok');
+$metadata['@@ISSUER@@/saml/ssp-assert-only'] = $sp('ssp-assert-only', ['saml20.sign.response' => false]);
+$metadata['@@ISSUER@@/saml/ssp-resp-only'] = $sp('ssp-resp-only', ['saml20.sign.assertion' => false]);
+$metadata['@@ISSUER@@/saml/ssp-enc'] = $sp('ssp-enc', [
+    'assertion.encryption' => true,
+    'certData' => '@@SP_ENC_CERT_B64@@',
+]);

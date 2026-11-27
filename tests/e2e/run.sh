@@ -14,7 +14,8 @@
 #      variant: a throwaway postgres:18-alpine container and a random KEK passed through the environment)
 #   3. the setup URL from the logs; the specs complete /setup once and share the credential
 #   4. `playwright test` on the given specs (default: every tests/e2e/specs/*.spec.ts, sorted, with
-#      a11y.spec.ts first and qual04.spec.ts left to scripts/qual04.sh), in both Playwright projects (chromium, and nojs with JavaScript disabled)
+#      a11y.spec.ts first, qual04.spec.ts left to scripts/qual04.sh and saml-interop.spec.ts left to
+#      tests/saml-interop/run.sh, which starts the IdPs it needs), in both Playwright projects (chromium, and nojs with JavaScript disabled)
 #
 # Requires Docker, Node.js, `npm ci` in tests/e2e and examples/node-rp (nojs.spec.ts starts the
 # sample RP) and Playwright's chromium.
@@ -39,14 +40,15 @@ esac
 (($# > 0)) && shift
 # Default: every specs/*.spec.ts (sorted glob), so new spec files need no edit here. a11y runs first:
 # on a fresh instance it audits the setup pages before the setup token is used. qual04.spec.ts is
-# excluded: scripts/qual04.sh drives it against its own zero-config instance.
+# excluded: scripts/qual04.sh drives it against its own zero-config instance. saml-interop.spec.ts
+# is excluded: tests/saml-interop/run.sh starts its IdP containers and then calls this script.
 SPECS=("$@")
 if ((${#SPECS[@]} == 0)); then
     SPECS=(specs/a11y.spec.ts)
     for path in "$ROOT"/tests/e2e/specs/*.spec.ts; do
         spec=specs/${path##*/}
         case "$spec" in
-            specs/a11y.spec.ts | specs/qual04.spec.ts) ;;
+            specs/a11y.spec.ts | specs/qual04.spec.ts | specs/saml-interop.spec.ts) ;;
             *) SPECS+=("$spec") ;;
         esac
     done
