@@ -197,3 +197,7 @@ No forced extra files: every file changed is in the plan's files_modified.
 
 - FOUND: tests/saml-interop/run.sh, compose.yml, README.md, all templates; tests/e2e/specs/saml-interop.spec.ts; tests/e2e/lib/saml-interop.ts; .github/workflows/saml-interop.yml
 - FOUND commits: 3eb4fa9, ab555f3, 2c3f147
+
+## First CI run
+
+saml-interop workflow on 59daa79: run 46003072939, success (all three IdPs).
