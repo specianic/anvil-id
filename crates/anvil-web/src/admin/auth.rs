@@ -29,7 +29,9 @@ use anvil_core::model::{
     AuditActor, Organization, SYSTEM_TENANT_SLUG, Tenant, TenantBase, UserId, issuer,
 };
 use anvil_core::oauth::redirect::validate_redirect_uri;
-use anvil_core::service::admin_scope::{ADMIN_WRITE, Access, Resource, scope_satisfies};
+use anvil_core::service::admin_scope::{
+    ADMIN_WRITE, Access, Resource, is_admin_scope, scope_satisfies,
+};
 use anvil_core::service::client::ClientService;
 use anvil_core::service::org_invitation::OrgInvitationService;
 use anvil_core::service::organization::{OrgActor, OrgService};
@@ -285,6 +287,22 @@ impl AdminAuth {
                 resource.as_str()
             ))
             .into())
+        }
+    }
+
+    /// Demands at least one admin scope (any of `ALL_ADMIN_SCOPES`), whatever it grants: the
+    /// bar for installation facts every console administrator may see (the running version),
+    /// below any resource scope. A system-tenant token without admin scopes (a console sign-in
+    /// of a user without an administrator role) and an org admin are refused (403).
+    pub(crate) fn require_any_admin_scope(&self) -> AdminResult<()> {
+        self.require_system_admin()?;
+        if self.claims.scope.iter().any(is_admin_scope) {
+            Ok(())
+        } else {
+            Err(
+                CoreError::InsufficientScope("this operation requires an admin scope".to_owned())
+                    .into(),
+            )
         }
     }
 

@@ -87,7 +87,7 @@ fn spec_is_openapi_3_1_with_oauth2_admin_scopes() {
             assert!(op["responses"]["403"].is_object(), "{method} {path}");
         }
     }
-    assert_eq!(operations, 129);
+    assert_eq!(operations, 130);
 }
 
 #[tokio::test]

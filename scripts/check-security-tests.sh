@@ -218,6 +218,11 @@ admin: deleted client|$W/security_admin.rs|token_of_a_deleted_client_is_401
 admin: scopes|$W/security_admin.rs|read_scope_cannot_write
 admin: scopes|$W/security_admin.rs|resource_scopes_are_confined_to_their_resource
 admin: scopes|$W/security_admin.rs|system_clients_need_full_admin
+admin: system info needs a token|$W/security_system_info.rs|system_info_without_a_token_is_401
+admin: system info refuses application-tenant and org-admin tokens|$W/security_system_info.rs|system_info_refuses_application_tenant_and_org_admin_tokens
+admin: system info needs an admin scope|$W/security_system_info.rs|system_info_without_an_admin_scope_is_403
+version disclosure: public endpoints never carry the version|$W/security_system_info.rs|public_endpoints_never_disclose_the_version
+version disclosure: public endpoints never carry the version|crates/anvilid/tests/system_info.rs|system_info_reports_the_binary_version_to_admins_only
 cache: OAuth responses are no-store|crates/anvil-web/src/errors.rs|every_oauth_response_is_no_store
 passkey: challenge single use|$W/flow_login_factors.rs|passkey_challenge_is_single_use
 passkey: challenge single use|$W/flow_passkey.rs|passkey_signs_in_and_a_consumed_challenge_cannot_be_replayed

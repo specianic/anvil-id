@@ -15,6 +15,7 @@ mod connections;
 pub mod dto;
 mod email;
 mod sessions;
+mod system;
 mod tenants;
 mod users;
 
@@ -164,6 +165,10 @@ fn base_document() -> OpenApi {
                  connections",
             ),
             tag("keys", "Signing keys of a tenant"),
+            tag(
+                "system",
+                "Facts about the running installation, for console administrators",
+            ),
         ]))
         .build()
 }
@@ -254,6 +259,7 @@ fn api_router() -> OpenApiRouter<AppState> {
         .merge(user_import::routes())
         .merge(user_export::routes())
         .merge(password_profiles::routes())
+        .merge(system::routes())
 }
 
 /// Management API routes, including the served OpenAPI document.

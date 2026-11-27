@@ -6,6 +6,134 @@
     "version": "v1"
   },
   "paths": {
+    "/api/admin/v1/system/info": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Version of the running server, for console administrators.",
+        "operationId": "getSystemInfo",
+        "responses": {
+          "200": {
+            "description": "Facts about the running installation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemInfo"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token carries no admin scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:tenants:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:tenants:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:clients:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:clients:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:users:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:users:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:sessions:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:sessions:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:audit:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:audit:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:settings:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:settings:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:organizations:read"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:organizations:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:users:export"
+            ]
+          }
+        ]
+      }
+    },
     "/api/admin/v1/tenants": {
       "get": {
         "tags": [
@@ -16620,6 +16748,19 @@
         },
         "additionalProperties": false
       },
+      "SystemInfo": {
+        "type": "object",
+        "description": "Facts about the running installation.",
+        "required": [
+          "version"
+        ],
+        "properties": {
+          "version": {
+            "type": "string",
+            "description": "Version of the running `anvilid` binary (e.g. `1.0.0`)."
+          }
+        }
+      },
       "TenantConfigJson": {
         "type": "object",
         "description": "A `TenantConfig` document, version 1 (JSON form). The full schema is published as\n`docs/schemas/tenant-config-v1.json`. Secrets: `{configured: bool}` keeps (true) or clears\n(false) a stored secret, `{value: \"…\"}` sets it; exports always carry `{configured: …}`."
@@ -17994,6 +18135,10 @@
     {
       "name": "keys",
       "description": "Signing keys of a tenant"
+    },
+    {
+      "name": "system",
+      "description": "Facts about the running installation, for console administrators"
     }
   ]
 }

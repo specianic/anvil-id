@@ -4,6 +4,23 @@
  */
 
 export interface paths {
+    "/api/admin/v1/system/info": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Version of the running server, for console administrators. */
+        get: operations["getSystemInfo"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/tenants": {
         parameters: {
             query?: never;
@@ -3099,6 +3116,11 @@ export interface components {
             /** @default null */
             zoneinfo: string | null;
         };
+        /** @description Facts about the running installation. */
+        SystemInfo: {
+            /** @description Version of the running `anvilid` binary (e.g. `1.0.0`). */
+            version: string;
+        };
         /**
          * @description A `TenantConfig` document, version 1 (JSON form). The full schema is published as
          *     `docs/schemas/tenant-config-v1.json`. Secrets: `{configured: bool}` keeps (true) or clears
@@ -3540,6 +3562,44 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    getSystemInfo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Facts about the running installation */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemInfo"];
+                };
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The token carries no admin scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     listTenants: {
         parameters: {
             query?: {

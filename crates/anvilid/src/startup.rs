@@ -222,6 +222,8 @@ pub async fn start(cfg: &Config, observability: Observability) -> anyhow::Result
     app_config.trace_context = observability.trace_context;
     app_config.saml_experimental = cfg.saml_experimental;
     app_config.domain_verification_resolvers = cfg.domain_verification_resolvers.clone();
+    // Shown to console administrators only (`GET /api/admin/v1/system/info`).
+    app_config.server_version = Some(env!("CARGO_PKG_VERSION").to_owned());
     let outbound = outbound_client(cfg, &mut app_config)?;
     let domain_txt = HickoryTxtLookup::new(&cfg.domain_verification_resolvers)
         .context("invalid configuration: domain_verification_resolvers")?;

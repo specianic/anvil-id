@@ -59,6 +59,10 @@ pub struct AppConfig {
     /// Operator key `domain_verification_resolvers`: the DNS resolvers domain verification
     /// queries. Empty (default): the system resolver configuration.
     pub domain_verification_resolvers: Vec<SocketAddr>,
+    /// Version of the running server binary (the binary sets its own `CARGO_PKG_VERSION`).
+    /// Disclosed only to authenticated console administrators (`GET /api/admin/v1/system/info`),
+    /// never on a public endpoint. `None` (default): that operation answers 500.
+    pub server_version: Option<String>,
 }
 
 /// Default lifetime of a negative "unknown host" cache entry.
@@ -87,6 +91,7 @@ impl AppConfig {
             trace_context: None,
             saml_experimental: false,
             domain_verification_resolvers: Vec::new(),
+            server_version: None,
         }
     }
 
