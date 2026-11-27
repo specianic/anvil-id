@@ -73,13 +73,13 @@ Notes:
       is part of the certification record. A different protocol endpoint is a different deployment, so pick
       the hostname you want to certify, or accept that this one is a dedicated certification deployment.
 - [ ] **Deployment name and version** as they will appear in the submission, for example
-      "AnvilID 1.0.0-rc.2" plus the commit. Record it in [Status](#status) after submission.
+      "AnvilID 1.0.0-rc.3" plus the commit. Record it in [Status](#status) after submission.
 - [ ] **Who signs the Declaration of Conformance** and who is the authorized contact. This is personal data
       that goes into the OIDF form only. It is never committed to this repository.
 
 ## 2. Deploy the release candidate on a throwaway public host
 
-Use the release candidate (the tag created at the release gate, currently `v1.0.0-rc.2`) from its release
+Use the release candidate (the tag created at the release gate, currently `v1.0.0-rc.3`) from its release
 binary or container image. Do not reuse an existing deployment, its keys or its clients. OIDF publishes
 the full test logs with the certification, and those logs contain client ids, client secrets, tokens and
 the test user's credentials.
