@@ -63,6 +63,25 @@
 # isolation, cross-org email trust, org JIT, the org config exclusion, the keys API and the
 # second-factor passkey picker.
 #
+# Release 1.0 adds the Phase 7 controls: the legacy password-hash verifiers (known-answer negatives,
+# constant-time comparison, the bcrypt $2x$ refusal), the import policy (parameter caps, floors,
+# unknown schemes, redaction), the verification dispatcher (caps before any hashing, the dummy path
+# for unknown schemes, Firebase failing closed, one shared pool), the import service (idempotency,
+# no hash leaks, batch cap, compare-and-swap rehash, sealed hash-profile signer keys), the admin
+# import routes (users:write scope, import-only body limit, record cap, profile secrecy), user export
+# (export scope, tenant isolation, no hashes over HTTP, GDPR redaction, secret-free DTOs, the
+# opt-in audited CLI hash flag), pushed authorization requests (single use incl. concurrency,
+# expiry, client binding, client authentication, issuer-only assertion audience, jti shared with
+# the token endpoint, request_uri in the body, request objects, redirect match, the require flags,
+# no interaction errors), the headless flow API in browser mode (origin allow-list, CSRF header,
+# 415, no wildcard CORS, the UI layer unchanged, shared throttling, CAPTCHA) and native mode
+# (PAR-bound start, headless_native eligibility, DCR/CIMD refusal, token binding both ways, browser
+# signals, the PKCE verifier, single use, no SSO session cookie), client policy validation (agents
+# never skip consent, native eligibility, DCR/CIMD forbidden fields, origin validation), agent
+# consent (provenance, step-up, deny keeps the grant, prompt=none), the API compatibility
+# self-tests, export scope semantics, the PAR-consume and password compare-and-swap contract
+# concurrency cases, the new rate-limit classes and the 1.0 secrets at rest.
+#
 # Controls deliberately not mapped here:
 #   - "Test code" (SEC-06): enforced by scripts/check-release-graph.sh, not by a unit test.
 #   - Released-migration immutability: enforced by scripts/check-migrations.sh (and its
@@ -74,7 +93,9 @@
 #     magic link, MFA policy and step-up, theme preview, i18n; for 0.4 the multi-tenant console
 #     pages, the MCP authorization journey and in-flow passkey enrolment; for 1.0 the console
 #     organization, SSO, domain and keys pages, the org switcher, invitations, SAML sign-in,
-#     home-realm discovery and its no-JavaScript variant): Playwright specs under
+#     home-realm discovery and its no-JavaScript variant; for 1.0 final the headless SPA journey,
+#     the agent consent and step-up screens, and the console user import, hash profile and client
+#     pages): Playwright specs under
 #     tests/e2e/specs, run by the e2e workflow, plus the OpenID conformance plans (conformance
 #     workflow).
 #   - JIT sign-up racing a concurrent registration of the same email cannot be produced over HTTP;
@@ -1011,6 +1032,200 @@ passkey picker: second-factor options list only the step user's credentials|$W/f
 passkey picker: second-factor options list only the step user's credentials|crates/anvil-core/src/service/flow.rs|allow_credentials_refuse_malformed_options
 release 1.0 secrets at rest: invitation token, org connection secret, sealed SAML identity and return target (SQLite)|crates/anvil-storage-sqlite/tests/plaintext.rs|release_1_0_secrets_never_stored_plaintext
 release 1.0 secrets at rest: invitation token, org connection secret, sealed SAML identity and return target (Postgres)|crates/anvil-storage-postgres/tests/plaintext.rs|release_1_0_secrets_never_stored_plaintext
+legacy hash verifiers: bcrypt KAT negatives and the \$2x\$ refusal|crates/anvil-web/src/adapters/password/bcrypt.rs|bcrypt_wrong_password_is_false
+legacy hash verifiers: bcrypt KAT negatives and the \$2x\$ refusal|crates/anvil-web/src/adapters/password/bcrypt.rs|bcrypt_refuses_2x_variant
+legacy hash verifiers: bcrypt KAT negatives and the \$2x\$ refusal|crates/anvil-web/src/adapters/password/bcrypt.rs|bcrypt_malformed_strings_are_rejected
+legacy hash verifiers: bcrypt KAT negatives and the \$2x\$ refusal|crates/anvil-web/src/adapters/password/bcrypt.rs|bcrypt_cost_out_of_range_is_invalid_parameters
+legacy hash verifiers: scrypt KAT negatives and the parameter floor|crates/anvil-web/src/adapters/password/scrypt.rs|scrypt_flipped_byte_is_false
+legacy hash verifiers: scrypt KAT negatives and the parameter floor|crates/anvil-web/src/adapters/password/scrypt.rs|scrypt_wrong_password_is_false
+legacy hash verifiers: scrypt KAT negatives and the parameter floor|crates/anvil-web/src/adapters/password/scrypt.rs|scrypt_stored_hash_below_floor_never_verifies
+legacy hash verifiers: scrypt KAT negatives and the parameter floor|crates/anvil-web/src/adapters/password/scrypt.rs|scrypt_invalid_parameters_are_rejected
+legacy hash verifiers: Firebase scrypt KAT negatives|crates/anvil-web/src/adapters/password/firebase.rs|firebase_wrong_password_is_false
+legacy hash verifiers: Firebase scrypt KAT negatives|crates/anvil-web/src/adapters/password/firebase.rs|firebase_wrong_separator_is_false
+legacy hash verifiers: Firebase scrypt KAT negatives|crates/anvil-web/src/adapters/password/firebase.rs|firebase_flipped_byte_is_false
+legacy hash verifiers: Firebase scrypt KAT negatives|crates/anvil-web/src/adapters/password/firebase.rs|firebase_empty_signer_key_is_invalid_parameters
+legacy hash verifiers: Firebase scrypt KAT negatives|crates/anvil-web/src/adapters/password/firebase.rs|firebase_zero_rounds_or_mem_cost_is_invalid_parameters
+legacy hash verifiers: PBKDF2 KAT negatives|crates/anvil-web/src/adapters/password/pbkdf2.rs|pbkdf2_flipped_byte_is_false
+legacy hash verifiers: PBKDF2 KAT negatives|crates/anvil-web/src/adapters/password/pbkdf2.rs|pbkdf2_truncated_expected_is_false
+legacy hash verifiers: PBKDF2 KAT negatives|crates/anvil-web/src/adapters/password/pbkdf2.rs|pbkdf2_wrong_iterations_or_prf_is_false
+legacy hash verifiers: PBKDF2 KAT negatives|crates/anvil-web/src/adapters/password/pbkdf2.rs|pbkdf2_zero_iterations_is_invalid_parameters
+legacy hash verifiers: salted SHA-2 KAT negatives|crates/anvil-web/src/adapters/password/sha2.rs|sha2_swapped_salt_position_is_false
+legacy hash verifiers: salted SHA-2 KAT negatives|crates/anvil-web/src/adapters/password/sha2.rs|sha2_flipped_byte_and_wrong_digest_are_false
+legacy hash verifiers: constant-time comparison, errors carry no input|crates/anvil-web/src/adapters/password/mod.rs|ct_eq_folds_length_into_the_result
+legacy hash verifiers: constant-time comparison, errors carry no input|crates/anvil-web/src/adapters/password/mod.rs|legacy_verify_error_debug_has_no_input
+import policy: parameter caps|crates/anvil-core/src/policy/password_import.rs|caps_refuse_scrypt_over_64_mib
+import policy: parameter caps|crates/anvil-core/src/policy/password_import.rs|caps_refuse_argon2_memory_over_cap
+import policy: parameter caps|crates/anvil-core/src/policy/password_import.rs|caps_refuse_argon2_time_over_cap
+import policy: parameter caps|crates/anvil-core/src/policy/password_import.rs|caps_refuse_argon2_lanes_over_cap
+import policy: parameter caps|crates/anvil-core/src/policy/password_import.rs|caps_refuse_pbkdf2_iterations_over_cap
+import policy: parameter caps|crates/anvil-core/src/policy/password_import.rs|caps_refuse_bcrypt_cost_over_16
+import policy: parameter caps|crates/anvil-core/src/policy/password_import.rs|import_refuses_over_cap_argon2_phc
+import policy: floors and weak schemes refused|crates/anvil-core/src/policy/password_import.rs|import_refuses_pbkdf2_below_1000_iterations
+import policy: floors and weak schemes refused|crates/anvil-core/src/policy/password_import.rs|import_refuses_short_salt
+import policy: floors and weak schemes refused|crates/anvil-core/src/policy/password_import.rs|import_refuses_unsalted_sha256
+import policy: floors and weak schemes refused|crates/anvil-core/src/policy/password_import.rs|import_refuses_md5
+import policy: floors and weak schemes refused|crates/anvil-core/src/policy/password_import.rs|import_refuses_plain_sha1
+import policy: floors and weak schemes refused|crates/anvil-core/src/policy/password_import.rs|import_salted_sha2_is_always_weak
+import policy: unknown and refused schemes, no smuggling|crates/anvil-core/src/policy/password_import.rs|parse_unknown_scheme
+import policy: unknown and refused schemes, no smuggling|crates/anvil-core/src/policy/password_import.rs|parse_refuses_bcrypt_2x
+import policy: unknown and refused schemes, no smuggling|crates/anvil-core/src/policy/password_import.rs|parse_malformed_never_panics
+import policy: unknown and refused schemes, no smuggling|crates/anvil-core/src/policy/password_import.rs|import_cannot_smuggle_another_scheme
+import policy: unknown and refused schemes, no smuggling|crates/anvil-core/src/policy/password_import.rs|import_rejects_unknown_fields
+import policy: redaction|crates/anvil-core/src/policy/password_import.rs|policy_error_never_echoes_input
+import policy: redaction|crates/anvil-core/src/policy/password_import.rs|import_password_debug_redacts
+dispatcher: caps checked before any hashing|crates/anvil-web/src/adapters/password/mod.rs|dispatcher_argon2_over_cap_fails_closed_without_hashing
+dispatcher: caps checked before any hashing|crates/anvil-web/src/adapters/password/mod.rs|dispatcher_scrypt_over_cap_fails_closed_without_hashing
+dispatcher: caps checked before any hashing|crates/anvil-web/src/adapters/password/mod.rs|dispatcher_pbkdf2_over_cap_fails_closed
+dispatcher: caps checked before any hashing|crates/anvil-web/src/adapters/password/mod.rs|dispatcher_bcrypt_over_cap_fails_closed
+dispatcher: caps checked before any hashing|crates/anvil-web/src/adapters/password/mod.rs|dispatcher_refuses_bcrypt_2x
+dispatcher: caps checked before any hashing|crates/anvil-web/src/adapters/argon2.rs|argon2_pool_over_cap_phc_fails_closed_without_hashing
+dispatcher: unknown scheme takes the dummy path|crates/anvil-web/src/adapters/password/mod.rs|dispatcher_unknown_scheme_takes_dummy_path
+dispatcher: unknown scheme takes the dummy path|crates/anvil-web/src/adapters/argon2.rs|non_argon2_stored_value_takes_the_dummy_path
+dispatcher: Firebase fails closed without a usable profile|crates/anvil-web/src/adapters/password/mod.rs|dispatcher_firebase_without_profile_fails_closed
+dispatcher: Firebase fails closed without a usable profile|crates/anvil-web/src/adapters/password/mod.rs|dispatcher_firebase_profile_over_cap_fails_closed
+dispatcher: Firebase fails closed without a usable profile|$W/import_login.rs|imported_firebase_missing_profile_fails_closed
+dispatcher: one shared pool, saturation never a bypass|crates/anvil-web/src/adapters/password/mod.rs|dispatcher_overloaded_when_queue_full
+dispatcher: one shared pool, saturation never a bypass|crates/anvil-web/src/adapters/password/mod.rs|dispatcher_serialises_legacy_and_argon2_on_one_permit
+dispatcher: one shared pool, saturation never a bypass|crates/anvil-web/src/adapters/password/mod.rs|dispatcher_debug_redacts
+import service: idempotency and id conflicts|$W/import_login.rs|import_outcomes_idempotency_and_dry_run
+import service: idempotency and id conflicts|$W/import_login.rs|import_preserves_ids_and_detects_id_conflicts
+import service: imported hashes never leak|$W/import_login.rs|import_never_leaks_hash
+import service: imported hashes never leak|crates/anvil-core/src/service/user_import.rs|debug_and_report_never_carry_the_hash
+import service: batch cap|crates/anvil-core/src/service/user_import.rs|import_batch_cap_enforced
+import service: batch cap|$W/import_login.rs|import_batch_cap_enforced
+import service: over-cap hash refused at import, wrong password fails|$W/import_login.rs|imported_over_cap_hash_refused_at_import
+import service: over-cap hash refused at import, wrong password fails|$W/import_login.rs|imported_wrong_password_fails
+import service: rehash is compare-and-swap|$W/import_login.rs|imported_rehash_cas_keeps_concurrent_change
+import service: sealed hash-profile signer key|$W/import_login.rs|profile_signer_key_sealed_and_never_returned
+import service: sealed hash-profile signer key|$W/import_login.rs|profile_delete_refused_while_referenced
+import service: sealed hash-profile signer key|crates/anvil-core/src/service/hash_profile.rs|profile_signer_key_aad_bound
+import service: sealed hash-profile signer key|crates/anvil-core/src/service/hash_profile.rs|new_profile_debug_redacts_the_signer_key
+import service: sealed hash-profile signer key|crates/anvil-core/src/model/password_profile.rs|signer_key_aad_binds_tenant_and_profile
+import service: sealed hash-profile signer key|crates/anvil-core/src/model/password_profile.rs|hash_profile_material_debug_redacts
+admin import: users:write scope, body limit on the import path only, record cap|$W/security_import.rs|import_requires_users_write_scope
+admin import: users:write scope, body limit on the import path only, record cap|$W/security_import.rs|import_body_limit_only_on_import_path
+admin import: users:write scope, body limit on the import path only, record cap|$W/security_import.rs|import_record_cap_enforced
+admin import: users:write scope, body limit on the import path only, record cap|$W/security_import.rs|import_report_contains_no_hash
+admin import: users:write scope, body limit on the import path only, record cap|$W/admin_user_import.rs|import_reports_bad_lines_by_number_without_echoing_them
+admin import: users:write scope, body limit on the import path only, record cap|$W/admin_user_import.rs|import_requires_ndjson_content_type_and_a_valid_query
+admin import: hash profile secrecy|$W/security_import.rs|profile_signer_key_never_returned
+admin import: hash profile secrecy|$W/security_import.rs|profile_delete_referenced_conflict
+export: export scope, tenant isolation, no hash over HTTP, audited|$W/security_export.rs|export_requires_export_scope
+export: export scope, tenant isolation, no hash over HTTP, audited|$W/security_export.rs|export_cross_tenant_refused
+export: export scope, tenant isolation, no hash over HTTP, audited|$W/security_export.rs|export_no_hash_via_http
+export: export scope, tenant isolation, no hash over HTTP, audited|$W/security_export.rs|export_is_audited
+export: GDPR bundle redacts other actors and never carries passwords|$W/security_export.rs|gdpr_export_redacts_admin_identity
+export: GDPR bundle redacts other actors and never carries passwords|$W/export_redaction.rs|gdpr_export_redacts_other_actors
+export: GDPR bundle redacts other actors and never carries passwords|$W/export_redaction.rs|gdpr_bundle_has_no_password_field_even_with_flag
+export: export DTOs carry no secrets|$W/export_redaction.rs|export_dto_contains_no_secrets
+export: export DTOs carry no secrets|$W/export_redaction.rs|single_export_has_exactly_the_allowed_fields
+export: hashes only through the explicit CLI flag, audited, never with GDPR|$W/export_redaction.rs|bulk_hashes_only_with_explicit_option
+export: hashes only through the explicit CLI flag, audited, never with GDPR|crates/anvilid/tests/users_export_cli.rs|bulk_export_with_hashes_is_opt_in_and_audited
+export: hashes only through the explicit CLI flag, audited, never with GDPR|crates/anvilid/tests/users_export_cli.rs|cli_hash_flag_refused_with_gdpr
+export: hashes only through the explicit CLI flag, audited, never with GDPR|crates/anvilid/tests/users_export_cli.rs|bulk_export_streams_every_user_without_hashes
+export scope: not implied by admin:read or users scopes, not grantable by users:write|crates/anvil-core/src/service/admin_scope.rs|export_scope_not_implied_by_admin_read
+export scope: not implied by admin:read or users scopes, not grantable by users:write|crates/anvil-core/src/service/admin_scope.rs|export_scope_not_implied_by_users_read
+export scope: not implied by admin:read or users scopes, not grantable by users:write|crates/anvil-core/src/service/admin_scope.rs|export_scope_not_implied_by_users_write
+export scope: not implied by admin:read or users scopes, not grantable by users:write|crates/anvil-core/src/service/role.rs|role_escalation_users_write_cannot_grant_export
+PAR: request_uri single use, one winner under concurrency|$W/security_par.rs|par_request_uri_single_use
+PAR: request_uri single use, one winner under concurrency|$W/security_par.rs|par_request_uri_concurrent_single_winner
+PAR: request_uri single use, one winner under concurrency|crates/anvil-storage/src/contract/par.rs|par_consume_twice_is_none
+PAR: request_uri single use, one winner under concurrency|crates/anvil-storage/src/contract/par.rs|par_consume_single_winner_under_concurrency
+PAR: request_uri expiry|$W/security_par.rs|par_request_uri_expires
+PAR: request_uri expiry|crates/anvil-storage/src/contract/par.rs|par_consume_expired_is_none
+PAR: request_uri bound to the client and tenant|$W/security_par.rs|par_request_uri_bound_to_client
+PAR: request_uri bound to the client and tenant|crates/anvil-storage/src/contract/par.rs|par_tenant_isolation
+PAR: malformed or unknown request_uri, no redirect|$W/security_par.rs|par_non_urn_request_uri_refused
+PAR: malformed or unknown request_uri, no redirect|$W/security_par.rs|par_unknown_request_uri_no_redirect
+PAR: malformed or unknown request_uri, no redirect|crates/anvil-core/src/oauth/par.rs|parse_request_uri_rejects_malformed_values
+PAR: client authentication required|$W/security_par.rs|par_confidential_client_requires_auth
+PAR: client authentication required|$W/security_par.rs|par_wrong_secret_refused
+PAR: client authentication required|$W/security_par.rs|par_body_client_id_must_match_credentials
+PAR: client assertion audience is the issuer only, jti shared with the token endpoint|$W/security_par.rs|par_client_assertion_aud_par_endpoint_refused
+PAR: client assertion audience is the issuer only, jti shared with the token endpoint|$W/security_par.rs|par_jti_replay_shared_with_token
+PAR: request_uri in the body and request objects refused|$W/security_par.rs|par_request_uri_in_body_refused
+PAR: request_uri in the body and request objects refused|$W/security_par.rs|par_request_object_not_supported
+PAR: request_uri in the body and request objects refused|$W/security_par.rs|par_id_token_hint_refused
+PAR: request_uri in the body and request objects refused|$W/security_par.rs|par_requires_form_body
+PAR: redirect_uri must match a registered one, policy re-checked at use|$W/security_par.rs|par_redirect_uri_must_match_registered
+PAR: redirect_uri must match a registered one, policy re-checked at use|$W/security_par.rs|par_policy_rechecked_at_use
+PAR: redirect_uri must match a registered one, policy re-checked at use|crates/anvil-core/src/oauth/par.rs|recheck_refuses_a_removed_redirect_uri_with_an_error_page
+PAR: redirect_uri must match a registered one, policy re-checked at use|crates/anvil-core/src/oauth/par.rs|recheck_follows_policy_changes
+PAR: client and tenant require flags refuse plain /authorize|$W/security_par.rs|par_required_client_plain_authorize_refused
+PAR: client and tenant require flags refuse plain /authorize|$W/security_par.rs|par_tenant_required_plain_authorize_refused
+PAR: errors are JSON, never interaction pages or redirects|$W/security_par.rs|par_no_interaction_errors
+PAR: errors are JSON, never interaction pages or redirects|crates/anvil-core/src/oauth/par.rs|push_errors_are_json_errors_never_pages
+headless browser: exact origin allow-list, no wildcard CORS with credentials|$W/security_headless.rs|headless_foreign_origin_refused
+headless browser: exact origin allow-list, no wildcard CORS with credentials|$W/security_headless.rs|headless_no_wildcard_cors_with_credentials
+headless browser: exact origin allow-list, no wildcard CORS with credentials|$W/security_headless.rs|headless_preflight_only_for_allowed_origin
+headless browser: CSRF header required|$W/security_headless.rs|headless_missing_csrf_header_refused
+headless browser: CSRF header required|$W/security_headless.rs|headless_wrong_csrf_header_refused
+headless browser: JSON only (415 for form bodies)|$W/security_headless.rs|headless_form_encoded_body_refused_415
+headless browser: UI layer unchanged, API outside the UI Fetch-Metadata layer|$W/security_headless.rs|headless_ui_router_still_refuses_cross_site
+headless browser: UI layer unchanged, API outside the UI Fetch-Metadata layer|$W/security_headless.rs|headless_api_not_behind_ui_fetch_metadata
+headless browser: throttling shared with the UI, CAPTCHA enforced|$W/security_headless.rs|headless_throttling_shared_with_ui
+headless browser: throttling shared with the UI, CAPTCHA enforced|$W/security_headless.rs|headless_captcha_required_in_browser_mode
+headless browser: throttling shared with the UI, CAPTCHA enforced|$W/security_headless.rs|headless_dto_never_contains_internal_fields
+headless native: PAR-bound start, headless_native first-party clients only|$W/security_headless.rs|native_requires_par_request_uri
+headless native: PAR-bound start, headless_native first-party clients only|$W/security_headless.rs|native_requires_headless_native_client
+headless native: PAR-bound start, headless_native first-party clients only|$W/security_headless.rs|native_request_uri_single_use
+headless native: PAR-bound start, headless_native first-party clients only|crates/anvil-core/src/service/authorize.rs|native_eligibility_follows_the_client_policy
+headless native: dynamic and CIMD clients refused|$W/security_headless.rs|native_dcr_client_refused
+headless native: dynamic and CIMD clients refused|$W/security_headless.rs|native_cimd_client_refused
+headless native: flow token binding, both directions|$W/security_headless.rs|native_flow_token_required
+headless native: flow token binding, both directions|$W/security_headless.rs|native_wrong_flow_token_refused
+headless native: flow token binding, both directions|$W/security_headless.rs|native_cookie_bound_flow_refused_with_token
+headless native: flow token binding, both directions|$W/security_headless.rs|native_token_flow_refused_with_cookie
+headless native: flow token binding, both directions|crates/anvil-core/src/service/flow.rs|token_flow_refuses_the_cookie_binding
+headless native: flow token binding, both directions|crates/anvil-core/src/service/flow.rs|cookie_flow_refuses_the_token_binding
+headless native: flow token binding, both directions|crates/anvil-core/src/service/flow.rs|token_binding_rejects_wrong_token_and_expiry
+headless native: flow token binding, both directions|crates/anvil-core/src/service/flow.rs|binding_marker_is_read_from_login_state_only
+headless native: browser signals refused, CAPTCHA needs the browser|$W/security_headless.rs|native_browser_signals_refused
+headless native: browser signals refused, CAPTCHA needs the browser|$W/security_headless.rs|native_captcha_returns_browser_required
+headless native: code needs the PKCE verifier|$W/security_headless.rs|native_code_requires_code_verifier
+headless native: no SSO session cookie, throttling shared with the UI|$W/security_headless.rs|native_no_sso_session_created
+headless native: no SSO session cookie, throttling shared with the UI|$W/security_headless.rs|native_throttling_shared_with_ui
+client policy: agents never skip consent|crates/anvil-core/src/service/client.rs|agent_client_cannot_skip_consent
+client policy: agents never skip consent|crates/anvil-core/src/service/client.rs|client_policy_truth_table
+client policy: agents never skip consent|$W/admin_client_fields_v10.rs|agent_client_cannot_skip_consent
+client policy: native headless eligibility (first-party, PKCE, not agents)|$W/admin_client_fields_v10.rs|headless_native_requires_first_party
+client policy: native headless eligibility (first-party, PKCE, not agents)|$W/admin_client_fields_v10.rs|headless_native_requires_pkce
+client policy: native headless eligibility (first-party, PKCE, not agents)|$W/admin_client_fields_v10.rs|headless_native_refuses_agent
+client policy: DCR and CIMD cannot set admin-only fields|$W/security_registration.rs|headless_native_refused_via_dcr
+client policy: DCR and CIMD cannot set admin-only fields|$W/security_registration.rs|client_kind_agent_refused_via_dcr_metadata_injection
+client policy: DCR and CIMD cannot set admin-only fields|$W/security_registration.rs|dcr_require_par_must_be_boolean
+client policy: DCR and CIMD cannot set admin-only fields|$W/security_cimd.rs|headless_native_refused_via_cimd
+client policy: DCR and CIMD cannot set admin-only fields|crates/anvil-core/src/oauth/registration.rs|client_kind_agent_refused_via_dcr_metadata_injection
+client policy: DCR and CIMD cannot set admin-only fields|crates/anvil-core/src/oauth/cimd.rs|headless_native_refused_via_cimd
+client policy: DCR and CIMD cannot set admin-only fields|crates/anvil-core/src/service/registration.rs|par_metadata_stored_and_admin_fields_never_taken_from_the_request
+client policy: headless origins exact, no wildcard or path|$W/admin_client_fields_v10.rs|headless_origins_reject_wildcard_and_path
+client policy: headless origins exact, no wildcard or path|crates/anvil-core/src/model/tenant.rs|headless_origin_validation_rejects_wildcard_path_and_http
+client policy: headless origins exact, no wildcard or path|crates/anvil-core/src/service/tenant.rs|headless_settings_are_validated
+client policy: headless origins exact, no wildcard or path|crates/anvil-core/src/service/config.rs|client_policy_and_headless_origins_are_validated_with_paths
+client policy: headless origins exact, no wildcard or path|crates/anvilid/tests/tenant_config.rs|yaml_v10_fields_round_trip_and_refusals
+agent consent: agents always see consent with provenance|$W/consent_agent.rs|agent_client_always_sees_consent
+agent consent: agents always see consent with provenance|$W/consent_agent.rs|consent_shows_agent_badge_for_agent_clients
+agent consent: agents always see consent with provenance|$W/consent_agent.rs|consent_provenance_static_dynamic_cimd
+agent consent: agents always see consent with provenance|$W/consent_agent.rs|consent_cimd_name_marked_unverified
+agent consent: agents always see consent with provenance|crates/anvil-core/src/service/consent.rs|provenance_follows_the_registration_source
+agent consent: step-up prompts only new scopes, deny keeps the grant, prompt=none needs consent|$W/consent_agent.rs|step_up_shows_only_new_scopes
+agent consent: step-up prompts only new scopes, deny keeps the grant, prompt=none needs consent|$W/consent_agent.rs|step_up_shows_only_new_resources
+agent consent: step-up prompts only new scopes, deny keeps the grant, prompt=none needs consent|$W/consent_agent.rs|step_up_deny_keeps_existing_grant
+agent consent: step-up prompts only new scopes, deny keeps the grant, prompt=none needs consent|$W/consent_agent.rs|step_up_prompt_none_new_scope_is_consent_required
+agent consent: step-up prompts only new scopes, deny keeps the grant, prompt=none needs consent|crates/anvil-core/src/service/consent.rs|step_up_deny_leaves_the_grant_untouched
+API compatibility: the checker detects breaking changes, current documents have none|$W/api_compat.rs|api_compat_admin_has_no_breaking_change
+API compatibility: the checker detects breaking changes, current documents have none|$W/api_compat.rs|api_compat_flows_has_no_breaking_change
+API compatibility: the checker detects breaking changes, current documents have none|$W/api_compat.rs|api_compat_detects_removed_operation
+API compatibility: the checker detects breaking changes, current documents have none|$W/api_compat.rs|api_compat_detects_removed_response_field
+API compatibility: the checker detects breaking changes, current documents have none|$W/api_compat.rs|api_compat_detects_new_required_request_field
+API compatibility: the checker detects breaking changes, current documents have none|$W/api_compat.rs|api_compat_detects_removed_scope
+API compatibility: unknown config document versions refused|crates/anvil-core/src/model/config_doc.rs|config_doc_unknown_version_refused
+contract concurrency: PAR consume and password compare-and-swap single winner|crates/anvil-storage/src/contract/par.rs|par_consume_single_winner_under_concurrency
+contract concurrency: PAR consume and password compare-and-swap single winner|crates/anvil-storage/src/contract/users.rs|password_replace_if_concurrent_single_winner
+rate-limit classes: /par is the token class, POST /api/flows the auth class|crates/anvil-web/src/layers/ratelimit.rs|par_is_token_class
+rate-limit classes: /par is the token class, POST /api/flows the auth class|crates/anvil-web/src/layers/ratelimit.rs|flows_post_is_auth_class
+release 1.0 secrets at rest: hash profile signer key, PAR request_uri, native flow token (SQLite)|crates/anvil-storage-sqlite/tests/plaintext.rs|release_1_0_final_secrets_never_stored_plaintext
+release 1.0 secrets at rest: hash profile signer key, PAR request_uri, native flow token (Postgres)|crates/anvil-storage-postgres/tests/plaintext.rs|release_1_0_final_secrets_never_stored_plaintext
 EOF
 )
 

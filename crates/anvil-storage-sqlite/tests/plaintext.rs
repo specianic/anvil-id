@@ -30,6 +30,11 @@
 //! sealed invitation return target (`return_to_sealed`), see
 //! `release_1_0_secrets_never_stored_plaintext`. Domain challenge tokens and SAML certificates
 //! are public by design and serve as positive controls.
+//!
+//! Release 1.0 final (Phase 7): a Firebase scrypt hash profile's signer key (KEK-sealed under
+//! `PROFILE_SIGNER_KEY_PURPOSE`), a pushed authorization request's `request_uri` (hash only) and
+//! a native headless flow token (hash only), see
+//! `release_1_0_final_secrets_never_stored_plaintext`.
 
 use std::collections::BTreeMap;
 
@@ -1121,4 +1126,236 @@ async fn release_1_0_secrets_never_stored_plaintext() {
     .await
     .expect("find invitation digest");
     assert_eq!(found, 1, "org_invitation.token_hash holds the token digest");
+}
+
+/// Release 1.0 final (Phase 7) secrets, seeded through the storage ports the way the core
+/// services store them: a Firebase scrypt hash profile whose signer key is sealed with
+/// `hash_profile::seal_signer_key` (purpose `PROFILE_SIGNER_KEY_PURPOSE`, AAD bound to tenant and
+/// profile), a pushed authorization request stored under the hash of its `request_uri`
+/// (`oauth::par::new_request_uri`), and a token-bound login flow (headless native mode) whose flow
+/// token is stored only as the flow's cookie hash. Neither the signer key (raw, base64 or base64url), the
+/// `request_uri` (or its random part) nor the flow token may appear in the database file, its WAL
+/// (before and after a checkpoint) or any column; the stored hashes and the sealed key are
+/// positive controls.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn release_1_0_final_secrets_never_stored_plaintext() {
+    use anvil_core::flow::engine::FlowState;
+    use anvil_core::flow::login::{FlowBindingKind, LoginState};
+    use anvil_core::model::{
+        NewPasswordHashProfile, NewPushedRequest, PROFILE_SIGNER_KEY_PURPOSE, ProfileKind,
+        profile_signer_key_aad,
+    };
+    use anvil_core::oauth::par::{REQUEST_URI_PREFIX, new_request_uri};
+    use anvil_core::service::flow::check_token_binding;
+    use anvil_core::service::hash_profile::{open_signer_key, seal_signer_key};
+    use anvil_jose::encoding::{b64std, random_bytes, random_token};
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("anvil.db");
+    let storage = SqliteStorage::connect(&format!("sqlite://{}", path.display()))
+        .await
+        .expect("connect");
+    storage.migrate().await.expect("migrate");
+    let kek = Kek::generate();
+    let t = storage
+        .tenants()
+        .create(&new_tenant())
+        .await
+        .expect("tenant")
+        .id;
+
+    // Firebase scrypt hash profile: the signer key is stored only KEK-sealed.
+    let signer_key = marker("firebase-signer-key");
+    let profile_id = uuid::Uuid::now_v7();
+    let signer_sealed =
+        seal_signer_key(&kek, t, profile_id, signer_key.as_bytes()).expect("seal signer key");
+    storage
+        .password_profiles()
+        .create(
+            t,
+            &NewPasswordHashProfile {
+                id: profile_id,
+                name: format!("firebase-{}", profile_id.simple()),
+                kind: ProfileKind::FirebaseScrypt,
+                salt_separator: vec![0x42, 0x00, 0xff],
+                rounds: 8,
+                mem_cost: 14,
+                signer_key_sealed: signer_sealed.clone(),
+                created_at: now_ms(),
+            },
+        )
+        .await
+        .expect("create hash profile");
+    let stored = storage
+        .password_profiles()
+        .get(t, profile_id)
+        .await
+        .expect("get hash profile")
+        .expect("the profile exists");
+    let opened = kek
+        .open(
+            PROFILE_SIGNER_KEY_PURPOSE,
+            &profile_signer_key_aad(t, profile_id),
+            &stored.signer_key_sealed,
+        )
+        .expect("open signer key");
+    assert_eq!(opened.to_vec(), signer_key.as_bytes());
+    assert!(
+        open_signer_key(&kek, t, uuid::Uuid::now_v7(), &stored.signer_key_sealed).is_err(),
+        "the sealed signer key must not open under another profile"
+    );
+
+    // Pushed authorization request: stored under the hash of its request_uri only.
+    let client = storage
+        .clients()
+        .create(t, &new_client())
+        .await
+        .expect("client");
+    let (request_uri, uri_hash) = new_request_uri(random_bytes());
+    let uri_random = request_uri
+        .strip_prefix(REQUEST_URI_PREFIX)
+        .expect("PAR prefix")
+        .to_owned();
+    let now = now_ms();
+    storage
+        .grants()
+        .create_pushed_request(
+            t,
+            &NewPushedRequest {
+                request_uri_hash: uri_hash.clone(),
+                client_id: client.client_id.clone(),
+                params: serde_json::json!({
+                    "response_type": "code",
+                    "client_id": client.client_id,
+                    "redirect_uri": "https://app.example.test/cb",
+                    "scope": "openid",
+                    "code_challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+                    "code_challenge_method": "S256",
+                }),
+                created_at: now,
+                expires_at: now + Duration::seconds(60),
+            },
+        )
+        .await
+        .expect("create pushed request");
+
+    // Token-bound native login flow: the flow token is stored only as the cookie hash.
+    let flow_token = random_token();
+    let mut flow = new_flow(None, Duration::minutes(10));
+    flow.cookie_hash = hash_of(&flow_token);
+    flow.state = serde_json::to_string(&FlowState::Login(LoginState {
+        binding: FlowBindingKind::Token,
+        ..LoginState::default()
+    }))
+    .expect("encode flow state");
+    storage.flows().create(t, &flow).await.expect("create flow");
+    let stored_flow = storage
+        .flows()
+        .get(t, flow.id, now_ms())
+        .await
+        .expect("get flow")
+        .expect("the flow exists");
+    assert!(
+        check_token_binding(&stored_flow, &flow_token, now_ms()).is_ok(),
+        "the seeded flow is token-bound to the flow token"
+    );
+
+    let signer_b64url = b64url(signer_key.as_bytes());
+    let signer_b64std = b64std(signer_key.as_bytes());
+    let plaintexts: Vec<(&str, &[u8])> = vec![
+        ("hash profile signer key", signer_key.as_bytes()),
+        (
+            "hash profile signer key (base64url)",
+            signer_b64url.as_bytes(),
+        ),
+        ("hash profile signer key (base64)", signer_b64std.as_bytes()),
+        ("PAR request_uri", request_uri.as_bytes()),
+        ("PAR request_uri random part", uri_random.as_bytes()),
+        ("native flow token", flow_token.as_bytes()),
+    ];
+
+    // Raw scan while the storage is open (database file + WAL).
+    let raw = raw_database_bytes(&path);
+    assert!(
+        raw.iter().any(|(_, bytes)| contains(bytes, &signer_sealed)),
+        "positive control: the raw scan must find the sealed signer key"
+    );
+    for (what, secret) in &plaintexts {
+        for (file, bytes) in &raw {
+            assert!(!contains(bytes, secret), "{what} in plaintext in {file}");
+        }
+    }
+    drop(storage);
+
+    // Checkpoint the WAL and scan the main file again.
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(SqliteConnectOptions::new().filename(&path))
+        .await
+        .expect("plain connection");
+    sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+        .execute(&pool)
+        .await
+        .expect("checkpoint");
+    pool.close().await;
+    let main = std::fs::read(&path).expect("read database file");
+    assert!(
+        contains(&main, &uri_hash.0),
+        "positive control: the checkpointed file holds the request_uri hash"
+    );
+    for (what, secret) in &plaintexts {
+        assert!(
+            !contains(&main, secret),
+            "{what} in plaintext in the checkpointed database file"
+        );
+    }
+
+    // Column scan.
+    let pool = inspect(&path).await;
+    let columns = all_columns(&pool).await;
+    for (table, column) in [
+        ("password_hash_profile", "signer_key_enc"),
+        ("pushed_authorization_request", "uri_hash"),
+        ("pushed_authorization_request", "params"),
+        ("flow", "cookie_hash"),
+        ("flow", "state"),
+    ] {
+        assert!(
+            columns.iter().any(|(t, c)| t == table && c == column),
+            "the scan must cover {table}.{column}"
+        );
+    }
+    for (what, secret) in &plaintexts {
+        assert_eq!(
+            hits_anywhere(&pool, &columns, secret).await,
+            0,
+            "{what} is stored in plaintext in some column"
+        );
+    }
+    assert_eq!(
+        hits_anywhere(&pool, &columns, &signer_sealed).await,
+        1,
+        "the signer key is stored sealed, once"
+    );
+    let found: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pushed_authorization_request
+          WHERE uri_hash = ?1 AND length(uri_hash) = 32",
+    )
+    .bind(uri_hash.0.as_slice())
+    .fetch_one(&pool)
+    .await
+    .expect("find request_uri hash");
+    assert_eq!(
+        found, 1,
+        "pushed_authorization_request.uri_hash holds the hash"
+    );
+    let flow_hash = hash_of(&flow_token);
+    let found: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM flow WHERE cookie_hash = ?1 AND length(cookie_hash) = 32",
+    )
+    .bind(flow_hash.0.as_slice())
+    .fetch_one(&pool)
+    .await
+    .expect("find flow token hash");
+    assert_eq!(found, 1, "flow.cookie_hash holds the flow token hash");
 }
