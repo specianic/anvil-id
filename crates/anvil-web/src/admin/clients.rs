@@ -196,7 +196,8 @@ pub(crate) async fn update_client(
 
 /// Delete a client and revoke its tokens. A deleted CIMD client (URL client id, percent-encoded
 /// in the path) is fetched again on its next use if the tenant's CIMD policy still allows its
-/// host; block a host with the `allow_listed` CIMD policy instead.
+/// host; block a host with the `allow_listed` CIMD policy instead. The built-in console client
+/// (`anvil-console` of the system tenant) cannot be deleted (409).
 #[utoipa::path(
     delete,
     path = "/api/admin/v1/tenants/{slug}/clients/{client_id}",
@@ -211,6 +212,7 @@ pub(crate) async fn update_client(
         (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
         (status = 403, description = "Insufficient scope", body = Problem, content_type = "application/problem+json"),
         (status = 404, description = "Unknown tenant or client", body = Problem, content_type = "application/problem+json"),
+        (status = 409, description = "The built-in console client cannot be deleted", body = Problem, content_type = "application/problem+json"),
     ),
     security(
         ("oauth2" = ["admin:clients:write"]),

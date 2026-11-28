@@ -1,7 +1,9 @@
 //! Redirect URI controls at the authorization endpoint (SEC-01, RFC 9700 §4.1): anything other
 //! than an exactly registered URI renders the error page and never sends a `Location` header.
 
+mod admin_support;
 mod authz;
+mod dcr_support;
 mod support;
 
 use authz::*;
@@ -145,4 +147,85 @@ async fn bad_redirect_uri_wins_over_a_bad_response_type() {
         ],
     );
     assert_mismatch(&get(&app, &path, None).await, "bad response_type");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Registration-time messages (07.1-06): name the real problem; decisions unchanged.
+// ---------------------------------------------------------------------------------------------
+
+const MISSING_SCHEME: &str =
+    "redirect URI is missing its scheme: add http:// (localhost only) or https://";
+
+/// Creates a web client with `redirect_uri` through the management API.
+async fn admin_create(app: &TestApp, token: &str, redirect_uri: &str) -> support::TestResponse {
+    admin_support::call(
+        app,
+        axum::http::Method::POST,
+        &format!("{}/tenants/default/clients", admin_support::API),
+        Some(token),
+        Some(serde_json::json!({
+            "name": "RP",
+            "client_type": "public",
+            "redirect_uris": [redirect_uri],
+        })),
+    )
+    .await
+}
+
+fn field_message(resp: &support::TestResponse) -> String {
+    admin_support::assert_field_error(resp, "redirect_uris");
+    let body = support::json(resp);
+    body["errors"][0]["message"].as_str().unwrap().to_owned()
+}
+
+#[tokio::test]
+async fn redirect_uri_without_scheme_says_so() {
+    let app = dcr_support::app().await;
+    let token = admin_support::admin_token(&app, "admin:clients:write").await;
+    for uri in ["localhost:5173/cb", "127.0.0.1:8080/cb", "app.example/cb"] {
+        let resp = admin_create(&app, &token, uri).await;
+        assert_eq!(field_message(&resp), MISSING_SCHEME, "{uri}");
+    }
+    // http to a non-loopback host: http is only for localhost and loopback.
+    let resp = admin_create(&app, &token, "http://app.example/cb").await;
+    let message = field_message(&resp);
+    assert!(
+        message.contains("only allowed for loopback addresses and localhost"),
+        "{message}"
+    );
+    // Accept decisions are unchanged.
+    for ok in ["http://localhost:5173/cb", "https://app.example/cb"] {
+        let resp = admin_create(&app, &token, ok).await;
+        assert_eq!(resp.status, 201, "{ok}: {}", resp.text());
+    }
+    let resp = admin_support::call(
+        &app,
+        axum::http::Method::POST,
+        &format!("{}/tenants/default/clients", admin_support::API),
+        Some(&token),
+        Some(serde_json::json!({
+            "name": "Native",
+            "client_type": "public",
+            "application_type": "native",
+            "redirect_uris": ["com.example.app:/cb"],
+        })),
+    )
+    .await;
+    assert_eq!(resp.status, 201, "{}", resp.text());
+}
+
+#[tokio::test]
+async fn dcr_redirect_uri_without_scheme_gets_the_same_message() {
+    let app = dcr_support::app().await;
+    dcr_support::set_policy(&app, anvil_core::model::DcrPolicy::Open).await;
+    let resp = dcr_support::register(
+        &app,
+        &serde_json::json!({"redirect_uris": ["localhost:5173/cb"]}),
+        None,
+    )
+    .await;
+    assert_eq!(resp.status, 400, "{}", resp.text());
+    let body = support::json(&resp);
+    assert_eq!(body["error"], "invalid_redirect_uri", "{body}");
+    assert_eq!(body["error_description"], MISSING_SCHEME, "{body}");
 }

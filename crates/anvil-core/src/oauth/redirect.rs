@@ -85,6 +85,36 @@ fn is_loopback_ip_literal(host: &str) -> bool {
     }
 }
 
+/// The message for a URI that is a host (or `host:port`) without a scheme, such as
+/// `localhost:5173/cb` (which parses with the scheme `localhost`).
+pub const MISSING_SCHEME_MESSAGE: &str =
+    "redirect URI is missing its scheme: add http:// (localhost only) or https://";
+
+/// Whether `uri` looks like a host or `host:port` written without a scheme: what precedes the
+/// first `:` is `localhost` or an IP address, or what follows it starts with a port number
+/// (`app.example:8080/cb`). Only used to choose the message of a URI that is refused anyway.
+fn looks_like_missing_scheme(uri: &str) -> bool {
+    let authority = uri.split(['/', '?', '#']).next().unwrap_or_default();
+    let (host, port) = match authority.split_once(':') {
+        Some((h, p)) => (h, Some(p)),
+        None => (authority, None),
+    };
+    if host.is_empty() {
+        return false;
+    }
+    let hostish = host.eq_ignore_ascii_case("localhost")
+        || host.parse::<std::net::Ipv4Addr>().is_ok()
+        || host.starts_with('[');
+    let numeric_port = port.is_some_and(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+    // A bare `app.example/cb` (no colon) is a host too; `name:/x` is a custom scheme.
+    let dotted_host_without_scheme = port.is_none()
+        && host.contains('.')
+        && host
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-');
+    hostish || numeric_port || dotted_host_without_scheme
+}
+
 fn invalid(message: &str) -> CoreError {
     CoreError::Validation {
         field: "redirect_uris",
@@ -100,6 +130,10 @@ fn invalid(message: &str) -> CoreError {
 ///   is accepted for local development, both for web and native clients;
 /// - native clients may also use a private-use (custom) scheme (RFC 8252 §7.1), except schemes
 ///   that execute or read content (`javascript`, `data`, `file`, `vbscript`, `blob`, `about`).
+///
+/// A refused URI that looks like a host without a scheme (`localhost:5173/cb`,
+/// `127.0.0.1:8080/cb`, `app.example/cb`) gets [`MISSING_SCHEME_MESSAGE`]; the accept/refuse
+/// decision does not depend on it.
 pub fn validate_redirect_uri(uri: &str, app: ApplicationType) -> Result<(), CoreError> {
     if uri.is_empty() || uri.len() > MAX_REDIRECT_URI_LEN {
         return Err(invalid("redirect URI is empty or too long"));
@@ -113,7 +147,13 @@ pub fn validate_redirect_uri(uri: &str, app: ApplicationType) -> Result<(), Core
     if uri.chars().any(|c| c.is_whitespace() || c.is_control()) {
         return Err(invalid("redirect URI contains whitespace"));
     }
-    let parsed = url::Url::parse(uri).map_err(|_| invalid("redirect URI must be absolute"))?;
+    let parsed = url::Url::parse(uri).map_err(|_| {
+        if looks_like_missing_scheme(uri) {
+            invalid(MISSING_SCHEME_MESSAGE)
+        } else {
+            invalid("redirect URI must be absolute")
+        }
+    })?;
     if !parsed.username().is_empty() || parsed.password().is_some() {
         return Err(invalid("redirect URI must not contain userinfo"));
     }
@@ -135,7 +175,8 @@ pub fn validate_redirect_uri(uri: &str, app: ApplicationType) -> Result<(), Core
                 Ok(())
             } else {
                 Err(invalid(
-                    "http redirect URIs are only allowed for loopback addresses and localhost",
+                    "http redirect URIs are only allowed for loopback addresses and localhost; \
+                     use https",
                 ))
             }
         }
@@ -143,6 +184,8 @@ pub fn validate_redirect_uri(uri: &str, app: ApplicationType) -> Result<(), Core
             Err(invalid("redirect URI scheme is not allowed"))
         }
         _ if app == ApplicationType::Native => Ok(()),
+        // `localhost:5173/cb` parses with the scheme `localhost`: say what is really wrong.
+        _ if looks_like_missing_scheme(uri) => Err(invalid(MISSING_SCHEME_MESSAGE)),
         _ => Err(invalid("web clients must use https redirect URIs")),
     }
 }
@@ -280,6 +323,75 @@ mod tests {
         assert!(validate_redirect_uri(&long, w).is_err());
     }
 
+    fn message(r: Result<(), CoreError>) -> String {
+        match r {
+            Err(CoreError::Validation { message, .. }) => message,
+            other => panic!("expected a validation error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn missing_scheme_is_named() {
+        let w = ApplicationType::Web;
+        for bad in [
+            "localhost:5173/cb",
+            "LOCALHOST:5173/cb",
+            "localhost/cb",
+            "127.0.0.1:8080/cb",
+            "127.0.0.1/cb",
+            "app.example:8443/cb",
+            "app.example/cb",
+        ] {
+            assert_eq!(
+                message(validate_redirect_uri(bad, w)),
+                MISSING_SCHEME_MESSAGE,
+                "{bad}"
+            );
+        }
+        // The DCR and native refusals of the same shape use the same text.
+        assert_eq!(
+            message(validate_redirect_uri(
+                "localhost/cb",
+                ApplicationType::Native
+            )),
+            MISSING_SCHEME_MESSAGE
+        );
+    }
+
+    #[test]
+    fn other_refusals_keep_their_message() {
+        let w = ApplicationType::Web;
+        assert!(
+            message(validate_redirect_uri("http://app.example/cb", w))
+                .contains("only allowed for loopback addresses and localhost")
+        );
+        assert_eq!(
+            message(validate_redirect_uri("com.example.app:/cb", w)),
+            "web clients must use https redirect URIs"
+        );
+        assert_eq!(
+            message(validate_redirect_uri("/relative/cb", w)),
+            "redirect URI must be absolute"
+        );
+        assert_eq!(
+            message(validate_redirect_uri("javascript:alert(1)", w)),
+            "redirect URI scheme is not allowed"
+        );
+    }
+
+    #[test]
+    fn messages_do_not_change_decisions() {
+        // Native custom schemes that look like host:port stay accepted (decision unchanged).
+        let n = ApplicationType::Native;
+        for ok in ["com.example.app:/cb", "localhost:5173/cb", "myapp:1234/cb"] {
+            assert!(validate_redirect_uri(ok, n).is_ok(), "{ok}");
+        }
+        let w = ApplicationType::Web;
+        for ok in ["http://localhost:5173/cb", "https://app.example/cb"] {
+            assert!(validate_redirect_uri(ok, w).is_ok(), "{ok}");
+        }
+    }
+
     proptest! {
         #[test]
         fn web_matching_is_set_membership(
@@ -296,6 +408,12 @@ mod tests {
                 redirect_matches(&registered, &requested, ApplicationType::Web),
                 registered.contains(&requested)
             );
+        }
+
+        #[test]
+        fn missing_scheme_detection_never_panics(uri in "\\PC{0,60}") {
+            let _ = looks_like_missing_scheme(&uri);
+            let _ = validate_redirect_uri(&uri, ApplicationType::Web);
         }
     }
 }

@@ -4,6 +4,7 @@
 //! admin scopes are out of reach for users of other tenants.
 //! Selected backend via `ANVILID_TEST_DB`.
 
+mod admin_support;
 mod authz;
 mod support;
 mod token_support;
@@ -434,4 +435,69 @@ async fn console_sign_in_with_profile_and_email_returns_email_from_userinfo() {
     assert_eq!(info["email"], "console-admin@example.test");
     assert_eq!(info["email_verified"], true);
     assert!(info.get("name").is_some(), "profile claims: {info}");
+}
+
+/// rc.4 (07.1-06): the management API refuses to delete the built-in console client (409, no
+/// audit event), and console sign-in keeps working afterwards.
+#[tokio::test]
+async fn console_client_survives_a_delete_attempt() {
+    let app = TestApp::new().await;
+    bootstrap(&app)
+        .ensure_console_client(&url(PROD_URL))
+        .await
+        .unwrap();
+    let system = system_id(&app);
+    let before = system_events(&app).await;
+
+    let token = admin_support::admin_token(&app, "admin:write").await;
+    let resp = admin_support::call(
+        &app,
+        axum::http::Method::DELETE,
+        &format!(
+            "{}/tenants/system/clients/{CONSOLE_CLIENT_ID}",
+            admin_support::API
+        ),
+        Some(&token),
+        None,
+    )
+    .await;
+    let problem = admin_support::assert_problem(&resp, 409);
+    assert_eq!(
+        problem["detail"],
+        "The console client is built in and cannot be deleted"
+    );
+    let console = app
+        .storage()
+        .clients()
+        .get(system, CONSOLE_CLIENT_ID)
+        .await
+        .unwrap()
+        .expect("console client still exists");
+    let after = system_events(&app).await;
+    assert_eq!(
+        count(&after, AuditAction::ClientDeleted),
+        count(&before, AuditAction::ClientDeleted)
+    );
+
+    // The console still starts a sign-in (no error page, no error redirect).
+    let redirect = console.redirect_uris[0].clone();
+    let resp = get(
+        &app,
+        &authorize_path(
+            "/t/system",
+            &[
+                ("response_type", "code"),
+                ("client_id", CONSOLE_CLIENT_ID),
+                ("redirect_uri", &redirect),
+                ("scope", "openid"),
+                ("state", "st-1"),
+                ("code_challenge", token_support::CHALLENGE),
+                ("code_challenge_method", "S256"),
+            ],
+        ),
+        None,
+    )
+    .await;
+    assert!(resp.status.is_redirection(), "{}", resp.text());
+    assert!(!location(&resp).contains("error="), "{}", location(&resp));
 }

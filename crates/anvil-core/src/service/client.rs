@@ -37,11 +37,16 @@ use crate::oauth::resource::parse_resources;
 use crate::ports::{Storage, StorageError};
 use crate::service::admin_scope::{ORG_ADMIN_SCOPE, is_reserved_admin_token};
 use crate::service::audit::AuditService;
+use crate::service::bootstrap::CONSOLE_CLIENT_ID;
 use crate::service::tenant::{MAX_DISPLAY_NAME_LEN, admin_page};
 
 /// Validates one redirect URI for an application type. Wired to
 /// `oauth::redirect::validate_redirect_uri` by the binary; tests inject their own.
 pub type RedirectValidator = fn(&str, ApplicationType) -> Result<(), CoreError>;
+
+/// Why [`ClientService::delete`] refuses the built-in console client (409).
+pub const CONSOLE_CLIENT_DELETE_REFUSED: &str =
+    "The console client is built in and cannot be deleted";
 
 /// Length of generated `client_id`s (base64url characters, 132 bits).
 pub const CLIENT_ID_LEN: usize = 22;
@@ -1208,6 +1213,11 @@ impl ClientService {
 
     /// Deletes the client; its token families are revoked by the repository. Audited as
     /// `client_deleted`.
+    ///
+    /// The built-in console client ([`CONSOLE_CLIENT_ID`] of the system tenant) is refused with
+    /// `Conflict` before anything is written: deleting it would lock every administrator out of
+    /// the console. The system tenant is resolved through the tenant port and compared by id, so
+    /// a client named `anvil-console` in any other tenant is an ordinary client.
     pub async fn delete(
         &self,
         tenant: TenantId,
@@ -1215,6 +1225,18 @@ impl ClientService {
         actor: AuditActor,
         ctx: &RequestContext,
     ) -> Result<(), CoreError> {
+        if client_id == CONSOLE_CLIENT_ID
+            && self
+                .storage
+                .tenants()
+                .get_by_slug(SYSTEM_TENANT_SLUG)
+                .await?
+                .is_some_and(|system| system.id == tenant)
+        {
+            return Err(CoreError::Conflict(
+                CONSOLE_CLIENT_DELETE_REFUSED.to_owned(),
+            ));
+        }
         self.remove(tenant, client_id, AuditAction::ClientDeleted, actor, ctx)
             .await
     }
