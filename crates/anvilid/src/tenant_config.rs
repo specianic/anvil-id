@@ -11,6 +11,10 @@
 //! - `{file: path}`: the contents of the file, without one trailing newline; a relative path is
 //!   relative to the document's directory.
 //!
+//! Logos (`branding[].logo`, `organizations[].branding.logo`) accept `{file: path}` as well: the
+//! image file (relative to the document's directory, at most 256 KiB, checked before it is read)
+//! is inlined as `{data: <base64>}`; the server then checks it like an upload.
+//!
 //! `apply` prints the plan first and applies only with `--yes` or after an interactive
 //! confirmation (refused when stdin is not a terminal). Deletions need `--prune`. Secrets the
 //! server generates (new clients and webhooks without a secret) are printed once.
@@ -22,6 +26,7 @@ use std::sync::Arc;
 use anvil_core::clock::SystemClock;
 use anvil_core::model::{AuditActor, RequestContext, Scope, TenantConfigDocument};
 use anvil_core::oauth::redirect::validate_redirect_uri;
+use anvil_core::policy::branding::MAX_LOGO_BYTES;
 use anvil_core::service::admin_scope::ADMIN_WRITE;
 use anvil_core::service::attribute::AttributeService;
 use anvil_core::service::branding::BrandingService;
@@ -34,6 +39,7 @@ use anvil_core::service::organization::OrgService;
 use anvil_core::service::role::RoleService;
 use anvil_core::service::tenant::TenantService;
 use anvil_core::service::webhook::WebhookService;
+use anvil_jose::encoding::b64std;
 use anvil_web::adapters::attribute_schema::JsonSchemaCheck;
 use anvil_web::adapters::dns_txt::HickoryTxtLookup;
 use anvil_web::adapters::upstream::UpstreamHttp;
@@ -214,6 +220,18 @@ fn secret_slots(doc: &mut Value) -> Vec<(String, &mut Value)> {
                     }
                 }
             }
+            ("organizations", Value::Array(orgs)) => {
+                for (i, org) in orgs.iter_mut().enumerate() {
+                    let Some(Value::Array(items)) = org.get_mut("connections") else {
+                        continue;
+                    };
+                    for (j, item) in items.iter_mut().enumerate() {
+                        if let Some(slot) = item.get_mut("secret") {
+                            out.push((format!("organizations[{i}].connections[{j}].secret"), slot));
+                        }
+                    }
+                }
+            }
             ("smtp", smtp) => {
                 if let Some(slot) = smtp.get_mut("password") {
                     out.push(("smtp.password".to_owned(), slot));
@@ -223,6 +241,77 @@ fn secret_slots(doc: &mut Value) -> Vec<(String, &mut Value)> {
         }
     }
     out
+}
+
+/// The logo positions of the document (the only places a logo `{file}` reference is resolved).
+fn logo_slots(doc: &mut Value) -> Vec<(String, &mut Value)> {
+    let mut out = Vec::new();
+    let Value::Object(map) = doc else {
+        return out;
+    };
+    for (section, items) in map.iter_mut() {
+        match (section.as_str(), items) {
+            ("branding", Value::Array(items)) => {
+                for (i, item) in items.iter_mut().enumerate() {
+                    if let Some(slot) = item.get_mut("logo") {
+                        out.push((format!("branding[{i}].logo"), slot));
+                    }
+                }
+            }
+            ("organizations", Value::Array(orgs)) => {
+                for (i, org) in orgs.iter_mut().enumerate() {
+                    if let Some(slot) = org.get_mut("branding").and_then(|b| b.get_mut("logo")) {
+                        out.push((format!("organizations[{i}].branding.logo"), slot));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Replaces `logo: {file: path}` by `{data: <base64>}`. The file size is checked before the file
+/// is read (the server checks the image type and size again).
+fn resolve_logo_files(doc: &mut Value, base: &Path) -> anyhow::Result<()> {
+    for (path, slot) in logo_slots(doc) {
+        let Some(file) = slot.as_object().and_then(|o| o.get("file")) else {
+            continue;
+        };
+        if slot.as_object().is_some_and(|o| o.len() != 1) {
+            bail!("{path}: a file reference has no other keys");
+        }
+        let file = file
+            .as_str()
+            .with_context(|| format!("{path}: file must be a path"))?;
+        let full = base.join(file);
+        let size = std::fs::metadata(&full)
+            .with_context(|| format!("{path}: failed to read {}", full.display()))?
+            .len();
+        if size > MAX_LOGO_BYTES as u64 {
+            bail!(
+                "{path}: {} is larger than 256 KiB (the logo limit)",
+                full.display()
+            );
+        }
+        let mut bytes = Vec::with_capacity(usize::try_from(size).unwrap_or(0));
+        std::fs::File::open(&full)
+            .and_then(|f| {
+                std::io::Read::read_to_end(
+                    &mut std::io::Read::take(f, MAX_LOGO_BYTES as u64 + 1),
+                    &mut bytes,
+                )
+            })
+            .with_context(|| format!("{path}: failed to read {}", full.display()))?;
+        if bytes.len() > MAX_LOGO_BYTES {
+            bail!(
+                "{path}: {} is larger than 256 KiB (the logo limit)",
+                full.display()
+            );
+        }
+        *slot = serde_json::json!({ "data": b64std(&bytes) });
+    }
+    Ok(())
 }
 
 /// Strips one trailing newline (`\n` or `\r\n`) from file contents.
@@ -297,6 +386,7 @@ fn read_document(file: &Path) -> anyhow::Result<TenantConfigDocument> {
     };
     let mut value: Value = serde_saphyr::from_str(&text).context("the file is not valid YAML")?;
     resolve_references(&mut value, &base)?;
+    resolve_logo_files(&mut value, &base)?;
     serde_json::from_value(value).context("the document does not match the TenantConfig schema")
 }
 
@@ -471,6 +561,50 @@ mod tests {
         let doc: TenantConfigDocument = serde_json::from_value(value).expect("example parses");
         assert_eq!(doc.tenant.slug, "acme");
         assert_eq!(doc.clients.len(), 1);
+    }
+
+    #[test]
+    fn logo_files_are_inlined_at_logo_positions_only() {
+        let dir = tempfile_dir();
+        let png = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3];
+        std::fs::write(dir.join("logo.png"), png).expect("write");
+        std::fs::write(dir.join("big.png"), vec![0u8; MAX_LOGO_BYTES + 1]).expect("write");
+        let mut doc = serde_json::json!({
+            "branding": [{"logo": {"file": "logo.png"}}, {"logo": null}],
+            "organizations": [{"slug": "o", "branding": {"logo": {"file": "logo.png"}},
+                "connections": [{"secret": {"env": "PATH"}}]}],
+            "attributes": [{"name": "x", "schema": {"file": "logo.png"}}],
+        });
+        resolve_logo_files(&mut doc, &dir).expect("resolve");
+        let data = serde_json::json!({"data": b64std(&png)});
+        assert_eq!(doc["branding"][0]["logo"], data);
+        assert_eq!(doc["branding"][1]["logo"], Value::Null);
+        assert_eq!(doc["organizations"][0]["branding"]["logo"], data);
+        assert_eq!(
+            doc["attributes"][0]["schema"],
+            serde_json::json!({"file": "logo.png"})
+        );
+        // Org connection secrets are secret positions.
+        resolve_references(&mut doc, &dir).expect("resolve");
+        assert!(
+            doc["organizations"][0]["connections"][0]["secret"]
+                .get("value")
+                .is_some()
+        );
+
+        let mut missing = serde_json::json!({"branding": [{"logo": {"file": "nope.png"}}]});
+        let err = resolve_logo_files(&mut missing, &dir)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("branding[0].logo"), "{err}");
+        let mut big =
+            serde_json::json!({"organizations": [{"branding": {"logo": {"file": "big.png"}}}]});
+        let err = resolve_logo_files(&mut big, &dir).unwrap_err().to_string();
+        assert!(
+            err.contains("organizations[0].branding.logo") && err.contains("256 KiB"),
+            "{err}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

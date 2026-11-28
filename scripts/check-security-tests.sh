@@ -1039,10 +1039,24 @@ cross-org email trust: only the org's verified domains and a verified upstream e
 org JIT: refused outside the org's verified domains; tenant connections follow upstream_registration|$W/enterprise_oidc.rs|org_jit_refused_for_email_outside_org_domains_under_closed_registration
 org JIT: refused outside the org's verified domains; tenant connections follow upstream_registration|$W/enterprise_oidc.rs|tenant_connection_jit_still_follows_upstream_registration
 org JIT: refused outside the org's verified domains; tenant connections follow upstream_registration|crates/anvil-core/src/upstream/linking.rs|jit_follows_the_tenant_rule_without_an_org_trusted_email
-org config: org-owned objects excluded from export and prune|$W/admin_config.rs|config_export_excludes_org_connections_and_org_roles
-org config: org-owned objects excluded from export and prune|$W/admin_config.rs|config_plan_never_lists_org_objects_as_deletes
-org config: org-owned objects excluded from export and prune|$W/admin_config.rs|config_apply_prune_keeps_org_connections_and_org_roles
-org config: org-owned objects excluded from export and prune|crates/anvilid/tests/tenant_config.rs|tenant_config_prune_keeps_org_objects
+org config: org objects only under organizations[]; tenant-section prune never touches them; absent organizations touches nothing; runtime data and domain verification never in the document|$W/admin_config.rs|config_export_lists_org_objects_only_under_organizations
+org config: org objects only under organizations[]; tenant-section prune never touches them; absent organizations touches nothing; runtime data and domain verification never in the document|$W/admin_config.rs|config_tenant_prune_never_plans_org_objects
+org config: org objects only under organizations[]; tenant-section prune never touches them; absent organizations touches nothing; runtime data and domain verification never in the document|$W/admin_config.rs|config_tenant_section_prune_keeps_org_objects
+org config: org objects only under organizations[]; tenant-section prune never touches them; absent organizations touches nothing; runtime data and domain verification never in the document|crates/anvilid/tests/tenant_config.rs|tenant_config_org_objects_only_under_organizations
+org config: org objects only under organizations[]; tenant-section prune never touches them; absent organizations touches nothing; runtime data and domain verification never in the document|$W/security_admin_config.rs|config_absent_organizations_touches_nothing_even_with_prune
+org config: org objects only under organizations[]; tenant-section prune never touches them; absent organizations touches nothing; runtime data and domain verification never in the document|$W/security_admin_config.rs|config_cannot_mark_domain_verified
+org config: org objects only under organizations[]; tenant-section prune never touches them; absent organizations touches nothing; runtime data and domain verification never in the document|$W/security_admin_config.rs|config_system_tenant_refuses_organizations
+org config: org objects only under organizations[]; tenant-section prune never touches them; absent organizations touches nothing; runtime data and domain verification never in the document|$W/admin_config.rs|config_org_prune_removes_owned_objects_of_listed_orgs_only
+org config: org objects only under organizations[]; tenant-section prune never touches them; absent organizations touches nothing; runtime data and domain verification never in the document|crates/anvil-core/src/service/config.rs|config_absent_organizations_plans_nothing_for_them
+org config: org objects only under organizations[]; tenant-section prune never touches them; absent organizations touches nothing; runtime data and domain verification never in the document|crates/anvil-core/src/service/config.rs|org_objects_plan_by_natural_key_and_the_org_is_never_deleted
+org config: org objects only under organizations[]; tenant-section prune never touches them; absent organizations touches nothing; runtime data and domain verification never in the document|crates/anvil-core/src/model/config_doc.rs|config_doc_organizations_parse_and_refuse_unknown_keys
+org config: organization connection secrets write-only (export {configured}, never echoed, CLI-only references)|$W/security_admin_config.rs|config_org_connection_secret_is_write_only
+config logos: upload rules (PNG/JPEG/WebP, 256 KiB, SVG refused), unknown hash refused, file references CLI only|$W/security_admin_config.rs|config_logo_refusals_name_the_path
+config logos: upload rules (PNG/JPEG/WebP, 256 KiB, SVG refused), unknown hash refused, file references CLI only|crates/anvil-core/src/service/config.rs|decode_logo_applies_the_upload_rules
+config logos: upload rules (PNG/JPEG/WebP, 256 KiB, SVG refused), unknown hash refused, file references CLI only|crates/anvil-core/src/model/config_doc.rs|config_doc_logo_variants
+config logos: upload rules (PNG/JPEG/WebP, 256 KiB, SVG refused), unknown hash refused, file references CLI only|crates/anvilid/tests/tenant_config.rs|tenant_config_logo_file_reference_is_inlined
+config logos: absent logo keeps the stored logo|crates/anvil-core/src/service/config.rs|logos_compare_by_hash_absent_keeps_and_null_equals_none
+config client home URLs: the shared home URL rule|$W/security_admin_config.rs|config_client_home_urls_use_the_shared_rule
 keys API: scopes, tenant isolation, no private material|$W/admin_keys.rs|keys_routes_require_scopes
 keys API: scopes, tenant isolation, no private material|$W/admin_keys.rs|keys_routes_isolate_tenants
 keys API: scopes, tenant isolation, no private material|$W/admin_keys.rs|keys_list_never_contains_private_material

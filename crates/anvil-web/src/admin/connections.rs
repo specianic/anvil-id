@@ -129,7 +129,7 @@ pub(crate) async fn list_connections(
         (status = 403, description = "Insufficient scope", body = Problem, content_type = "application/problem+json"),
         (status = 404, description = "Unknown tenant", body = Problem, content_type = "application/problem+json"),
         (status = 409, description = "Slug already in use in this tenant", body = Problem, content_type = "application/problem+json"),
-        (status = 422, description = "Validation failed (also: a SAML connection, which belongs to an organization)", body = Problem, content_type = "application/problem+json"),
+        (status = 422, description = "Validation failed (also: a SAML connection, which belongs to an organization; enabling an incomplete connection, or a generic OIDC connection whose issuer fails discovery, is refused)", body = Problem, content_type = "application/problem+json"),
     ),
     security(
         ("oauth2" = ["admin:settings:write"]),
@@ -210,7 +210,7 @@ pub(crate) async fn get_connection(
         (status = 403, description = "Insufficient scope", body = Problem, content_type = "application/problem+json"),
         (status = 404, description = "Unknown tenant or connection", body = Problem, content_type = "application/problem+json"),
         (status = 409, description = "The connection belongs to an organization", body = Problem, content_type = "application/problem+json"),
-        (status = 422, description = "Validation failed", body = Problem, content_type = "application/problem+json"),
+        (status = 422, description = "Validation failed (also: enabling an incomplete connection, or a generic OIDC connection whose issuer fails discovery, is refused)", body = Problem, content_type = "application/problem+json"),
     ),
     security(
         ("oauth2" = ["admin:settings:write"]),

@@ -1507,7 +1507,7 @@ pub(crate) async fn list_org_connections(
         (status = 403, description = "Insufficient scope, an org admin token of another organization, or SAML is not enabled (`feature_disabled`)", body = Problem, content_type = "application/problem+json"),
         (status = 404, description = "Unknown tenant or organization", body = Problem, content_type = "application/problem+json"),
         (status = 409, description = "Slug already in use in this tenant", body = Problem, content_type = "application/problem+json"),
-        (status = 422, description = "Validation failed (also: a kind other than OIDC or SAML)", body = Problem, content_type = "application/problem+json"),
+        (status = 422, description = "Validation failed (also: a kind other than OIDC or SAML; enabling an incomplete connection, or a generic OIDC connection whose issuer fails discovery, is refused)", body = Problem, content_type = "application/problem+json"),
     ),
     security(
         ("oauth2" = ["admin:organizations:write"]),
@@ -1600,7 +1600,7 @@ pub(crate) async fn get_org_connection(
         (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
         (status = 403, description = "Insufficient scope, an org admin token of another organization, or SAML is not enabled (`feature_disabled`)", body = Problem, content_type = "application/problem+json"),
         (status = 404, description = "Unknown tenant, organization or connection (or another organization's connection)", body = Problem, content_type = "application/problem+json"),
-        (status = 422, description = "Validation failed", body = Problem, content_type = "application/problem+json"),
+        (status = 422, description = "Validation failed (also: enabling an incomplete connection, or a generic OIDC connection whose issuer fails discovery, is refused)", body = Problem, content_type = "application/problem+json"),
     ),
     security(
         ("oauth2" = ["admin:organizations:write"]),

@@ -761,10 +761,13 @@ async fn seed_org(
                 slug: "acme-sso".into(),
                 display_name: "Acme SSO".into(),
                 enabled: true,
-                config: serde_json::from_value(
-                    json!({"type": "social", "provider": "google", "client_id": "acme-client"}),
-                )
-                .expect("social config"),
+                // Organization connections are OIDC or SAML.
+                config: serde_json::from_value(json!({
+                    "type": "oidc",
+                    "issuer": "https://idp.acme-corp.com",
+                    "client_id": "acme-client",
+                }))
+                .expect("oidc config"),
                 secret_enc: None,
                 trust_email_verified: false,
                 created_at: now,
@@ -828,22 +831,35 @@ async fn seed_org(
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn tenant_config_prune_keeps_org_objects() {
+async fn tenant_config_org_objects_only_under_organizations() {
     let a = Instance::new().await;
     configure(&a).await;
     let tenant = a.tenant("default").await;
     let (org, user, role, connection) = seed_org(&a, &tenant).await;
 
-    // The export never contains the org's objects.
-    let out = a.run(&["tenant", "export", "default", "-o", "doc.yaml"], &[]);
+    // The export lists the org's objects under `organizations` only, never runtime data.
+    let out = a.run(&["tenant", "export", "default", "-o", "full.yaml"], &[]);
     assert!(out.status.success(), "{}", text(&out));
-    let raw = std::fs::read_to_string(a.path("doc.yaml")).expect("read yaml");
-    assert!(!raw.contains("acme-sso"), "{raw}");
-    assert!(!raw.contains("Org-owned"), "{raw}");
+    let full = yaml(&a.path("full.yaml"));
+    assert_eq!(full["organizations"][0]["slug"], "acme");
+    assert_eq!(
+        full["organizations"][0]["connections"][0]["slug"],
+        "acme-sso"
+    );
+    assert_eq!(full["organizations"][0]["roles"][0]["name"], "editor");
+    assert!(
+        !full["connections"].to_string().contains("acme-sso"),
+        "{}",
+        full["connections"]
+    );
+    let raw = std::fs::read_to_string(a.path("full.yaml")).expect("read yaml");
+    assert!(!raw.contains("member@acme.example.test"), "{raw}");
+    assert!(!raw.contains("acme-user-1"), "{raw}");
 
-    // A document without any role or connection, applied with --prune, deletes the tenant's
-    // role `editor` and connection `google` only.
-    let mut doc = yaml(&a.path("doc.yaml"));
+    // The rc.3 shape (no `organizations` key) without any role or connection, applied with
+    // --prune, deletes the tenant's role `editor` and connection `google` only.
+    let mut doc = full.clone();
+    doc.as_object_mut().unwrap().remove("organizations");
     doc["roles"] = json!([]);
     doc["connections"] = json!([]);
     write_yaml(&a.path("doc.yaml"), &doc);
@@ -859,6 +875,7 @@ async fn tenant_config_prune_keeps_org_objects() {
         "{shown}"
     );
     assert!(!shown.contains("acme-sso"), "{shown}");
+    assert!(!shown.contains("organization"), "{shown}");
     assert!(shown.contains("2 deleted"), "{shown}");
     assert!(
         a.storage
@@ -880,44 +897,47 @@ async fn tenant_config_prune_keeps_org_objects() {
     );
 
     // The org role, connection, identity link, membership and org assignment are intact.
-    let org_roles = a
-        .storage
-        .roles()
-        .list_org_roles(tenant.id, org)
-        .await
-        .unwrap();
-    assert_eq!(org_roles.iter().map(|r| r.id).collect::<Vec<_>>(), [role]);
-    let org_conns = a
-        .storage
-        .connections()
-        .list_for_org(tenant.id, org)
-        .await
-        .unwrap();
-    assert_eq!(
-        org_conns.iter().map(|c| c.id).collect::<Vec<_>>(),
-        [connection]
-    );
-    assert!(
-        a.storage
+    let assert_intact = || async {
+        let org_roles = a
+            .storage
+            .roles()
+            .list_org_roles(tenant.id, org)
+            .await
+            .unwrap();
+        assert_eq!(org_roles.iter().map(|r| r.id).collect::<Vec<_>>(), [role]);
+        let org_conns = a
+            .storage
             .connections()
-            .has_links(tenant.id, connection)
+            .list_for_org(tenant.id, org)
             .await
-            .unwrap()
-    );
-    assert!(
-        a.storage
-            .organizations()
-            .is_member(tenant.id, org, user)
+            .unwrap();
+        assert_eq!(
+            org_conns.iter().map(|c| c.id).collect::<Vec<_>>(),
+            [connection]
+        );
+        assert!(
+            a.storage
+                .connections()
+                .has_links(tenant.id, connection)
+                .await
+                .unwrap()
+        );
+        assert!(
+            a.storage
+                .organizations()
+                .is_member(tenant.id, org, user)
+                .await
+                .unwrap()
+        );
+        let held = a
+            .storage
+            .roles()
+            .roles_for_user_in_org(tenant.id, user, org)
             .await
-            .unwrap()
-    );
-    let held = a
-        .storage
-        .roles()
-        .roles_for_user_in_org(tenant.id, user, org)
-        .await
-        .unwrap();
-    assert!(held.iter().any(|r| r.id == role), "{held:?}");
+            .unwrap();
+        assert!(held.iter().any(|r| r.id == role), "{held:?}");
+    };
+    assert_intact().await;
 
     // Re-applying the same document is a no-op (the org objects never show up as deletes).
     let out = a.run(
@@ -926,4 +946,101 @@ async fn tenant_config_prune_keeps_org_objects() {
     );
     assert!(out.status.success(), "{}", text(&out));
     assert!(!text(&out).contains("(prune only)"), "{}", text(&out));
+
+    // The organization listed as exported, with --prune: nothing of it changes.
+    let mut listed = doc.clone();
+    listed["organizations"] = full["organizations"].clone();
+    write_yaml(&a.path("listed.yaml"), &listed);
+    let out = a.run(
+        &["tenant", "apply", "-f", "listed.yaml", "--yes", "--prune"],
+        &[],
+    );
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(text(&out).contains("No changes."), "{}", text(&out));
+    assert_intact().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tenant_config_logo_file_reference_is_inlined() {
+    let a = Instance::new().await;
+    configure(&a).await;
+    let png = [
+        0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, b'I', b'H', b'D', b'R',
+    ];
+    std::fs::create_dir(a.path("img")).expect("img dir");
+    std::fs::write(a.path("img/logo.png"), png).expect("logo");
+    std::fs::write(
+        a.path("img/logo.svg"),
+        r#"<svg xmlns="http://www.w3.org/2000/svg"/>"#,
+    )
+    .expect("svg");
+    let out = a.run(&["tenant", "export", "default", "-o", "doc.yaml"], &[]);
+    assert!(out.status.success(), "{}", text(&out));
+    let mut doc = yaml(&a.path("doc.yaml"));
+    // The tenant-wide entry (configure() also brands a client) gets a logo file reference.
+    let tenant_entry = doc["branding"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|b| b.get("client_id").is_none_or(Value::is_null));
+    let i = match tenant_entry {
+        Some(i) => i,
+        None => {
+            doc["branding"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"tokens": {}}));
+            doc["branding"].as_array().unwrap().len() - 1
+        }
+    };
+    doc["branding"][i]["logo"] = json!({"file": "img/logo.png"});
+    write_yaml(&a.path("doc.yaml"), &doc);
+
+    // Plan shows the logo change; apply stores it; the export names it by hash.
+    let out = a.run(&["tenant", "plan", "-f", "doc.yaml"], &[]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(text(&out).contains("branding (tenant)"), "{}", text(&out));
+    let out = a.run(&["tenant", "apply", "-f", "doc.yaml", "--yes"], &[]);
+    assert!(out.status.success(), "{}", text(&out));
+    let tenant = a.tenant("default").await;
+    let stored = a
+        .storage
+        .branding()
+        .get(tenant.id, "")
+        .await
+        .unwrap()
+        .expect("branding");
+    assert_eq!(stored.logo_type.as_deref(), Some("image/png"));
+    let out = a.run(&["tenant", "export", "default", "-o", "after.yaml"], &[]);
+    assert!(out.status.success(), "{}", text(&out));
+    let after = yaml(&a.path("after.yaml"));
+    assert_eq!(
+        after["branding"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|b| b.get("client_id").is_none_or(Value::is_null))
+            .and_then(|b| b["logo"]["sha256"].as_str()),
+        stored.logo_sha256.as_deref()
+    );
+    // The file reference re-applied is no change.
+    let out = a.run(&["tenant", "plan", "-f", "doc.yaml"], &[]);
+    assert!(text(&out).contains("No changes."), "{}", text(&out));
+
+    // A missing file names the path; an SVG is refused by the server's logo rule.
+    doc["branding"][i]["logo"] = json!({"file": "img/missing.png"});
+    write_yaml(&a.path("missing.yaml"), &doc);
+    let out = a.run(&["tenant", "plan", "-f", "missing.yaml"], &[]);
+    assert!(!out.status.success());
+    let path = format!("branding[{i}].logo");
+    assert!(text(&out).contains(&path), "{}", text(&out));
+    doc["branding"][i]["logo"] = json!({"file": "img/logo.svg"});
+    write_yaml(&a.path("svg.yaml"), &doc);
+    let out = a.run(&["tenant", "apply", "-f", "svg.yaml", "--yes"], &[]);
+    assert!(!out.status.success());
+    let shown = text(&out);
+    assert!(
+        shown.contains(&path) && shown.contains("PNG, JPEG or WebP"),
+        "{shown}"
+    );
 }

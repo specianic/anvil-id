@@ -15,14 +15,15 @@ already in force changes nothing.
 | Section | Key | Notes |
 |---|---|---|
 | `tenant` | `slug` | Display name, custom host and settings (registration, MFA, signing algorithms, sign-in by email, upstream linking, default language, DCR and CIMD policy, role and permission claim mapping; since 1.0 also the organization claim mapping `claims.org_roles` / `claims.org_permissions`, the PAR policy `par` and the headless origin allow-list `headless`). |
-| `clients` | `client_id` | Static clients only. Since 1.0 with the `organization` policy (`off`, `optional`, `required`), `require_pushed_authorization_requests`, `client_kind` and `headless_native`. |
-| `connections` | `slug` | Tenant-level upstream identity providers (social presets, OIDC, OAuth 2.0). Organization connections are not included (below). |
-| `branding` | `client_id` (absent = tenant-wide) | Theme tokens and custom CSS. |
+| `clients` | `client_id` | Static clients only. Since 1.0 with the `organization` policy (`off`, `optional`, `required`), `require_pushed_authorization_requests`, `client_kind` and `headless_native`; since rc.4 with the home URLs `client_uri` and `initiate_login_uri`. |
+| `connections` | `slug` | Tenant-level upstream identity providers (social presets, OIDC, OAuth 2.0). Organization connections are listed under their organization (below). |
+| `branding` | `client_id` (absent = tenant-wide) | Theme tokens, custom CSS and (rc.4) the logo. |
 | `roles` | `name` | Name, description, permissions. |
 | `attributes` | `name` | Custom user attribute definitions (JSON Schema, claim rule). |
 | `email_templates` | `kind` | Customized templates only. |
 | `smtp` | (one) | Tenant SMTP settings; absent = the installation SMTP. |
 | `webhooks` | `name` | URL, subscribed events, enabled flag. |
+| `organizations` | `slug` | rc.4, optional: organizations with their roles, connections, domain claims, default roles and branding (below). |
 
 Objects are identified by these natural keys only. Database ids never appear in a document, so a
 document exported from one installation applies to another.
@@ -35,25 +36,121 @@ The document does **not** contain:
   with `public_url` at every start);
 - CAPTCHA settings (their secret cannot be exported; configure CAPTCHA through the admin API or
   the console, and leave `captcha` out of the document);
-- logos (version 1 carries theme tokens and custom CSS; upload logos through the admin API);
-- organizations and everything they own (1.0, see below).
+- organization members, invitations, identity links, the role assignments made within an
+  organization, and domain verification (status, DNS token, timestamps).
 
-### Organizations are not part of the document
+The keys added in rc.4 (`logo`, `client_uri`, `initiate_login_uri`, `organizations`) are optional
+keys of version 1 ([COMPATIBILITY.md](COMPATIBILITY.md)): unknown keys are still refused, and there
+is no new document version. A document written before rc.4 keeps its meaning, also with `--prune`:
+an absent `logo` keeps the stored logo, and an absent `organizations` key touches no organization.
 
-Added in 1.0. Organizations are customer data that organization admins change at runtime, so the
-tenant document neither contains nor manages them. Export, plan, apply and `--prune` never see
-or touch:
+### Logos (rc.4)
 
-- organizations, their memberships, invitations, verified domains and routing settings;
-- organization connections (OIDC and SAML) and their identity links;
-- organization roles and the role assignments made within an organization;
-- organization branding.
+`branding[].logo` and `organizations[].branding.logo` take one of these forms:
 
-In particular, `--prune` never deletes an organization connection or an organization role, even
-one whose name equals a tenant role being pruned (roles are matched by name among tenant roles
-only). A document connection whose `slug` is already used by an organization connection is
-refused before anything is written (`connections[i].slug`: the slug is used by an organization
-connection), because organization and tenant connections share one slug namespace.
+| Form | Meaning |
+|---|---|
+| omitted | Keep the stored logo (documents written before rc.4). |
+| `null` | Remove the logo. |
+| `{data: <base64>}` | Set the logo from the image (standard base64; line breaks are ignored). The upload rules apply: PNG, JPEG or WebP, at most 256 KiB; SVG is refused. |
+| `{sha256: <hex>, content_type: image/png}` | A logo already stored in this tenant, by content hash. This is what an export writes. A hash the target tenant does not have is refused (`branding[0].logo: unknown logo hash`), so a document for another installation must carry the image. |
+| `{file: path}` | CLI only: the image file (relative to the document's directory) is inlined as `{data}`. The admin API refuses it with a 422 naming the field. |
+
+```yaml excerpt
+branding:
+  - tokens:
+      colors: {primary: "#0b5fff"}
+    logo: {file: brand/logo.png}
+```
+
+Plans compare logos by SHA-256 (inline images are hashed first), so re-applying the same image is
+no change. Over HTTP a document is limited to 1 MiB, and each inline logo takes up to about
+350 KB of base64: a document with several inline logos may need the CLI, which applies the
+document without HTTP.
+
+### Client home URLs (rc.4)
+
+```yaml excerpt
+clients:
+  - client_id: billing-web
+    # ...
+    client_uri: https://billing.example.com/
+    initiate_login_uri: https://billing.example.com/login
+```
+
+Both are optional and omitted from an export while unset. The rule is the one of the admin API: an
+absolute `https` URL (`http` only for `localhost` and loopback addresses), without user information
+or fragment, at most 2048 characters. A refusal names the field, for example
+`clients[0].client_uri: must be an absolute https URL`. Like every other client field, a home URL
+set in the console and missing from the document is removed by the next apply.
+
+### Organizations (rc.4)
+
+1.0 kept organizations out of the document. Since rc.4 the optional `organizations` section manages
+them, keyed by `slug`:
+
+```yaml excerpt
+organizations:
+  - slug: globex
+    display_name: Globex
+    mfa_policy: required          # null = no organization requirement
+    metadata: {crm_id: "42"}      # free-form JSON object
+    settings:
+      default_roles: [member]     # by name: a role of this organization, otherwise a tenant role
+    roles:
+      - name: member
+        permissions: [docs:read]
+    connections:
+      - slug: globex-sso
+        display_name: Globex SSO
+        enabled: false
+        config:
+          type: oidc
+          issuer: https://idp.globex.example.com
+          client_id: anvilid
+        secret: {env: GLOBEX_OIDC_SECRET}
+    domains:
+      - domain: globex.example.com
+        connection: globex-sso    # routing target, a connection of this organization
+        routing: true
+        allow_local_password: true
+    branding:
+      tokens: {radius_px: 4}
+      logo: {file: brand/globex.png}
+```
+
+Rules:
+
+- **Absent means unmanaged.** Without the `organizations` key, export, plan, apply and `--prune`
+  leave every organization and everything it owns alone. The tenant sections never contain
+  organization objects: `--prune` of the tenant's `roles` or `connections` never deletes an
+  organization role or connection, even one whose name equals a tenant role being pruned.
+- **Organizations are never deleted by a document** in rc.4. An organization missing from the
+  list (or an empty list) is kept; delete organizations through the admin API or the console
+  (that removes their members and links too).
+- **Inside a listed organization**, roles, connections, domain claims and branding that its entry
+  no longer lists are deletes, performed only with `--prune` (`- organization role
+  globex/member (prune only)`). Plan keys are `{org}/{name}`.
+- **Runtime data is never part of the document**: members, invitations, identity links and the
+  roles assigned within the organization. The export writes none of them and applying never
+  changes them.
+- **A document never marks a domain verified.** A new domain claim is pending, with a fresh DNS
+  token that the console or the admin API shows. `routing: true` and `allow_local_password:
+  false` take effect only once the domain was verified through DNS: until then the claim keeps its
+  stored routing settings (a new claim: routing off, passwords allowed) and the plan shows no
+  change for them. Apply the document again after verification to turn routing on. A document
+  with any verification key (`verified`, `status`, `token`, `verified_at`, ...) is refused.
+- **Connections** are OIDC, or SAML while the operator flag `saml_experimental` is on (creating or
+  changing a SAML connection with the flag off is refused; a SAML connection has no secret).
+  Their secrets are write-only like every other secret (`{configured: true}` in an export).
+  Enabling one follows the same rule as everywhere: it must be complete, and a generic OIDC
+  issuer must pass discovery.
+- **One slug namespace**: tenant and organization connections share slugs. A slug used twice in
+  the document, or by a stored connection of the tenant or of another organization, is refused
+  by path (`organizations[0].connections[0].slug`), as is a tenant connection reusing an
+  organization connection's slug (`connections[i].slug`).
+- **Not for the system tenant**: a system tenant document with `organizations` (even an empty
+  list) is refused.
 
 The client `organization` field is part of the document and round-trips like every other client
 option:
@@ -196,8 +293,8 @@ connection's `config`, unknown keys are ignored, like the admin API does.
 
 ## Secrets
 
-Secret fields are `clients[].secret`, `connections[].secret`, `webhooks[].secret` and
-`smtp.password`. An export never contains a secret, a secret hash or sealed bytes; it writes
+Secret fields are `clients[].secret`, `connections[].secret`,
+`organizations[].connections[].secret`, `webhooks[].secret` and `smtp.password`. An export never contains a secret, a secret hash or sealed bytes; it writes
 `{configured: true}` (a secret is stored) or `{configured: false}`.
 
 | Form | Meaning |
@@ -271,7 +368,8 @@ Secret changes are reported without values. An applied document plans as `No cha
 Objects that exist but are missing from the document are listed as deletes and only removed with
 `--prune` (API: `?prune=true`). Without it they stay, so a partial document never removes
 anything. Deleting a client also revokes its tokens; deleting branding also drops the scope's logo
-reference; deleting a role removes its assignments.
+reference; deleting a role removes its assignments. Organizations are never pruned; see
+[Organizations](#organizations-rc4) for what prune does inside a listed organization.
 
 ## Validation and the system tenant
 
@@ -298,7 +396,8 @@ explicitly, and the audit event records it.
 ## Idempotency, ordering and partial failures
 
 Apply writes through the same services as the admin API, in dependency order: tenant settings,
-roles, attributes, connections, clients, branding, email templates and SMTP (then the settings
+roles, attributes, connections, organizations (each with its roles, connections, domain claims,
+default roles and branding), clients, branding, email templates and SMTP (then the settings
 that need SMTP, such as sign-in by email), webhooks. Each write is audited by its service as
 usual, and a final `tenant_config_applied` event records the counts of creates, updates and
 deletes (no names, no values). Before writing, the document is normalized the way the services
@@ -314,7 +413,9 @@ plans against the new state and completes the remaining changes.
 
 - Plan and apply over HTTP (`POST /api/admin/v1/tenants/{slug}/config/plan` and `.../apply`)
   accept documents up to 1 MiB and answer `413` above that; every other admin API route keeps the
-  64 KiB limit. The CLI reads the file directly and has no HTTP limit.
+  64 KiB limit. The CLI reads the file directly and has no HTTP limit (use it for documents with
+  several inline logos).
+- Logos: at most 256 KiB each (about 350 KB as base64), PNG, JPEG or WebP.
 - Plan and apply check the DCR and CIMD settings with the same rules as the tenant API: allow-list
   hosts are host names or IP literals, at most 100 per list and no duplicates; at most 100 allowed
   scopes and resources; no `admin` / `admin:*` scope; `dcr.max_clients` at most 1000000; CIMD

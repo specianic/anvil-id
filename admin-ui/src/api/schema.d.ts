@@ -1894,12 +1894,14 @@ export interface components {
             fields: components["schemas"]["ConfigFieldDiff"][];
             /**
              * @description The natural key (`client_id`, slug, name, template kind, `(tenant)` for tenant-wide
-             *     branding, `smtp`).
+             *     branding, `smtp`; organization objects `{org slug}/{name}`, organization and its branding
+             *     the org slug).
              */
             key: string;
             /**
              * @description `tenant`, `client`, `connection`, `branding`, `role`, `attribute`, `email_template`,
-             *     `smtp` or `webhook`.
+             *     `smtp`, `webhook`, `organization`, `org_role`, `org_connection`, `org_domain` or
+             *     `org_branding`.
              */
             kind: string;
         };
@@ -5703,7 +5705,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Validation failed (also: a SAML connection, which belongs to an organization) */
+            /** @description Validation failed (also: a SAML connection, which belongs to an organization; enabling an incomplete connection, or a generic OIDC connection whose issuer fails discovery, is refused) */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -5888,7 +5890,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Validation failed */
+            /** @description Validation failed (also: enabling an incomplete connection, or a generic OIDC connection whose issuer fails discovery, is refused) */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -7320,7 +7322,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Validation failed (also: a kind other than OIDC or SAML) */
+            /** @description Validation failed (also: a kind other than OIDC or SAML; enabling an incomplete connection, or a generic OIDC connection whose issuer fails discovery, is refused) */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -7558,7 +7560,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Validation failed */
+            /** @description Validation failed (also: enabling an incomplete connection, or a generic OIDC connection whose issuer fails discovery, is refused) */
             422: {
                 headers: {
                     [name: string]: unknown;

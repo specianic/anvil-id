@@ -3366,7 +3366,7 @@
             }
           },
           "422": {
-            "description": "Validation failed (also: a SAML connection, which belongs to an organization)",
+            "description": "Validation failed (also: a SAML connection, which belongs to an organization; enabling an incomplete connection, or a generic OIDC connection whose issuer fails discovery, is refused)",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -3657,7 +3657,7 @@
             }
           },
           "422": {
-            "description": "Validation failed",
+            "description": "Validation failed (also: enabling an incomplete connection, or a generic OIDC connection whose issuer fails discovery, is refused)",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -5938,7 +5938,7 @@
             }
           },
           "422": {
-            "description": "Validation failed (also: a kind other than OIDC or SAML)",
+            "description": "Validation failed (also: a kind other than OIDC or SAML; enabling an incomplete connection, or a generic OIDC connection whose issuer fails discovery, is refused)",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -6339,7 +6339,7 @@
             }
           },
           "422": {
-            "description": "Validation failed",
+            "description": "Validation failed (also: enabling an incomplete connection, or a generic OIDC connection whose issuer fails discovery, is refused)",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -13730,11 +13730,11 @@
           },
           "key": {
             "type": "string",
-            "description": "The natural key (`client_id`, slug, name, template kind, `(tenant)` for tenant-wide\nbranding, `smtp`)."
+            "description": "The natural key (`client_id`, slug, name, template kind, `(tenant)` for tenant-wide\nbranding, `smtp`; organization objects `{org slug}/{name}`, organization and its branding\nthe org slug)."
           },
           "kind": {
             "type": "string",
-            "description": "`tenant`, `client`, `connection`, `branding`, `role`, `attribute`, `email_template`,\n`smtp` or `webhook`."
+            "description": "`tenant`, `client`, `connection`, `branding`, `role`, `attribute`, `email_template`,\n`smtp`, `webhook`, `organization`, `org_role`, `org_connection`, `org_domain` or\n`org_branding`."
           }
         }
       },
