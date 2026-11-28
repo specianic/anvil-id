@@ -169,12 +169,12 @@ pub struct Client {
     /// request plus PKCE, receiving the code as JSON (decision Q6). Never set for DCR or CIMD
     /// clients. Default false.
     pub headless_native: bool,
-    /// OIDC `client_uri`: the app's home page. Rendered as "Back to <app>" only for static
+    /// OIDC `client_uri`: the app's home page. Rendered as "Back to &lt;app&gt;" only for static
     /// clients (DCR/CIMD values are third-party controlled and only stored); never taken from a
     /// request. `None` for every client created before 1.0.0-rc.4.
     pub client_uri: Option<String>,
     /// OIDC `initiate_login_uri`: starts a sign-in at the app (preferred over `client_uri` for
-    /// "Back to <app>"). Same trust rules as `client_uri`.
+    /// "Back to &lt;app&gt;"). Same trust rules as `client_uri`.
     pub initiate_login_uri: Option<String>,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,

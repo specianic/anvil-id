@@ -34,6 +34,9 @@ pub async fn start(max_connections: u32) -> (ContainerAsync<Postgres>, String) {
             format!("max_connections={max_connections}"),
         ])
         .with_mount(Mount::tmpfs_mount("/var/lib/postgresql"))
+        // Docker's default 64 MiB /dev/shm is exhausted when hundreds of test databases run in
+        // parallel on one server (error 53100, "could not resize shared memory segment").
+        .with_shm_size(256 * 1024 * 1024)
         .with_label(LABEL, "postgres")
         .with_label(PID_LABEL, std::process::id().to_string())
         .start()

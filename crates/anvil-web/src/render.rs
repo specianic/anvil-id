@@ -168,7 +168,7 @@ pub struct PageLinks {
     /// that signs out.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sign_out: Option<String>,
-    /// "Continue to <app>" of a live authorization request (`#link-continue`).
+    /// "Continue to &lt;app&gt;" of a live authorization request (`#link-continue`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub continue_to: Option<ContinueLink>,
     /// The admin console (`#link-console`, system tenant only).
@@ -176,7 +176,7 @@ pub struct PageLinks {
     pub console: Option<String>,
 }
 
-/// The "Continue to <app>" link of a page.
+/// The "Continue to &lt;app&gt;" link of a page.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ContinueLink {
     pub href: String,

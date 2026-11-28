@@ -5,7 +5,7 @@
 //!
 //! A link sent by a registration that started from an app carries its `request=`: when it is
 //! still a live request of this tenant, the flow continues it and `verification.done` offers
-//! "Continue to <app>". A stale request is dropped silently (the token is valid on its own).
+//! "Continue to &lt;app&gt;". A stale request is dropped silently (the token is valid on its own).
 
 use anvil_core::flow::engine::FlowInput;
 use anvil_core::model::FlowKind;

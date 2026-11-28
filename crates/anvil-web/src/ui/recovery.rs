@@ -6,7 +6,7 @@
 //!
 //! The page keeps the authorization request it was opened for (`request=`, also on the emailed
 //! link of a recovery started from an app's sign-in): after the reset, `recovery.done` offers
-//! "Continue to <app>" while the request is live. Without a token, a `request=` that is not a live
+//! "Continue to &lt;app&gt;" while the request is live. Without a token, a `request=` that is not a live
 //! request of this tenant answers the `flow_expired` page; with a token the reset still works
 //! (the token is valid on its own) and the stale request is simply dropped.
 

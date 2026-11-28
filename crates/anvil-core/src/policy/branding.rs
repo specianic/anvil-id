@@ -431,7 +431,7 @@ fn check_contrast(
 /// for text/bg, text/surface and primary_text/primary in the light set and (when present) the dark
 /// set. A pair is checked when either of its colours is customised; the other comes from the default
 /// palette of that scheme, except that a lone `primary` or `primary_text` is paired with the legacy
-/// button colour the stylesheet emits for it ([`LEGACY_BUTTON_LIGHT`]). Below 3:1 is an error, below
+/// button colour the stylesheet emits for it (`LEGACY_BUTTON_LIGHT`). Below 3:1 is an error, below
 /// 4.5:1 a warning.
 pub fn validate_tokens(t: &ThemeTokens) -> Result<Vec<ThemeWarning>, ThemeError> {
     check_syntax(t)?;
@@ -800,8 +800,8 @@ fn hex(bytes: &[u8]) -> String {
 /// Derived variables keep a customer's look on the default theme, whose links, focus ring and cards
 /// use their own variables: a customised `primary` also sets `--anvil-link` and (unless `focus` is
 /// customised) `--anvil-focus`; `radius_px` also sets `--anvil-card-radius`; a lone `primary` or
-/// `primary_text` gets the legacy partner colour ([`LEGACY_BUTTON_LIGHT`], dark
-/// [`LEGACY_BUTTON_DARK`]) so the button pair stays the one that was validated.
+/// `primary_text` gets the legacy partner colour (`LEGACY_BUTTON_LIGHT`, dark
+/// `LEGACY_BUTTON_DARK`) so the button pair stays the one that was validated.
 ///
 /// The input is re-checked (syntax and custom CSS, not contrast) so stored data can never break out of
 /// its declaration. Same input, same bytes, same hash.

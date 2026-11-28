@@ -1,7 +1,7 @@
 //! End-user flow navigation: the single place that turns flow context into links (U-H1).
 //!
 //! Every link an end-user flow page shows onward (Create account, Sign in, Forgot password, Use
-//! another way, Start over, Cancel, "Continue to <app>", the signed-in page's account and
+//! another way, Start over, Cancel, "Continue to &lt;app&gt;", the signed-in page's account and
 //! sign-out links) is built here by [`NavContext`]. Handlers never format `/ui/login`,
 //! `/ui/registration`, `/ui/recovery` or `/ui/verification` URLs themselves.
 //!
@@ -30,7 +30,7 @@ use crate::render::{ContinueLink, PageLinks};
 use crate::state::AppState;
 use crate::tenant::ResolvedTenant;
 
-/// Message key of the "Continue to <app>" link (argument `app`).
+/// Message key of the "Continue to &lt;app&gt;" link (argument `app`).
 pub(crate) const CONTINUE_KEY: &str = "nav.continue_to";
 /// Message key of the account link.
 pub(crate) const ACCOUNT_KEY: &str = "nav.go_to_account";
@@ -114,7 +114,7 @@ pub(crate) enum StaleRequest {
 pub(crate) struct NavLink {
     pub href: String,
     pub label_key: &'static str,
-    /// The application named by a "Continue to <app>" link.
+    /// The application named by a "Continue to &lt;app&gt;" link.
     pub app_name: Option<String>,
     /// Render as a form posting to `href` (sign-out), not as a link.
     pub method_post: bool,
