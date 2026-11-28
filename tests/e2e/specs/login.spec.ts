@@ -1,5 +1,6 @@
 // Hosted login page: a wrong password gets the generic message, and the page loads nothing from
-// any host other than AnvilID itself.
+// any host other than AnvilID itself. The first field has the initial focus, an empty submit
+// asks for the address, and with email sign-in on there is one address field (plan 07.1-13).
 //
 // Env: ANVIL_URL, SETUP_URL, E2E_STATE_FILE (see tests/e2e/run.sh).
 
@@ -14,6 +15,7 @@ import {
   sharedManagementCredential,
   type ManagementCredential,
 } from '../lib/anvil';
+import { createEmailSignInTenant, deleteTenant, requestEmailCode } from '../lib/email-code';
 
 let creds: ManagementCredential;
 
@@ -62,4 +64,37 @@ test('wrong password shows the generic message and the page makes no external re
   await expect(page.locator('#message-body')).toHaveAttribute('data-message-key', 'login.signed_in');
 
   expect(foreign, 'requests to hosts other than AnvilID').toEqual([]);
+});
+
+test('sign-in page: initial focus, empty submit asks for the address, one email field', async ({
+  page,
+  browser,
+}) => {
+  await page.goto(`${anvilUrl()}/ui/login`);
+  // U-L2: the first field has the focus.
+  await expect(page.locator('#identifier')).toBeFocused();
+
+  // U-L1: an empty submit asks for the address instead of saying "incorrect".
+  await page.locator('#login-submit').click();
+  await expect(page).toHaveURL(/\/ui\/login\?flow=/);
+  await expect(page.locator('[data-message-key="signin.identifier_required"]')).toBeVisible();
+  await expect(page.locator('[data-message-key="login.invalid_credentials"]')).toHaveCount(0);
+
+  // U-M7: with email sign-in on, one address field serves both the password and the email code.
+  const tok = await adminToken(await sharedManagementCredential(browser));
+  const tenant = await createEmailSignInTenant(tok, 'login-onefield');
+  try {
+    const signIn = await browser.newPage();
+    try {
+      await signIn.goto(`${tenant.base}/ui/login`);
+      await expect(signIn.locator('input[type=email]')).toHaveCount(1);
+      await expect(signIn.locator('#email-code-request-submit')).toBeVisible();
+      await expect(signIn.locator('#email-code-email')).toHaveCount(0);
+      await requestEmailCode(signIn, randomEmail('onefield'));
+    } finally {
+      await signIn.close();
+    }
+  } finally {
+    await deleteTenant(tok, tenant.slug);
+  }
 });

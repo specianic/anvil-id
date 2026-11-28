@@ -121,8 +121,19 @@ test('confirmation: auto_link off asks for the password, then links', async ({ p
     await startGithubSignIn(page, rp, tenant, mock);
     await expect(page).toHaveURL((url) => url.origin === new URL(tenantIssuer(tenant)).origin);
     await expect(page.locator('form#upstream-link')).toBeVisible();
-    await expect(page.locator('[data-message-key="upstream.link_explain"]')).toBeVisible();
     await expect(page.locator('#link-cancel')).toBeVisible();
+    // U-M9: the copy and the address field agree. Revealed account: "an account with this email
+    // address already exists" and the address prefilled; otherwise neither.
+    const revealed = await page.locator('[data-message-key="upstream.link_explain"]').count();
+    if (revealed) {
+      await expect(page.locator('#identifier')).toHaveValue(user.email);
+    } else {
+      await expect(page.locator('[data-message-key="upstream.link_explain_hidden"]')).toBeVisible();
+      await expect(page.locator('#identifier')).toHaveValue('');
+      await expect(page.locator('main')).not.toContainText('already exists');
+    }
+    // Cancel keeps the app's authorization request.
+    expect(await page.locator('#link-cancel').getAttribute('href')).toContain('request=');
     await expectNoA11yViolations(page);
     // Nothing is linked and no second account exists before the password proof.
     expect(await linkModes(tok, tenant)).toEqual([]);
@@ -135,6 +146,12 @@ test('confirmation: auto_link off asks for the password, then links', async ({ p
     await page.locator('#upstream-link-submit').click();
     await expect(page.locator('form#upstream-link')).toBeVisible();
     await expect(page.locator('[data-message-key="login.invalid_credentials"]')).toBeVisible();
+    // Post/Redirect/Get: the error is a GET of the flow (reload-safe), Cancel still keeps the
+    // request.
+    await expect(page).toHaveURL(/\/ui\/login\?flow=/);
+    await page.reload();
+    await expect(page.locator('form#upstream-link')).toBeVisible();
+    expect(await page.locator('#link-cancel').getAttribute('href')).toContain('request=');
     expect(await linkModes(tok, tenant)).toEqual([]);
   });
 

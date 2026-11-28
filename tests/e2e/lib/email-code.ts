@@ -5,9 +5,8 @@
 // SMTP; the e2e instance has ANVILID_SMTP_URL pointing at Mailpit), so the shared default tenant's
 // sign-in page (keyboard and a11y specs) is not changed. The tenant is deleted afterwards.
 //
-// Selectors (themes/default/templates/login.html, email_code.html, magic_link.html): disclosure
-// `email-code-toggle`, form `email-code-request`, input `email-code-email`, button
-// `email-code-request-submit`; "Check your email" form `email-code` (input `code`, button
+// Selectors (themes/default/templates/login.html, email_code.html, magic_link.html): the sign-in
+// field `identifier` and the button `email-code-request-submit` in the sign-in form; "Check your email" form `email-code` (input `code`, button
 // `email-code-submit`); magic link form `magic-link` (button `magic-link-submit`).
 
 import { expect, type Page } from '@playwright/test';
@@ -65,21 +64,19 @@ export async function deleteTenant(token: string, slug: string): Promise<void> {
 }
 
 /**
- * On the tenant's sign-in page (already open): opens "Email me a sign-in code", submits `email`
- * and waits for the "Check your email" page. Returns the confirmation text shown there (the same
- * for every address). `beforeSubmit` runs with the disclosure open (e.g. an axe audit).
+ * On the tenant's sign-in page (already open): enters `email` in the sign-in field, presses "Email
+ * me a way to sign in" and waits for the "Check your email" page. Returns the confirmation text
+ * shown there (the same for every address). `beforeSubmit` runs before the button is pressed
+ * (e.g. an axe audit).
  */
 export async function requestEmailCode(
   page: Page,
   email: string,
   beforeSubmit?: () => Promise<void>,
 ): Promise<string> {
-  const toggle = page.locator('#email-code-toggle');
-  await expect(toggle).toBeVisible();
-  if ((await toggle.getAttribute('open')) === null) {
-    await toggle.locator('summary').click();
-  }
-  const input = page.locator('#email-code-email');
+  // One address field (U-M7, plan 07.1-13): the sign-in field `identifier`; the button
+  // `email-code-request-submit` in the sign-in form posts it to the email-code route.
+  const input = page.locator('#identifier');
   await expect(input).toBeVisible();
   await input.fill(email);
   if (beforeSubmit) await beforeSubmit();

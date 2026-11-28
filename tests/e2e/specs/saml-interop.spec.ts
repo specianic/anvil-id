@@ -490,7 +490,7 @@ for (const idp of IDPS) {
                 await p.locator('#code').fill(totp(secret));
                 await p.locator('#mfa-enroll-submit').click();
                 await expect(p.locator('#recovery-codes li')).toHaveCount(10);
-                await p.locator('#link-continue').click();
+                await p.locator('#recovery-codes-confirm-submit').click();
               },
             });
             if (!tokens.id_token) throw new Error('no id_token');

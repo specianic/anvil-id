@@ -118,6 +118,8 @@ async function expectEnrolmentPage(page: Page): Promise<void> {
   await expect(page).toHaveURL((url) => url.href.startsWith(anvilUrl()));
   await expect(page.locator('form#mfa-enroll')).toBeVisible();
   await expect(page.locator('#mfa-enroll-required')).toBeVisible();
+  // U-L3: the tenant policy speaks of "this service", not of an organisation.
+  await expect(page.locator('#mfa-enroll-required')).not.toContainText(/organi[sz]ation/i);
   await expect(page.locator('#totp-secret')).toBeVisible();
 }
 
@@ -157,10 +159,11 @@ test('policy required: enrolment during sign-in, then the second factor on the n
     await page.locator('#code').fill(totp(secret, now));
     await page.locator('#mfa-enroll-submit').click();
 
-    // Recovery codes, shown once, then on to the RP.
+    // Recovery codes on their own page (GET, reload-safe), then on to the RP.
+    await expect(page).toHaveURL(/\/ui\/login\/recovery-codes\?flow=/);
     await expect(page.locator('#recovery-codes li')).toHaveCount(10);
     await expectNoA11yViolations(page);
-    await page.locator('#link-continue').click();
+    await page.locator('#recovery-codes-confirm-submit').click();
     await expectAtRp(page, rp.base, user.email);
 
     // The next sign-in asks for the enrolled factor (code of the next step: the enrolment step is

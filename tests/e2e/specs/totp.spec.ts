@@ -19,6 +19,7 @@ import {
   type ManagementCredential,
 } from '../lib/anvil';
 import { auditEvents, enrolTotp, signInDirect, startSampleRp, type SampleRp } from '../lib/account';
+import { withTenantSettings } from '../lib/admin';
 import { latestMessageTo } from '../lib/mailpit';
 import { totp } from '../lib/totp';
 
@@ -160,3 +161,45 @@ async function signInDirectWithTotp(
   await submitCode(page, totp(secret, step * 30));
   await expect(page.locator('#message-body')).toHaveAttribute('data-message-key', 'login.signed_in');
 }
+
+test('required enrolment at sign-in: recovery codes survive a reload, then the RP gets a code', async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  const token = await adminToken(creds);
+  const email = randomEmail('totp-codes');
+  const password = randomPassword();
+  await createUser(token, { email, password, email_verified: true });
+
+  await withTenantSettings(token, { mfa_policy: 'required' }, async () => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.context().clearCookies();
+    await page.goto(`${rp.base}/login`);
+    await expect(page).toHaveURL((url) => url.href.startsWith(anvilUrl()));
+    await login(page, email, password);
+    await expect(page.locator('form#mfa-enroll')).toBeVisible();
+
+    // U-M13: an otpauth:// link next to the QR code, visible on a phone-sized screen.
+    const otpauth = page.locator('#link-otpauth');
+    await expect(otpauth).toBeVisible();
+    expect(await otpauth.getAttribute('href')).toMatch(/^otpauth:\/\/totp\//);
+
+    const secret = ((await page.locator('#totp-secret').textContent()) ?? '').replace(/\s+/g, '');
+    await page.locator('#code').fill(totp(secret));
+    await page.locator('#mfa-enroll-submit').click();
+
+    // U-H7: the codes are a GET page of their own; a reload shows the same codes.
+    await expect(page).toHaveURL(/\/ui\/login\/recovery-codes\?flow=/);
+    const codes = page.locator('#recovery-codes li');
+    await expect(codes).toHaveCount(10);
+    const shown = await codes.allTextContents();
+    await expectNoA11yViolations(page);
+    await page.reload();
+    await expect(codes).toHaveCount(10);
+    expect(await codes.allTextContents()).toEqual(shown);
+
+    // "I have saved them": on to the RP, signed in.
+    await page.locator('#recovery-codes-confirm-submit').click();
+    await expectSignedIn(page, email);
+  });
+});
