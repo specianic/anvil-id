@@ -678,10 +678,28 @@ pub async fn link_choices(
     })
 }
 
-/// A connection that can confirm a pending link: enabled, and started by this module (SAML has
-/// its own start).
+/// A connection that can confirm a pending link: offerable (enabled and complete,
+/// [`Connection::is_offerable`]), and started by this module (SAML has its own start).
 fn confirmable(c: &Connection) -> bool {
-    c.enabled && !matches!(c.config, ConnectionConfig::Saml(_))
+    c.is_offerable() && !matches!(c.config, ConnectionConfig::Saml(_))
+}
+
+/// The connections the tenant's sign-in page offers as "Continue with ..." buttons: tenant-level
+/// (organization connections are reached through home-realm discovery or the `organization`
+/// parameter), and offerable ([`Connection::is_offerable`]: enabled and complete, so a row
+/// enabled before completeness was checked never publishes a button that cannot work). Slug
+/// order. The one listing the sign-in page uses.
+pub async fn sign_in_connections(
+    storage: &dyn Storage,
+    tenant: TenantId,
+) -> Result<Vec<Connection>, CoreError> {
+    Ok(storage
+        .connections()
+        .list(tenant)
+        .await?
+        .into_iter()
+        .filter(|c| c.org_id.is_none() && c.is_offerable())
+        .collect())
 }
 
 /// Orchestrates upstream sign-in and linking over the ports.
@@ -734,6 +752,8 @@ impl UpstreamService<'_> {
             // Only used here to open connection secrets; never administers SAML connections.
             saml_enabled: false,
             saml_xml: None,
+            // Never enables connections.
+            upstream: None,
         }
     }
 

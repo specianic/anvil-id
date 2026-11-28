@@ -35,6 +35,7 @@ use anvil_core::model::RequestContext;
 use anvil_core::service::account::SettingsBinding;
 use anvil_core::service::upstream::{
     CallbackParams, CallbackResult, StartResult, UpstreamOutcome, UpstreamService, link_choices,
+    sign_in_connections,
 };
 use axum::Router;
 use axum::extract::rejection::{FormRejection, QueryRejection};
@@ -94,8 +95,9 @@ pub(super) struct SignInChoices {
 
 /// The upstream choices of a bound sign-in form:
 ///
-/// - the combined form and the email-first page (`login-identify`): the tenant's enabled
-///   connections (not org connections);
+/// - the combined form and the email-first page (`login-identify`): the tenant's offerable
+///   (enabled and complete) connections, not org connections
+///   (`anvil_core::service::upstream::sign_in_connections`);
 /// - the link confirmation page (`upstream-link`), "Continue with … to confirm"
 ///   (`anvil_core::service::upstream::link_choices`): the revealed candidate's enabled linked
 ///   connections, or, when the matching account may not be revealed, the tenant's connections
@@ -140,15 +142,12 @@ pub(super) async fn upstream_buttons(
     if form.id != "login" && form.id != IDENTIFY_FORM_ID {
         return SignInChoices::default();
     }
-    match state.storage().connections().list(tenant.tenant.id).await {
+    // Tenant-level, enabled and complete connections only (`Connection::is_offerable`): org
+    // connections (enterprise SSO) are reached through home-realm discovery or the
+    // `organization` parameter, and an incomplete row never publishes a broken button.
+    match sign_in_connections(state.storage(), tenant.tenant.id).await {
         Ok(list) => SignInChoices {
-            buttons: list
-                .into_iter()
-                // Org connections (enterprise SSO) are reached through home-realm discovery or
-                // the `organization` parameter, never as buttons on the tenant's sign-in page.
-                .filter(|c| c.enabled && c.org_id.is_none())
-                .map(button)
-                .collect(),
+            buttons: list.into_iter().map(button).collect(),
             link_email_code: false,
             link_email_hidden: false,
         },

@@ -33,6 +33,16 @@
 //! operator flag `saml_experimental` is on: creating one, and every change to one except
 //! disabling it, answers `FeatureDisabled("saml")` (403) when the flag is off. Deleting stays
 //! possible. A SAML connection has no client secret.
+//!
+//! **Enabling** (decision 5 of 07.1): a connection can always be created, edited, disabled and
+//! deleted while it is disabled, but turning it on (create with `enabled = true`, a patch with
+//! `enabled = true`, or a config change of an enabled connection) is refused with 422 naming the
+//! first missing field ([`ConnectionConfig::missing_for_enable`]: client id, secret, issuer or
+//! endpoints, SAML entity id / SSO URL / certificate) until it is complete. For generic OIDC the
+//! issuer must also pass discovery: `{issuer}/.well-known/openid-configuration` is fetched
+//! through the [`UpstreamClient`] port (the SSRF-guarded outbound adapter, which also checks the
+//! document's `issuer`), and the refusal names the problem without echoing fetched content. The
+//! check runs before anything is written, for tenant and organization connections alike.
 
 use std::sync::Arc;
 
@@ -50,7 +60,7 @@ use crate::model::{
     RequestContext, SamlConfig, Scope, SocialConfig, SocialProvider, TenantId, connection_aad,
     truncate_to_ms,
 };
-use crate::ports::{SamlXml, Storage, StorageError};
+use crate::ports::{SamlXml, Storage, StorageError, UpstreamClient, UpstreamError};
 use crate::service::audit::AuditService;
 use crate::service::tenant::validate_display_name;
 use crate::upstream::providers;
@@ -636,6 +646,74 @@ pub struct ConnectionService {
     /// SAML is never configured (CLI tenant config apply, the upstream sign-in flow opening
     /// secrets).
     pub saml_xml: Option<Arc<dyn SamlXml>>,
+    /// Checks a generic OIDC issuer (discovery) before a connection is enabled: the
+    /// SSRF-guarded upstream adapter. `None` where connections are never enabled (the upstream
+    /// sign-in flow opening secrets); enabling an OIDC connection then fails (`Internal`).
+    pub upstream: Option<Arc<dyn UpstreamClient>>,
+}
+
+/// The refusal for a field [`ConnectionConfig::missing_for_enable`] reported.
+fn missing_for_enable_error(field: &'static str) -> CoreError {
+    let message = if field == "secret" {
+        "a client secret is required before the connection can be enabled; set the secret, \
+         then enable the connection"
+    } else {
+        "is required before the connection can be enabled; save the connection disabled and \
+         enable it once it is complete"
+    };
+    invalid(field, message)
+}
+
+/// The refusal for a failed issuer discovery. Names the problem only: never the fetched body,
+/// a resolved address or a redirect target.
+fn issuer_check_error(e: &UpstreamError) -> CoreError {
+    let message = match e {
+        UpstreamError::Blocked => "the issuer's address is not allowed for outbound requests \
+             (private, loopback or reserved network); the connection cannot be enabled"
+            .to_owned(),
+        UpstreamError::Network | UpstreamError::Timeout => {
+            "the issuer could not be reached to fetch its discovery document \
+             (/.well-known/openid-configuration); the connection cannot be enabled"
+                .to_owned()
+        }
+        UpstreamError::Status(code) => format!(
+            "the issuer's discovery document (/.well-known/openid-configuration) answered HTTP \
+             {code}; the connection cannot be enabled"
+        ),
+        UpstreamError::TooLarge => "the issuer's discovery document is too large; the \
+             connection cannot be enabled"
+            .to_owned(),
+        UpstreamError::InvalidResponse("issuer mismatch") => "the issuer named in the discovery \
+             document does not equal the configured issuer; the connection cannot be enabled"
+            .to_owned(),
+        UpstreamError::InvalidResponse(reason) => format!(
+            "the issuer's discovery document is not usable ({reason}); the connection cannot be \
+             enabled"
+        ),
+    };
+    invalid("config.issuer", message)
+}
+
+/// Refuses to enable a connection with `config` (`has_secret`: a secret is stored or supplied)
+/// unless it is complete and, for generic OIDC, its issuer passes discovery through `upstream`
+/// (the SSRF-guarded port; `None` = no way to check, `Internal`). See the module docs.
+pub async fn check_enable(
+    config: &ConnectionConfig,
+    has_secret: bool,
+    upstream: Option<&dyn UpstreamClient>,
+) -> Result<(), CoreError> {
+    if let Some(field) = config.missing_for_enable(has_secret).first() {
+        return Err(missing_for_enable_error(field));
+    }
+    if let ConnectionConfig::Oidc(o) = config {
+        let client = upstream
+            .ok_or_else(|| CoreError::Internal("no upstream client to check the issuer".into()))?;
+        client
+            .metadata(&o.issuer)
+            .await
+            .map_err(|e| issuer_check_error(&e))?;
+    }
+    Ok(())
 }
 
 /// Whether a patch only disables the connection (allowed for SAML with the flag off, so an
@@ -688,6 +766,15 @@ impl ConnectionService {
         } else {
             Err(CoreError::FeatureDisabled("saml"))
         }
+    }
+
+    /// [`check_enable`] with this service's upstream port.
+    pub async fn check_enable(
+        &self,
+        config: &ConnectionConfig,
+        has_secret: bool,
+    ) -> Result<(), CoreError> {
+        check_enable(config, has_secret, self.upstream.as_deref()).await
     }
 
     /// Every connection of the tenant (tenant-level and organizations'), in slug order.
@@ -779,6 +866,10 @@ impl ConnectionService {
         if new.config.kind() == ConnectionKind::Saml {
             self.require_saml()?;
         }
+        if new.enabled {
+            self.check_enable(&new.config, new.secret_enc.is_some())
+                .await?;
+        }
         let conn = self
             .storage
             .connections()
@@ -837,6 +928,12 @@ impl ConnectionService {
             self.require_saml()?;
         }
         let (update, fields, risk) = plan_update(&current, patch)?;
+        let enabled_after = update.enabled.unwrap_or(current.enabled);
+        if enabled_after && (update.enabled == Some(true) || update.config.is_some()) {
+            let config = update.config.as_ref().unwrap_or(&current.config);
+            self.check_enable(config, current.secret_enc.is_some())
+                .await?;
+        }
         let conn = self
             .storage
             .connections()
@@ -1643,5 +1740,108 @@ mod tests {
             display_name: Some("x".into()),
             ..off
         }));
+    }
+
+    /// A discovery port answering with a fixed result (test double; the real adapter is tested
+    /// in anvil-web's `security_connection_enable`).
+    struct FixedDiscovery(Result<(), UpstreamError>, std::sync::Mutex<Vec<String>>);
+
+    #[async_trait::async_trait]
+    impl UpstreamClient for FixedDiscovery {
+        async fn metadata(
+            &self,
+            issuer: &str,
+        ) -> Result<crate::ports::ProviderMetadata, UpstreamError> {
+            self.1.lock().unwrap().push(issuer.to_owned());
+            self.0.clone().map(|()| crate::ports::ProviderMetadata {
+                issuer: issuer.to_owned(),
+                authorization_endpoint: format!("{issuer}/authorize"),
+                token_endpoint: format!("{issuer}/token"),
+                userinfo_endpoint: None,
+                jwks_uri: format!("{issuer}/jwks"),
+                id_token_signing_alg_values_supported: vec!["RS256".into()],
+                authorization_response_iss_parameter_supported: false,
+                code_challenge_methods_supported: vec!["S256".into()],
+            })
+        }
+        async fn jwks(&self, _: &str, _: bool) -> Result<anvil_jose::Jwks, UpstreamError> {
+            Err(UpstreamError::Network)
+        }
+        async fn exchange_code(
+            &self,
+            _: &crate::ports::CodeExchange,
+        ) -> Result<crate::ports::TokenSet, UpstreamError> {
+            Err(UpstreamError::Network)
+        }
+        async fn get_json(
+            &self,
+            _: &str,
+            _: &SecretString,
+            _: crate::ports::ApiProfile,
+        ) -> Result<serde_json::Value, UpstreamError> {
+            Err(UpstreamError::Network)
+        }
+    }
+
+    fn fixed(r: Result<(), UpstreamError>) -> FixedDiscovery {
+        FixedDiscovery(r, std::sync::Mutex::new(Vec::new()))
+    }
+
+    fn field_of(e: CoreError) -> (&'static str, String) {
+        match e {
+            CoreError::Validation { field, message } => (field, message),
+            other => panic!("expected a validation error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn enabling_needs_every_field_before_discovery_runs() {
+        let ok = fixed(Ok(()));
+        let cfg = oidc_config();
+        let (field, _) = field_of(check_enable(&cfg, false, Some(&ok)).await.unwrap_err());
+        assert_eq!(field, "secret");
+        assert!(
+            ok.1.lock().unwrap().is_empty(),
+            "an incomplete connection is refused before anything is fetched"
+        );
+        check_enable(&cfg, true, Some(&ok)).await.expect("complete");
+        assert_eq!(*ok.1.lock().unwrap(), ["https://idp.example.test"]);
+
+        // Kinds without discovery need no port; generic OIDC without one cannot be checked.
+        let google = ConnectionConfig::Social(social(SocialProvider::Google));
+        check_enable(&google, true, None).await.expect("google");
+        assert!(matches!(
+            check_enable(&cfg, true, None).await,
+            Err(CoreError::Internal(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn failed_discovery_refuses_with_the_issuer_field_and_no_fetched_content() {
+        let cfg = oidc_config();
+        for (err, needle) in [
+            (UpstreamError::Blocked, "not allowed"),
+            (UpstreamError::Network, "could not be reached"),
+            (UpstreamError::Timeout, "could not be reached"),
+            (UpstreamError::Status(404), "HTTP 404"),
+            (UpstreamError::TooLarge, "too large"),
+            (
+                UpstreamError::InvalidResponse("issuer mismatch"),
+                "does not equal",
+            ),
+            (
+                UpstreamError::InvalidResponse("malformed discovery document"),
+                "not usable",
+            ),
+        ] {
+            let (field, message) = field_of(
+                check_enable(&cfg, true, Some(&fixed(Err(err.clone()))))
+                    .await
+                    .unwrap_err(),
+            );
+            assert_eq!(field, "config.issuer", "{err:?}");
+            assert!(message.contains(needle), "{err:?}: {message}");
+            assert!(!message.contains("idp.example"), "{message}");
+        }
     }
 }

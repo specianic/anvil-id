@@ -65,10 +65,13 @@ fn issuer(app: &TestApp) -> String {
     anvil_core::service::logout::canonical_issuer(&app.config.public_url, &default_tenant(app))
 }
 
+/// A disabled org OIDC connection: enabling one fetches the issuer's discovery document (covered
+/// by `security_connection_enable.rs` against a local mock); these tests never go online.
 fn oidc_body(slug: &str) -> Value {
     json!({
         "slug": slug,
         "display_name": "Acme Entra",
+        "enabled": false,
         "config": {"type": "oidc", "issuer": "https://login.acme.test", "client_id": "acme-client"},
         "secret": SECRET,
     })
@@ -279,7 +282,7 @@ async fn org_connections_are_oidc_or_saml_and_share_the_slug_namespace() {
     assert_field_error(&resp, "config");
     // A tenant-level connection already holds the slug.
     let tenant_conn = json!({
-        "slug": "taken", "display_name": "Tenant OIDC",
+        "slug": "taken", "display_name": "Tenant OIDC", "enabled": false,
         "config": {"type": "oidc", "issuer": "https://idp.test", "client_id": "c"},
     });
     let admin = admin_token(&app, "admin:write").await;

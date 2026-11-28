@@ -197,6 +197,63 @@ impl ConnectionConfig {
         }
     }
 
+    /// Whether a connection of this config needs a client secret (Apple: the `.p8` key) before
+    /// it can be enabled. Every OAuth/OIDC kind does (the sign-in flow authenticates at the
+    /// provider's token endpoint with it); SAML has no OAuth client and no secret.
+    pub fn requires_secret(&self) -> bool {
+        !matches!(self, Self::Saml(_))
+    }
+
+    /// The fields (admin API paths) this config, with or without a stored secret, still lacks
+    /// before the connection can be enabled; empty = complete. The single definition of
+    /// completeness: enabling is refused while this is non-empty
+    /// (`service::connection`), and the sign-in page never offers such a connection
+    /// ([`Connection::is_offerable`]). Syntax is checked separately when the config is written.
+    pub fn missing_for_enable(&self, has_secret: bool) -> Vec<&'static str> {
+        let mut missing = Vec::new();
+        let mut need = |field: &'static str, value: &str| {
+            if value.trim().is_empty() {
+                missing.push(field);
+            }
+        };
+        match self {
+            Self::Social(s) => {
+                need("config.client_id", &s.client_id);
+                if s.provider == SocialProvider::Apple {
+                    match &s.apple {
+                        None => missing.push("config.apple"),
+                        Some(a) => {
+                            need("config.apple.team_id", &a.team_id);
+                            need("config.apple.key_id", &a.key_id);
+                        }
+                    }
+                }
+            }
+            Self::Oidc(o) => {
+                need("config.issuer", &o.issuer);
+                need("config.client_id", &o.client_id);
+            }
+            Self::Oauth2(o) => {
+                need("config.authorization_endpoint", &o.authorization_endpoint);
+                need("config.token_endpoint", &o.token_endpoint);
+                need("config.userinfo_endpoint", &o.userinfo_endpoint);
+                need("config.client_id", &o.client_id);
+                need("config.mapping.subject", &o.mapping.subject);
+            }
+            Self::Saml(c) => {
+                need("config.idp_entity_id", &c.idp_entity_id);
+                need("config.sso_url", &c.sso_url);
+                if c.signing_certs.iter().all(|pem| pem.trim().is_empty()) {
+                    missing.push("config.signing_certs");
+                }
+            }
+        }
+        if self.requires_secret() && !has_secret {
+            missing.push("secret");
+        }
+        missing
+    }
+
     /// The upstream OAuth `client_id`; `None` for SAML, which has no OAuth client.
     pub fn client_id(&self) -> Option<&str> {
         match self {
@@ -231,6 +288,18 @@ pub struct Connection {
 impl Connection {
     pub fn kind(&self) -> ConnectionKind {
         self.config.kind()
+    }
+
+    /// [`ConnectionConfig::missing_for_enable`] with this connection's stored secret.
+    pub fn missing_for_enable(&self) -> Vec<&'static str> {
+        self.config.missing_for_enable(self.secret_enc.is_some())
+    }
+
+    /// Whether a sign-in page may offer this connection: enabled and complete. Rows enabled
+    /// before enabling checked completeness (rc.3, e.g. without their secret) stay hidden until
+    /// they are completed, so they never publish a button that cannot work.
+    pub fn is_offerable(&self) -> bool {
+        self.enabled && self.missing_for_enable().is_empty()
     }
 }
 
@@ -396,6 +465,90 @@ mod tests {
         assert_eq!(&aad[..16], t.0.as_bytes());
         assert_eq!(&aad[16..], c.0.as_bytes());
         assert_ne!(aad, connection_aad(t, ConnectionId::new_v7()));
+    }
+
+    fn conn(config: ConnectionConfig, secret: bool, enabled: bool) -> Connection {
+        let now = OffsetDateTime::UNIX_EPOCH;
+        Connection {
+            id: ConnectionId::new_v7(),
+            tenant_id: TenantId::new_v7(),
+            org_id: None,
+            slug: "c".into(),
+            display_name: "C".into(),
+            enabled,
+            config,
+            secret_enc: secret.then(|| vec![1; 40]),
+            trust_email_verified: false,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn oidc_config(issuer: &str, client_id: &str) -> ConnectionConfig {
+        ConnectionConfig::Oidc(OidcConfig {
+            issuer: issuer.into(),
+            client_id: client_id.into(),
+            scopes: vec![],
+            use_pkce: true,
+            fetch_userinfo: false,
+        })
+    }
+
+    #[test]
+    fn missing_for_enable_names_each_absent_field() {
+        let complete = oidc_config("https://idp.example", "c");
+        assert!(complete.missing_for_enable(true).is_empty());
+        assert_eq!(complete.missing_for_enable(false), ["secret"]);
+        assert_eq!(
+            oidc_config(" ", "").missing_for_enable(false),
+            ["config.issuer", "config.client_id", "secret"]
+        );
+
+        let apple: ConnectionConfig =
+            serde_json::from_str(r#"{"type":"social","provider":"apple","client_id":"svc"}"#)
+                .unwrap();
+        assert_eq!(apple.missing_for_enable(true), ["config.apple"]);
+        let github: ConnectionConfig =
+            serde_json::from_str(r#"{"type":"social","provider":"github","client_id":"x"}"#)
+                .unwrap();
+        assert_eq!(github.missing_for_enable(false), ["secret"]);
+
+        let oauth2 = ConnectionConfig::Oauth2(OAuth2Config {
+            authorization_endpoint: String::new(),
+            token_endpoint: "https://a.example/token".into(),
+            userinfo_endpoint: "https://a.example/me".into(),
+            client_id: "c".into(),
+            scopes: vec![],
+            use_pkce: true,
+            mapping: ClaimMapping {
+                subject: "/id".into(),
+                email: None,
+                email_verified: None,
+                name: None,
+            },
+        });
+        assert_eq!(
+            oauth2.missing_for_enable(true),
+            ["config.authorization_endpoint"]
+        );
+
+        let saml: ConnectionConfig = serde_json::from_str(
+            r#"{"type":"saml","idp_entity_id":"e","sso_url":"https://i/sso","signing_certs":[]}"#,
+        )
+        .unwrap();
+        assert!(!saml.requires_secret());
+        assert_eq!(saml.missing_for_enable(false), ["config.signing_certs"]);
+    }
+
+    #[test]
+    fn only_enabled_complete_connections_are_offerable() {
+        let cfg = oidc_config("https://idp.example", "c");
+        assert!(conn(cfg.clone(), true, true).is_offerable());
+        assert!(
+            !conn(cfg.clone(), false, true).is_offerable(),
+            "an enabled row without its secret (rc.3) is not offered"
+        );
+        assert!(!conn(cfg, true, false).is_offerable(), "disabled");
     }
 
     #[test]

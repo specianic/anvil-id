@@ -1934,6 +1934,17 @@ impl ConfigService {
                 .ok_or_else(|| missing("connection", &c.key))?;
             let id = stored_conn(&c.key)?;
             let f = top_fields(c);
+            // The secret first: enabling a connection needs its secret (`check_enable`), so a
+            // document that adds both must not be refused for the order of the calls.
+            if f.contains("secret") {
+                let secret = match &s.secret {
+                    Some(SecretInput::Inline { value }) => Some(value.clone()),
+                    _ => None,
+                };
+                self.connections
+                    .set_secret(tid, id, secret, actor(), ctx)
+                    .await?;
+            }
             let patch = ConnectionPatch {
                 display_name: f.contains("display_name").then(|| s.display_name.clone()),
                 enabled: f.contains("enabled").then_some(s.enabled),
@@ -1950,15 +1961,6 @@ impl ConfigService {
             {
                 self.connections
                     .update(tid, id, patch, actor(), ctx)
-                    .await?;
-            }
-            if f.contains("secret") {
-                let secret = match &s.secret {
-                    Some(SecretInput::Inline { value }) => Some(value.clone()),
-                    _ => None,
-                };
-                self.connections
-                    .set_secret(tid, id, secret, actor(), ctx)
                     .await?;
             }
         }

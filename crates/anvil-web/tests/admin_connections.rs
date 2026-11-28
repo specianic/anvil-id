@@ -193,6 +193,7 @@ async fn crud_round_trip_with_write_only_secret() {
         saml_xml: Some(std::sync::Arc::new(
             anvil_web::adapters::saml_xml::SamlXmlAdapter,
         )),
+        upstream: None,
     };
     assert_eq!(
         service
@@ -371,6 +372,7 @@ async fn microsoft_email_trust_needs_the_risk_flag_and_is_audited() {
         &base(),
         Some(json!({"slug": "ms", "display_name": "Microsoft",
                     "config": {"type": "social", "provider": "microsoft", "client_id": "c"},
+                    "secret": SECRET,
                     "trust_email_verified": true, "accept_email_trust_risk": true})),
     )
     .await;
@@ -404,6 +406,8 @@ async fn tenant_connection_list_shows_org_connections_read_only() {
         Some(json!({
             "slug": "acme-entra",
             "display_name": "Acme Entra",
+            // Disabled: enabling would fetch the issuer's discovery document.
+            "enabled": false,
             "config": {"type": "oidc", "issuer": "https://login.acme.test", "client_id": "c"},
             "secret": SECRET,
         })),
@@ -429,7 +433,7 @@ async fn tenant_connection_list_shows_org_connections_read_only() {
         &t,
         Method::PATCH,
         &one,
-        Some(json!({"display_name": "Hijacked", "enabled": false})),
+        Some(json!({"display_name": "Hijacked", "enabled": true})),
     )
     .await;
     assert_problem(&resp, 409);
@@ -452,5 +456,5 @@ async fn tenant_connection_list_shows_org_connections_read_only() {
         .unwrap()
         .unwrap();
     assert_eq!(stored.display_name, "Acme Entra");
-    assert!(stored.enabled && stored.secret_enc.is_some());
+    assert!(!stored.enabled && stored.secret_enc.is_some());
 }

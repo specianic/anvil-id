@@ -551,6 +551,8 @@ async fn json_schema_matches_the_document_types() {
         {
             "slug": "corp",
             "display_name": "Corp IdP",
+            // Disabled: enabling a generic OIDC connection fetches its issuer's discovery document.
+            "enabled": false,
             "config": {"type": "oidc", "issuer": "https://idp.example.test", "client_id": "anvil"},
             "secret": {"value": "corp-secret"},
             "trust_email_verified": true,

@@ -20,6 +20,8 @@
 //! (they decide who can sign in to the console). All mutations are audited by the service in the
 //! connection's tenant.
 
+use std::sync::Arc;
+
 use anvil_core::error::CoreError;
 use anvil_core::model::{ConnectionId, SYSTEM_TENANT_SLUG, Tenant};
 use anvil_core::service::admin_scope::{Access, Resource};
@@ -45,6 +47,7 @@ impl AppState {
             kek: self.kek_arc(),
             saml_enabled: self.config().saml_experimental,
             saml_xml: Some(self.saml_xml()),
+            upstream: Some(Arc::new(self.upstream().clone())),
         }
     }
 }

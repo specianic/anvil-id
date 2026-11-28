@@ -33,6 +33,7 @@ use anvil_core::service::role::RoleService;
 use anvil_core::service::tenant::TenantService;
 use anvil_core::service::webhook::WebhookService;
 use anvil_web::adapters::attribute_schema::JsonSchemaCheck;
+use anvil_web::adapters::upstream::UpstreamHttp;
 use anvil_web::config::AppConfig;
 use anyhow::{Context, bail};
 use secrecy::ExposeSecret as _;
@@ -114,6 +115,8 @@ async fn service(cfg: &Config) -> anyhow::Result<ConfigService> {
             // SAML connections are never part of tenant YAML.
             saml_enabled: false,
             saml_xml: None,
+            // Enabling a generic OIDC connection checks its issuer like the admin API does.
+            upstream: Some(Arc::new(UpstreamHttp::new(Arc::clone(&outbound)))),
         },
         branding: BrandingService {
             storage: Arc::clone(&storage),

@@ -57,6 +57,7 @@ impl AppState {
                 kek: self.kek_arc(),
                 saml_enabled: self.config().saml_experimental,
                 saml_xml: Some(self.saml_xml()),
+                upstream: Some(Arc::new(self.upstream().clone())),
             },
             branding: self.branding(),
             roles: RoleService {

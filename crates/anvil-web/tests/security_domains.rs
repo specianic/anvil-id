@@ -611,11 +611,12 @@ async fn routing_target_must_be_same_org_connection() {
         &format!("{API}/tenants/default/connections"),
         Some(&admin),
         Some(json!({
-            "slug": "tenant-oidc", "display_name": "T",
+            "slug": "tenant-oidc", "display_name": "T", "enabled": false,
             "config": {"type": "oidc", "issuer": "https://idp.acme-corp.com", "client_id": "c"},
         })),
     )
     .await;
+    assert_eq!(resp.status, 201, "{}", resp.text());
     let tenant_conn = body_json(&resp)["id"].clone();
     let resp = patch(&app, &t, "acme", id, json!({"connection_id": tenant_conn})).await;
     assert_problem(&resp, 422);
