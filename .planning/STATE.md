@@ -6,14 +6,14 @@ current_phase: 05
 current_phase_name: release 0 4 operate it
 current_plan: 33
 status: verifying
-stopped_at: Completed 07.1-06-PLAN.md
-last_updated: "2026-11-28T04:16:24.720Z"
+stopped_at: Completed 07.1-09-PLAN.md
+last_updated: "2026-11-28T04:17:19.861Z"
 last_activity: 2026-11-28
 progress:
   total_phases: 8
   completed_phases: 3
   total_plans: 215
-  completed_plans: 193
+  completed_plans: 194
   percent: 90
 ---
 
@@ -228,6 +228,7 @@ done before 05-29 tags v0.4.0.
 | Phase 07.1 P01 | 120min | 3 tasks | 22 files |
 | Phase 07.1 P10 | 40min | 3 tasks | 18 files |
 | Phase 07.1 P06 | 90min | 3 tasks | 32 files |
+| Phase 07.1 P09 | 80min | 2 tasks | 20 files |
 
 ## Accumulated Context
 
@@ -541,6 +542,7 @@ Recent decisions affecting current work:
 - [Phase 07.1]: 07.1-06: one client home URL rule (validate_client_home_uri): admin loopback http allowed, DCR https only, CIMD loopback http only in dev mode
 - [Phase 07.1]: 07.1-06: anvil-console of the system tenant cannot be deleted (409, guard by tenant id)
 - [Phase 07.1]: 07.1-06: admin recovery reuses self_service_email, 202 no body, user_recovery_sent; api_compat treats required inputs of new operations as additive
+- [Phase 07.1]: Enabling an upstream connection needs every field incl. secret (all OAuth/OIDC kinds) and, for generic OIDC, discovery through the SSRF-guarded UpstreamClient; sign-in lists only Connection::is_offerable
 
 ### Roadmap Evolution
 
@@ -558,6 +560,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-28T04:16:24.717Z
-Stopped at: Completed 07.1-06-PLAN.md
+Last session: 2026-11-28T04:17:19.858Z
+Stopped at: Completed 07.1-09-PLAN.md
 Resume file: None
