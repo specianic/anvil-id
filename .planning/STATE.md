@@ -6,15 +6,15 @@ current_phase: 05
 current_phase_name: release 0 4 operate it
 current_plan: 33
 status: verifying
-stopped_at: Completed 07.1-09-PLAN.md
-last_updated: "2026-11-28T04:17:19.861Z"
+stopped_at: Completed 07.1-08-PLAN.md
+last_updated: "2026-11-28T04:26:49.002Z"
 last_activity: 2026-11-28
 progress:
   total_phases: 8
   completed_phases: 3
   total_plans: 215
-  completed_plans: 194
-  percent: 90
+  completed_plans: 195
+  percent: 91
 ---
 
 # Project State
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 **Status:** Phase complete — ready for verification
 **Last Activity:** 2026-11-28
 **Last Activity Description:** 06-26 phase gate complete (921-pair security map, 1.0 plaintext scans, `just doc`, legacy console redirects removed, anvilid 1.0.0-beta.1, 1.0 migrations pinned, every workflow incl. load, deploy and the macOS release dry run green on 9c40f61). Open: 04-33/v0.3.0 and 05-29/v0.4.0 (owner), then 06-27 (v1.0.0-beta.1)
-**Progress:** [█████████░] 90%
+**Progress:** [█████████░] 91%
 
 Phase 5 has 33 plans (05-01 through 05-33). Every plan except 05-29 (release v0.4.0 after owner sign-off) has a
 SUMMARY. Current Plan counts plans in execution order: 05-29 is the 33rd and last. Phase 4 still has one open plan, 04-33 (manual real-provider checklist, then tag v0.3.0); it must be
@@ -229,6 +229,7 @@ done before 05-29 tags v0.4.0.
 | Phase 07.1 P10 | 40min | 3 tasks | 18 files |
 | Phase 07.1 P06 | 90min | 3 tasks | 32 files |
 | Phase 07.1 P09 | 80min | 2 tasks | 20 files |
+| Phase 07.1 P08 | 50min | 3 tasks | 37 files |
 
 ## Accumulated Context
 
@@ -543,6 +544,8 @@ Recent decisions affecting current work:
 - [Phase 07.1]: 07.1-06: anvil-console of the system tenant cannot be deleted (409, guard by tenant id)
 - [Phase 07.1]: 07.1-06: admin recovery reuses self_service_email, 202 no body, user_recovery_sent; api_compat treats required inputs of new operations as additive
 - [Phase 07.1]: Enabling an upstream connection needs every field incl. secret (all OAuth/OIDC kinds) and, for generic OIDC, discovery through the SSRF-guarded UpstreamClient; sign-in lists only Connection::is_offerable
+- [Phase 07.1]: Error pages: one renderer (errors::error_page_nav), negotiated locale everywhere, dev-only detail, way forward for every key; Back to <app> only for static clients with absolute http(s) URLs
+- [Phase 07.1]: After setup, any unusable setup link GET answers 200 'Setup is already complete' + console link; POST and pre-setup GET stay 403
 
 ### Roadmap Evolution
 
@@ -560,6 +563,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-28T04:17:19.858Z
-Stopped at: Completed 07.1-09-PLAN.md
+Last session: 2026-11-28T04:26:48.999Z
+Stopped at: Completed 07.1-08-PLAN.md
 Resume file: None
