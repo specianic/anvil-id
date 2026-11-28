@@ -238,6 +238,17 @@ pub trait UserRepo: Send + Sync {
         now: OffsetDateTime,
     ) -> Result<Vec<(SelfServiceKind, OffsetDateTime)>, StorageError>;
 
+    /// Whether the self-service token with `token_hash` of `kind` is currently usable (unconsumed,
+    /// `expires_at > now`, this tenant). Read-only: never consumes or touches the row. For showing
+    /// "link expired" on GET before the user types anything (mail scanners must not consume tokens).
+    async fn peek_self_service_token(
+        &self,
+        tenant: TenantId,
+        kind: SelfServiceKind,
+        token_hash: &SecretHash,
+        now: OffsetDateTime,
+    ) -> Result<bool, StorageError>;
+
     /// Sets `last_login_at = now`. A missing user is not an error.
     async fn record_login(
         &self,

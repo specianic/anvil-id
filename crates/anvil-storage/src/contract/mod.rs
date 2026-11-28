@@ -407,6 +407,8 @@ macro_rules! storage_contract_tests {
             families_for_user_every_state_oldest_first,
             // ---- Phase 7.1 (plan 07.1-04): client home URLs, read-only self-service token peek ----
             client_home_urls_round_trip,
+            peek_self_service_token_reports_usable_tokens_only,
+            peek_self_service_token_never_consumes,
         );
     };
     (@each $factory:path; $($name:ident),+ $(,)?) => {

@@ -1457,3 +1457,180 @@ pub async fn pending_self_service_tokens_existence_only(s: &TestStorage) {
             .is_empty()
     );
 }
+
+/// `peek_self_service_token` is true only for an unconsumed, unexpired token of the asked kind in
+/// the asked tenant: consumed (by verification or recovery), expired (`expires_at <= now`), other
+/// kind, other tenant and unknown hashes are all false.
+pub async fn peek_self_service_token_reports_usable_tokens_only(s: &TestStorage) {
+    let tenant = seed_tenant(s).await;
+    let other = seed_tenant(s).await;
+    let user = seed_user(s, tenant).await;
+    let users = s.storage.users();
+    let issue = |kind, ttl| new_self_service_token(kind, user.id, &user.email, ttl);
+
+    let verification = issue(SelfServiceKind::Verification, Duration::hours(1));
+    let recovery = issue(SelfServiceKind::Recovery, Duration::hours(1));
+    let expired = issue(SelfServiceKind::Recovery, Duration::seconds(-1));
+    for t in [&verification, &recovery, &expired] {
+        users
+            .issue_self_service_token(tenant, t, None)
+            .await
+            .expect("issue");
+    }
+    let now = now_ms();
+    let peek = |tenant, kind, hash| {
+        let users = s.storage.users();
+        async move {
+            users
+                .peek_self_service_token(tenant, kind, hash, now)
+                .await
+                .expect("peek")
+        }
+    };
+
+    // Usable.
+    assert!(
+        peek(
+            tenant,
+            SelfServiceKind::Verification,
+            &verification.token_hash
+        )
+        .await
+    );
+    assert!(peek(tenant, SelfServiceKind::Recovery, &recovery.token_hash).await);
+    // Other kind.
+    assert!(!peek(tenant, SelfServiceKind::Recovery, &verification.token_hash).await);
+    assert!(!peek(tenant, SelfServiceKind::Invitation, &recovery.token_hash).await);
+    // Other tenant.
+    assert!(
+        !peek(
+            other,
+            SelfServiceKind::Verification,
+            &verification.token_hash
+        )
+        .await
+    );
+    // Unknown hash.
+    let unknown = unique_hash();
+    assert!(!peek(tenant, SelfServiceKind::Verification, &unknown).await);
+    // Expired.
+    assert!(!peek(tenant, SelfServiceKind::Recovery, &expired.token_hash).await);
+    // expires_at == now is expired (strictly `expires_at > now`).
+    assert!(
+        !users
+            .peek_self_service_token(
+                tenant,
+                SelfServiceKind::Verification,
+                &verification.token_hash,
+                verification.expires_at,
+            )
+            .await
+            .expect("peek")
+    );
+    assert!(
+        users
+            .peek_self_service_token(
+                tenant,
+                SelfServiceKind::Verification,
+                &verification.token_hash,
+                verification.expires_at - Duration::milliseconds(1),
+            )
+            .await
+            .expect("peek")
+    );
+
+    // Consumed by verification.
+    users
+        .complete_verification(tenant, &verification.token_hash, now)
+        .await
+        .expect("complete")
+        .expect("consumed");
+    assert!(
+        !peek(
+            tenant,
+            SelfServiceKind::Verification,
+            &verification.token_hash
+        )
+        .await
+    );
+    // Consumed by recovery.
+    users
+        .complete_recovery(
+            tenant,
+            &recovery.token_hash,
+            "$argon2id$v=19$peeked",
+            now,
+            None,
+        )
+        .await
+        .expect("complete")
+        .expect("consumed");
+    assert!(!peek(tenant, SelfServiceKind::Recovery, &recovery.token_hash).await);
+}
+
+/// `peek_self_service_token` is read-only: peeking any number of times leaves the token pending
+/// (still listed, `consumed_at` untouched) and the completion afterwards succeeds exactly once.
+pub async fn peek_self_service_token_never_consumes(s: &TestStorage) {
+    let tenant = seed_tenant(s).await;
+    let user = seed_user(s, tenant).await;
+    let users = s.storage.users();
+    let token = new_self_service_token(
+        SelfServiceKind::Verification,
+        user.id,
+        &user.email,
+        Duration::hours(1),
+    );
+    users
+        .issue_self_service_token(tenant, &token, None)
+        .await
+        .expect("issue");
+    let now = now_ms();
+    for _ in 0..2 {
+        assert!(
+            users
+                .peek_self_service_token(
+                    tenant,
+                    SelfServiceKind::Verification,
+                    &token.token_hash,
+                    now
+                )
+                .await
+                .expect("peek")
+        );
+    }
+    assert_eq!(
+        users
+            .pending_self_service_tokens(tenant, user.id, now)
+            .await
+            .expect("pending"),
+        vec![(SelfServiceKind::Verification, token.expires_at)],
+        "the peeked token is still unconsumed"
+    );
+    assert!(
+        users
+            .complete_verification(tenant, &token.token_hash, now)
+            .await
+            .expect("complete")
+            .is_some(),
+        "completion after peeks succeeds"
+    );
+    assert!(
+        users
+            .complete_verification(tenant, &token.token_hash, now)
+            .await
+            .expect("complete")
+            .is_none(),
+        "and only once"
+    );
+    assert!(
+        !users
+            .peek_self_service_token(
+                tenant,
+                SelfServiceKind::Verification,
+                &token.token_hash,
+                now
+            )
+            .await
+            .expect("peek")
+    );
+}

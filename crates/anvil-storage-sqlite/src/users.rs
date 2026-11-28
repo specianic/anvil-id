@@ -770,6 +770,33 @@ impl UserRepo for SqliteUsers {
         })
         .collect()
     }
+
+    async fn peek_self_service_token(
+        &self,
+        tenant: TenantId,
+        kind: SelfServiceKind,
+        token_hash: &SecretHash,
+        now: OffsetDateTime,
+    ) -> Result<bool, StorageError> {
+        // A plain SELECT on the reader: never consumes or touches the row.
+        let kind = kind.as_str();
+        let hash = token_hash.as_bytes().as_slice();
+        let now_ms = odt_to_ms(now);
+        let found = sqlx::query_scalar!(
+            r#"SELECT 1 AS "found!: i64"
+                 FROM self_service_token
+                WHERE tenant_id = ?1 AND kind = ?2 AND token_hash = ?3
+                  AND consumed_at IS NULL AND expires_at > ?4"#,
+            tenant.0,
+            kind,
+            hash,
+            now_ms,
+        )
+        .fetch_optional(&self.reader)
+        .await
+        .map_err(map_err)?;
+        Ok(found.is_some())
+    }
 }
 
 /// Upserts the password credential of an existing user on `conn`. `false` if the user does not

@@ -756,6 +756,30 @@ impl UserRepo for PgUsers {
         })
         .collect()
     }
+
+    async fn peek_self_service_token(
+        &self,
+        tenant: TenantId,
+        kind: SelfServiceKind,
+        token_hash: &SecretHash,
+        now: OffsetDateTime,
+    ) -> Result<bool, StorageError> {
+        // A plain SELECT: never consumes or touches the row.
+        let found = sqlx::query_scalar!(
+            r#"SELECT 1 AS "found!"
+                 FROM self_service_token
+                WHERE tenant_id = $1 AND kind = $2 AND token_hash = $3
+                  AND consumed_at IS NULL AND expires_at > $4"#,
+            tenant.0,
+            kind.as_str(),
+            token_hash.as_bytes().as_slice(),
+            now,
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_err)?;
+        Ok(found.is_some())
+    }
 }
 
 /// Inserts or replaces the password of a user of `tenant`. `false` if the user does not exist

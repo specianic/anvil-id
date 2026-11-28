@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT 1 AS \"found!\"\n                 FROM self_service_token\n                WHERE tenant_id = $1 AND kind = $2 AND token_hash = $3\n                  AND consumed_at IS NULL AND expires_at > $4",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "found!",
+        "type_info": "Int4",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Bytea",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "8484a0ae09835c62b488ce8213a9f1718db9e0f812c813d23291624dc7b8e430"
+}
