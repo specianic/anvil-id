@@ -9,7 +9,7 @@ default: ci
 
 # The single command contributors run (needs Docker for the Postgres tests and Node >= 22.12 for
 # the console check).
-ci: fmt-check lint doc deny deps migrations-check test test-pg test-redis release-graph security-tests console-check fuzz-check
+ci: fmt-check lint doc deny deps migrations-check test test-pg test-redis release-graph security-tests fonts-check console-check fuzz-check
 
 # Check formatting.
 fmt-check:
@@ -129,6 +129,12 @@ release-graph:
 # Every security control has a negative test (plan 02-21).
 security-tests:
     scripts/check-security-tests.sh
+
+# The self-hosted theme fonts are the pinned, unmodified upstream files with their OFL licences
+# (themes/default/static/fonts/SOURCES.md); the self-test proves a flipped byte is rejected.
+fonts-check:
+    scripts/check-fonts.sh
+    scripts/check-fonts.sh --self-test
 
 # Prove the security-test map detects a missing test.
 security-tests-selftest:
