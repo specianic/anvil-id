@@ -678,3 +678,208 @@ async fn closed_registration_message_keeps_the_request() {
         Some(format!("{}/ui/login?request={request}", issuer(&app)).as_str())
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// Emailed links carry the request (U-H6, U-M10)
+// ---------------------------------------------------------------------------------------------
+
+/// Follows a continue link through sign-in to the RP: `GET /ui/login?request=` → password →
+/// 303 to the authorization continuation → 303 to the RP with a code.
+async fn sign_in_and_reach_the_rp(app: &TestApp, login_url: &str, email: &str, password: &str) {
+    let resp = submit_form(
+        app,
+        &to_path(app, login_url),
+        &[("identifier", email), ("password", password)],
+    )
+    .await;
+    assert_eq!(resp.status, 303, "{}", resp.text());
+    let cont = to_path(app, &location(&resp));
+    assert!(cont.starts_with("/authorize/continue?request="), "{cont}");
+    let resp = app.get(&cont).await;
+    assert_eq!(resp.status, 303, "{}", resp.text());
+    let rp = location(&resp);
+    assert!(rp.starts_with(&format!("{REDIRECT}?")), "{rp}");
+    assert!(rp.contains("code="), "a code for the RP: {rp}");
+}
+
+#[tokio::test]
+async fn emailed_recovery_link_carries_the_request_and_continues_to_the_app() {
+    let (app, _rp, request) = request_bound().await;
+    let sent = submit_form(
+        &app,
+        &format!("/ui/recovery?request={request}"),
+        &[("email", ALICE)],
+    )
+    .await;
+    assert_eq!(sent.status, 200, "{}", sent.text());
+    let emails = take_emails(&app).await;
+    let link = ui_helpers::link_of(&app, &emails, "recovery");
+    assert!(link.starts_with("/ui/recovery?token="), "{link}");
+    assert!(link.ends_with(&format!("&request={request}")), "{link}");
+
+    // Opened in another browser (no cookies): reset, then continue to the app.
+    app.clear_cookies();
+    let new_password = "a brand new passphrase";
+    let done = submit_form(&app, &link, &[("password", new_password)]).await;
+    assert_eq!(done.status, 200, "{}", done.text());
+    let html = done.html();
+    assert!(message_keys(&html).contains(&"recovery.done".to_owned()));
+    let cont = href(&html, "link-continue").expect("continue link");
+    assert_eq!(cont, format!("{}/ui/login?request={request}", issuer(&app)));
+    assert!(html.contains(&format!("Continue to {APP_NAME}")), "{html}");
+    assert!(
+        href(&html, "link-login").is_none(),
+        "one way forward: {html}"
+    );
+    sign_in_and_reach_the_rp(&app, &cont, ALICE, new_password).await;
+}
+
+#[tokio::test]
+async fn registration_check_email_names_the_address_and_verification_continues() {
+    let app = TestApp::with(|c| c.rate_limits.auth = RateQuota::per_minute(6000, 1000)).await;
+    tenant_settings(&app, |s| s.require_verified_email = true).await;
+    let rp = shop(&app, default_tenant(&app).id).await;
+    let request = authorize(&app, &rp).await;
+    const BOB: &str = "bob@example.com";
+    let resp = submit_form(
+        &app,
+        &format!("/ui/registration?request={request}"),
+        &[("email", " Bob@Example.com "), ("password", PASSWORD)],
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let html = resp.html();
+    assert!(message_keys(&html).contains(&"registration.check_email".to_owned()));
+    assert_eq!(
+        ui_helpers::element_text(&html, "message-sent-to"),
+        format!("We sent the confirmation link to {BOB}.")
+    );
+    // While the request is live the page already offers the way back to the app.
+    assert_keeps(&html, "link-continue", &request);
+
+    let emails = take_emails(&app).await;
+    let link = ui_helpers::link_of(&app, &emails, "verification");
+    assert!(link.starts_with("/ui/verification?token="), "{link}");
+    assert!(link.ends_with(&format!("&request={request}")), "{link}");
+    app.clear_cookies();
+    let done = submit_form(&app, &link, &[]).await;
+    assert_eq!(done.status, 200, "{}", done.text());
+    let html = done.html();
+    assert!(message_keys(&html).contains(&"verification.done".to_owned()));
+    let cont = href(&html, "link-continue").expect("continue link");
+    assert_eq!(cont, format!("{}/ui/login?request={request}", issuer(&app)));
+    sign_in_and_reach_the_rp(&app, &cont, BOB, PASSWORD).await;
+}
+
+/// An emailed link opened after its request expired (requests live 15 minutes, the recovery
+/// token an hour) still resets the password but offers no continuation, never an error.
+#[tokio::test]
+async fn emailed_link_with_expired_request_works_without_continue() {
+    let (app, _rp, request) = request_bound().await;
+    let sent = submit_form(
+        &app,
+        &format!("/ui/recovery?request={request}"),
+        &[("email", ALICE)],
+    )
+    .await;
+    assert_eq!(sent.status, 200, "{}", sent.text());
+    let emails = take_emails(&app).await;
+    let link = ui_helpers::link_of(&app, &emails, "recovery");
+    assert!(link.ends_with(&format!("&request={request}")), "{link}");
+    app.clear_cookies();
+    app.clock().advance(std::time::Duration::from_secs(16 * 60));
+    let page = app.get(&link).await;
+    assert_eq!(page.status, 200, "{}", page.text());
+    let html = page.html();
+    assert!(html.contains("name=\"password\""), "the reset form: {html}");
+    assert!(!html.contains(&format!("request={request}")), "{html}");
+    let done = submit_form(&app, &link, &[("password", "another fresh passphrase")]).await;
+    assert_eq!(done.status, 200, "{}", done.text());
+    let html = done.html();
+    assert!(message_keys(&html).contains(&"recovery.done".to_owned()));
+    assert!(href(&html, "link-continue").is_none(), "{html}");
+    assert_eq!(
+        href(&html, "link-login").as_deref(),
+        Some(format!("{}/ui/login", issuer(&app)).as_str())
+    );
+}
+
+/// An emailed link whose `request=` was swapped for another tenant's, an unknown or a malformed
+/// id: the token still works, no continuation, the id is never echoed.
+#[tokio::test]
+async fn emailed_link_with_foreign_unknown_or_malformed_request_works_without_continue() {
+    let (app, _rp, request) = request_bound().await;
+    let acme = ui_helpers::create_tenant(&app, "acme").await;
+    let acme_rp = shop(&app, acme.id).await;
+    let foreign = stored_request(&app, acme.id, acme_rp.id())
+        .await
+        .0
+        .to_string();
+    let unknown = uuid::Uuid::now_v7().to_string();
+    for id in [foreign.as_str(), unknown.as_str(), "nope"] {
+        let sent = submit_form(
+            &app,
+            &format!("/ui/recovery?request={request}"),
+            &[("email", ALICE)],
+        )
+        .await;
+        assert_eq!(sent.status, 200, "{}", sent.text());
+        let emails = take_emails(&app).await;
+        let link = ui_helpers::link_of(&app, &emails, "recovery");
+        let link = format!(
+            "{}&request={id}",
+            link.strip_suffix(&format!("&request={request}"))
+                .expect("link carries the request")
+        );
+        let page = app.get(&link).await;
+        assert_eq!(page.status, 200, "{id}: {}", page.text());
+        assert!(!page.html().contains(&format!("request={id}")), "{id}");
+        let done = submit_form(&app, &link, &[("password", "another fresh passphrase")]).await;
+        assert_eq!(done.status, 200, "{id}: {}", done.text());
+        let html = done.html();
+        assert!(href(&html, "link-continue").is_none(), "{id}: {html}");
+        assert_eq!(
+            href(&html, "link-login").as_deref(),
+            Some(format!("{}/ui/login", issuer(&app)).as_str()),
+            "{id}"
+        );
+    }
+}
+
+/// Admin invitations and upstream just-in-time verification emails are not part of an
+/// authorization flow: their links carry no request.
+#[tokio::test]
+async fn invitation_and_upstream_jit_emails_carry_no_request() {
+    // Invitation (admin API): built without any flow.
+    let app = TestApp::new().await;
+    let tenant = default_tenant(&app);
+    let kek = anvil_jose::kek::Kek::generate();
+    let invitation = anvil_core::service::user::build_invitation(
+        &kek,
+        app.clock().now(),
+        &tenant,
+        &issuer(&app),
+        UserId::new_v7(),
+        "bob@example.com",
+    )
+    .expect("invitation");
+    let payload =
+        anvil_core::model::open_payload(&kek, tenant.id, &invitation.email.payload).expect("open");
+    assert!(!payload["link"].contains("request="), "{}", payload["link"]);
+
+    // Upstream just-in-time registration started from an app's sign-in page.
+    let u = upstream_flow::setup(false).await;
+    let rp = shop(&u.app, default_tenant(&u.app).id).await;
+    let request = authorize(&u.app, &rp).await;
+    let page = u.app.get(&format!("/ui/login?request={request}")).await;
+    let html = page.html();
+    let action = upstream_flow::button_action(&u.app, &html, upstream_flow::SLUG);
+    let started = upstream_flow::post_start(&u.app, &action, &csrf_from(&html)).await;
+    upstream_flow::reply_for(&u, &started, json!({}));
+    let resp = upstream_flow::callback(&u, &started).await;
+    assert_eq!(resp.status, 303, "{}", resp.text());
+    let emails = take_emails(&u.app).await;
+    let link = ui_helpers::link_of(&u.app, &emails, "verification");
+    assert!(link.starts_with("/ui/verification?token="), "{link}");
+    assert!(!link.contains("request="), "{link}");
+}

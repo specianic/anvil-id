@@ -2902,13 +2902,15 @@ impl FlowService {
                     Some(Effect::EnqueueEmail(EmailKind::Verification))
                 ) {
                     queue.pop_front();
-                    Some(self_service_email(
+                    // The link continues the app the registration started from.
+                    Some(self_service_email_for_request(
                         &self.kek,
                         cx,
                         SelfServiceKind::Verification,
                         new_user.id,
                         email,
                         now,
+                        exec.flow.auth_request_id,
                     )?)
                 } else {
                     None
@@ -2994,13 +2996,14 @@ impl FlowService {
                 if let Some(user) = users.get_by_email(tenant, email).await?
                     && user.status == UserStatus::Active
                 {
-                    let (token, mail) = self_service_email(
+                    let (token, mail) = self_service_email_for_request(
                         &self.kek,
                         cx,
                         SelfServiceKind::Recovery,
                         user.id,
                         &user.email,
                         self.clock.now(),
+                        exec.flow.auth_request_id,
                     )?;
                     users
                         .issue_self_service_token(tenant, &token, Some(&mail))
@@ -3554,7 +3557,8 @@ impl FlowService {
 
 /// A new self-service token for `user` and the email carrying its link. The payload is sealed
 /// with the KEK because the link carries the token. Also used by just-in-time upstream
-/// registration (`service::upstream`).
+/// registration (`service::upstream`) and admin-triggered emails, which carry no authorization
+/// request ([`self_service_email_for_request`] adds one).
 pub(crate) fn self_service_email(
     kek: &Kek,
     cx: &FlowContext<'_>,
@@ -3562,6 +3566,22 @@ pub(crate) fn self_service_email(
     user: UserId,
     email: &str,
     now: OffsetDateTime,
+) -> Result<(NewSelfServiceToken, NewEmail), CoreError> {
+    self_service_email_for_request(kek, cx, kind, user, email, now, None)
+}
+
+/// [`self_service_email`] for a flow that continues an authorization request: the link carries
+/// `&request={id}` after the token, so the page it opens can offer "Continue to <app>" (the web
+/// layer checks the id again: this tenant, unexpired). Nothing about the request is stored on
+/// the token.
+pub(crate) fn self_service_email_for_request(
+    kek: &Kek,
+    cx: &FlowContext<'_>,
+    kind: SelfServiceKind,
+    user: UserId,
+    email: &str,
+    now: OffsetDateTime,
+    request: Option<AuthRequestId>,
 ) -> Result<(NewSelfServiceToken, NewEmail), CoreError> {
     let token = random_token();
     let (ttl, page, template, expires_in) = match kind {
@@ -3593,7 +3613,7 @@ pub(crate) fn self_service_email(
     payload.insert("email".to_owned(), email.to_owned());
     payload.insert(
         "link".to_owned(),
-        format!("{}/{}?token={}", cx.ui_base, page, token),
+        self_service_link(cx.ui_base, page, &token, request),
     );
     payload.insert("expires_in".to_owned(), expires_in.to_owned());
     let mail = NewEmail {
@@ -3605,6 +3625,20 @@ pub(crate) fn self_service_email(
         expires_at,
     };
     Ok((record, mail))
+}
+
+/// The emailed link `{ui_base}/{page}?token={token}[&request={id}]`. The token is base64url and
+/// the request a UUID, so neither needs escaping.
+fn self_service_link(
+    ui_base: &str,
+    page: &str,
+    token: &str,
+    request: Option<AuthRequestId>,
+) -> String {
+    match request {
+        Some(r) => format!("{ui_base}/{page}?token={token}&request={r}"),
+        None => format!("{ui_base}/{page}?token={token}"),
+    }
 }
 
 /// The `password_changed` notice of a recovery (payload `tenant_name`, sealed). It carries no
@@ -4055,6 +4089,48 @@ mod tests {
             assert_eq!(payload["tenant_name"], "Acme");
             assert_eq!(payload["expires_in"], expires_in);
         }
+    }
+
+    #[test]
+    fn self_service_links_carry_the_request_only_when_given() {
+        let request = AuthRequestId(uuid::Uuid::nil());
+        let base = "https://id.example.test/t/acme/ui";
+        assert_eq!(
+            self_service_link(base, "recovery", "tok", None),
+            "https://id.example.test/t/acme/ui/recovery?token=tok"
+        );
+        assert_eq!(
+            self_service_link(base, "verification", "tok", Some(request)),
+            format!("https://id.example.test/t/acme/ui/verification?token=tok&request={request}")
+        );
+        // Through the email builder: the sealed payload's link, and nothing on the token record.
+        let kek = Kek::generate();
+        let tenant = acme();
+        let cx = cx(&tenant);
+        let user = UserId::new_v7();
+        let (record, mail) = self_service_email_for_request(
+            &kek,
+            &cx,
+            SelfServiceKind::Recovery,
+            user,
+            "alice@example.com",
+            NOW,
+            Some(request),
+        )
+        .unwrap();
+        let payload = open_payload(&kek, tenant.id, &mail.payload).unwrap();
+        let link = &payload["link"];
+        assert!(link.ends_with(&format!("&request={request}")), "{link}");
+        let token = link
+            .strip_prefix("https://id.example.test/t/acme/ui/recovery?token=")
+            .and_then(|rest| rest.strip_suffix(&format!("&request={request}")))
+            .expect("link format");
+        assert_eq!(record.token_hash, SecretHash(secret_hash(token)));
+        // Without a request (invitations, upstream JIT): no request parameter.
+        let (_, mail) =
+            self_service_email(&kek, &cx, SelfServiceKind::Recovery, user, "a@b.c", NOW).unwrap();
+        let payload = open_payload(&kek, tenant.id, &mail.payload).unwrap();
+        assert!(!payload["link"].contains("request="), "{}", payload["link"]);
     }
 
     #[test]
