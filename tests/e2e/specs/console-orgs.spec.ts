@@ -263,8 +263,9 @@ test('console: organizations with members, org roles, invitations and client pol
       },
       slug,
     );
+    // The client page has one settings form (07.1-16: no read-only duplicate), so the policy
+    // select itself shows the stored value.
     await openTenantPage(page, slug, `clients/${client.client_id}`);
-    await expect(page.getByTestId('client-organization')).toHaveText('Off');
     const policy = page.getByTestId('client-organization-policy');
     await expect(policy).toHaveValue('off');
     await policy.selectOption('optional');
@@ -272,7 +273,9 @@ test('console: organizations with members, org roles, invitations and client pol
     await expectNoA11yViolations(page);
     await page.getByRole('button', { name: 'Save changes' }).click();
     await expect(page.getByRole('status').filter({ hasText: 'Client saved.' })).toBeVisible();
-    await expect(page.getByTestId('client-organization')).toHaveText('Optional');
+    // A fresh load of the page shows the saved policy.
+    await page.reload();
+    await expect(page.getByTestId('client-organization-policy')).toHaveValue('optional');
 
     const stored = await adminCall<{ organization: string }>(
       token,

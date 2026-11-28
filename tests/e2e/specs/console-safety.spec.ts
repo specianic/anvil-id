@@ -32,8 +32,11 @@ test('console safety: unsaved-changes guard, typed tenant deletion, true SMTP st
     await openTenantPage(page, slug, 'settings');
     await expect(page.getByRole('heading', { level: 1, name: 'Login settings' })).toBeVisible();
     await expectNoA11yViolations(page);
+    // A new tenant asks for a second factor from users who enrolled one (MfaPolicy default).
     const mfa = page.getByLabel('MFA policy');
-    await mfa.selectOption('optional');
+    await expect(mfa).toHaveValue('optional');
+    await expect(page.getByTestId('login-settings-dirty')).toHaveCount(0);
+    await mfa.selectOption('required');
     await expect(page.getByTestId('login-settings-dirty')).toBeVisible();
 
     await navLink(page, 'Users').click();
@@ -42,25 +45,27 @@ test('console safety: unsaved-changes guard, typed tenant deletion, true SMTP st
     await guard.getByRole('button', { name: 'Stay' }).click();
     await expect(guard).toBeHidden();
     await expect(page).toHaveURL((url) => url.pathname === `/console/t/${slug}/settings`);
-    await expect(mfa).toHaveValue('optional');
+    await expect(mfa).toHaveValue('required');
 
     // Leave discards the edit; nothing was stored.
     await navLink(page, 'Users').click();
     await guard.getByRole('button', { name: 'Leave' }).click();
     await expect(page).toHaveURL((url) => url.pathname === `/console/t/${slug}/users`);
-    expect((await tenantSettings(token, slug)).mfa_policy).toBe('off');
+    expect((await tenantSettings(token, slug)).mfa_policy).toBe('optional');
   });
 
   await test.step('a saved form leaves without a prompt; undoing an edit clears the guard', async () => {
     await openTenantPage(page, slug, 'settings');
     const mfa = page.getByLabel('MFA policy');
-    await mfa.selectOption('optional');
+    await expect(mfa).toHaveValue('optional');
+    await mfa.selectOption('off');
     await page.getByTestId('save-login-settings').click();
     await expect(page.getByTestId('login-settings-save-bar').getByRole('status')).toHaveText('Login settings saved.');
-    expect((await tenantSettings(token, slug)).mfa_policy).toBe('optional');
+    expect((await tenantSettings(token, slug)).mfa_policy).toBe('off');
 
     await mfa.selectOption('required');
-    await mfa.selectOption('optional');
+    await expect(page.getByTestId('login-settings-dirty')).toBeVisible();
+    await mfa.selectOption('off');
     await expect(page.getByTestId('login-settings-dirty')).toHaveCount(0);
     await navLink(page, 'Users').click();
     await expect(page).toHaveURL((url) => url.pathname === `/console/t/${slug}/users`);

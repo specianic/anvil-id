@@ -179,18 +179,24 @@ test('admin console: users, sessions, audit, clients, email and SMTP', async ({ 
     await page.getByLabel('Action').selectOption('session_revoked');
     await page.getByRole('button', { name: 'Apply filters' }).click();
     await expect(page).toHaveURL(/action=session_revoked/);
-    const row = page.getByRole('row').filter({ hasText: sessionId });
+    // Session ids do not resolve to a record: the cell shows the id shortened, with the full value
+    // as its title (07.1-15) and in the details.
+    const row = page.getByRole('row').filter({ has: page.locator(`[title="${sessionId}"]`) });
     await expect(row).toBeVisible();
+    await expect(row).toContainText('Session revoked');
     await expect(row).toContainText('session_revoked');
-    await expect(row).toContainText('admin');
-    // Every row matches the filter.
+    // The actor resolves to the signed-in administrator.
+    await expect(row.getByRole('link', { name: admin.email })).toBeVisible();
+    // Every row matches the filter (each action cell shows the label and the raw action name).
     const actions = await page.locator('tbody tr td:nth-child(2)').allTextContents();
-    expect(actions.every((a) => a === 'session_revoked')).toBe(true);
+    expect(actions.length).toBeGreaterThan(0);
+    expect(actions.every((a) => a === 'Session revokedsession_revoked')).toBe(true);
 
-    await row.getByRole('button', { name: /^Details of session_revoked/ }).click();
+    await row.getByRole('button', { name: /^Details of Session revoked/ }).click();
     const drawer = page.getByRole('dialog', { name: 'Audit event' });
     await expect(drawer).toBeVisible();
     await expect(drawer.getByTestId('audit-details')).toBeVisible();
+    await expect(drawer.getByLabel('Target id', { exact: true })).toHaveValue(sessionId);
     await expectNoA11yViolations(page);
     await drawer.getByRole('button', { name: 'Close' }).click();
     await expect(drawer).toBeHidden();
