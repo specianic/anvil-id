@@ -13,7 +13,7 @@
 //   the collapsed Advanced section (`client-advanced-toggle`), opened before asserting
 // - login settings: `par-headless-form`, `tenant-require-par`, `headless-origins`,
 //   `headless-origin` rows (`data-origin`, button "Remove {origin}"), `headless-origin-input`,
-//   `headless-origin-add`, `save-par-headless`, `password-profiles-link`
+//   `headless-origin-add`, `save-login-settings`, `password-profiles-link`
 // - password hash profiles: `new-profile`, `profile-form`, `profile-name`, `profile-rounds`,
 //   `profile-mem-cost`, `profile-salt-separator`, `profile-signer-key`, `profile-submit`,
 //   `profile-row` (`data-name`, button "Delete {name}"), `profile-in-use`
@@ -161,16 +161,16 @@ test('console: client PAR/agent/headless fields, tenant PAR and origins, hash pr
     await form.getByTestId('headless-origin-input').fill('https://*.example.test');
     await form.getByTestId('headless-origin-add').click();
     await expect(form.getByTestId('headless-origin')).toHaveCount(2);
-    await form.getByTestId('save-par-headless').click();
-    await expect(form.getByText('The settings were not saved. Fix the errors below.')).toBeVisible();
+    await page.getByTestId('save-login-settings').click();
+    await expect(page.getByTestId('login-settings-invalid')).toBeVisible();
     await expect(form.getByTestId('headless-origin-input')).toHaveAttribute('aria-invalid', 'true');
     const unchanged = await readTenant();
     expect(unchanged.settings.par.require_pushed_authorization_requests).toBe(false);
     expect(unchanged.settings.headless.allowed_origins).toEqual([]);
 
     await form.getByRole('button', { name: 'Remove https://*.example.test' }).click();
-    await form.getByTestId('save-par-headless').click();
-    await expect(page.getByRole('status').filter({ hasText: 'headless settings saved' })).toBeVisible();
+    await page.getByTestId('save-login-settings').click();
+    await expect(page.getByTestId('login-settings-save-bar').getByRole('status')).toHaveText('Login settings saved.');
     const saved = await readTenant();
     expect(saved.settings.par.require_pushed_authorization_requests).toBe(true);
     expect(saved.settings.headless.allowed_origins).toEqual([origin]);
@@ -184,8 +184,8 @@ test('console: client PAR/agent/headless fields, tenant PAR and origins, hash pr
     await expect(form.getByTestId('tenant-require-par')).toBeChecked();
     await form.getByRole('button', { name: `Remove ${origin}` }).click();
     await form.getByTestId('tenant-require-par').uncheck();
-    await form.getByTestId('save-par-headless').click();
-    await expect(page.getByRole('status').filter({ hasText: 'headless settings saved' })).toBeVisible();
+    await page.getByTestId('save-login-settings').click();
+    await expect(page.getByTestId('login-settings-save-bar').getByRole('status')).toHaveText('Login settings saved.');
     const saved = await readTenant();
     expect(saved.settings.par.require_pushed_authorization_requests).toBe(false);
     expect(saved.settings.headless.allowed_origins).toEqual([]);
