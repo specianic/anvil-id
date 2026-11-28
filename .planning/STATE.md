@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
-current_phase: 05
-current_phase_name: release 0 4 operate it
-current_plan: 33
-status: verifying
-stopped_at: Completed 07.1-18-PLAN.md
-last_updated: "2026-11-28T09:19:46.473Z"
+current_phase: 07.1
+current_phase_name: operability and ux rc 4
+current_plan: 19
+status: awaiting owner checkpoint
+stopped_at: "07.1-19 Task 2: owner checkpoint (push main + tag v1.0.0-rc.4)"
+last_updated: "2026-11-28T11:19:46.572Z"
 last_activity: 2026-11-28
 progress:
   total_phases: 8
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 215
-  completed_plans: 206
+  completed_plans: 207
   percent: 96
 ---
 
@@ -24,23 +24,22 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-25)
 
 **Core value:** A standards-correct, secure OIDC provider that anyone can run in two minutes.
-**Current focus:** Phase 5: Release 0.4 "Operate it" (M4) — gate passed (05-28, every workflow green on f80dcb4); next the v0.4.0 release (05-29). Still pending from Phase 4: the manual provider checklist and the v0.3.0 tag (04-33), which must come first
+**Current focus:** Phase 07.1: Operability and UX (rc.4). Gate 07.1-19 green locally (just ci, e2e sqlite and postgres 218/218, conformance 5 plans with 0 failures), anvilid 1.0.0-rc.4 committed locally; waiting for the owner to authorize the push to main and the v1.0.0-rc.4 tag. Then 07-27 (1.0.0 final). Older owner gates still open: 04-33/v0.3.0, 05-29/v0.4.0, 06-27/v1.0.0-beta.1
 
 ## Current Position
 
-**Current Phase:** 05
-**Current Phase Name:** release 0 4 operate it
-**Total Phases:** 7
-**Current Plan:** 33
-**Total Plans in Phase:** 33
-**Status:** Phase complete — ready for verification
+**Current Phase:** 07.1
+**Current Phase Name:** operability and ux rc 4
+**Total Phases:** 8
+**Current Plan:** 19
+**Total Plans in Phase:** 21
+**Status:** Awaiting owner checkpoint (07.1-19 Task 2: push main, tag v1.0.0-rc.4)
 **Last Activity:** 2026-11-28
-**Last Activity Description:** 06-26 phase gate complete (921-pair security map, 1.0 plaintext scans, `just doc`, legacy console redirects removed, anvilid 1.0.0-beta.1, 1.0 migrations pinned, every workflow incl. load, deploy and the macOS release dry run green on 9c40f61). Open: 04-33/v0.3.0 and 05-29/v0.4.0 (owner), then 06-27 (v1.0.0-beta.1)
+**Last Activity Description:** 07.1-19 phase gate Task 1 complete: 1244-pair security map, theme README rc.4 contract, UPGRADING rc.3 to rc.4 with deferred Lows (U-L9, C-L4, C-L6, C-L7 grace period), SAML held-codes guard, anvilid 1.0.0-rc.4 with SQLite 0011 / Postgres 0009 pinned; just ci, both e2e backends and conformance green locally. Nothing pushed or tagged
 **Progress:** [██████████] 96%
 
-Phase 5 has 33 plans (05-01 through 05-33). Every plan except 05-29 (release v0.4.0 after owner sign-off) has a
-SUMMARY. Current Plan counts plans in execution order: 05-29 is the 33rd and last. Phase 4 still has one open plan, 04-33 (manual real-provider checklist, then tag v0.3.0); it must be
-done before 05-29 tags v0.4.0.
+Phase 07.1 has 21 plans; every plan except 07.1-19 (gate, stopped at the owner checkpoint) has a SUMMARY
+of a completed run. 07.1-19 has a SUMMARY of Task 1 and the pending owner decision.
 
 ## Performance Metrics
 
@@ -241,6 +240,7 @@ done before 05-29 tags v0.4.0.
 | Phase 07.1 P13 | 180min | 3 tasks | 40 files |
 | Phase 07.1 P21 | 150min | 3 tasks | 40 files |
 | Phase 07.1 P18 | 40min | 2 tasks | 8 files |
+| Phase 07.1 P19 | 150min | 1 tasks | 15 files |
 
 ## Accumulated Context
 
@@ -581,6 +581,8 @@ Recent decisions affecting current work:
 - [Phase 07.1]: U-L9 (registration reveals existing account) deferred: needs a new email kind
 - [Phase 07.1]: Destructive account actions use a server-rendered confirm step (confirm=yes, same binding); account form refusals use PRG with a fresh flow on GET
 - [Phase 07.1]: 07.1-18: detour journeys shared in tests/e2e/lib/detours.ts (JS and no-JS specs run the same assertions); decision pages are swept for visible submit buttons; console axe waits for colour transitions
+- [Phase 07.1]: 07.1-19: rc.4 gate green locally (just ci, e2e sqlite+postgres 218/218, conformance 5 plans 0 failures); 1.0.0-rc.4 + SQLite 0011/Postgres 0009 pinned; push and v1.0.0-rc.4 tag await the owner
+- [Phase 07.1]: 07.1-19: deferred Lows U-L9, C-L4, C-L6, C-L7 grace period (UPGRADING); partial Medium remainders U-M11 resend verification and U-M16 UTC times recorded as known limitations
 
 ### Roadmap Evolution
 
@@ -598,6 +600,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-28T09:19:46.470Z
-Stopped at: Completed 07.1-18-PLAN.md
+Last session: 2026-11-28T11:19:46.567Z
+Stopped at: 07.1-19 Task 2: owner checkpoint (push main + tag v1.0.0-rc.4)
 Resume file: None
