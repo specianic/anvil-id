@@ -6,14 +6,14 @@ current_phase: 05
 current_phase_name: release 0 4 operate it
 current_plan: 33
 status: verifying
-stopped_at: Completed 07.1-02-PLAN.md
-last_updated: "2026-11-28T02:51:08.781Z"
+stopped_at: Completed 07.1-04-PLAN.md
+last_updated: "2026-11-28T02:57:34.942Z"
 last_activity: 2026-11-28
 progress:
   total_phases: 8
   completed_phases: 3
   total_plans: 215
-  completed_plans: 189
+  completed_plans: 190
   percent: 88
 ---
 
@@ -224,6 +224,7 @@ done before 05-29 tags v0.4.0.
 | Phase 07.1 P05 | 25min | 2 tasks | 4 files |
 | Phase 07.1 P03 | 35min | 3 tasks | 17 files |
 | Phase 07.1 P02 | 75min | 3 tasks | 26 files |
+| Phase 07.1 P04 | 25min | 3 tasks | 53 files |
 
 ## Accumulated Context
 
@@ -526,6 +527,9 @@ Recent decisions affecting current work:
 - [Phase 07.1]: 07.1-02: Default theme is Specianic (orange fill + ink text both schemes; links/focus via --anvil-link/--anvil-focus; 2px controls, square cards); fonts are official upstream files with pinned SHA256SUMS checked by just fonts-check
 - [Phase 07.1]: 07.1-02: A lone customised primary/primary_text is paired with the legacy partner (#2f5bd3/#fff, dark #6d8ef0/#0d1020) in validation and stylesheet; primary also emits --anvil-link/--anvil-focus, radius_px also --anvil-card-radius
 - [Phase 07.1]: 07.1-02: Every end-user document CSP adds font-src 'self'; theme.rs subresource CSP stays default-src 'none'
+- [Phase 07.1]: 07.1-04: client_uri/initiate_login_uri stored on both backends (SQLite 0011, Postgres 0009, additive, unpinned until 07.1-19); CIMD refresh replaces them like other metadata
+- [Phase 07.1]: 07.1-04: UserRepo::peek_self_service_token is a single read-only SELECT (tenant, kind, hash, unconsumed, expires_at > now) for U-M11
+- [Phase 07.1]: 07.1-04: anvil-console scopes are openid profile email admin:read admin:write; existing installs reconciled by the startup drift check
 
 ### Roadmap Evolution
 
@@ -543,6 +547,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-28T02:51:08.777Z
-Stopped at: Completed 07.1-02-PLAN.md
+Last session: 2026-11-28T02:57:34.938Z
+Stopped at: Completed 07.1-04-PLAN.md
 Resume file: None
