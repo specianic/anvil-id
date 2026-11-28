@@ -6,14 +6,14 @@ current_phase: 05
 current_phase_name: release 0 4 operate it
 current_plan: 33
 status: verifying
-stopped_at: Completed 07.1-13-PLAN.md
-last_updated: "2026-11-28T06:07:41.559Z"
+stopped_at: Completed 07.1-21-PLAN.md
+last_updated: "2026-11-28T08:37:14.836Z"
 last_activity: 2026-11-28
 progress:
   total_phases: 8
   completed_phases: 3
   total_plans: 215
-  completed_plans: 204
+  completed_plans: 205
   percent: 95
 ---
 
@@ -239,6 +239,7 @@ done before 05-29 tags v0.4.0.
 | Phase 07.1 P14 | 100min | 3 tasks | 39 files |
 | Phase 07.1 P11 | 120min | 3 tasks | 14 files |
 | Phase 07.1 P13 | 180min | 3 tasks | 40 files |
+| Phase 07.1 P21 | 150min | 3 tasks | 40 files |
 
 ## Accumulated Context
 
@@ -577,6 +578,7 @@ Recent decisions affecting current work:
 - [Phase 07.1]: Recovery codes of an in-flow enrolment are held KEK-sealed (anvilid/flow-recovery-codes/v1) in a new non-engine flow until confirmed on GET /ui/login/recovery-codes
 - [Phase 07.1]: Sign-in page has one address field; the email-code button posts it via formaction and UiForm falls back email<-identifier
 - [Phase 07.1]: U-L9 (registration reveals existing account) deferred: needs a new email kind
+- [Phase 07.1]: Destructive account actions use a server-rendered confirm step (confirm=yes, same binding); account form refusals use PRG with a fresh flow on GET
 
 ### Roadmap Evolution
 
@@ -594,6 +596,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-28T06:07:41.553Z
-Stopped at: Completed 07.1-13-PLAN.md
+Last session: 2026-11-28T08:37:14.833Z
+Stopped at: Completed 07.1-21-PLAN.md
 Resume file: None
