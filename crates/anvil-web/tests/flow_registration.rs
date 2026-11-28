@@ -111,8 +111,18 @@ async fn open_registration_creates_the_user_signs_in_and_sends_a_verification_li
         .expect("user");
     assert!(user.email_verified, "POST verifies the email");
 
-    // The token is single-use.
-    let resp = submit_form(&app, &link, &[]).await;
+    // The token is single-use: the link says so on GET (07.1-07) ...
+    let page = app.get(&link).await;
+    assert_eq!(page.status, 400, "{}", page.text());
+    assert!(message_keys(&page.html()).contains(&"links.expired".to_owned()));
+    // ... and a POST of the used token is refused by the flow.
+    let token = link
+        .split("token=")
+        .nth(1)
+        .and_then(|t| t.split('&').next())
+        .expect("token")
+        .to_owned();
+    let resp = submit_form(&app, "/ui/verification", &[("token", &token)]).await;
     assert_eq!(resp.status, 400);
     assert!(
         message_keys(&resp.html()).contains(&"verification.invalid_token".to_owned()),

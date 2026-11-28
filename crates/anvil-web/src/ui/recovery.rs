@@ -9,18 +9,30 @@
 //! "Continue to &lt;app&gt;" while the request is live. Without a token, a `request=` that is not a live
 //! request of this tenant answers the `flow_expired` page; with a token the reset still works
 //! (the token is valid on its own) and the stale request is simply dropped.
+//!
+//! A reset link that was used, expired or never existed answers on `GET`, before any input:
+//! the request form with "This link has expired or was already used" above it (400), so a new
+//! link is one click away. The check only reads (`FlowService::self_service_link_usable`); a
+//! `GET` never consumes a token. A failed POST answers 303 to `GET /ui/recovery?flow=`
+//! (Post/Redirect/Get); a failed reset keeps the token in the sealed flash, never in the flow
+//! state or in plaintext.
 
 use anvil_core::flow::engine::FlowInput;
-use anvil_core::model::FlowKind;
+use anvil_core::model::{FlowKind, SelfServiceKind};
 use axum::Router;
 use axum::extract::rejection::FormRejection;
 use axum::extract::{Form, Query, State};
+use axum::http::HeaderMap;
 use axum::response::Response;
 use axum::routing::get;
 use axum_extra::extract::cookie::CookieJar;
 
-use super::login::{UiForm, UiQuery, rejected_form, stale_request_page, start_page, submit_page};
+use super::login::{
+    UiForm, UiQuery, expired_reset_link_page, link_usable, rejected_form, show_step,
+    stale_request_page, start_page, submit_page,
+};
 use super::nav::NavContext;
+use crate::errors::core_error_page_in;
 use crate::i18n::RequestLocale;
 use crate::request_context::AuditContext;
 use crate::state::AppState;
@@ -33,15 +45,42 @@ pub(super) fn routes() -> Router<AppState> {
 async fn show(
     State(state): State<AppState>,
     tenant: ResolvedTenant,
-    RequestLocale(loc, _): RequestLocale,
+    locale: RequestLocale,
+    headers: HeaderMap,
+    jar: CookieJar,
     Query(q): Query<UiQuery>,
 ) -> Response {
+    // Post/Redirect/Get: the form a failed POST redirected to.
+    if let Some(flow) = q.flow_id()
+        && let Some(resp) = show_step(
+            &state,
+            &tenant,
+            locale.clone(),
+            &headers,
+            &jar,
+            flow,
+            "recovery",
+        )
+        .await
+    {
+        return resp;
+    }
+    let loc = locale.0;
     let token = q.token();
     let nav = match NavContext::from_query(&state, &tenant, q.request.as_deref()).await {
         Ok(nav) => nav,
         Err(_) if token.is_some() => NavContext::none(),
         Err(_) => return stale_request_page(&state, &tenant, &loc),
     };
+    // A used, expired or unknown reset link fails here, before the user types a new password,
+    // without consuming anything.
+    if let Some(t) = token.as_deref() {
+        match link_usable(&state, &tenant, SelfServiceKind::Recovery, t).await {
+            Ok(true) => {}
+            Ok(false) => return expired_reset_link_page(&state, &tenant, &loc, &nav).await,
+            Err(e) => return core_error_page_in(&state, Some(&tenant), &loc, &e),
+        }
+    }
     start_page(&state, &tenant, &loc, FlowKind::Recovery, &nav, token).await
 }
 

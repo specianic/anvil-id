@@ -152,7 +152,9 @@ async fn post_code(app: &TestApp, page: &TestResponse, code: &str) -> TestRespon
     let action = form_action(app, &html);
     let csrf = csrf_from(&html);
     let token = hidden(&html, "factor_token");
-    app.post_form(
+    // A wrong code answers Post/Redirect/Get: follow it like a browser.
+    post_form_follow(
+        app,
         &action,
         &[
             ("csrf_token", csrf.as_str()),
@@ -339,19 +341,19 @@ async fn required_without_a_factor_enrols_then_signs_in_with_mfa() {
 
     // Replaying the confirming POST: the flow is gone; a fresh sign-in, nobody signed in again.
     app.clear_cookies();
-    let replay = app
-        .post_form(
-            &form_action(&app, &resp.html()),
-            &[
-                ("csrf_token", csrf_from(&resp.html()).as_str()),
-                (
-                    "factor_token",
-                    hidden(&resp.html(), "factor_token").as_str(),
-                ),
-                ("code", code.as_str()),
-            ],
-        )
-        .await;
+    let replay = post_form_follow(
+        &app,
+        &form_action(&app, &resp.html()),
+        &[
+            ("csrf_token", csrf_from(&resp.html()).as_str()),
+            (
+                "factor_token",
+                hidden(&resp.html(), "factor_token").as_str(),
+            ),
+            ("code", code.as_str()),
+        ],
+    )
+    .await;
     assert!(
         replay.status == 403 || replay.status == 400,
         "{}",
@@ -550,7 +552,9 @@ async fn finish(
     factor: &str,
     response: &str,
 ) -> TestResponse {
-    app.post_form(
+    // A refused ceremony answers Post/Redirect/Get: follow it like a browser.
+    post_form_follow(
+        app,
         action,
         &[
             ("csrf_token", csrf),
@@ -998,12 +1002,12 @@ async fn passkey_enrolment_routes_are_bound_to_the_flow_and_its_enrolment_step()
         .await;
     assert_eq!(resp.status, 400, "{}", resp.text());
     assert_eq!(json(&resp)["error"], PASSKEY_FAILED);
-    let resp = app
-        .post_form(
-            &format!("/ui/login/enroll/passkey/finish?flow={flow}"),
-            &[("csrf_token", &csrf_from(&html)), ("response", "{}")],
-        )
-        .await;
+    let resp = post_form_follow(
+        &app,
+        &format!("/ui/login/enroll/passkey/finish?flow={flow}"),
+        &[("csrf_token", &csrf_from(&html)), ("response", "{}")],
+    )
+    .await;
     assert_eq!(resp.status, 400, "{}", resp.text());
     assert!(session_cookie(&app).is_none());
     assert_eq!(passkey_count(&app, BOB).await, 0);
@@ -1622,15 +1626,15 @@ async fn identify_step_passkey_challenge_is_not_accepted_at_second_factor() {
     assert_sf_refused(&app, &resp);
     assert_eq!(sf_passkey_failures(&app, alice).await, 1);
     // The identify-step route does not accept it at this step either.
-    let resp = app
-        .post_form(
-            &to_path(
-                &app,
-                &identify_options.replace("/passkey/options", "/passkey"),
-            ),
-            &[("csrf_token", csrf.as_str()), ("response", &from_identify)],
-        )
-        .await;
+    let resp = post_form_follow(
+        &app,
+        &to_path(
+            &app,
+            &identify_options.replace("/passkey/options", "/passkey"),
+        ),
+        &[("csrf_token", csrf.as_str()), ("response", &from_identify)],
+    )
+    .await;
     assert_eq!(resp.status, 400, "{}", resp.text());
     assert!(session_cookie(&app).is_none());
 }

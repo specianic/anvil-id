@@ -2,7 +2,15 @@
 {% import "form.html" as forms %}
 {% block heading %}{{ t("title.verification") }}{% endblock %}
 {% block content %}
-{#- The token travels in a hidden field and is only consumed on POST, so link scanners that GET the URL never use it up. -#}
+{#- The token travels in a hidden field and is only consumed on POST, so link scanners that GET the URL never use it up. A link that was used, expired or never existed shows no button, only the way to sign in. -#}
+{% if link_expired -%}
+<p class="anvil-message anvil-message-error" id="verification-expired" data-message-key="{{ expired_key }}" role="alert">{{ t("links.expired") }}</p>
+<p class="anvil-lead">{{ t("links.verification_expired_lead") }}</p>
+<nav class="anvil-links" aria-label="{{ t("nav.account_help") }}">
+<a id="link-login" href="{{ page.links.login }}">{{ t("links.go_to_sign_in") }}</a>
+</nav>
+{%- else -%}
 <p class="anvil-lead">{{ t("verification.lead") }}</p>
 {{ forms.render(form, t("verification.submit")) }}
+{%- endif %}
 {% endblock %}

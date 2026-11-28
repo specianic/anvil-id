@@ -197,7 +197,8 @@ async fn every_form_page_rejects_a_missing_token() {
     for page in [
         "/ui/registration",
         "/ui/recovery",
-        "/ui/verification?token=t",
+        // Without a token: a token link that cannot be used shows no form (07.1-07).
+        "/ui/verification",
     ] {
         let (action, _) = open_form(&app, page).await;
         let resp = app.post_form(&action, &[("email", EMAIL)]).await;

@@ -25,7 +25,9 @@ use anvil_web::adapters::outbound::OutboundPolicy;
 use axum::body::Body;
 use axum::http::{Method, Request, header};
 use support::{TestApp, TestResponse, csrf_from};
-use ui_helpers::{default_tenant, login, open_form, register, set_settings, to_path};
+use ui_helpers::{
+    default_tenant, login, open_form, post_form_follow, register, set_settings, to_path,
+};
 use upstream_flow::add_connection;
 use wiremock::matchers::{body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -134,17 +136,24 @@ async fn post_from(
     let body = url::form_urlencoded::Serializer::new(String::new())
         .extend_pairs(pairs)
         .finish();
-    app.send_from(
-        peer,
-        Request::builder()
-            .method(Method::POST)
-            .uri(path)
-            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-            .header("sec-fetch-site", "same-origin")
-            .body(Body::from(body))
-            .expect("request"),
-    )
-    .await
+    let resp = app
+        .send_from(
+            peer,
+            Request::builder()
+                .method(Method::POST)
+                .uri(path)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header("sec-fetch-site", "same-origin")
+                .body(Body::from(body))
+                .expect("request"),
+        )
+        .await;
+    // A failed attempt answers Post/Redirect/Get: follow it like a browser (a lock or CAPTCHA
+    // demand is a direct answer).
+    if support::is_prg(&resp) {
+        return app.follow(&resp).await;
+    }
+    resp
 }
 
 /// Opens the sign-in page and submits it from `peer` with `extra` fields.
@@ -217,8 +226,12 @@ async fn passkey_failures(app: &TestApp) -> (TestResponse, TestResponse, TestRes
     let attempt = async || {
         let resp = app.post_form(&options, &[("csrf_token", &csrf)]).await;
         assert_eq!(resp.status, 200, "{}", resp.text());
-        app.post_form(&action, &[("csrf_token", &csrf), ("response", "garbage")])
-            .await
+        post_form_follow(
+            app,
+            &action,
+            &[("csrf_token", &csrf), ("response", "garbage")],
+        )
+        .await
     };
     let first = attempt().await;
     assert_eq!(first.status, 400, "{}", first.text());

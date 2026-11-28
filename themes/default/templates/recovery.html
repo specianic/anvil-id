@@ -3,7 +3,7 @@
 {% block heading %}{{ t("title.recovery") }}{% endblock %}
 {% block content %}
 <p class="anvil-lead">{{ t("recovery.lead") }}</p>
-{{ forms.render(form, t("recovery.submit")) }}
+{{ forms.render(form, t("links.send_new_link") if "links.expired" in form.messages|map(attribute="key")|list else t("recovery.submit")) }}
 {% if page.links.login %}
 <nav class="anvil-links" aria-label="{{ t("nav.account_help") }}">
 <a id="link-login" href="{{ page.links.login }}">{{ t("recovery.back_to_sign_in") }}</a>

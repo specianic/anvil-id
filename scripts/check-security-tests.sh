@@ -1246,6 +1246,40 @@ rate-limit classes: /par is the token class, POST /api/flows the auth class|crat
 rate-limit classes: /par is the token class, POST /api/flows the auth class|crates/anvil-web/src/layers/ratelimit.rs|flows_post_is_auth_class
 release 1.0 secrets at rest: hash profile signer key, PAR request_uri, native flow token (SQLite)|crates/anvil-storage-sqlite/tests/plaintext.rs|release_1_0_final_secrets_never_stored_plaintext
 release 1.0 secrets at rest: hash profile signer key, PAR request_uri, native flow token (Postgres)|crates/anvil-storage-postgres/tests/plaintext.rs|release_1_0_final_secrets_never_stored_plaintext
+release 1.0 rc.4 PRG: derived flow CSRF bound to tenant, flow and cookie|$W/flow_prg.rs|derived_csrf_rejected_for_other_cookie
+release 1.0 rc.4 PRG: derived flow CSRF bound to tenant, flow and cookie|crates/anvil-core/src/service/flow.rs|derived_csrf_verifies_only_with_its_own_cookie
+release 1.0 rc.4 PRG: derived flow CSRF bound to tenant, flow and cookie|crates/anvil-core/src/service/flow.rs|flow_csrf_is_deterministic_and_bound_to_tenant_flow_and_cookie
+release 1.0 rc.4 PRG: flash sealed, one-shot, no secrets, bound to flow and tenant|$W/flow_prg.rs|flash_never_contains_password_or_code
+release 1.0 rc.4 PRG: flash sealed, one-shot, no secrets, bound to flow and tenant|$W/flow_prg.rs|flash_from_other_flow_or_tenant_is_ignored
+release 1.0 rc.4 PRG: flash sealed, one-shot, no secrets, bound to flow and tenant|$W/flow_prg.rs|flash_cookie_is_strict_http_only_and_short_lived
+release 1.0 rc.4 PRG: flash sealed, one-shot, no secrets, bound to flow and tenant|crates/anvil-web/src/ui/flash.rs|flash_never_contains_password_or_code
+release 1.0 rc.4 PRG: flash sealed, one-shot, no secrets, bound to flow and tenant|crates/anvil-web/src/ui/flash.rs|flash_from_other_flow_or_tenant_is_ignored
+release 1.0 rc.4 PRG: no form state without the flow cookie, locks stay direct, enumeration-safe|$W/flow_prg.rs|prg_get_without_flow_cookie_shows_no_form_state
+release 1.0 rc.4 PRG: no form state without the flow cookie, locks stay direct, enumeration-safe|$W/flow_prg.rs|a_lock_stays_a_direct_answer
+release 1.0 rc.4 PRG: no form state without the flow cookie, locks stay direct, enumeration-safe|$W/flow_prg.rs|unknown_and_known_identifiers_get_the_same_redirect_and_page
+release 1.0 rc.4 emailed links: stale link fails on GET, GET never consumes|$W/flow_prg.rs|get_with_consumed_reset_token_consumes_nothing_and_offers_new_link
+release 1.0 rc.4 emailed links: stale link fails on GET, GET never consumes|$W/flow_prg.rs|verification_link_is_checked_on_get_and_never_consumed_by_it
+release 1.0 rc.4 client home URLs: unsafe values refused (admin API, DCR, CIMD)|$W/security_admin_rc4.rs|client_home_uris_refuse_unsafe_values
+release 1.0 rc.4 client home URLs: unsafe values refused (admin API, DCR, CIMD)|$W/security_registration.rs|dcr_client_home_uris_refuse_unsafe_values
+release 1.0 rc.4 client home URLs: unsafe values refused (admin API, DCR, CIMD)|$W/security_cimd.rs|cimd_unsafe_home_uris_rejected
+release 1.0 rc.4 console client: cannot be deleted, guard per tenant id|$W/security_admin_rc4.rs|console_client_cannot_be_deleted
+release 1.0 rc.4 console client: cannot be deleted, guard per tenant id|$W/security_admin_rc4.rs|console_client_id_in_another_tenant_is_an_ordinary_client
+release 1.0 rc.4 admin recovery: users:write scope, tenant isolation, blocked user, no token leak|$W/security_admin_rc4.rs|admin_recovery_requires_users_write_scope
+release 1.0 rc.4 admin recovery: users:write scope, tenant isolation, blocked user, no token leak|$W/security_admin_rc4.rs|admin_recovery_other_tenant_is_404
+release 1.0 rc.4 admin recovery: users:write scope, tenant isolation, blocked user, no token leak|$W/security_admin_rc4.rs|admin_recovery_blocked_user_refused
+release 1.0 rc.4 admin recovery: users:write scope, tenant isolation, blocked user, no token leak|$W/security_admin_rc4.rs|admin_recovery_response_has_no_token
+release 1.0 rc.4 system info: smtp_configured admin-only|$W/security_system_info.rs|system_info_reports_whether_installation_smtp_is_configured
+release 1.0 rc.4 error pages: app home never from the request or dynamic clients, detail hidden outside dev|$W/error_pages.rs|app_home_never_from_request
+release 1.0 rc.4 error pages: app home never from the request or dynamic clients, detail hidden outside dev|$W/error_pages.rs|app_home_never_for_dynamic_or_cimd_clients
+release 1.0 rc.4 error pages: app home never from the request or dynamic clients, detail hidden outside dev|$W/error_pages.rs|error_detail_hidden_outside_dev_mode
+release 1.0 rc.4 error pages: app home never from the request or dynamic clients, detail hidden outside dev|crates/anvil-web/src/ui/nav.rs|app_home_prefers_initiate_login_uri_of_static_clients_only
+release 1.0 rc.4 setup: an unknown setup token after setup grants nothing|$W/security_setup.rs|unknown_setup_token_after_setup_grants_nothing
+release 1.0 rc.4 connections: never enabled while incomplete or unverified, SSRF-guarded check|$W/security_connection_enable.rs|create_enabled_without_secret_is_refused_and_stores_nothing
+release 1.0 rc.4 connections: never enabled while incomplete or unverified, SSRF-guarded check|$W/security_connection_enable.rs|discovery_failure_or_issuer_mismatch_refuses_enable
+release 1.0 rc.4 connections: never enabled while incomplete or unverified, SSRF-guarded check|$W/security_connection_enable.rs|disabled_connection_can_be_created_edited_disabled_and_deleted_but_not_enabled_while_incomplete
+release 1.0 rc.4 connections: never enabled while incomplete or unverified, SSRF-guarded check|$W/security_connection_enable.rs|organization_connection_follows_the_same_rule
+release 1.0 rc.4 connections: never enabled while incomplete or unverified, SSRF-guarded check|$W/security_connection_enable.rs|connection_check_refuses_private_address
+release 1.0 rc.4 connections: never enabled while incomplete or unverified, SSRF-guarded check|$W/security_connection_enable.rs|incomplete_connection_not_offered_on_sign_in
 EOF
 )
 

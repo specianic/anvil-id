@@ -52,7 +52,9 @@ fn peer(n: u8) -> SocketAddr {
     SocketAddr::new(IpAddr::V4(Ipv4Addr::new(198, 51, 100, n)), 40000)
 }
 
-/// A same-origin form POST from `peer`.
+/// A same-origin form POST from `peer`. A failed attempt answers Post/Redirect/Get (303 with the
+/// flash cookie); the redirect is followed like a browser, so the result is the page showing the
+/// error. A lock (429) or CAPTCHA demand is a direct answer and is returned as it is.
 async fn post_from(
     app: &TestApp,
     peer: SocketAddr,
@@ -62,17 +64,22 @@ async fn post_from(
     let body = url::form_urlencoded::Serializer::new(String::new())
         .extend_pairs(pairs)
         .finish();
-    app.send_from(
-        peer,
-        Request::builder()
-            .method(Method::POST)
-            .uri(path)
-            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-            .header("sec-fetch-site", "same-origin")
-            .body(Body::from(body))
-            .expect("request"),
-    )
-    .await
+    let resp = app
+        .send_from(
+            peer,
+            Request::builder()
+                .method(Method::POST)
+                .uri(path)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header("sec-fetch-site", "same-origin")
+                .body(Body::from(body))
+                .expect("request"),
+        )
+        .await;
+    if support::is_prg(&resp) {
+        return app.follow(&resp).await;
+    }
+    resp
 }
 
 /// Opens the sign-in page and submits it from `peer` with `extra` fields.
@@ -487,7 +494,8 @@ async fn second_factor(app: &TestApp, page: &TestResponse, code: &str) -> TestRe
         .find(|(n, _)| n == "factor_token")
         .map(|(_, v)| v)
         .expect("factor token");
-    app.post_form(
+    post_form_follow(
+        app,
         &form_action(app, &html),
         &[
             ("csrf_token", csrf_from(&html).as_str()),
@@ -563,12 +571,16 @@ async fn passkey_failures_are_throttled_per_ip() {
     };
     for i in 0..5 {
         challenge(support::DEFAULT_PEER).await;
-        let resp = app
-            .post_form(&action, &[("csrf_token", &csrf), ("response", "garbage")])
-            .await;
+        let resp = post_form_follow(
+            &app,
+            &action,
+            &[("csrf_token", &csrf), ("response", "garbage")],
+        )
+        .await;
         assert_eq!(resp.status, 400, "attempt {i}");
     }
     challenge(support::DEFAULT_PEER).await;
+    // The lock is a direct answer (no redirect).
     let resp = app
         .post_form(&action, &[("csrf_token", &csrf), ("response", "garbage")])
         .await;

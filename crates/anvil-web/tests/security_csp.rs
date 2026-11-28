@@ -93,7 +93,10 @@ async fn every_ui_page_has_the_strict_headers_and_no_external_references() {
         "/t/system/ui/login",
     ] {
         let resp = Client::get(&app, path).await;
-        assert_eq!(resp.status, 200, "{path}");
+        // A token that was never issued shows the "link expired" page (400, 07.1-07): its headers
+        // are checked like every other page.
+        let expected = if path.contains("token=sample") { 400 } else { 200 };
+        assert_eq!(resp.status, expected, "{path}");
         pages.push((path.to_owned(), resp));
     }
     let setup = format!("/setup?token={}", app.setup_token);

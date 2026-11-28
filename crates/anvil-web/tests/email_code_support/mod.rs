@@ -132,8 +132,12 @@ pub async fn request_code_at(app: &TestApp, login_path: &str, email: &str) -> Te
     let html = page.html();
     let action = action_of(app, &html, "email-code-request");
     let csrf = csrf_from(&html);
-    app.post_form(&action, &[("csrf_token", csrf.as_str()), ("email", email)])
-        .await
+    post_form_follow(
+        app,
+        &action,
+        &[("csrf_token", csrf.as_str()), ("email", email)],
+    )
+    .await
 }
 
 pub async fn request_code(app: &TestApp, email: &str) -> TestResponse {
@@ -146,7 +150,8 @@ pub async fn resend(app: &TestApp, page: &TestResponse) -> TestResponse {
     let action = action_of(app, &html, "email-code-resend");
     let csrf = csrf_from(&html);
     let token = hidden(&html, "factor_token").expect("factor_token");
-    app.post_form(
+    post_form_follow(
+        app,
         &action,
         &[
             ("csrf_token", csrf.as_str()),
@@ -156,13 +161,15 @@ pub async fn resend(app: &TestApp, page: &TestResponse) -> TestResponse {
     .await
 }
 
-/// Posts `code` with the code form of a "check your email" page.
+/// Posts `code` with the code form of a "check your email" page. A refused code answers
+/// Post/Redirect/Get; the redirect is followed like a browser (the page showing the error).
 pub async fn submit_code(app: &TestApp, page: &TestResponse, code: &str) -> TestResponse {
     let html = page.html();
     let action = action_of(app, &html, "email-code");
     let csrf = csrf_from(&html);
     let token = hidden(&html, "factor_token").expect("factor_token");
-    app.post_form(
+    post_form_follow(
+        app,
         &action,
         &[
             ("csrf_token", csrf.as_str()),
@@ -230,7 +237,7 @@ pub async fn post_link(app: &TestApp, page: &TestResponse, cookie: Option<&str>)
     let token = hidden(&html, "token").expect("token");
     let pairs = [("csrf_token", csrf.as_str()), ("token", token.as_str())];
     match cookie {
-        None => app.post_form(&action, &pairs).await,
+        None => post_form_follow(app, &action, &pairs).await,
         Some(c) => post_with_cookie(app, &action, &pairs, c).await,
     }
 }
@@ -268,7 +275,7 @@ pub async fn get_from(app: &TestApp, peer: SocketAddr, path: &str) -> TestRespon
     .await
 }
 
-/// A same-origin form POST from `peer`.
+/// A same-origin form POST from `peer` (a Post/Redirect/Get answer is followed).
 pub async fn post_from(
     app: &TestApp,
     peer: SocketAddr,
@@ -278,18 +285,24 @@ pub async fn post_from(
     let body = url::form_urlencoded::Serializer::new(String::new())
         .extend_pairs(pairs)
         .finish();
-    app.send_from(
-        peer,
-        Request::builder()
-            .method(Method::POST)
-            .uri(path)
-            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-            .header("sec-fetch-site", "same-origin")
-            .header(header::CONTENT_LENGTH, body.len())
-            .body(Body::from(body))
-            .expect("request"),
-    )
-    .await
+    let resp = app
+        .send_from(
+            peer,
+            Request::builder()
+                .method(Method::POST)
+                .uri(path)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header("sec-fetch-site", "same-origin")
+                .header(header::CONTENT_LENGTH, body.len())
+                .body(Body::from(body))
+                .expect("request"),
+        )
+        .await;
+    // A refused submission answers Post/Redirect/Get; follow it like a browser.
+    if crate::support::is_prg(&resp) {
+        return app.follow(&resp).await;
+    }
+    resp
 }
 
 /// The active session of the jar's session cookie, if any.

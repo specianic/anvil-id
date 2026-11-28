@@ -356,9 +356,13 @@ async fn a_garbage_assertion_is_the_login_form_with_passkey_failed() {
     let (options, action, csrf) = passkey_form(&app, &page);
     challenge(&app, &options, &csrf).await;
     for garbage in ["", "not json", "{}", "{\"id\":\"x\",\"response\":{}}"] {
-        let resp = app
-            .post_form(&action, &[("csrf_token", &csrf), ("response", garbage)])
-            .await;
+        // Post/Redirect/Get: followed like a browser.
+        let resp = post_form_follow(
+            &app,
+            &action,
+            &[("csrf_token", &csrf), ("response", garbage)],
+        )
+        .await;
         assert_eq!(resp.status, 400, "{garbage}: {}", resp.text());
         let html = resp.html();
         assert_eq!(
@@ -385,13 +389,19 @@ async fn passkey_signs_in_and_a_consumed_challenge_cannot_be_replayed() {
     // single use, so the valid assertion is now a replay and is rejected.
     let ch = challenge(&app, &options, &csrf).await;
     let assertion = auth.assert(&ch, rp_id(), origin(), FLAG_UP | FLAG_UV, 1);
-    let resp = app
-        .post_form(&action, &[("csrf_token", &csrf), ("response", "garbage")])
-        .await;
+    let resp = post_form_follow(
+        &app,
+        &action,
+        &[("csrf_token", &csrf), ("response", "garbage")],
+    )
+    .await;
     assert_eq!(resp.status, 400);
-    let resp = app
-        .post_form(&action, &[("csrf_token", &csrf), ("response", &assertion)])
-        .await;
+    let resp = post_form_follow(
+        &app,
+        &action,
+        &[("csrf_token", &csrf), ("response", &assertion)],
+    )
+    .await;
     assert_eq!(resp.status, 400, "{}", resp.text());
     assert_eq!(
         message_keys(&resp.html()),
@@ -435,9 +445,8 @@ async fn passkey_signs_in_and_a_consumed_challenge_cannot_be_replayed() {
     let page = app.get("/ui/login").await;
     let (options, action, csrf) = passkey_form(&app, &page);
     challenge(&app, &options, &csrf).await;
-    let resp = app
-        .post_form(&action, &[("csrf_token", &csrf), ("response", &assertion)])
-        .await;
+    let resp =
+        post_form_follow(&app, &action, &[("csrf_token", &csrf), ("response", &assertion)]).await;
     assert_eq!(resp.status, 400);
     assert!(session_cookie(&app).is_none());
 }

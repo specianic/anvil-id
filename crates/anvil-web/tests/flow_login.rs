@@ -283,16 +283,18 @@ async fn expired_flow_restarts_with_flow_expired() {
     let app = app_with_user().await;
     let (action, csrf) = open_form(&app, "/ui/login").await;
     app.clock().advance(Duration::from_secs(16 * 60));
-    let resp = app
-        .post_form(
-            &action,
-            &[
-                ("csrf_token", &csrf),
-                ("identifier", EMAIL),
-                ("password", PASSWORD),
-            ],
-        )
-        .await;
+    // Post/Redirect/Get: 303 to the restarted flow, which shows the message.
+    let resp = post_form_follow(
+        &app,
+        &action,
+        &[
+            ("csrf_token", &csrf),
+            ("identifier", EMAIL),
+            ("password", PASSWORD),
+        ],
+    )
+    .await;
+    assert_eq!(resp.status, 400, "{}", resp.text());
     let html = resp.html();
     assert!(
         message_keys(&html).contains(&"flow.expired".to_owned()),

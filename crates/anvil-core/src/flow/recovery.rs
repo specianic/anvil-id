@@ -64,13 +64,15 @@ pub(super) fn request(mut state: RecoveryState, email: String) -> (FlowState, Ve
 }
 
 pub(super) fn reset(
-    state: RecoveryState,
+    mut state: RecoveryState,
     token: String,
     password: String,
     env: &super::engine::FlowEnv,
 ) -> (FlowState, Vec<Effect>) {
     let token = token.trim().to_owned();
     if token.is_empty() || token.len() > MAX_TOKEN_LEN {
+        // The request form is now the current step (a page showing the flow again agrees).
+        state.reset = false;
         let f = request_form(&state, vec![error("recovery.invalid_token")], Vec::new());
         return (FlowState::Recovery(state), vec![Effect::Render(f)]);
     }
@@ -93,13 +95,15 @@ pub(super) fn reset(
 }
 
 pub(super) fn on_failure(
-    state: RecoveryState,
+    mut state: RecoveryState,
     pending: &[Effect],
     failure: Failure,
 ) -> (FlowState, FormDescription) {
     let f = match failure {
-        // A dead token: offer to request a new link.
+        // A dead token: offer to request a new link. The request form is now the current step
+        // (a page showing the flow again after Post/Redirect/Get shows the same form).
         Failure::InvalidToken => {
+            state.reset = false;
             request_form(&state, vec![error("recovery.invalid_token")], Vec::new())
         }
         Failure::Breached | Failure::Overloaded => {
@@ -309,8 +313,13 @@ mod tests {
         assert_eq!(f.id, "recovery-reset");
         assert_eq!(all_keys(&f), vec!["password.breached"]);
         assert_form_invariants(&f, &[PW]);
-        let (_, f) = engine_on_failure(state, &pending[1..], Failure::InvalidToken, &env);
+        let (next, f) = engine_on_failure(state, &pending[1..], Failure::InvalidToken, &env);
         assert_eq!(f.id, "recovery");
         assert_eq!(all_keys(&f), vec!["recovery.invalid_token"]);
+        // The request form is the current step from now on.
+        let FlowState::Recovery(next) = next else {
+            panic!("recovery state")
+        };
+        assert_eq!(current_form(&next, Vec::new()).id, "recovery");
     }
 }

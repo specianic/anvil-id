@@ -7,6 +7,10 @@
 //! ([`super::login::stale_request_page`]) before any form. A registration that must confirm its
 //! address answers `registration.check_email` naming the address, and the emailed link carries
 //! the request so the verification page can continue to the app.
+//!
+//! A failed POST answers 303 to `GET /ui/registration?flow=` (Post/Redirect/Get,
+//! [`super::login::show_step`]), which shows the form again with the errors, the email and the
+//! name (never the password).
 
 use anvil_core::flow::engine::FlowInput;
 use anvil_core::model::{FlowKind, RegistrationMode};
@@ -19,8 +23,8 @@ use axum::routing::get;
 use axum_extra::extract::cookie::CookieJar;
 
 use super::login::{
-    UiForm, UiQuery, message_page, page_locale, rejected_form, stale_request_page, start_page,
-    submit_page,
+    UiForm, UiQuery, message_page, page_locale, rejected_form, show_step, stale_request_page,
+    start_page, submit_page,
 };
 use super::nav::{NavContext, StaleRequest};
 use crate::i18n::RequestLocale;
@@ -37,8 +41,24 @@ async fn show(
     tenant: ResolvedTenant,
     locale: RequestLocale,
     headers: HeaderMap,
+    jar: CookieJar,
     Query(q): Query<UiQuery>,
 ) -> Response {
+    // Post/Redirect/Get: the form a failed POST redirected to.
+    if let Some(flow) = q.flow_id()
+        && let Some(resp) = show_step(
+            &state,
+            &tenant,
+            locale.clone(),
+            &headers,
+            &jar,
+            flow,
+            "registration",
+        )
+        .await
+    {
+        return resp;
+    }
     let nav = match NavContext::from_query(&state, &tenant, q.request.as_deref()).await {
         Ok(nav) => nav,
         Err(StaleRequest::Unknown) => return stale_request_page(&state, &tenant, &locale.0),

@@ -1068,17 +1068,16 @@ async fn confirmation_through_a_linked_provider_still_needs_the_second_factor() 
         .expect("factor token")
         .1;
     // A wrong code links nothing.
-    let wrong = u
-        .app
-        .post_form(
-            &action,
-            &[
-                ("csrf_token", &csrf),
-                ("factor_token", &factor),
-                ("code", "000000"),
-            ],
-        )
-        .await;
+    let wrong = post_form_follow(
+        &u.app,
+        &action,
+        &[
+            ("csrf_token", &csrf),
+            ("factor_token", &factor),
+            ("code", "000000"),
+        ],
+    )
+    .await;
     assert_eq!(wrong.status, 400, "{}", wrong.text());
     assert_eq!(links(&u.app, &alice).await.len(), 1);
     assert!(session(&u.app).await.is_none());

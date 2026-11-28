@@ -338,7 +338,7 @@ async fn posts_without_or_with_a_wrong_csrf_token_are_403() {
         .await;
     assert_eq!(resp.status, 403);
     // A tampered limiter token restarts the sign-in (a new flow and cookie) without checking the
-    // code.
+    // code (Post/Redirect/Get to the new flow's sign-in page).
     let resp = app
         .post_form(
             &verify,
@@ -349,6 +349,9 @@ async fn posts_without_or_with_a_wrong_csrf_token_are_403() {
             ],
         )
         .await;
+    assert_eq!(resp.status, 303, "{}", resp.text());
+    let resp = app.follow(&resp).await;
+    assert_eq!(resp.status, 400, "{}", resp.text());
     assert_eq!(message_keys(&resp.html()), vec!["flow.expired"]);
     assert_eq!(sign_ins(&app).await, 0);
 }

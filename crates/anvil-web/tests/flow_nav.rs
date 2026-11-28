@@ -27,8 +27,8 @@ use serde_json::json;
 use support::{TestApp, TestResponse, csrf_from, location};
 use token_support::{CHALLENGE, REDIRECT, Rp, register_with, web_input};
 use ui_helpers::{
-    default_tenant, error_key, form_action, hidden_inputs, message_keys, set_settings, submit_form,
-    take_emails, to_path,
+    default_tenant, error_key, form_action, hidden_inputs, message_keys, post_form_follow,
+    set_settings, submit_form, take_emails, to_path,
 };
 use upstream_support::MOCK_EMAIL;
 
@@ -338,6 +338,12 @@ async fn continue_link_never_takes_host_from_request() {
         ]),
     )
     .await;
+    // Post/Redirect/Get: the redirect and the page it leads to stay on the issuer's origin.
+    assert_eq!(failed.status, 303, "{}", failed.text());
+    let to = location(&failed);
+    assert!(!to.contains("evil.test"), "{to}");
+    assert!(to.starts_with(&issuer(&app)), "{to}");
+    let failed = send_with(&app, Method::GET, &to_path(&app, &to), forged, None).await;
     assert_eq!(failed.status, 400, "{}", failed.text());
     let html = failed.html();
     assert!(!html.contains("evil.test"), "{html}");
@@ -485,30 +491,30 @@ async fn second_factor_start_over_keeps_the_request_and_restart_continues_it() {
     let action = form_action(&app, &html);
     let csrf = csrf_from(&html);
     let token = hidden(&html, "factor_token");
-    let wrong = app
-        .post_form(
-            &action,
-            &[
-                ("csrf_token", &csrf),
-                ("factor_token", &token),
-                ("code", "000000"),
-            ],
-        )
-        .await;
+    let wrong = post_form_follow(
+        &app,
+        &action,
+        &[
+            ("csrf_token", &csrf),
+            ("factor_token", &token),
+            ("code", "000000"),
+        ],
+    )
+    .await;
     assert_eq!(wrong.status, 400, "{}", wrong.text());
     assert_keeps(&wrong.html(), "link-login", &request);
 
     // A post without a valid binding token restarts the sign-in for the same request.
-    let restarted = app
-        .post_form(
-            &action,
-            &[
-                ("csrf_token", &csrf),
-                ("factor_token", "garbage"),
-                ("code", "000000"),
-            ],
-        )
-        .await;
+    let restarted = post_form_follow(
+        &app,
+        &action,
+        &[
+            ("csrf_token", &csrf),
+            ("factor_token", "garbage"),
+            ("code", "000000"),
+        ],
+    )
+    .await;
     assert_eq!(restarted.status, 400, "{}", restarted.text());
     let html = restarted.html();
     assert!(message_keys(&html).contains(&"flow.expired".to_owned()));
@@ -544,12 +550,12 @@ async fn second_factor_get_bounce_keeps_the_request_only_for_the_flow_browser() 
     .await;
     let html = page.html();
     let action = form_action(&app, &html);
+    // In the browser holding the flow cookie, the GET shows the step again (Post/Redirect/Get)
+    // with the request's links.
     let resp = app.get(&action).await;
-    assert_eq!(resp.status, 303);
-    assert_eq!(
-        location(&resp),
-        format!("{}/ui/login?request={request}", issuer(&app))
-    );
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert!(resp.html().contains("id=\"second-factor\""));
+    assert_keeps(&resp.html(), "link-login", &request);
     // Without the flow cookie: the bare sign-in page.
     app.clear_cookies();
     let resp = app.get(&action).await;
@@ -575,16 +581,16 @@ async fn mfa_enrolment_start_over_keeps_the_request() {
     let action = form_action(&app, &html);
     let csrf = csrf_from(&html);
     let token = hidden(&html, "factor_token");
-    let wrong = app
-        .post_form(
-            &action,
-            &[
-                ("csrf_token", &csrf),
-                ("factor_token", &token),
-                ("code", "000000"),
-            ],
-        )
-        .await;
+    let wrong = post_form_follow(
+        &app,
+        &action,
+        &[
+            ("csrf_token", &csrf),
+            ("factor_token", &token),
+            ("code", "000000"),
+        ],
+    )
+    .await;
     assert_eq!(wrong.status, 400, "{}", wrong.text());
     assert_keeps(&wrong.html(), "link-login", &request);
 }
@@ -610,16 +616,16 @@ async fn email_code_use_another_way_keeps_the_request() {
     assert_keeps(&html, "link-login", &request);
     // A wrong code keeps it.
     let token = hidden(&html, "factor_token");
-    let wrong = app
-        .post_form(
-            &format!("/ui/login/email-code/verify?flow={flow}"),
-            &[
-                ("csrf_token", &csrf),
-                ("factor_token", &token),
-                ("code", "00000000"),
-            ],
-        )
-        .await;
+    let wrong = post_form_follow(
+        &app,
+        &format!("/ui/login/email-code/verify?flow={flow}"),
+        &[
+            ("csrf_token", &csrf),
+            ("factor_token", &token),
+            ("code", "00000000"),
+        ],
+    )
+    .await;
     assert_eq!(wrong.status, 400, "{}", wrong.text());
     assert_keeps(&wrong.html(), "link-login", &request);
 }

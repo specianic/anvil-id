@@ -35,7 +35,8 @@ use serde_json::json;
 use support::{TestApp, TestResponse, csrf_from, location};
 use token_support::{CHALLENGE, REDIRECT, register_with, web_input};
 use ui_helpers::{
-    form_action, hidden_inputs, message_keys, normalize, register, session_cookie, to_path,
+    form_action, hidden_inputs, message_keys, normalize, post_form_follow, register,
+    session_cookie, to_path,
 };
 use upstream_flow::{
     Started, Upstream, add_org_connection, callback_at, claim_domain, create_org, form_id,
@@ -151,7 +152,9 @@ async fn post_form_in(
     let mut all: Vec<(&str, &str)> = vec![("csrf_token", &csrf)];
     all.extend(hidden.iter().map(|(k, v)| (k.as_str(), v.as_str())));
     all.extend_from_slice(pairs);
-    app.post_form(action, &all).await
+    // A failed POST answers Post/Redirect/Get: followed like a browser (a lock, CAPTCHA demand or
+    // a redirect to an identity provider is returned as it is).
+    post_form_follow(app, action, &all).await
 }
 
 /// Opens the sign-in page (expects 200).
@@ -945,17 +948,23 @@ async fn post_page_from(
     let body = url::form_urlencoded::Serializer::new(String::new())
         .extend_pairs(all)
         .finish();
-    app.send_from(
-        peer,
-        Request::builder()
-            .method(Method::POST)
-            .uri(&action)
-            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-            .header("sec-fetch-site", "same-origin")
-            .body(Body::from(body))
-            .expect("request"),
-    )
-    .await
+    let resp = app
+        .send_from(
+            peer,
+            Request::builder()
+                .method(Method::POST)
+                .uri(&action)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header("sec-fetch-site", "same-origin")
+                .body(Body::from(body))
+                .expect("request"),
+        )
+        .await;
+    // Post/Redirect/Get: follow a failed attempt's redirect like a browser.
+    if support::is_prg(&resp) {
+        return app.follow(&resp).await;
+    }
+    resp
 }
 
 /// The `flow` parameter of the first form's action.

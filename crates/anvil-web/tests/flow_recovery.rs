@@ -84,7 +84,19 @@ async fn recovery_resets_the_password_revokes_sessions_and_is_single_use() {
     // The token cannot be reused.
     app.clock().advance(Duration::from_secs(60));
     app.clear_cookies();
-    let resp = submit_form(&app, &link, &[("password", "yet another passphrase")]).await;
+    // Opening the used link says so on GET, before anything is typed (07.1-07).
+    let page = app.get(&link).await;
+    assert_eq!(page.status, 400, "{}", page.text());
+    assert!(message_keys(&page.html()).contains(&"links.expired".to_owned()));
+    assert!(!page.html().contains("id=\"recovery-reset-submit\""));
+    // A POST of the used token is still refused by the flow.
+    let token = link.split("token=").nth(1).expect("token").to_owned();
+    let resp = submit_form(
+        &app,
+        "/ui/recovery",
+        &[("token", &token), ("password", "yet another passphrase")],
+    )
+    .await;
     assert_eq!(resp.status, 400);
     assert!(
         message_keys(&resp.html()).contains(&"recovery.invalid_token".to_owned()),
@@ -215,10 +227,15 @@ async fn reset_with_an_invalid_token_enqueues_no_notice_and_audits_nothing() {
     let app = TestApp::new().await;
     register(&app, "", EMAIL, OLD).await;
     take_emails(&app).await;
+    // The link page already says the link cannot be used (GET, nothing consumed) ...
+    let page = app.get("/ui/recovery?token=not-a-real-token").await;
+    assert_eq!(page.status, 400, "{}", page.text());
+    assert!(message_keys(&page.html()).contains(&"links.expired".to_owned()));
+    // ... and a POST of the token is refused by the flow.
     let resp = submit_form(
         &app,
-        "/ui/recovery?token=not-a-real-token",
-        &[("password", NEW)],
+        "/ui/recovery",
+        &[("token", "not-a-real-token"), ("password", NEW)],
     )
     .await;
     assert_eq!(resp.status, 400);

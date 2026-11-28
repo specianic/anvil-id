@@ -4,7 +4,7 @@
 //! | Route | |
 //! |---|---|
 //! | `POST /ui/login/second-factor?flow=` | `code` (TOTP) or `recovery_code`, plus `factor_token`; in the enrolment step `code` confirms the new authenticator app |
-//! | `GET  /ui/login/second-factor[?flow=]` | 303 to the sign-in page (the page only exists as a POST answer), keeping the flow's request when the flow cookie is present |
+//! | `GET  /ui/login/second-factor?flow=` | the current second-factor or enrolment step again after a failed POST (Post/Redirect/Get); without the flow cookie 303 to the sign-in page (keeping the flow's request when the cookie is present) |
 //!
 //! The same route serves the three steps of the login flow that come after the user is known:
 //! the second factor (`second_factor.html`), the enrolment required by a `required` policy
@@ -34,7 +34,7 @@ use anvil_jose::encoding::{b64url, b64url_decode};
 use axum::Router;
 use axum::extract::rejection::FormRejection;
 use axum::extract::{Form, Query, State};
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum_extra::extract::cookie::CookieJar;
@@ -42,7 +42,7 @@ use axum_extra::extract::cookie::CookieJar;
 use super::flow_driver::{self, DriveOutcome, FlowBinding, Throttle};
 use super::login::{
     Extras, UiForm, UiQuery, csrf_page, drive_response, locked_page, rejected_form,
-    restart_login_in,
+    restart_login_in, show_step,
 };
 use super::nav::{NavContext, UiPage};
 use crate::i18n::{Locale, RequestLocale};
@@ -96,16 +96,35 @@ pub(super) fn open_factor_token(
     uuid::Uuid::from_slice(&plain).ok().map(UserId)
 }
 
-/// `GET`: the page is only ever the answer to a POST (its CSRF token cannot be shown again), so
-/// a direct visit goes back to the sign-in page. A reload in the browser holding the flow cookie
-/// keeps the flow's authorization request.
+/// `GET ?flow=`: the step a failed POST redirected to (Post/Redirect/Get,
+/// [`super::login::show_step`]): the second-factor or enrolment form again, its binding token
+/// sealed again from the flow state and the enrolment QR code re-derived from the pending secret.
+/// Without the flow cookie (or for another flow, an expired one, or a flow at another step) there
+/// is no form state: 303 to the sign-in page, keeping the flow's authorization request only in
+/// the browser holding the flow cookie.
 async fn show(
     State(state): State<AppState>,
     tenant: ResolvedTenant,
-    RequestLocale(loc, _): RequestLocale,
+    locale: RequestLocale,
+    headers: HeaderMap,
     jar: CookieJar,
     Query(q): Query<UiQuery>,
 ) -> Response {
+    if let Some(flow) = q.flow_id()
+        && let Some(resp) = show_step(
+            &state,
+            &tenant,
+            locale.clone(),
+            &headers,
+            &jar,
+            flow,
+            "login/second-factor",
+        )
+        .await
+    {
+        return resp;
+    }
+    let loc = locale.0;
     let has_cookie = jar
         .get(&state.cookies().flow_name(&tenant.tenant))
         .is_some();

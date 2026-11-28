@@ -4,6 +4,7 @@
 //! |---|---|
 //! | `POST /ui/login/email-code?flow=` | `email` (from the sign-in page), or nothing plus `factor_token` (a new code from the email page), or nothing at all (the "Email me a code" button of a link confirmation whose matching account may not be revealed: counted against the pending link's upstream address) |
 //! | `POST /ui/login/email-code/verify?flow=` | `code` plus `factor_token` |
+//! | `GET  /ui/login/email-code?flow=` | the email page again after a wrong code (Post/Redirect/Get); without the flow cookie 303 to the sign-in page |
 //! | `GET  /ui/login/email-link?flow=&token=` | the emailed link: only a "Continue signing in" button (consumes nothing) |
 //! | `POST /ui/login/email-link?flow=` | `token` plus the page's `csrf_token`: consumes the link in the browser holding the flow cookie |
 //!
@@ -52,16 +53,16 @@ use anvil_jose::encoding::{b64url, b64url_decode};
 use axum::Router;
 use axum::extract::rejection::FormRejection;
 use axum::extract::{Form, Query, State};
-use axum::http::{HeaderValue, StatusCode, header};
-use axum::response::Response;
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum_extra::extract::cookie::CookieJar;
 
 use super::flow_driver::{self, DriveOutcome, FlowBinding, Throttle};
 use super::login::{
     Extras, UiForm, UiQuery, bad_form, csrf_page, drive_response, factor_token, message_page,
-    outcome_response_with, rejected_form, rejection_page, restart_login_in, started_response_with,
-    ui_base,
+    outcome_response_with, rejected_form, rejection_page, restart_login_in, show_step,
+    started_response_with, ui_base,
 };
 use super::nav::{NavContext, UiPage};
 use crate::client_ip::ClientIp;
@@ -79,7 +80,7 @@ pub const EMAIL_TOKEN_PURPOSE: &str = "anvilid/email-code-limit/v1";
 /// Email code routes, behind the Fetch-Metadata layer.
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
-        .route("/ui/login/email-code", post(request))
+        .route("/ui/login/email-code", get(show).post(request))
         .route("/ui/login/email-code/verify", post(verify))
         .route("/ui/login/email-link", get(link_page).post(link_submit))
 }
@@ -143,6 +144,39 @@ fn not_found(state: &AppState, tenant: &ResolvedTenant, loc: &Locale) -> Respons
         "not_found",
         "",
     )
+}
+
+/// `GET /ui/login/email-code?flow=`: the email-code step again after a failed code
+/// (Post/Redirect/Get, [`super::login::show_step`]), its limiter token sealed again from the flow
+/// state. Without the flow cookie (or another flow, an expired one, another step): 303 to the
+/// sign-in page with no form state. 404 unless email sign-in is on.
+async fn show(
+    State(state): State<AppState>,
+    tenant: ResolvedTenant,
+    locale: RequestLocale,
+    headers: HeaderMap,
+    jar: CookieJar,
+    Query(q): Query<UiQuery>,
+) -> Response {
+    if !email_code_enabled(&tenant.tenant) {
+        return not_found(&state, &tenant, &locale.0);
+    }
+    if let Some(flow) = q.flow_id()
+        && let Some(resp) = show_step(
+            &state,
+            &tenant,
+            locale.clone(),
+            &headers,
+            &jar,
+            flow,
+            "login/email-code",
+        )
+        .await
+    {
+        return resp;
+    }
+    let location = NavContext::none().url(&tenant, &locale.0, UiPage::Login);
+    (StatusCode::SEE_OTHER, [(header::LOCATION, location)]).into_response()
 }
 
 /// `POST /ui/login/email-code?flow=`: send a sign-in email (module docs).

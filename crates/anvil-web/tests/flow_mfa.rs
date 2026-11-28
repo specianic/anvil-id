@@ -168,7 +168,8 @@ async fn second_factor(app: &TestApp, page: &TestResponse, pairs: &[(&str, &str)
         ("factor_token", token.as_str()),
     ];
     all.extend_from_slice(pairs);
-    app.post_form(&action, &all).await
+    // A failed code answers Post/Redirect/Get: follow it like a browser.
+    post_form_follow(app, &action, &all).await
 }
 
 /// Signs in with the password and expects the second-factor page (no session yet).
@@ -347,7 +348,7 @@ async fn a_second_factor_post_without_a_valid_binding_token_restarts_the_sign_in
         if let Some(t) = token {
             pairs.push(("factor_token", t));
         }
-        let resp = app.post_form(&action, &pairs).await;
+        let resp = post_form_follow(&app, &action, &pairs).await;
         assert_eq!(resp.status, 400, "{token:?}: {}", resp.text());
         let html = resp.html();
         assert!(html.contains("id=\"login\""), "a fresh sign-in form");
@@ -357,16 +358,16 @@ async fn a_second_factor_post_without_a_valid_binding_token_restarts_the_sign_in
 
     // A token of another flow does not open either.
     let other = password_step(&app, "/ui/login").await;
-    let resp = app
-        .post_form(
-            &action,
-            &[
-                ("csrf_token", csrf.as_str()),
-                ("code", code.as_str()),
-                ("factor_token", factor_token(&other.html()).as_str()),
-            ],
-        )
-        .await;
+    let resp = post_form_follow(
+        &app,
+        &action,
+        &[
+            ("csrf_token", csrf.as_str()),
+            ("code", code.as_str()),
+            ("factor_token", factor_token(&other.html()).as_str()),
+        ],
+    )
+    .await;
     assert_eq!(resp.status, 400);
     assert!(session_cookie(&app).is_none());
 }
@@ -382,12 +383,12 @@ async fn a_code_posted_to_the_password_route_is_not_a_second_factor() {
         .map(|(_, f)| f.to_owned())
         .expect("flow id");
     let code = current_code(&app).await;
-    let resp = app
-        .post_form(
-            &format!("/ui/login?flow={flow}"),
-            &[("csrf_token", csrf_from(&html).as_str()), ("code", &code)],
-        )
-        .await;
+    let resp = post_form_follow(
+        &app,
+        &format!("/ui/login?flow={flow}"),
+        &[("csrf_token", csrf_from(&html).as_str()), ("code", &code)],
+    )
+    .await;
     assert_eq!(resp.status, 400, "{}", resp.text());
     assert_eq!(
         message_keys(&resp.html()),

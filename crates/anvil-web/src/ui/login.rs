@@ -125,6 +125,7 @@ use secrecy::{ExposeSecret as _, SecretString};
 use serde::{Deserialize, Serialize};
 
 use super::account_security::{ACCOUNT_CSP, grouped};
+use super::flash::{self, Flash};
 use super::flow_driver::{
     self, CaptchaAnswer, DriveOutcome, DriveRejection, FlowBinding, Identified, InFlowPasskey,
     LoginMethod, PasskeyStep, Throttle, login_methods,
@@ -136,7 +137,7 @@ use crate::adapters::passkey::{WebauthnPasskeys, relying_party};
 use crate::client_ip::ClientIp;
 use crate::errors::{core_error_page_in, error_page_in};
 use crate::i18n::{Locale, RequestLocale, carry_ui_locales, locale_for_request};
-use crate::layers::ratelimit::{Surface, too_many_requests};
+use crate::layers::ratelimit::{Surface, too_many_requests_in};
 use crate::render::PageContext;
 use crate::request_context::AuditContext;
 use crate::state::AppState;
@@ -202,6 +203,21 @@ async fn show(
     jar: CookieJar,
     Query(q): Query<UiQuery>,
 ) -> Response {
+    // Post/Redirect/Get: the step of the flow a failed POST redirected to.
+    if let Some(flow) = q.flow_id()
+        && let Some(resp) = show_step(
+            &state,
+            &tenant,
+            locale.clone(),
+            &headers,
+            &jar,
+            flow,
+            "login",
+        )
+        .await
+    {
+        return resp;
+    }
     let nav = match NavContext::from_query(&state, &tenant, q.request.as_deref()).await {
         Ok(nav) => nav.with_return_to(q.return_target()),
         Err(StaleRequest::Unknown) => return stale_request_page(&state, &tenant, &locale.0),
@@ -471,7 +487,7 @@ async fn sign_in_gate_page(
             )
         }
         DriveOutcome::Throttled { retry_after } => {
-            too_many_requests(state, Some(tenant), Surface::Browser, retry_after)
+            too_many_requests_in(state, Some(tenant), loc, Surface::Browser, retry_after)
         }
         DriveOutcome::Rejected(r) => rejection_page(state, tenant, loc, r),
     }
@@ -995,6 +1011,146 @@ async fn flow_passkey_finish(
         ..Extras::default()
     };
     outcome_response_with(state, tenant, loc, &nav, result.outcome, &extras)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Post/Redirect/Get (U-M1)
+// ---------------------------------------------------------------------------------------------
+
+/// The page (path under `{issuer}/ui/`) that shows `form_id` again after a failed POST, or
+/// `None` for a form that is answered directly (the upstream link confirmation, setup).
+pub(super) fn prg_path(form_id: &str) -> Option<&'static str> {
+    match form_id {
+        "login" | IDENTIFY_FORM_ID | SSO_CHOICE_FORM_ID => Some("login"),
+        SECOND_FACTOR_FORM_ID | ENROLL_FORM_ID => Some("login/second-factor"),
+        EMAIL_CODE_FORM_ID => Some("login/email-code"),
+        "registration" => Some("registration"),
+        "recovery" | "recovery-reset" => Some("recovery"),
+        "verification" => Some("verification"),
+        _ => None,
+    }
+}
+
+/// The answer to a failed form POST (Post/Redirect/Get, [`super::flash`]): 303 to the `GET` of
+/// the flow page showing `form` (`{issuer}/ui/<page>?flow={id}`, explicit `ui_locales` kept),
+/// with the flash cookie carrying its messages and non-secret values (`captcha`: the brute-force
+/// gate asks for the widget next time) added to `jar`. `None` for a form that is answered
+/// directly ([`prg_path`]) or not bound to a flow.
+pub(super) fn prg_redirect(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    loc: &Locale,
+    form: &FormDescription,
+    captcha: bool,
+    jar: CookieJar,
+) -> Option<Response> {
+    let path = prg_path(&form.id)?;
+    let flow = flow_of(form)?;
+    let cookie = flash::write(
+        state,
+        &tenant.tenant,
+        flow,
+        &Flash::from_form(form, captcha),
+    )?;
+    let location = carry_ui_locales(&format!("{}/{path}?flow={flow}", ui_base(tenant)), loc);
+    let location = HeaderValue::from_str(&location).ok()?;
+    Some(
+        (
+            StatusCode::SEE_OTHER,
+            jar.add(cookie),
+            [
+                (header::LOCATION, location),
+                (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+            ],
+        )
+            .into_response(),
+    )
+}
+
+/// [`prg_redirect`] for a newly started flow (a restart): its flow cookie goes with the redirect.
+fn prg_started(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    loc: &Locale,
+    started: &StartedFlow,
+) -> Option<Response> {
+    let jar = CookieJar::new().add(
+        state
+            .cookies()
+            .flow_cookie(&tenant.tenant, started.cookie_token.expose_secret()),
+    );
+    prg_redirect(state, tenant, loc, &started.form, false, jar)
+}
+
+/// The `GET` of a flow page after Post/Redirect/Get (`?flow={id}`): the current step of the flow
+/// (`flow_driver::shown_step`), bound to the CSRF token recomputed from the flow cookie
+/// (`FlowService::csrf_for`), with the messages and values of the flash ([`super::flash::take`],
+/// cleared) and the links of the flow's request. Status 400 when it shows an error, else 200;
+/// `no-store`. The second-factor and email-code binding tokens are sealed again from the flow
+/// state, never carried in the flash.
+///
+/// `None` (the caller shows its page as for a plain `GET`, without any form state) when the
+/// browser has no flow cookie, the cookie belongs to another flow, the flow is unknown or
+/// expired, or its current step is not shown by `path` ([`prg_path`]).
+pub(super) async fn show_step(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    locale: RequestLocale,
+    headers: &HeaderMap,
+    jar: &CookieJar,
+    flow_id: FlowId,
+    path: &str,
+) -> Option<Response> {
+    let cookie = jar.get(&state.cookies().flow_name(&tenant.tenant))?;
+    let csrf = state
+        .ui_flow_service()
+        .csrf_for(tenant.tenant.id, flow_id, cookie.value());
+    let binding = FlowBinding::Cookie { jar, csrf: &csrf };
+    let (mut form, _, display) =
+        match flow_driver::shown_step(state, tenant, flow_id, &binding).await {
+            Ok(Some(step)) => step,
+            Ok(None) | Err(DriveRejection::Binding) => return None,
+            Err(DriveRejection::Failed(e)) => {
+                return Some(core_error_page_in(state, Some(tenant), &locale.0, &e));
+            }
+        };
+    if prg_path(&form.id) != Some(path) {
+        return None;
+    }
+    let nav = NavContext::from_flow(state, tenant, flow_id).await;
+    let loc = page_locale(state, tenant, locale, headers, nav.request().map(|r| r.id)).await;
+    let (flash, out) = flash::take(state, &tenant.tenant, flow_id, jar, CookieJar::new());
+    let captcha = flash
+        .as_ref()
+        .is_some_and(|f| f.form_id() == form.id && f.captcha());
+    if let Some(f) = &flash {
+        f.apply(&mut form);
+    }
+    let factor_token = match form.id.as_str() {
+        SECOND_FACTOR_FORM_ID | ENROLL_FORM_ID => display
+            .step_user
+            .and_then(|user| factor_token(state, tenant, flow_id, user)),
+        EMAIL_CODE_FORM_ID => display.email_code.as_ref().and_then(|ec| {
+            flow_driver::seal_email_token(
+                state,
+                tenant,
+                flow_id,
+                ec.subject,
+                &flow_driver::email_send_ident(&ec.email),
+            )
+        }),
+        _ => None,
+    };
+    let extras = Extras {
+        captcha: tenant.tenant.settings.captcha.as_ref().filter(|_| captcha),
+        factor_token,
+        totp: display.totp.as_ref(),
+        upstream: identify_buttons(state, tenant, &loc, &form).await,
+    };
+    let status = form_status(&form);
+    Some(no_store(render_tenant_form_with(
+        state, tenant, &loc, &form, &nav, status, out, &extras,
+    )))
 }
 
 fn no_store(mut resp: Response) -> Response {
@@ -1632,10 +1788,11 @@ pub(super) async fn start_page(
     }
 }
 
-/// A new sign-in flow with the `flow.expired` message (400) for the live request of `nav` (the
+/// A new sign-in flow with the `flow.expired` message for the live request of `nav` (the
 /// request of the flow that could not continue, so "Start over" keeps the app): the answer to a
 /// submission that cannot continue its flow (for example a second-factor POST without a valid
-/// binding token).
+/// binding token). Post/Redirect/Get: 303 to the new flow's sign-in page with its cookie and the
+/// message in the flash ([`prg_started`]); the page then answers 400.
 pub(super) async fn restart_login_in(
     state: &AppState,
     tenant: &ResolvedTenant,
@@ -1649,10 +1806,87 @@ pub(super) async fn restart_login_in(
                 .form
                 .messages
                 .insert(0, FormMessage::error("flow.expired"));
+            if let Some(resp) = prg_started(state, tenant, loc, &started) {
+                return resp;
+            }
             started_response(state, tenant, loc, &started, nav, StatusCode::BAD_REQUEST)
         }
         Err(e) => core_error_page_in(state, Some(tenant), loc, &e),
     }
+}
+
+/// Message key of a used, expired or unknown emailed link (reset or verification), shown on
+/// `GET` before any input ([`link_usable`]).
+pub(super) const LINK_EXPIRED: &str = "links.expired";
+
+/// Whether the emailed link token `token` of `kind` can still be used
+/// (`FlowService::self_service_link_usable`: read only, the token is never consumed by a `GET`).
+pub(super) async fn link_usable(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    kind: anvil_core::model::SelfServiceKind,
+    token: &str,
+) -> Result<bool, CoreError> {
+    state
+        .ui_flow_service()
+        .self_service_link_usable(tenant.tenant.id, kind, token)
+        .await
+}
+
+/// The recovery request form of a new flow with the [`LINK_EXPIRED`] message above it (400,
+/// `no-store`): the answer to a `GET` of a reset link that cannot be used any more, so the user
+/// can ask for a new link at once. Nothing is consumed.
+pub(super) async fn expired_reset_link_page(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    loc: &Locale,
+    nav: &NavContext,
+) -> Response {
+    let request = nav.request().map(|r| r.id);
+    match flow_driver::start(state, tenant, FlowKind::Recovery, request, None).await {
+        Ok(mut started) => {
+            started
+                .form
+                .messages
+                .insert(0, FormMessage::error(LINK_EXPIRED));
+            no_store(started_response(
+                state,
+                tenant,
+                loc,
+                &started,
+                nav,
+                StatusCode::BAD_REQUEST,
+            ))
+        }
+        Err(e) => core_error_page_in(state, Some(tenant), loc, &e),
+    }
+}
+
+/// The verification page for a link that cannot be used any more (400, `no-store`): the
+/// [`LINK_EXPIRED`] notice, no confirmation form, and the way to the sign-in page (an address
+/// that was already confirmed signs in; there is no self-service resend yet).
+pub(super) fn expired_verification_link_page(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    loc: &Locale,
+    nav: &NavContext,
+) -> Response {
+    let mut page = PageContext::for_tenant(state, tenant, loc, "title.verification");
+    page.links.login = Some(nav.url(tenant, loc, UiPage::Login));
+    let ctx = minijinja::context! {
+        page => page.into_value(),
+        link_expired => true,
+        expired_key => LINK_EXPIRED,
+    };
+    no_store(render_page(
+        state,
+        Some(tenant),
+        loc,
+        "verification.html",
+        ctx,
+        StatusCode::BAD_REQUEST,
+        CookieJar::new(),
+    ))
 }
 
 /// [`restart_login_in`] without a flow context, for callers that have no flow to read the
@@ -1747,7 +1981,7 @@ pub(super) fn drive_response(
             form, retry_after, ..
         } => locked_page(state, tenant, loc, nav, form, retry_after, locked_token),
         DriveOutcome::Throttled { retry_after } => {
-            too_many_requests(state, Some(tenant), Surface::Browser, retry_after)
+            too_many_requests_in(state, Some(tenant), loc, Surface::Browser, retry_after)
         }
         DriveOutcome::CaptchaRejected { form } => render_tenant_form_with(
             state,
@@ -1835,17 +2069,36 @@ pub(super) fn outcome_response_with(
 ) -> Response {
     let cookies = state.cookies();
     match outcome {
-        FlowOutcome::Render(form) => render_tenant_form_with(
-            state,
-            tenant,
-            loc,
-            &form,
-            nav,
-            form_status(&form),
-            CookieJar::new(),
-            extras,
-        ),
+        FlowOutcome::Render(form) => {
+            if has_error(&form)
+                && let Some(resp) = prg_redirect(
+                    state,
+                    tenant,
+                    loc,
+                    &form,
+                    extras.captcha.is_some(),
+                    CookieJar::new(),
+                )
+            {
+                return resp;
+            }
+            render_tenant_form_with(
+                state,
+                tenant,
+                loc,
+                &form,
+                nav,
+                form_status(&form),
+                CookieJar::new(),
+                extras,
+            )
+        }
         FlowOutcome::Enroll { form, totp } => {
+            if has_error(&form)
+                && let Some(resp) = prg_redirect(state, tenant, loc, &form, false, CookieJar::new())
+            {
+                return resp;
+            }
             let extras = Extras {
                 factor_token: extras.factor_token.clone(),
                 totp: Some(&totp),
@@ -1864,6 +2117,11 @@ pub(super) fn outcome_response_with(
         }
         FlowOutcome::Restarted(started) => {
             let status = form_status(&started.form);
+            if has_error(&started.form)
+                && let Some(resp) = prg_started(state, tenant, loc, &started)
+            {
+                return resp;
+            }
             started_response(state, tenant, loc, &started, nav, status)
         }
         FlowOutcome::Message { key } => {
