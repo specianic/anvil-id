@@ -6,14 +6,14 @@ current_phase: 05
 current_phase_name: release 0 4 operate it
 current_plan: 33
 status: verifying
-stopped_at: Completed 07.1-01-PLAN.md
-last_updated: "2026-11-28T03:02:04.484Z"
+stopped_at: Completed 07.1-10-PLAN.md
+last_updated: "2026-11-28T04:00:04.159Z"
 last_activity: 2026-11-28
 progress:
   total_phases: 8
   completed_phases: 3
   total_plans: 215
-  completed_plans: 191
+  completed_plans: 192
   percent: 89
 ---
 
@@ -226,6 +226,7 @@ done before 05-29 tags v0.4.0.
 | Phase 07.1 P02 | 75min | 3 tasks | 26 files |
 | Phase 07.1 P04 | 25min | 3 tasks | 53 files |
 | Phase 07.1 P01 | 120min | 3 tasks | 22 files |
+| Phase 07.1 P10 | 40min | 3 tasks | 18 files |
 
 ## Accumulated Context
 
@@ -534,6 +535,8 @@ Recent decisions affecting current work:
 - [Phase 07.1]: 07.1-01: ui::nav::NavContext is the single end-user link builder; GET validates request= (stale -> flow_expired, no oracle), re-renders read Flow.auth_request_id
 - [Phase 07.1]: 07.1-01: signed-in page sign-out form POSTs to the end-session endpoint (asks for confirmation; no GET logout, no flow cookie)
 - [Phase 07.1]: 07.1-01: emailed recovery/verification links carry &request= (self_service_email_for_request); invitations and upstream JIT do not
+- [Phase 07.1]: Console forms track dirty state with lib/formState.ts (useFormState) and call useUnsavedChanges(isDirty && !pending); UnsavedChangesGuard renders outside the form
+- [Phase 07.1]: Org connections (OIDC and SAML) are created disabled from the console; org delete confirms with the typed org slug
 
 ### Roadmap Evolution
 
@@ -551,6 +554,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-28T03:02:04.481Z
-Stopped at: Completed 07.1-01-PLAN.md
+Last session: 2026-11-28T04:00:04.156Z
+Stopped at: Completed 07.1-10-PLAN.md
 Resume file: None
