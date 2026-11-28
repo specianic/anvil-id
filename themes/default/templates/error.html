@@ -9,7 +9,7 @@
 {% block heading %}
 {%- if heading -%}
 {{ heading }}
-{%- elif error_key in ["redirect_uri_mismatch", "unknown_client", "invalid_request", "flow_expired", "csrf", "not_found", "too_many_requests"] -%}
+{%- elif error_key in ["redirect_uri_mismatch", "unknown_client", "invalid_request", "flow_expired", "csrf", "not_found", "too_many_requests", "saml_login_failed"] -%}
 {{ t("errors_friendly.heading." ~ error_key) }}
 {%- else -%}
 {{ t("errors_friendly.heading.generic") }}
@@ -25,7 +25,7 @@
 {%- endif -%}
 </p>
 <p class="anvil-lead" id="error-explanation">
-{%- if error_key in ["redirect_uri_mismatch", "unknown_client", "invalid_request", "flow_expired", "csrf", "not_found", "too_many_requests"] -%}
+{%- if error_key in ["redirect_uri_mismatch", "unknown_client", "invalid_request", "flow_expired", "csrf", "not_found", "too_many_requests", "saml_login_failed"] -%}
 {{ t("errors_friendly.explain." ~ error_key) }}
 {%- else -%}
 {{ t("errors_friendly.explain.generic") }}

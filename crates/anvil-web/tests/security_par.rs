@@ -109,7 +109,7 @@ async fn par_request_uri_bound_to_client() {
     let resp = authorize(&app, other.id(), &request_uri, &[], Some(&cookie)).await;
     assert_no_redirect_page(&resp);
     assert!(
-        resp.html().contains("not issued to this client"),
+        resp.html().contains("data-error-key=\"invalid_request\""),
         "{}",
         resp.html()
     );
