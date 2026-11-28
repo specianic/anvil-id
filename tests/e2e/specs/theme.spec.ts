@@ -6,7 +6,8 @@
 // After Publish, the real sign-in page of the tenant has the same primary colour and logo, still
 // passes axe (the theme keeps AA), and its CSP still has no 'unsafe-inline'. A low-contrast text
 // colour shows a contrast warning, custom CSS with @import shows the line error and blocks Publish,
-// and Reset restores the default theme on the sign-in page.
+// and Reset restores the default theme on the sign-in page. A first test checks the default theme:
+// the self-hosted fonts load under the page CSP and orange is never a text colour.
 //
 // The default tenant's branding is shared by every spec of the run, so it is deleted before and
 // after this file through the admin API.
@@ -27,9 +28,12 @@ import {
 } from '../lib/anvil';
 import { consoleLogin } from '../lib/console';
 
-/** The built-in primary colour (themes/default/static/anvil.css, light scheme). */
-const DEFAULT_PRIMARY = '#2f5bd3';
-/** The new primary colour: 7.9:1 against the default white button text, so AA holds. */
+/** The built-in primary colour (themes/default/static/anvil.css, Specianic orange, both schemes). */
+const DEFAULT_PRIMARY = '#ff5a1f';
+/** Orange as a computed colour: a fill only, never the colour of text. */
+const ORANGE_RGB = 'rgb(255, 90, 31)';
+/** The new primary colour: 7.9:1 against white, the button text a lone customised primary is paired
+ *  with (see themes/default/README.md), so AA holds. */
 const PRIMARY = '#1b5e20';
 const PRIMARY_RGB = 'rgb(27, 94, 32)';
 /** Text colour between 3:1 and 4.5:1 on the default background and surface: accepted, warned. */
@@ -89,6 +93,56 @@ async function openLoginPage(browser: Browser): Promise<{ page: Page; csp: strin
     close: () => context.close(),
   };
 }
+
+/** The computed colour of a link in the page's main card (a link appended for the measurement, so the
+ *  check does not depend on which links the tenant's settings show). */
+async function linkColor(page: Page): Promise<string> {
+  return page.locator('main').evaluate((main) => {
+    const a = document.createElement('a');
+    a.href = '#';
+    a.textContent = 'link';
+    main.append(a);
+    const color = getComputedStyle(a).color;
+    a.remove();
+    return color;
+  });
+}
+
+test('default theme: self-hosted fonts load and orange is never text', async ({ browser }) => {
+  const login = await openLoginPage(browser);
+  try {
+    const fonts = await login.page.evaluate(async () => {
+      await document.fonts.ready;
+      // Plex is only used by code on some pages; ask for it so its file has to load too.
+      await document.fonts.load('13px "IBM Plex Mono"');
+      const faces: FontFace[] = [];
+      document.fonts.forEach((f) => faces.push(f));
+      const loaded = (family: string) =>
+        faces.some((f) => f.family.replace(/["']/g, '') === family && f.status === 'loaded');
+      return {
+        hankenCheck: document.fonts.check('16px "Hanken Grotesk"'),
+        hanken: loaded('Hanken Grotesk'),
+        plex: loaded('IBM Plex Mono'),
+        bodyFont: getComputedStyle(document.body).fontFamily,
+      };
+    });
+    expect(fonts.hankenCheck).toBe(true);
+    expect(fonts.hanken).toBe(true);
+    expect(fonts.plex).toBe(true);
+    expect(fonts.bodyFont).toContain('Hanken Grotesk');
+    expect(login.csp).toContain("font-src 'self'");
+    expect(login.csp).not.toMatch(/https?:/);
+
+    await expect.poll(() => rootVar(login.page, '--anvil-primary')).toBe(DEFAULT_PRIMARY);
+    // Orange fills the primary button (with ink text) but links use the darker signal-text colour.
+    await expect(login.page.locator('#login-submit')).toHaveCSS('background-color', ORANGE_RGB);
+    await expect(login.page.locator('#login-submit')).not.toHaveCSS('color', ORANGE_RGB);
+    expect(await linkColor(login.page)).not.toBe(ORANGE_RGB);
+    await expectNoA11yViolations(login.page);
+  } finally {
+    await login.close();
+  }
+});
 
 test('console theme editor: live preview, publish to the sign-in page, warnings, errors, reset', async ({
   page,
@@ -155,6 +209,9 @@ test('console theme editor: live preview, publish to the sign-in page, warnings,
     try {
       await expect.poll(() => rootVar(login.page, '--anvil-primary')).toBe(PRIMARY);
       await expect(login.page.locator('#login-submit')).toHaveCSS('background-color', PRIMARY_RGB);
+      // Links follow the customised primary colour, as before the default theme had its own link
+      // colour.
+      expect(await linkColor(login.page)).toBe(PRIMARY_RGB);
       await expect(login.page.locator('.anvil-logo')).toBeVisible();
       await expect(login.page.locator('.anvil-logo')).toHaveAttribute('role', 'img');
       expect(login.csp).not.toBe('');

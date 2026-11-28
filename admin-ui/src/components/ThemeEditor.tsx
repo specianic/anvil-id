@@ -42,37 +42,41 @@ const COLOR_FIELDS: readonly { key: ColorKey; label: string; hint?: string }[] =
   { key: "danger", label: "Danger", hint: "Errors." },
 ];
 
-// The built-in palette of the default theme (themes/default/static/anvil.css), shown for empty fields.
+// The built-in palette of the default theme (themes/default/static/anvil.css; the server mirrors it
+// in LIGHT_DEFAULTS/DARK_DEFAULTS of crates/anvil-core/src/policy/branding.rs), shown for empty fields.
+// Links and the focus ring follow a customised primary colour on the server; when only one of primary
+// and primary_text is set, the server pairs it with the pre-1.0 button colour (see the theme README).
 const LIGHT_DEFAULTS: Record<ColorKey, string> = {
-  primary: "#2f5bd3",
-  primary_text: "#ffffff",
-  bg: "#f6f7f9",
+  primary: "#ff5a1f",
+  primary_text: "#0f0f10",
+  bg: "#fafaf9",
   surface: "#ffffff",
-  text: "#1c1f24",
-  muted: "#5b6270",
-  border: "#d6dae1",
-  focus: "#1d4ed8",
+  text: "#0f0f10",
+  muted: "#5c5a56",
+  border: "#e5e3df",
+  focus: "#c2410c",
   danger: "#b42318",
 };
 
 const DARK_DEFAULTS: Record<ColorKey, string> = {
-  primary: "#6d8ef0",
-  primary_text: "#0d1020",
-  bg: "#14161a",
-  surface: "#1d2026",
-  text: "#e7e9ee",
-  muted: "#a0a7b4",
-  border: "#343944",
-  focus: "#a9c0ff",
-  danger: "#f97066",
+  primary: "#ff5a1f",
+  primary_text: "#0f0f10",
+  bg: "#0f0f10",
+  surface: "#18181a",
+  text: "#f4f3f1",
+  muted: "#a3a19c",
+  border: "#2a2a2d",
+  focus: "#ff7a45",
+  danger: "#f0695e",
 };
 
-const DEFAULT_RADIUS = 6;
+const DEFAULT_RADIUS = 2;
 const MAX_RADIUS = 32;
 const MAX_LOGO_BYTES = 256 * 1024;
 const LOGO_TYPES = ["image/png", "image/jpeg", "image/webp"] as const;
 
 const FONT_SUGGESTIONS = [
+  '"Hanken Grotesk", "Helvetica Neue", Arial, sans-serif',
   'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
   '"Helvetica Neue", Arial, sans-serif',
   "Georgia, Cambria, serif",
