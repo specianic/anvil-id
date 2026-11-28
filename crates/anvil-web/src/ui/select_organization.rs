@@ -29,14 +29,14 @@ use anvil_core::service::authorize::{AccountChoiceBinding, OrgChoice, SelectOrga
 use axum::Router;
 use axum::extract::rejection::FormRejection;
 use axum::extract::{Form, Query, State};
-use axum::http::{HeaderMap, StatusCode, header};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum_extra::extract::cookie::CookieJar;
 use secrecy::ExposeSecret as _;
 use serde::{Deserialize, Serialize};
 
-use super::consent::{PageMessage, current_session, localized, no_store};
+use super::consent::{PageMessage, current_session, localized, no_store, to_login};
 use super::login::{UiQuery, bad_form, csrf_page, page_locale, rejected_form};
 use crate::errors::{core_error_page_in, error_page_in};
 use crate::i18n::{Locale, RequestLocale, carry_ui_locales};
@@ -69,19 +69,6 @@ struct OrgEntry<'a> {
     id: String,
     slug: &'a str,
     display_name: &'a str,
-}
-
-fn to_login(tenant: &ResolvedTenant, request: AuthRequestId) -> Response {
-    no_store(
-        (
-            StatusCode::SEE_OTHER,
-            [(
-                header::LOCATION,
-                tenant.ui_url(&format!("/ui/login?request={request}")),
-            )],
-        )
-            .into_response(),
-    )
 }
 
 /// The `request` parameter; absent or malformed → the invalid request page.
@@ -192,7 +179,7 @@ async fn show(
             )
             .await
         }
-        Ok(None) => to_login(&tenant, request),
+        Ok(None) => to_login(&state, &tenant, &loc, request).await,
         Err(e) => core_error_page_in(&state, Some(&tenant), &loc, &e),
     }
 }
@@ -217,7 +204,7 @@ async fn submit(
     let loc = page_locale(&state, &tenant, locale, &headers, Some(request)).await;
     let session = match current_session(&state, &tenant, &jar).await {
         Ok(Some(s)) => s,
-        Ok(None) => return to_login(&tenant, request),
+        Ok(None) => return to_login(&state, &tenant, &loc, request).await,
         Err(e) => return core_error_page_in(&state, Some(&tenant), &loc, &e),
     };
     let (Some(flow_id), Some(csrf)) = (q.flow_id(), form.csrf_token.filter(|c| !c.is_empty()))
@@ -251,7 +238,9 @@ async fn submit(
         )
         .await
     {
-        Ok(OrgChoice::Continue(outcome)) => no_store(state.authorize_response(&tenant, outcome)),
+        Ok(OrgChoice::Continue(outcome)) => {
+            no_store(state.authorize_response(&tenant, &loc, outcome))
+        }
         Ok(OrgChoice::FlowExpired) => {
             switcher_page(
                 &state,

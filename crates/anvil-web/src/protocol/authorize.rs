@@ -15,6 +15,9 @@
 //!   organization switcher, when the client requires an org and the user belongs to several);
 //! - `Register` → `303` to `{issuer}/ui/registration?request={id}` (`prompt=create`; the
 //!   registration resumes the request through `/authorize/continue`);
+//! - `NotOrgMember` → `303` to `{issuer}/ui/select-organization/not-member?request={id}` (the
+//!   explanation page for a user who is not a member of the org the client needs; "Return to
+//!   the app" answers `access_denied` like `prompt=none` does directly);
 //! - `ErrorPage` → the themed `400` error page, never a redirect (unknown client, unregistered
 //!   redirect URI, malformed request before the redirect URI is trusted, expired request).
 //!
@@ -58,15 +61,16 @@ impl AppState {
     }
 
     /// The HTTP response for an authorization outcome (shared with the consent screen, so the
-    /// response modes have one implementation). An `ErrorPage` outcome renders in the tenant's
-    /// default language here; the authorization endpoint itself renders its error pages in the
-    /// request's language with the client's way forward ([`authorize_error_page`]).
+    /// response modes have one implementation). An `ErrorPage` outcome renders in `loc`, the
+    /// language the calling page negotiated; the authorization endpoint itself renders its error
+    /// pages in the request's language with the client's way forward ([`authorize_error_page`]).
     pub(crate) fn authorize_response(
         &self,
         tenant: &ResolvedTenant,
+        loc: &Locale,
         outcome: AuthorizeOutcome,
     ) -> Response {
-        respond(self, tenant, outcome)
+        respond(self, tenant, loc, outcome)
     }
 
     /// Session lookup for the authorization endpoint.
@@ -172,7 +176,12 @@ fn form_post(state: &AppState, tenant: &ResolvedTenant, r: &AuthorizationRespons
     }
 }
 
-fn respond(state: &AppState, tenant: &ResolvedTenant, outcome: AuthorizeOutcome) -> Response {
+fn respond(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    loc: &Locale,
+    outcome: AuthorizeOutcome,
+) -> Response {
     match outcome {
         AuthorizeOutcome::Respond(r) => match r.mode {
             ResponseMode::Query => see_other(&r.to_redirect_url()),
@@ -193,10 +202,13 @@ fn respond(state: &AppState, tenant: &ResolvedTenant, outcome: AuthorizeOutcome)
         AuthorizeOutcome::Register { request_id } => {
             see_other(&tenant.ui_url(&format!("/ui/registration?request={request_id}")))
         }
+        AuthorizeOutcome::NotOrgMember { request_id } => see_other(&tenant.ui_url(&format!(
+            "/ui/select-organization/not-member?request={request_id}"
+        ))),
         AuthorizeOutcome::ErrorPage { error_key, detail } => error_page_in(
             state,
             Some(tenant),
-            &default_locale(state.renderer().catalogs(), Some(tenant)),
+            loc,
             StatusCode::BAD_REQUEST,
             error_key,
             &detail,
@@ -286,7 +298,7 @@ async fn authorize(
             )
             .await
         }
-        Ok(outcome) => respond(state, tenant, outcome),
+        Ok(outcome) => respond(state, tenant, &locale, outcome),
         Err(e) => core_error_page_in(state, Some(tenant), &locale, &e),
     }
 }
@@ -387,7 +399,7 @@ async fn authorize_continue(
             )
             .await
         }
-        Ok(outcome) => respond(&state, &tenant, outcome),
+        Ok(outcome) => respond(&state, &tenant, &locale, outcome),
         Err(e) => core_error_page_in(&state, Some(&tenant), &locale, &e),
     }
 }

@@ -1,7 +1,8 @@
 {#- Consent screen (plan 03-17). Variables (besides page):
       client_name, client_id, agent (bool), provenance ("static" | "dynamic" | "cimd"),
       new_scopes / granted_scopes [{name, description}], new_resources / granted_resources
-      [string] (RFC 8707, plan 04-12), messages [{level, key, text}], csrf_token, action
+      [string] (RFC 8707, plan 04-12), messages [{level, key, text}], csrf_token, action,
+      account_email (the signed-in account, plan 07.1-14)
     Selectors: form consent-form, client name consent-client, scope fieldset consent-scopes
     holding the list of new scopes consent-new-scopes (only when there are any) with items
     consent-scope-{n} (data-scope = scope name), buttons consent-allow and consent-deny
@@ -16,6 +17,10 @@
     consent-cimd holds the initials avatar consent-avatar (never a remote logo), the
     self-asserted name consent-client-name with the note consent-cimd-unverified, and
     consent-cimd-note.
+    Signed-in account (plan 07.1-14): consent-account holding consent-account-email, and the
+    "Use another account" form consent-switch-form (same action and CSRF token) with button
+    consent-other (name="choice", value="other").
+    offline_access is described as staying signed in to the named app, with consent-offline-note.
     No JavaScript. -#}
 {% extends "base.html" %}
 {% block heading %}{{ t("consent.heading") }}{% endblock %}
@@ -25,10 +30,17 @@
 <p class="anvil-message anvil-message-{{ m.level }}" id="consent-msg-{{ loop.index }}" data-message-key="{{ m.key }}"{% if m.level == "error" %} role="alert"{% endif %}>{{ m.text }}</p>
 {% endfor %}
 </div>
+<div id="consent-account">
+<p class="anvil-account">{{ t("consent.signed_in_as") }} <strong><bdi id="consent-account-email">{{ account_email }}</bdi></strong></p>
+<form id="consent-switch-form" method="post" action="{{ action }}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+<button type="submit" id="consent-other" name="choice" value="other" class="anvil-secondary">{{ t("consent.other_account") }}</button>
+</form>
+</div>
 <form id="consent-form" method="post" action="{{ action }}">
 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 {% if agent %}
-<p class="anvil-message anvil-message-info" id="consent-agent" role="note"><strong>{{ t("consent.agent_badge") }}</strong></p>
+<p class="anvil-message anvil-message-info" id="consent-agent" role="note"><strong>{{ t("consent.agent_badge") }}</strong> <span id="consent-agent-explain">{{ t("consent.agent_explain") }}</span></p>
 {% endif %}
 {% if cimd_host %}
 <div class="anvil-consent-cimd" id="consent-cimd">
@@ -44,7 +56,7 @@
 {% if granted_scopes %}<p id="consent-new-heading">{{ t("consent.new_permissions") }}</p>{% endif %}
 <ul class="anvil-scope-list" id="consent-new-scopes">
 {% for s in new_scopes %}
-<li id="consent-scope-{{ loop.index }}" data-scope="{{ s.name }}">{% if s.description %}{{ s.description }}{% else %}{{ t("scope.use") }} <code>{{ s.name }}</code>{% endif %}</li>
+<li id="consent-scope-{{ loop.index }}" data-scope="{{ s.name }}">{% if s.name == "offline_access" %}{{ t("consent.offline_access", app=client_name) }}<br><span class="anvil-muted" id="consent-offline-note">{{ t("consent.offline_access_note") }}</span>{% elif s.description %}{{ s.description }}{% else %}{{ t("scope.use") }} <code>{{ s.name }}</code>{% endif %}</li>
 {% endfor %}
 </ul>
 {% endif %}
@@ -65,7 +77,7 @@
 {% if granted_scopes %}
 <ul class="anvil-scope-list">
 {% for s in granted_scopes %}
-<li id="consent-granted-scope-{{ loop.index }}" data-granted-scope="{{ s.name }}">{% if s.description %}{{ s.description }}{% else %}{{ t("scope.use") }} <code>{{ s.name }}</code>{% endif %}</li>
+<li id="consent-granted-scope-{{ loop.index }}" data-granted-scope="{{ s.name }}">{% if s.name == "offline_access" %}{{ t("consent.offline_access", app=client_name) }}{% elif s.description %}{{ s.description }}{% else %}{{ t("scope.use") }} <code>{{ s.name }}</code>{% endif %}</li>
 {% endfor %}
 </ul>
 {% endif %}

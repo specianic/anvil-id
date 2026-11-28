@@ -123,6 +123,12 @@ pub enum AuthorizeOutcome {
     /// `prompt=create`: send the user to the registration page for the stored request; the
     /// request resumes through [`AuthorizeService::resume`] once the new account is signed in.
     Register { request_id: AuthRequestId },
+    /// An interactive request whose user is not a member of the organization the client needs
+    /// (the requested org, or any org under `required`): send the user to the explanation page
+    /// ([`AuthorizeService::start_org_not_member`]). "Return to the app" answers the client
+    /// `access_denied` exactly like a non-interactive request
+    /// ([`AuthorizeService::answer_org_not_member`]); "Use another account" signs in again.
+    NotOrgMember { request_id: AuthRequestId },
     /// Show an error page; never redirect. `error_key` is one of `invalid_request`,
     /// `unknown_client`, `redirect_uri_mismatch`, `flow_expired`.
     ErrorPage {
@@ -441,6 +447,40 @@ pub enum OrgChoice {
     NotAMember,
 }
 
+/// What the organization non-member page shows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrgNotMemberPage {
+    pub request_id: AuthRequestId,
+    pub client_name: String,
+    /// The `organization` value the request carried, as the app sent it (an id or a slug);
+    /// `None` when the client requires an org and the request named none. Never looked up, so
+    /// the page reveals nothing about the tenant's organizations.
+    pub requested_org: Option<String>,
+    /// The signed-in user's email address.
+    pub user_email: String,
+}
+
+/// Result of opening the organization non-member page.
+#[derive(Debug)]
+pub enum OrgNotMemberStart {
+    Started {
+        flow: StartedConsentFlow,
+        page: OrgNotMemberPage,
+    },
+    /// The request expired, was used, its client is gone, or its user is not refused (any
+    /// more).
+    RequestExpired,
+}
+
+/// The non-member page's answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OrgNotMemberChoice {
+    /// Return to the app: the client gets `access_denied`, as without the page.
+    ReturnToApp,
+    /// Sign in as someone else ([`AuthorizeService::sign_in_as_other`]).
+    Other,
+}
+
 /// Builds a code and its pre-created token family. Returns the plaintext code (sent to the
 /// client only) and the records to store; only the code's hash is stored. `issuer` is the
 /// issuer of this authorization response (and of the ID tokens issued from the code); storage
@@ -517,9 +557,7 @@ pub fn bind_active_org(active: ActiveOrg, prompt_none: bool) -> Result<Option<Or
     match active {
         ActiveOrg::NoOrg => Ok(None),
         ActiveOrg::Selected(org) => Ok(Some(org.id)),
-        ActiveOrg::Denied => Err(OrgRefusal::Error(CoreError::AccessDenied(
-            "the user is not a member of the requested organization".to_owned(),
-        ))),
+        ActiveOrg::Denied => Err(OrgRefusal::Error(not_a_member())),
         ActiveOrg::Refused => Err(OrgRefusal::Error(CoreError::InvalidRequest(
             "this client does not accept the organization parameter".to_owned(),
         ))),
@@ -528,6 +566,11 @@ pub fn bind_active_org(active: ActiveOrg, prompt_none: bool) -> Result<Option<Or
         }
         ActiveOrg::NeedsChoice => Err(OrgRefusal::SelectionRequired),
     }
+}
+
+/// The client's answer when the user is not a member of the organization it needs.
+fn not_a_member() -> CoreError {
+    CoreError::AccessDenied("the user is not a member of the requested organization".to_owned())
 }
 
 /// Where a stored authorization request continues from.
@@ -783,6 +826,11 @@ impl AuthorizeService {
                                     self.store_request(tenant, &client, &params, now).await?;
                                 Ok(AuthorizeOutcome::SelectOrganization { request_id })
                             }
+                            OrgStep::NotMember => {
+                                let request_id =
+                                    self.store_request(tenant, &client, &params, now).await?;
+                                Ok(AuthorizeOutcome::NotOrgMember { request_id })
+                            }
                         }
                     }
                     Ok(ConsentDecision::Required) => {
@@ -983,9 +1031,17 @@ impl AuthorizeService {
         request_id: AuthRequestId,
         session: BrowserSession,
     ) -> Result<Completion, CoreError> {
-        let outcome = self
+        let outcome = match self
             .continue_request(tenant, issuer, request_id, Some(session), Stage::AfterLogin)
-            .await?;
+            .await?
+        {
+            // No browser to show the explanation page to: the client gets `access_denied`
+            // right away, as before the page existed.
+            AuthorizeOutcome::NotOrgMember { request_id } => {
+                self.deny_not_member(tenant, issuer, request_id).await?
+            }
+            outcome => outcome,
+        };
         Ok(Completion::of(outcome))
     }
 
@@ -1126,6 +1182,10 @@ impl AuthorizeService {
                     OrgStep::Bind(org) => org,
                     OrgStep::Choose => {
                         return Ok(AuthorizeOutcome::SelectOrganization { request_id });
+                    }
+                    // The request is kept for the page's answer.
+                    OrgStep::NotMember => {
+                        return Ok(AuthorizeOutcome::NotOrgMember { request_id });
                     }
                     OrgStep::Answer(answer) => {
                         self.storage
@@ -1318,18 +1378,154 @@ impl AuthorizeService {
                 )
                 .await
                 .map(Some),
-            AccountChoice::Other => {
-                if self
-                    .storage
-                    .grants()
-                    .get_authorization_request(tenant.id, request_id, now)
-                    .await?
-                    .is_none()
-                {
-                    return Ok(Some(flow_expired()));
-                }
-                Ok(Some(AuthorizeOutcome::Login { request_id }))
-            }
+            AccountChoice::Other => self.sign_in_as_other(tenant, request_id).await.map(Some),
+        }
+    }
+
+    /// "Use another account" (the account chooser, the consent screen, the organization
+    /// non-member page): [`AuthorizeOutcome::Login`] for the stored request, or the
+    /// `flow_expired` page when it is gone. The login page then signs a user in for the request;
+    /// signing in as someone else revokes the current session (session switch). The request
+    /// answers only to that sign-in or to the page it came from, never to the old session
+    /// silently. Call only after the page's flow binding was checked and the flow used up.
+    pub async fn sign_in_as_other(
+        &self,
+        tenant: &Tenant,
+        request_id: AuthRequestId,
+    ) -> Result<AuthorizeOutcome, CoreError> {
+        let now = self.clock.now();
+        if self
+            .storage
+            .grants()
+            .get_authorization_request(tenant.id, request_id, now)
+            .await?
+            .is_none()
+        {
+            return Ok(flow_expired());
+        }
+        Ok(AuthorizeOutcome::Login { request_id })
+    }
+
+    /// Answers a request whose user is not a member of the org it needs with `access_denied`
+    /// (same error, description, `state` and `iss` as a direct refusal); the request is used up.
+    async fn deny_not_member(
+        &self,
+        tenant: &Tenant,
+        issuer: &str,
+        request_id: AuthRequestId,
+    ) -> Result<AuthorizeOutcome, CoreError> {
+        let now = self.clock.now();
+        let Some(request) = self
+            .storage
+            .grants()
+            .get_authorization_request(tenant.id, request_id, now)
+            .await?
+        else {
+            return Ok(flow_expired());
+        };
+        if !self
+            .storage
+            .grants()
+            .delete_authorization_request(tenant.id, request_id)
+            .await?
+        {
+            return Ok(flow_expired());
+        }
+        Ok(error_response(&request.params, &not_a_member(), issuer))
+    }
+
+    /// Opens the organization non-member page for a stored request: only while `session`'s user
+    /// is still refused for it (the requested org, or any org under `required`). A flow bound to
+    /// the user and to the request, and what the page shows.
+    pub async fn start_org_not_member(
+        &self,
+        tenant: &Tenant,
+        session: &BrowserSession,
+        request_id: AuthRequestId,
+    ) -> Result<OrgNotMemberStart, CoreError> {
+        if session.tenant_id != tenant.id {
+            return Err(CoreError::Forbidden);
+        }
+        let now = self.clock.now();
+        let Some(request) = self
+            .storage
+            .grants()
+            .get_authorization_request(tenant.id, request_id, now)
+            .await?
+        else {
+            return Ok(OrgNotMemberStart::RequestExpired);
+        };
+        let Some(client) = self
+            .storage
+            .clients()
+            .get(tenant.id, &request.client_id)
+            .await?
+        else {
+            return Ok(OrgNotMemberStart::RequestExpired);
+        };
+        let active = active_org_of(
+            self.storage.as_ref(),
+            tenant.id,
+            &client,
+            &request.params,
+            session.user_id,
+        )
+        .await?;
+        if active != ActiveOrg::Denied {
+            return Ok(OrgNotMemberStart::RequestExpired);
+        }
+        let Some(user) = self.storage.users().get(tenant.id, session.user_id).await? else {
+            return Err(CoreError::Forbidden);
+        };
+        let flow = self
+            .open_request_flow(tenant, session, request_id, now)
+            .await?;
+        Ok(OrgNotMemberStart::Started {
+            flow,
+            page: OrgNotMemberPage {
+                request_id,
+                client_name: client.name,
+                requested_org: request.params.organization.clone(),
+                user_email: user.email,
+            },
+        })
+    }
+
+    /// Applies the non-member page's answer for `request_id`. The submission must carry the
+    /// page flow's cookie and CSRF token, and the flow must belong to the session's user and to
+    /// this request; otherwise [`CoreError::Forbidden`] and nothing changes. The flow is used up
+    /// first, so a page answers once. `Ok(None)` when the flow expired or was already used (show
+    /// the page again).
+    ///
+    /// - [`OrgNotMemberChoice::ReturnToApp`]: `access_denied` to the client's redirect URI, the
+    ///   same answer (error, description, `state`, `iss`, response mode) as a request refused
+    ///   without the page; the request is used up.
+    /// - [`OrgNotMemberChoice::Other`]: [`Self::sign_in_as_other`].
+    pub async fn answer_org_not_member(
+        &self,
+        tenant: &Tenant,
+        issuer: &str,
+        request_id: AuthRequestId,
+        session: &BrowserSession,
+        binding: &AccountChoiceBinding<'_>,
+        choice: OrgNotMemberChoice,
+    ) -> Result<Option<AuthorizeOutcome>, CoreError> {
+        let now = self.clock.now();
+        let Some(flow_id) = self
+            .bound_request_flow(tenant, session, request_id, binding, now)
+            .await?
+        else {
+            return Ok(None);
+        };
+        if !self.storage.flows().delete(tenant.id, flow_id).await? {
+            return Ok(None);
+        }
+        match choice {
+            OrgNotMemberChoice::ReturnToApp => self
+                .deny_not_member(tenant, issuer, request_id)
+                .await
+                .map(Some),
+            OrgNotMemberChoice::Other => self.sign_in_as_other(tenant, request_id).await.map(Some),
         }
     }
 
@@ -1496,6 +1692,11 @@ impl AuthorizeService {
         )
         .await?;
         let prompt_none = params.prompt.iter().any(|p| p == "none");
+        // An interactive request explains the refusal first (U-M14); `prompt=none` answers
+        // `access_denied` directly.
+        if active == ActiveOrg::Denied && !prompt_none {
+            return Ok(OrgStep::NotMember);
+        }
         Ok(match bind_active_org(active, prompt_none) {
             Ok(org) => OrgStep::Bind(org),
             Err(OrgRefusal::Error(error)) => {
@@ -1595,6 +1796,8 @@ enum OrgStep {
     Answer(AuthorizeOutcome),
     /// Show the organization switcher.
     Choose,
+    /// Explain that the user is not a member of the org the client needs (interactive only).
+    NotMember,
 }
 
 /// The switcher's entries for `memberships`, by display name, then slug.

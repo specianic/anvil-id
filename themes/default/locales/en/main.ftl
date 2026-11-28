@@ -207,11 +207,16 @@ consent-note = You can remove this access at any time under Connected apps in yo
 consent-allow = Allow
 consent-deny = Deny
 consent-agent_badge = AI agent / automated client
-consent-provenance_static = Registered by your administrator.
+consent-provenance_static = Set up by the administrators of this sign-in service.
 consent-provenance_dynamic = Registered itself through dynamic registration. Its details are not verified.
 consent-provenance_cimd = Identified by its metadata document at { $host }. Its name is not verified.
 consent-new_permissions = New permissions:
 consent-already_allowed = Already allowed
+consent-agent_explain = It acts on its own, for example as an AI assistant, and can use this access while you are not there.
+consent-signed_in_as = Signed in as
+consent-other_account = Use another account
+consent-offline_access = Stay signed in to { $app }
+consent-offline_access_note = The app can keep using this access when you are not using it, until you remove it under Connected apps.
 form_post-heading = Continuing…
 form_post-status = Returning you to the application.
 

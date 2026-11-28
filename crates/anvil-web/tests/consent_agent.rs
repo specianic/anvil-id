@@ -392,6 +392,14 @@ async fn consent_shows_agent_badge_for_agent_clients() {
         html.contains("<strong id=\"consent-client\">Research agent</strong>"),
         "{html}"
     );
+    // The badge says what an agent is (U-L4).
+    assert!(
+        html.contains(
+            "<span id=\"consent-agent-explain\">It acts on its own, for example as an AI \
+             assistant, and can use this access while you are not there.</span>"
+        ),
+        "{html}"
+    );
 
     let (html, _, _) = f
         .open_request(f.request(&app.client_id, "openid", &[]).await)
@@ -416,7 +424,7 @@ async fn consent_provenance_static_dynamic_cimd() {
             ClientSource::Static,
             "static-1",
             "static",
-            "Registered by your administrator.",
+            "Set up by the administrators of this sign-in service.",
         ),
         (
             ClientSource::Dynamic,

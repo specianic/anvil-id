@@ -5,10 +5,12 @@
 //! submission, expired flows, and the page's markup. Also the `id_token_hint` algorithms (the
 //! hint is verified with every algorithm the tenant enables), remembered consent covering RFC
 //! 8707 resources (plan 05-13), and the screen for CIMD clients (client_id host, unverified
-//! name, no remote logo).
+//! name, no remote logo). The signed-in account and "Use another account" (plan 07.1-14):
+//! the switch is bound to the consent flow, and the next user is asked for their own consent.
 
 mod authz;
 mod support;
+mod ui_helpers;
 
 use std::sync::Arc;
 
@@ -600,6 +602,263 @@ async fn login_then_consent_resumes_through_the_screen() {
         .post(&action, &[("csrf_token", &csrf), ("decision", "allow")])
         .await;
     assert_code(&resp, &f.iss);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Signed-in account and "Use another account" (07.1-14, U-M15)
+// ---------------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn consent_page_shows_the_account_and_use_another_account() {
+    let f = fixture(ConsentMode::Required).await;
+    let resp = f.authorize("openid", &[]).await;
+    let path = f.consent_path(&resp);
+    let (html, action, _) = f.open(&path).await;
+    assert!(
+        html.contains("<bdi id=\"consent-account-email\">alice@example.com</bdi>"),
+        "{html}"
+    );
+    assert!(
+        html.contains("id=\"consent-other\" name=\"choice\" value=\"other\""),
+        "{html}"
+    );
+    // The switch form posts to the same bound action as the decision form.
+    assert_eq!(action_of(&f.app, &html, "consent-switch-form"), action);
+}
+
+#[tokio::test]
+async fn consent_switch_account_requires_binding() {
+    let f = fixture(ConsentMode::Required).await;
+    let resp = f.authorize("openid", &[]).await;
+    let path = f.consent_path(&resp);
+    let (_, action, csrf) = f.open(&path).await;
+    let other = [("csrf_token", csrf.as_str()), ("choice", "other")];
+
+    // No CSRF token, a forged one, no flow cookie, cross-site, another user's session.
+    let resp = f.post(&action, &[("choice", "other")]).await;
+    assert_eq!(resp.status, 403, "{}", resp.text());
+    let resp = f
+        .post(&action, &[("csrf_token", "forged"), ("choice", "other")])
+        .await;
+    assert_eq!(resp.status, 403, "{}", resp.text());
+    let resp = f
+        .post_with(&action, &other, Some(&f.session), "same-origin")
+        .await;
+    assert_eq!(resp.status, 403, "{}", resp.text());
+    let resp = f
+        .post_with(&action, &other, Some(&f.cookies()), "cross-site")
+        .await;
+    assert_eq!(resp.status, 403, "{}", resp.text());
+    let bob = user(&f.app, &f.tenant, "bob@example.com").await;
+    let bob_session = session(&f.app, &f.tenant, bob).await;
+    let flow_cookie: Vec<String> = f
+        .app
+        .cookies()
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect();
+    let resp = f
+        .post_with(
+            &action,
+            &other,
+            Some(&format!("{bob_session}; {}", flow_cookie.join("; "))),
+            "same-origin",
+        )
+        .await;
+    assert_eq!(resp.status, 403, "{}", resp.text());
+    // A switch and a decision at once is a bad request.
+    let resp = f
+        .post(
+            &action,
+            &[
+                ("csrf_token", csrf.as_str()),
+                ("choice", "other"),
+                ("decision", "allow"),
+            ],
+        )
+        .await;
+    assert_eq!(resp.status, 400, "{}", resp.text());
+
+    // Nothing changed: the session is active, nothing granted, the page still answers.
+    let sessions = f
+        .app
+        .storage()
+        .sessions()
+        .list_for_user(f.tenant.id, f.user, f.app.clock().now())
+        .await
+        .expect("sessions");
+    assert_eq!(sessions.len(), 1, "Alice's session is untouched");
+    assert!(sessions[0].revoked_at.is_none());
+    assert!(f.granted_scopes().await.is_none());
+
+    // The bound switch goes to the login page for the request and uses the page up.
+    let resp = f.post(&action, &other).await;
+    assert_eq!(resp.status, 303, "{}", resp.text());
+    let request = path.split("request=").nth(1).expect("request id");
+    assert_eq!(
+        location(&resp),
+        format!("{}/ui/login?request={request}", f.iss)
+    );
+    assert_eq!(resp.header("cache-control"), Some("no-store"));
+    let again = f
+        .post(
+            &action,
+            &[("csrf_token", csrf.as_str()), ("decision", "allow")],
+        )
+        .await;
+    assert_eq!(again.status, 400, "{}", again.text());
+    assert!(
+        again
+            .html()
+            .contains("data-message-key=\"consent.expired\""),
+        "the used page cannot answer again"
+    );
+    assert!(
+        f.granted_scopes().await.is_none(),
+        "the switch grants nothing"
+    );
+}
+
+#[tokio::test]
+async fn use_another_account_on_consent_asks_the_next_user_for_their_own_consent() {
+    const PASSWORD: &str = "correct horse battery";
+    let app = TestApp::new().await;
+    let tenant = default_tenant(&app);
+    ui_helpers::register(&app, "", "alice@example.com", PASSWORD).await;
+    ui_helpers::register(&app, "", "bob@example.com", PASSWORD).await;
+    let client = web_client(&app, &tenant).await;
+    app.storage()
+        .clients()
+        .update(
+            tenant.id,
+            &client.client_id,
+            &ClientUpdate {
+                consent_mode: Some(ConsentMode::Required),
+                ..ClientUpdate::default()
+            },
+            app.clock().now(),
+        )
+        .await
+        .expect("client update")
+        .expect("client exists");
+    let iss = app.issuer(None);
+    let id_of = |email: &'static str| {
+        let app = &app;
+        let tenant = tenant.id;
+        async move {
+            app.storage()
+                .users()
+                .get_by_email(tenant, email)
+                .await
+                .expect("lookup")
+                .expect("user")
+                .id
+        }
+    };
+    let alice = id_of("alice@example.com").await;
+    let bob = id_of("bob@example.com").await;
+    let grant = |user: UserId| {
+        let app = &app;
+        let tenant = tenant.id;
+        let client_id = client.client_id.clone();
+        async move {
+            app.storage()
+                .grants()
+                .consent(tenant, user, &client_id)
+                .await
+                .expect("consent lookup")
+                .map(|g| g.scopes)
+        }
+    };
+    let authorize = |scope: &'static str| {
+        let app = &app;
+        let client_id = client.client_id.clone();
+        async move {
+            let p: Vec<(&str, &str)> = pkce_params(&client_id)
+                .into_iter()
+                .map(|(k, v)| if k == "scope" { (k, scope) } else { (k, v) })
+                .collect();
+            app.get(&authorize_path("", &p)).await
+        }
+    };
+    let open_consent = |resp: TestResponse| {
+        let app = &app;
+        async move {
+            assert_eq!(resp.status, 303, "{}", resp.text());
+            let path = to_path(app, &location(&resp));
+            assert!(path.starts_with("/ui/consent?request="), "{path}");
+            let page = app.get(&path).await;
+            assert_eq!(page.status, 200, "{}", page.text());
+            let html = page.html();
+            let action = action_of(app, &html, "consent-form");
+            let csrf = csrf_from(&html);
+            (html, action, csrf)
+        }
+    };
+
+    // Alice signs in and allows `openid`.
+    let resp = ui_helpers::login(&app, "", "alice@example.com", PASSWORD).await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let alice_session = ui_helpers::session_cookie(&app).expect("session").1;
+    let (_, action, csrf) = open_consent(authorize("openid").await).await;
+    let resp = app
+        .post_form(&action, &[("csrf_token", &csrf), ("decision", "allow")])
+        .await;
+    assert_code(&resp, &iss);
+    assert_eq!(grant(alice).await.expect("Alice's grant"), ["openid"]);
+
+    // A new scope asks Alice again; she uses another account instead.
+    let (html, action, csrf) = open_consent(authorize("openid email").await).await;
+    assert!(html.contains(">alice@example.com</bdi>"), "{html}");
+    let resp = app
+        .post_form(&action, &[("csrf_token", &csrf), ("choice", "other")])
+        .await;
+    assert_eq!(resp.status, 303, "{}", resp.text());
+    let login = to_path(&app, &location(&resp));
+    assert!(login.starts_with("/ui/login?request="), "{login}");
+
+    // Bob signs in for the request; Alice's session is revoked.
+    let resp = ui_helpers::submit_form(
+        &app,
+        &login,
+        &[("identifier", "bob@example.com"), ("password", PASSWORD)],
+    )
+    .await;
+    assert_eq!(resp.status, 303, "{}", resp.text());
+    assert!(
+        location(&resp).contains("/authorize/continue?request="),
+        "{}",
+        location(&resp)
+    );
+    let alice_row = app
+        .storage()
+        .sessions()
+        .get_active(
+            tenant.id,
+            &anvil_core::model::SecretHash(anvil_jose::encoding::secret_hash(&alice_session)),
+            app.clock().now(),
+        )
+        .await
+        .expect("session lookup");
+    assert!(alice_row.is_none(), "Alice's session is revoked");
+
+    // Bob gets his own consent screen: Alice's grant is not his, so openid is new for him.
+    let resp = app.follow(&resp).await;
+    let (html, action, csrf) = open_consent(resp).await;
+    assert!(html.contains(">bob@example.com</bdi>"), "{html}");
+    assert!(html.contains("data-scope=\"openid\""), "{html}");
+    assert!(!html.contains("id=\"consent-granted-scopes\""), "{html}");
+    assert!(grant(bob).await.is_none(), "nothing granted to Bob yet");
+    let resp = app
+        .post_form(&action, &[("csrf_token", &csrf), ("decision", "allow")])
+        .await;
+    assert_code(&resp, &iss);
+    assert_eq!(grant(bob).await.expect("Bob's grant"), ["email", "openid"]);
+    assert_eq!(
+        grant(alice).await.expect("Alice's grant"),
+        ["openid"],
+        "Alice's grant is unchanged"
+    );
 }
 
 // ---------------------------------------------------------------------------------------------

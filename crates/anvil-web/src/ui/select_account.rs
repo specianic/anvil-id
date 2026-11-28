@@ -17,6 +17,13 @@
 //! the `csrf` error page (403) and nothing changes. An expired or used chooser flow shows the
 //! chooser again with a message; an expired or used request is the `flow_expired` page. The page
 //! works without JavaScript and is `Cache-Control: no-store`.
+//!
+//! "Use another account" is one path for every page that offers it: the core's
+//! [`AuthorizeService::sign_in_as_other`] (here inside `choose_account`, on the consent screen
+//! through [`use_another_account`], on the organization non-member page inside
+//! `answer_org_not_member`), always after the page's flow binding was checked.
+//!
+//! [`AuthorizeService::sign_in_as_other`]: anvil_core::service::authorize::AuthorizeService::sign_in_as_other
 
 use anvil_core::error::CoreError;
 use anvil_core::model::{AuthRequestId, BrowserSession};
@@ -24,14 +31,14 @@ use anvil_core::service::authorize::{AccountChoice, AccountChoiceBinding, Select
 use axum::Router;
 use axum::extract::rejection::FormRejection;
 use axum::extract::{Form, Query, State};
-use axum::http::{HeaderMap, StatusCode, header};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum_extra::extract::cookie::CookieJar;
 use secrecy::ExposeSecret as _;
 use serde::Deserialize;
 
-use super::consent::{PageMessage, current_session, localized, no_store};
+use super::consent::{PageMessage, current_session, localized, no_store, to_login};
 use super::login::{UiQuery, bad_form, csrf_page, page_locale, rejected_form};
 use crate::errors::{core_error_page_in, error_page_in};
 use crate::i18n::{Locale, RequestLocale, carry_ui_locales};
@@ -56,17 +63,23 @@ struct ChoiceForm {
     choice: Option<String>,
 }
 
-fn to_login(tenant: &ResolvedTenant, request: AuthRequestId) -> Response {
-    no_store(
-        (
-            StatusCode::SEE_OTHER,
-            [(
-                header::LOCATION,
-                tenant.ui_url(&format!("/ui/login?request={request}")),
-            )],
-        )
-            .into_response(),
-    )
+/// "Use another account" for a page whose own flow binding was already checked and used up
+/// (the consent screen): the login page for `request`, or the `flow_expired` page when the
+/// request is gone ([`AuthorizeService::sign_in_as_other`](anvil_core::service::authorize::AuthorizeService::sign_in_as_other)).
+pub(super) async fn use_another_account(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    loc: &Locale,
+    request: AuthRequestId,
+) -> Response {
+    match state
+        .authorize_service()
+        .sign_in_as_other(&tenant.tenant, request)
+        .await
+    {
+        Ok(outcome) => no_store(state.authorize_response(tenant, loc, outcome)),
+        Err(e) => core_error_page_in(state, Some(tenant), loc, &e),
+    }
 }
 
 /// The `request` parameter; absent or malformed → the invalid request page.
@@ -169,7 +182,7 @@ async fn show(
             )
             .await
         }
-        Ok(None) => to_login(&tenant, request),
+        Ok(None) => to_login(&state, &tenant, &loc, request).await,
         Err(e) => core_error_page_in(&state, Some(&tenant), &loc, &e),
     }
 }
@@ -199,7 +212,7 @@ async fn submit(
     let loc = page_locale(&state, &tenant, locale, &headers, Some(request)).await;
     let session = match current_session(&state, &tenant, &jar).await {
         Ok(Some(s)) => s,
-        Ok(None) => return to_login(&tenant, request),
+        Ok(None) => return to_login(&state, &tenant, &loc, request).await,
         Err(e) => return core_error_page_in(&state, Some(&tenant), &loc, &e),
     };
     let (Some(flow_id), Some(csrf)) = (q.flow_id(), form.csrf_token.filter(|c| !c.is_empty()))
@@ -226,7 +239,7 @@ async fn submit(
         )
         .await
     {
-        Ok(Some(outcome)) => no_store(state.authorize_response(&tenant, outcome)),
+        Ok(Some(outcome)) => no_store(state.authorize_response(&tenant, &loc, outcome)),
         Ok(None) => {
             chooser_page(
                 &state,

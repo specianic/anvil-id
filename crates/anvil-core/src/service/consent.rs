@@ -442,6 +442,39 @@ impl ConsentService {
         })
     }
 
+    /// The email address of `session`'s user: the account the consent screen asks for.
+    pub async fn account_email(
+        &self,
+        tenant: TenantId,
+        session: &BrowserSession,
+    ) -> Result<String, CoreError> {
+        if session.tenant_id != tenant {
+            return Err(CoreError::Forbidden);
+        }
+        match self.storage.users().get(tenant, session.user_id).await? {
+            Some(user) => Ok(user.email),
+            None => Err(CoreError::Forbidden),
+        }
+    }
+
+    /// "Use another account" on the consent screen: takes the decision like Allow or Deny (same
+    /// binding, owner and single-use checks; [`CoreError::Forbidden`] for a bad binding) but
+    /// stores nothing and leaves an existing grant untouched. Returns the request, which then
+    /// goes to the login page
+    /// ([`AuthorizeService::sign_in_as_other`](super::authorize::AuthorizeService::sign_in_as_other));
+    /// the next user's consent is asked for that user.
+    pub async fn switch_account(
+        &self,
+        tenant: TenantId,
+        session: &BrowserSession,
+        binding: &ConsentBinding<'_>,
+    ) -> Result<ConsentSubmission, CoreError> {
+        Ok(match self.take_decision(tenant, session, binding).await? {
+            Some(pending) => ConsentSubmission::Decided(pending.request_id),
+            None => ConsentSubmission::Expired,
+        })
+    }
+
     /// The user's active grants, in client id order.
     pub async fn list(
         &self,

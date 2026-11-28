@@ -3,7 +3,7 @@
 //! | Route | |
 //! |---|---|
 //! | `GET  /ui/consent?request=` | names the client and lists the requested scopes (and RFC 8707 resources); starts a consent flow (flow cookie + CSRF token) |
-//! | `POST /ui/consent?flow=&request=` | `decision=allow` or `decision=deny` (two submit buttons named `decision`) |
+//! | `POST /ui/consent?flow=&request=` | `decision=allow` or `decision=deny` (two submit buttons named `decision`), or `choice=other` ("Use another account", its own small form) |
 //!
 //! `/authorize` sends the signed-in user here when consent is needed
 //! (`AuthorizeOutcome::Consent`). Allow stores the grant and continues the authorization request
@@ -16,6 +16,16 @@
 //! flow cookie and the CSRF token; otherwise the `csrf` error page (403). An expired flow shows
 //! the screen again with a message; an expired or used request is the `flow_expired` page. The
 //! page works without JavaScript and is `Cache-Control: no-store`.
+//!
+//! The page names the signed-in account (its email address) and offers "Use another account"
+//! (U-M15): a POST bound to the consent flow like Allow and Deny (flow cookie, CSRF token, the
+//! flow's own user), which takes the flow's single decision without storing anything, then goes
+//! to the login page for the request through the same path as the account chooser's "Use
+//! another account" ([`AuthorizeService::sign_in_as_other`]). Signing in as someone else
+//! revokes the current session, and the next user is asked for their own consent: grants are
+//! per user, so one user's Allow is never used for another.
+//!
+//! [`AuthorizeService::sign_in_as_other`]: anvil_core::service::authorize::AuthorizeService::sign_in_as_other
 //!
 //! For a client materialised from a Client ID Metadata Document (CIMD) the page names the client
 //! by the host of its `client_id` URL, shows the self-asserted `client_name` as unverified and
@@ -46,6 +56,8 @@ use secrecy::ExposeSecret as _;
 use serde::{Deserialize, Serialize};
 
 use super::login::{UiQuery, bad_form, csrf_page, page_locale, rejected_form};
+use super::nav::{NavContext, UiPage};
+use super::select_account::use_another_account;
 use crate::errors::{core_error_page_in, error_page_in};
 use crate::i18n::{Locale, RequestLocale, carry_ui_locales, locale_for_user};
 use crate::render::PageContext;
@@ -78,6 +90,16 @@ pub fn routes() -> Router<AppState> {
 struct ConsentForm {
     csrf_token: Option<String>,
     decision: Option<String>,
+    /// `other`: the "Use another account" form.
+    choice: Option<String>,
+}
+
+/// What a consent submission asks for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Answer {
+    Allow,
+    Deny,
+    OtherAccount,
 }
 
 /// A message on the consent and account pages (`data-message-key` like the form messages).
@@ -198,8 +220,17 @@ fn see_other(location: &str) -> Response {
     )
 }
 
-fn to_login(tenant: &ResolvedTenant, request: AuthRequestId) -> Response {
-    see_other(&tenant.ui_url(&format!("/ui/login?request={request}")))
+/// The sign-in page for `request` (built by [`NavContext`]; a request that is no longer live
+/// gives the plain sign-in page). Shared by the consent screen, the account chooser and the
+/// organization pages when there is no session.
+pub(super) async fn to_login(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    loc: &Locale,
+    request: AuthRequestId,
+) -> Response {
+    let nav = NavContext::from_request(state, tenant, Some(request)).await;
+    see_other(&nav.url(tenant, loc, UiPage::Login))
 }
 
 fn flow_expired(state: &AppState, tenant: &ResolvedTenant, loc: &Locale) -> Response {
@@ -284,8 +315,17 @@ async fn consent_page(
     let granted_scopes = scope_views(state, loc, &view.granted_scopes);
     let cimd_host = view.cimd_host();
     let messages = localized(state, loc, messages);
+    let account_email = match state
+        .ui_consent_service()
+        .account_email(tenant.tenant.id, session)
+        .await
+    {
+        Ok(email) => email,
+        Err(e) => return core_error_page_in(state, Some(tenant), loc, &e),
+    };
     let ctx = minijinja::context! {
         page => PageContext::for_tenant(state, tenant, loc, "title.consent").into_value(),
+        account_email => account_email,
         client_name => &view.client_name,
         client_id => &page.client_id,
         agent => view.client_kind == ClientKind::Agent,
@@ -343,7 +383,7 @@ async fn show(
             )
             .await
         }
-        Ok(None) => to_login(&tenant, request),
+        Ok(None) => to_login(&state, &tenant, &loc, request).await,
         Err(e) => core_error_page_in(&state, Some(&tenant), &loc, &e),
     }
 }
@@ -366,9 +406,10 @@ async fn submit(
         Ok(Form(form)) => form,
         Err(e) => return rejected_form(&state, Some(&tenant), &locale.0, &e),
     };
-    let approved = match form.decision.as_deref() {
-        Some("allow") => true,
-        Some("deny") => false,
+    let answer = match (form.choice.as_deref(), form.decision.as_deref()) {
+        (Some("other"), None) => Answer::OtherAccount,
+        (None, Some("allow")) => Answer::Allow,
+        (None, Some("deny")) => Answer::Deny,
         _ => return bad_form(&state, &tenant, &locale.0),
     };
     let request = match request_id(&state, &tenant, &locale.0, &q) {
@@ -378,7 +419,7 @@ async fn submit(
     let loc = page_locale(&state, &tenant, locale, &headers, Some(request)).await;
     let session = match current_session(&state, &tenant, &jar).await {
         Ok(Some(s)) => s,
-        Ok(None) => return to_login(&tenant, request),
+        Ok(None) => return to_login(&state, &tenant, &loc, request).await,
         Err(e) => return core_error_page_in(&state, Some(&tenant), &loc, &e),
     };
     let (Some(flow_id), Some(csrf)) = (q.flow_id(), form.csrf_token.filter(|c| !c.is_empty()))
@@ -394,14 +435,24 @@ async fn submit(
         csrf_token: &csrf,
     };
     let consent = state.ui_consent_service();
-    let result = if approved {
-        consent
-            .approve(tenant.tenant.id, &session, &binding, &ctx)
-            .await
-    } else {
-        consent.deny(tenant.tenant.id, &session, &binding).await
+    let result = match answer {
+        Answer::Allow => {
+            consent
+                .approve(tenant.tenant.id, &session, &binding, &ctx)
+                .await
+        }
+        Answer::Deny => consent.deny(tenant.tenant.id, &session, &binding).await,
+        Answer::OtherAccount => {
+            consent
+                .switch_account(tenant.tenant.id, &session, &binding)
+                .await
+        }
     };
+    let approved = answer == Answer::Allow;
     match result {
+        Ok(ConsentSubmission::Decided(decided)) if answer == Answer::OtherAccount => {
+            use_another_account(&state, &tenant, &loc, decided).await
+        }
         Ok(ConsentSubmission::Decided(decided)) => {
             match state
                 .authorize_service()
@@ -414,7 +465,7 @@ async fn submit(
                 )
                 .await
             {
-                Ok(outcome) => no_store(state.authorize_response(&tenant, outcome)),
+                Ok(outcome) => no_store(state.authorize_response(&tenant, &loc, outcome)),
                 Err(e) => core_error_page_in(&state, Some(&tenant), &loc, &e),
             }
         }

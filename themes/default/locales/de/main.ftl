@@ -198,11 +198,16 @@ consent-note = Sie können diesen Zugriff jederzeit in Ihrem Konto unter „Verb
 consent-allow = Erlauben
 consent-deny = Ablehnen
 consent-agent_badge = KI-Agent / automatisierter Client
-consent-provenance_static = Von Ihrer Administration registriert.
+consent-provenance_static = Von der Administration dieses Anmeldedienstes eingerichtet.
 consent-provenance_dynamic = Hat sich selbst über die dynamische Registrierung angemeldet. Seine Angaben sind nicht überprüft.
 consent-provenance_cimd = Identifiziert durch sein Metadatendokument unter { $host }. Sein Name ist nicht überprüft.
 consent-new_permissions = Neue Berechtigungen:
 consent-already_allowed = Bereits erlaubt
+consent-agent_explain = Er handelt selbstständig, zum Beispiel als KI-Assistent, und kann diesen Zugriff auch nutzen, wenn Sie nicht anwesend sind.
+consent-signed_in_as = Angemeldet als
+consent-other_account = Anderes Konto verwenden
+consent-offline_access = Bei { $app } angemeldet bleiben
+consent-offline_access_note = Die App kann diesen Zugriff weiter nutzen, auch wenn Sie sie gerade nicht verwenden, bis Sie ihn unter „Verbundene Apps“ entfernen.
 form_post-heading = Weiterleitung…
 form_post-status = Sie werden zur Anwendung zurückgeleitet.
 
