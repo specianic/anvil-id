@@ -211,7 +211,7 @@ async fn without_a_session_both_routes_go_to_sign_in() {
     let resp = app.get(PAGE).await;
     assert_eq!(resp.status, 303);
     assert!(
-        location(&resp).ends_with("/ui/login"),
+        location(&resp).ends_with("/ui/login?return_to=%2Fui%2Faccount%2Fattributes"),
         "{}",
         location(&resp)
     );

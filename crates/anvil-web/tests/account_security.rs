@@ -229,7 +229,13 @@ async fn without_a_session_every_route_sends_the_user_to_sign_in() {
     let app = TestApp::new().await;
     let resp = app.get(PAGE).await;
     assert_eq!(resp.status, 303);
-    assert_eq!(location(&resp), format!("{}/ui/login", app.issuer(None)));
+    assert_eq!(
+        location(&resp),
+        format!(
+            "{}/ui/login?return_to=%2Fui%2Faccount%2Fsecurity",
+            app.issuer(None)
+        )
+    );
     for path in [
         "/ui/account/security/totp",
         "/ui/account/security/passkey",
@@ -420,7 +426,9 @@ async fn a_stale_session_must_sign_in_again_and_changes_nothing() {
             vec!["account.reauth_required".to_owned()]
         );
         assert!(html.contains("id=\"link-reauth\""));
-        assert!(html.contains("href=\"https://op.test/ui/login\""));
+        assert!(
+            html.contains("href=\"https://op.test/ui/login?return_to=%2Fui%2Faccount%2Fsecurity\"")
+        );
     }
     let resp = post(&app, &options, &[("csrf_token", &csrf)]).await;
     assert_eq!(resp.status, 400);

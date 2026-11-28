@@ -363,7 +363,7 @@ async fn without_a_session_the_page_and_posts_redirect_to_sign_in() {
     let resp = anonymous.get(PAGE).await;
     assert_eq!(resp.status, 303);
     assert!(
-        location(&resp).ends_with("/ui/login"),
+        location(&resp).ends_with("/ui/login?return_to=%2Fui%2Faccount%2Fsessions"),
         "{}",
         location(&resp)
     );
@@ -477,7 +477,7 @@ async fn revoking_the_current_session_signs_out_and_redirects_to_sign_in() {
     let resp = browser.submit(&format!("session-revoke-{a}")).await;
     assert_eq!(resp.status, 303, "{}", resp.text());
     assert!(
-        location(&resp).ends_with("/ui/login"),
+        location(&resp).ends_with("/ui/login?return_to=%2Fui%2Faccount%2Fsessions"),
         "{}",
         location(&resp)
     );

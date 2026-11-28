@@ -98,7 +98,7 @@ async fn page_needs_a_session_and_is_in_the_navigation() {
     let u = setup(true).await;
     let resp = u.app.get(PAGE).await;
     assert_eq!(resp.status, 303);
-    assert!(support::location(&resp).ends_with("/ui/login"));
+    assert!(support::location(&resp).ends_with("/ui/login?return_to=%2Fui%2Faccount%2Flinked"));
 
     bob_signed_in(&u).await;
     let resp = u.app.get(PAGE).await;

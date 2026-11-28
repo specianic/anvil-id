@@ -169,7 +169,14 @@ async fn without_a_session_the_pages_send_the_user_to_sign_in() {
     ] {
         let resp = app.get(page).await;
         assert_eq!(resp.status, 303, "{page}");
-        assert_eq!(location(&resp), format!("{}/ui/login", app.issuer(None)));
+        assert_eq!(
+            location(&resp),
+            format!(
+                "{}/ui/login?return_to={}",
+                app.issuer(None),
+                url::form_urlencoded::byte_serialize(page.as_bytes()).collect::<String>()
+            )
+        );
         let resp = app.post_form(page, &[("csrf_token", "x")]).await;
         assert_eq!(resp.status, 303, "{page}");
     }

@@ -418,7 +418,7 @@ async fn revocations_without_a_valid_binding_change_nothing() {
         .await;
     assert_eq!(resp.status, 303, "{}", resp.text());
     assert!(
-        location(&resp).ends_with("/ui/login"),
+        location(&resp).ends_with("/ui/login?return_to=%2Fui%2Faccount%2Fapps"),
         "{}",
         location(&resp)
     );
@@ -435,7 +435,7 @@ async fn the_page_needs_a_session() {
     let resp = f.get(PAGE, None).await;
     assert_eq!(resp.status, 303, "{}", resp.text());
     assert!(
-        location(&resp).ends_with("/ui/login"),
+        location(&resp).ends_with("/ui/login?return_to=%2Fui%2Faccount%2Fapps"),
         "{}",
         location(&resp)
     );
