@@ -6,15 +6,15 @@ current_phase: 05
 current_phase_name: release 0 4 operate it
 current_plan: 33
 status: verifying
-stopped_at: Completed 07.1-03-PLAN.md
-last_updated: "2026-11-28T02:40:12.770Z"
+stopped_at: Completed 07.1-02-PLAN.md
+last_updated: "2026-11-28T02:51:08.781Z"
 last_activity: 2026-11-28
 progress:
   total_phases: 8
   completed_phases: 3
   total_plans: 215
-  completed_plans: 188
-  percent: 87
+  completed_plans: 189
+  percent: 88
 ---
 
 # Project State
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 **Status:** Phase complete — ready for verification
 **Last Activity:** 2026-11-28
 **Last Activity Description:** 06-26 phase gate complete (921-pair security map, 1.0 plaintext scans, `just doc`, legacy console redirects removed, anvilid 1.0.0-beta.1, 1.0 migrations pinned, every workflow incl. load, deploy and the macOS release dry run green on 9c40f61). Open: 04-33/v0.3.0 and 05-29/v0.4.0 (owner), then 06-27 (v1.0.0-beta.1)
-**Progress:** [█████████░] 87%
+**Progress:** [█████████░] 88%
 
 Phase 5 has 33 plans (05-01 through 05-33). Every plan except 05-29 (release v0.4.0 after owner sign-off) has a
 SUMMARY. Current Plan counts plans in execution order: 05-29 is the 33rd and last. Phase 4 still has one open plan, 04-33 (manual real-provider checklist, then tag v0.3.0); it must be
@@ -223,6 +223,7 @@ done before 05-29 tags v0.4.0.
 | Phase 07 P04 | 70 min | 2 tasks | 22 files |
 | Phase 07.1 P05 | 25min | 2 tasks | 4 files |
 | Phase 07.1 P03 | 35min | 3 tasks | 17 files |
+| Phase 07.1 P02 | 75min | 3 tasks | 26 files |
 
 ## Accumulated Context
 
@@ -522,6 +523,9 @@ Recent decisions affecting current work:
 - [Phase 07.1]: 07.1-03: console dark mode follows prefers-color-scheme (media custom variant); links use text-link; destructive Alert renders its own icon
 - [Phase 07.1]: 07.1-03: TENANT_PAGES (group, systemTenant) is the only nav source; only Organizations is hidden in the system tenant
 - [Phase 07.1]: 07.1-03: DangerZone/CopyField/UnsavedChangesGuard/useUnsavedChanges/useSlugFromName are the shared console safety components; DangerZone and the guard build on Modal from ConfirmDialog.tsx
+- [Phase 07.1]: 07.1-02: Default theme is Specianic (orange fill + ink text both schemes; links/focus via --anvil-link/--anvil-focus; 2px controls, square cards); fonts are official upstream files with pinned SHA256SUMS checked by just fonts-check
+- [Phase 07.1]: 07.1-02: A lone customised primary/primary_text is paired with the legacy partner (#2f5bd3/#fff, dark #6d8ef0/#0d1020) in validation and stylesheet; primary also emits --anvil-link/--anvil-focus, radius_px also --anvil-card-radius
+- [Phase 07.1]: 07.1-02: Every end-user document CSP adds font-src 'self'; theme.rs subresource CSP stays default-src 'none'
 
 ### Roadmap Evolution
 
@@ -539,6 +543,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-28T02:40:12.766Z
-Stopped at: Completed 07.1-03-PLAN.md
+Last session: 2026-11-28T02:51:08.777Z
+Stopped at: Completed 07.1-02-PLAN.md
 Resume file: None
