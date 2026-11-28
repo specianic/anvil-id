@@ -87,19 +87,6 @@ pub(crate) enum AccountSection {
 }
 
 impl AccountSection {
-    /// Every account page.
-    #[cfg(test)]
-    pub(crate) const ALL: [Self; 8] = [
-        Self::Profile,
-        Self::Email,
-        Self::Password,
-        Self::Security,
-        Self::Sessions,
-        Self::Apps,
-        Self::Linked,
-        Self::Attributes,
-    ];
-
     /// The tenant-relative path of the page.
     fn path(self) -> &'static str {
         match self {
@@ -597,6 +584,18 @@ mod tests {
     const REQ: &str = "0190a6d4-0000-7000-8000-0000000000aa";
     const ISSUER: &str = "https://id.example.com/t/acme";
 
+    /// Every account page.
+    const ALL_SECTIONS: [AccountSection; 8] = [
+        AccountSection::Profile,
+        AccountSection::Email,
+        AccountSection::Password,
+        AccountSection::Security,
+        AccountSection::Sessions,
+        AccountSection::Apps,
+        AccountSection::Linked,
+        AccountSection::Attributes,
+    ];
+
     fn tenant(slug: &str, registration: RegistrationMode) -> ResolvedTenant {
         let settings = TenantSettings {
             registration,
@@ -713,7 +712,7 @@ mod tests {
     #[test]
     fn account_sign_in_returns_to_that_page() {
         let t = tenant("acme", RegistrationMode::Open);
-        for section in AccountSection::ALL {
+        for section in ALL_SECTIONS {
             // The allowlist and the account page map stay in step.
             assert!(
                 anvil_core::policy::return_to::ACCOUNT_PATHS.contains(&section.path()),
@@ -728,7 +727,7 @@ mod tests {
         }
         assert_eq!(
             anvil_core::policy::return_to::ACCOUNT_PATHS.len(),
-            AccountSection::ALL.len()
+            ALL_SECTIONS.len()
         );
         assert_eq!(
             NavContext::login_returning_to(&t, AccountSection::Security),
