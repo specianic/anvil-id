@@ -9,7 +9,8 @@
 //
 // Console test ids (admin-ui, plan 07-20):
 // - client form: fieldset `client-v10-fields`, `client-require-par`, `client-kind`,
-//   `client-headless-native` (the consent select is labelled "Consent")
+//   `client-headless-native` (the consent select is labelled "Consent"); since 07.1-16 these sit in
+//   the collapsed Advanced section (`client-advanced-toggle`), opened before asserting
 // - login settings: `par-headless-form`, `tenant-require-par`, `headless-origins`,
 //   `headless-origin` rows (`data-origin`, button "Remove {origin}"), `headless-origin-input`,
 //   `headless-origin-add`, `save-par-headless`, `password-profiles-link`
@@ -80,10 +81,18 @@ test('console: client PAR/agent/headless fields, tenant PAR and origins, hash pr
   const readClient = () =>
     adminCall<ClientFields>(token, 'GET', tenantPath(slug, `/clients/${encodeURIComponent(clientId)}`));
   const editForm = () => page.getByRole('form', { name: 'Edit client' });
+  /** Opens the collapsed Advanced section of the edit form (closed again after a reload). */
+  const openAdvanced = async () => {
+    const toggle = editForm().getByTestId('client-advanced-toggle');
+    if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  };
 
   await test.step('the client form shows the 1.0 fields with their defaults', async () => {
     await openTenantPage(page, slug, `clients/${encodeURIComponent(clientId)}`);
     const form = editForm();
+    await expect(form.getByTestId('client-v10-fields')).toHaveCount(0);
+    await openAdvanced();
     await expect(form.getByTestId('client-v10-fields')).toBeVisible();
     await expect(form.getByTestId('client-require-par')).not.toBeChecked();
     await expect(form.getByTestId('client-kind')).toHaveValue('application');
@@ -116,6 +125,7 @@ test('console: client PAR/agent/headless fields, tenant PAR and origins, hash pr
     expect(stored.headless_native).toBe(false);
 
     await page.reload();
+    await openAdvanced();
     await expect(editForm().getByTestId('client-require-par')).toBeChecked();
     await expect(editForm().getByTestId('client-kind')).toHaveValue('agent');
   });
@@ -133,6 +143,7 @@ test('console: client PAR/agent/headless fields, tenant PAR and origins, hash pr
     expect(stored.consent_mode).toBe('skip_first_party');
 
     await page.reload();
+    await openAdvanced();
     await expect(editForm().getByTestId('client-headless-native')).toBeChecked();
   });
 

@@ -219,10 +219,13 @@ test('admin console: users, sessions, audit, clients, email and SMTP', async ({ 
     await page.getByRole('button', { name: 'Create client' }).click();
     await expect(page.getByText('The client was not saved. Fix the errors below.')).toBeVisible();
 
+    // The type picker comes first; Web app is preselected (confidential, consent skipped).
+    await expect(page.getByTestId('app-type-picker').getByRole('radio', { name: 'Web app' })).toBeChecked();
     await page.getByLabel('Name', { exact: true }).fill(clientName);
     await page.getByLabel('Redirect URIs', { exact: true }).fill('https://rp.example.test/callback');
+    await page.getByTestId('client-advanced-toggle').click();
     await page.getByLabel('Access token format').selectOption('opaque');
-    await page.getByLabel('Consent').selectOption('skip_first_party');
+    await expect(page.getByLabel('Consent', { exact: true })).toHaveValue('skip_first_party');
     await page.getByRole('button', { name: 'Create client' }).click();
     await expect(page.getByRole('heading', { level: 1, name: 'Client created' })).toBeVisible();
     await expect(page.getByTestId('created-client-secret')).not.toBeEmpty();
@@ -240,6 +243,8 @@ test('admin console: users, sessions, audit, clients, email and SMTP', async ({ 
     await findInPagedTable(page, link);
     await link.click();
     await expect(page.getByRole('heading', { level: 1, name: clientName })).toBeVisible();
+    await expect(page.getByTestId('integration-card')).toBeVisible();
+    await page.getByTestId('client-advanced-toggle').click();
     await expect(page.getByLabel('Access token format')).toHaveValue('opaque');
     await expectNoA11yViolations(page);
 
@@ -251,21 +256,19 @@ test('admin console: users, sessions, audit, clients, email and SMTP', async ({ 
     await takeOneTimeSecret(page, 'rotated-client-secret', false);
   });
 
-  await test.step("the sample RP's client card shows its logout, resource and MFA settings", async () => {
-    // The sample RP registers no logout URIs, resources or MFA policy: the card shows the defaults.
+  await test.step("the sample RP's client page shows its logout, resource and MFA settings", async () => {
+    // The sample RP registers no logout URIs, resources or MFA policy: the form shows the defaults.
     await page.goto(consoleUrl('t/default/clients'));
     const row = page.getByRole('row').filter({ hasText: 'e2e console sample RP' }).first();
     await findInPagedTable(page, row);
     await row.getByRole('link').click();
     await expect(page.getByRole('heading', { level: 1, name: 'e2e console sample RP' })).toBeVisible();
-    const card = page.getByTestId('client-logout-security');
-    await expect(card).toContainText('Logout and security');
-    const field = (label: string) => card.locator('dt', { hasText: label }).locator('xpath=following-sibling::dd[1]');
-    await expect(field('Post-logout redirect URIs')).toHaveText('None');
-    await expect(field('Back-channel logout URI')).toHaveText('None');
-    await expect(card.locator('dt', { hasText: 'Back-channel session required' })).toHaveCount(0);
-    await expect(field('Allowed resources')).toHaveText('None: tokens are for this client');
-    await expect(field('MFA policy')).toHaveText('Tenant default');
+    const form = page.getByRole('form', { name: 'Edit client' });
+    await expect(form.getByLabel('Post-logout redirect URIs')).toHaveValue('');
+    await expect(form.getByLabel('Multi-factor authentication')).toHaveValue('inherit');
+    await form.getByTestId('client-advanced-toggle').click();
+    await expect(form.getByLabel('Back-channel logout URI')).toHaveValue('');
+    await expect(form.getByLabel('Allowed resources')).toHaveValue('');
     await expectNoA11yViolations(page);
   });
 
