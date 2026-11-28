@@ -23,6 +23,18 @@ test.beforeAll(async ({ browser }) => {
   creds = await sharedManagementCredential(browser);
 });
 
+test('a failed registration redirects (Post/Redirect/Get) and keeps the email, not the password', async ({
+  page,
+}) => {
+  await page.goto(`${anvilUrl()}/ui/registration`);
+  const email = randomEmail('reg-prg');
+  await register(page, email, 'short');
+  await expect(page).toHaveURL(/\/ui\/registration\?flow=/);
+  await expect(page.locator('#password-msg-1')).toBeVisible();
+  await expect(page.locator('#email')).toHaveValue(email);
+  await expect(page.locator('#password')).toHaveValue('');
+});
+
 test('registration sends a verification email whose link verifies the address', async ({
   page,
 }) => {
@@ -53,10 +65,13 @@ test('registration sends a verification email whose link verifies the address', 
 
   expect((await getUser(token, user!.id)).email_verified).toBe(true);
 
-  // The same link cannot be used twice.
-  await page.goto(link);
-  await page.locator('#verification-submit').click();
-  await expect(page.locator('[data-message-key="verification.invalid_token"]')).toBeVisible();
+  // The same link cannot be used twice: opening it again says so before anything is clicked,
+  // and offers the way to sign in instead of the button.
+  const reopened = await page.goto(link);
+  expect(reopened?.status()).toBe(400);
+  await expect(page.locator('[data-message-key="links.expired"]')).toBeVisible();
+  await expect(page.locator('#verification-submit')).toHaveCount(0);
+  await expect(page.locator('#link-login')).toBeVisible();
 
   // The new account can sign in.
   await page.context().clearCookies();

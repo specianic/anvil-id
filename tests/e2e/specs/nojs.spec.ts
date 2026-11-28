@@ -120,6 +120,8 @@ test('password login through the sample RP without JavaScript', async ({ page, b
   // A wrong password first: the error round trip works without JavaScript too.
   await login(page, email, randomPassword());
   await expect(page.locator('[data-message-key="login.invalid_credentials"]')).toBeVisible();
+  // Post/Redirect/Get works without JavaScript: the error page is a GET of the flow.
+  await expect(page).toHaveURL(/\/ui\/login\?flow=/);
 
   await login(page, email, password);
   await expect(page).toHaveURL(`${rpBase}/me`);

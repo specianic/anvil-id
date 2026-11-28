@@ -43,6 +43,9 @@ test('wrong password shows the generic message and the page makes no external re
   await login(page, email, randomPassword());
   const wrongPassword = page.locator('[data-message-key="login.invalid_credentials"]');
   await expect(wrongPassword).toBeVisible();
+  // Post/Redirect/Get: the error page is a GET of the flow, with the identifier kept.
+  await expect(page).toHaveURL(/\/ui\/login\?flow=/);
+  await expect(page.locator('#identifier')).toHaveValue(email);
   const wrongText = (await wrongPassword.textContent())?.trim();
 
   // An unknown account gets the identical message.

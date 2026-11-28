@@ -60,6 +60,13 @@ test('recovery link sets a new password; the old one stops working', async ({ pa
   await page.locator('button[type="submit"]').click();
   await expect(page.locator('#message-body')).toHaveAttribute('data-message-key', 'recovery.done');
 
+  // The used link says so on opening, before anything is typed, and offers a new link.
+  const reopened = await page.goto(link);
+  expect(reopened?.status()).toBe(400);
+  await expect(page.locator('[data-message-key="links.expired"]')).toBeVisible();
+  await expect(page.locator('form#recovery')).toBeVisible();
+  await expect(page.locator('input[type="password"]')).toHaveCount(0);
+
   // Old password: the same generic message as any wrong password.
   await page.context().clearCookies();
   const wrongText = await loginError(page, email, randomPassword());
