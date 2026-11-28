@@ -1036,6 +1036,8 @@ mod tests {
             headless_native: false,
             created_at: T0,
             updated_at: T0,
+            client_uri: None,
+            initiate_login_uri: None,
         }
     }
 

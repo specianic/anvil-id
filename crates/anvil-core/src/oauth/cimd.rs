@@ -155,6 +155,8 @@ impl NewClientMetadata {
             require_pushed_authorization_requests: false,
             client_kind: CIMD_CLIENT_KIND,
             headless_native: false,
+            client_uri: None,
+            initiate_login_uri: None,
         }
     }
 }

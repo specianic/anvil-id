@@ -405,6 +405,8 @@ macro_rules! storage_contract_tests {
             pending_self_service_tokens_existence_only,
             // grants: export read
             families_for_user_every_state_oldest_first,
+            // ---- Phase 7.1 (plan 07.1-04): client home URLs, read-only self-service token peek ----
+            client_home_urls_round_trip,
         );
     };
     (@each $factory:path; $($name:ident),+ $(,)?) => {

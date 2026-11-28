@@ -102,6 +102,8 @@ impl Fixture {
             require_pushed_authorization_requests: false,
             client_kind: kind,
             headless_native: false,
+            client_uri: None,
+            initiate_login_uri: None,
         };
         let clients = self.app.storage().clients();
         let client = match source {

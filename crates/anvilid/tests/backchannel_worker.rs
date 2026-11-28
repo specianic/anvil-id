@@ -258,6 +258,8 @@ async fn logout_wakes_the_worker_and_the_rp_gets_the_token_without_waiting_for_t
                 require_pushed_authorization_requests: false,
                 client_kind: anvil_core::model::ClientKind::Application,
                 headless_native: false,
+                client_uri: None,
+                initiate_login_uri: None,
             },
         )
         .await

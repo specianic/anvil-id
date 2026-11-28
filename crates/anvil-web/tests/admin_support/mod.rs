@@ -71,6 +71,8 @@ pub async fn system_client(app: &TestApp, scopes: &[&str]) -> String {
                 require_pushed_authorization_requests: false,
                 client_kind: anvil_core::model::ClientKind::Application,
                 headless_native: false,
+                client_uri: None,
+                initiate_login_uri: None,
             },
         )
         .await
@@ -368,6 +370,8 @@ pub async fn org_admin_token_with(
                 require_pushed_authorization_requests: false,
                 client_kind: anvil_core::model::ClientKind::Application,
                 headless_native: false,
+                client_uri: None,
+                initiate_login_uri: None,
             },
         )
         .await

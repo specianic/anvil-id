@@ -11,7 +11,9 @@
 //! 0.3 → 0.4 from `fixtures/release_0_3.sql`, which also checks the administrator backfill, and
 //! 0.4 → 1.0 from `fixtures/release_0_4.sql`, which counts the rows of every table 0007 changes,
 //! and 1.0.0-beta.1 → final from `fixtures/release_1_0_beta1.sql`, which compares the row count and
-//! every beta.1 column value of every table before and after 0008).
+//! every beta.1 column value of every table before and after 0008, and 1.0.0-rc.3 → rc.4 from
+//! `fixtures/release_1_0_rc3.sql`, one client per registration source, which checks that 0009's
+//! client_uri and initiate_login_uri columns read NULL on every rc.3 row).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -1828,4 +1830,252 @@ pub async fn upgraded_beta1_postgres() -> TestStorage {
 
 mod upgraded_beta1_contract {
     anvil_storage::storage_contract_tests!(crate::upgraded_beta1_postgres);
+}
+
+// ---------------------------------------------------------------------------------------------
+// 1.0.0-rc.3 → rc.4 (migration 0009: client columns client_uri and initiate_login_uri, nullable,
+// no default). Additive only: every rc.3 row must survive unchanged and read NULL home URLs.
+
+/// Schema version shipped in 1.0.0-rc.3 (0008_release_1_0_par_import).
+const RC3_VERSION: i64 = 8;
+
+const RC3_SYSTEM: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0011_0001);
+const RC3_DEFAULT: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0011_0002);
+const RC3_CAROL: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0011_0011);
+const RC3_FAMILY: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0011_0080);
+
+/// The rc.3 fixture's clients: (client_id, registration source).
+const RC3_CLIENTS: [(&str, anvil_core::model::ClientSource); 4] = [
+    ("rc3-web", anvil_core::model::ClientSource::Static),
+    ("rc3-spa", anvil_core::model::ClientSource::Static),
+    ("rc3-dcr", anvil_core::model::ClientSource::Dynamic),
+    (
+        "https://mcp.example.test/client.json",
+        anvil_core::model::ClientSource::Cimd,
+    ),
+];
+
+struct UpgradedRc3 {
+    storage: PostgresStorage,
+    url: String,
+    before: BTreeMap<String, String>,
+    columns: BTreeMap<String, Vec<String>>,
+    counts_before: BTreeMap<String, i64>,
+}
+
+/// A database at the rc.3 schema, populated from `fixtures/release_1_0_rc3.sql`, then upgraded
+/// exactly like the rc.4 binary does on start.
+async fn upgraded_from_rc3() -> UpgradedRc3 {
+    let url = fresh_database().await;
+    let mut conn = connect(&url).await;
+    sqlx::migrate!()
+        .run_to(RC3_VERSION, &mut conn)
+        .await
+        .expect("rc.3 migrations apply");
+    let version: i64 = sqlx::query_scalar("SELECT max(version) FROM _sqlx_migrations")
+        .fetch_one(&mut conn)
+        .await
+        .expect("version");
+    assert_eq!(version, RC3_VERSION);
+    sqlx::raw_sql(include_str!("fixtures/release_1_0_rc3.sql"))
+        .execute(&mut conn)
+        .await
+        .expect("rc.3 fixtures load (every foreign key holds)");
+    let columns = table_columns(&mut conn).await;
+    let before = snapshot(&mut conn, &columns).await;
+    let counts_before = table_counts(&mut conn, &columns).await;
+    assert_eq!(counts_before.get("client").copied(), Some(4));
+    conn.close().await.expect("close");
+
+    // The rc.4 binary starts: connect and migrate with the defaults (destructive refused).
+    let storage = PostgresStorage::connect(&url, MAX_CONNECTIONS)
+        .await
+        .expect("connect");
+    storage
+        .migrate_with(MigrateOptions::default())
+        .await
+        .expect("rc.3 → latest upgrade applies without the destructive flag");
+    UpgradedRc3 {
+        storage,
+        url,
+        before,
+        columns,
+        counts_before,
+    }
+}
+
+#[tokio::test]
+async fn upgrade_from_1_0_rc3_keeps_clients_and_nulls_home_urls() {
+    use anvil_core::model::{ClientKind, ClientType, ClientUpdate, PageRequest};
+
+    let up = upgraded_from_rc3().await;
+    let s = &up.storage;
+    let default = TenantId(RC3_DEFAULT);
+    let mut conn = connect(&up.url).await;
+
+    // Row counts per table and every value of every rc.3 column are unchanged.
+    assert_eq!(
+        table_counts(&mut conn, &up.columns).await,
+        up.counts_before,
+        "0009 must not add or lose a row in any rc.3 table"
+    );
+    assert_eq!(
+        snapshot(&mut conn, &up.columns).await,
+        up.before,
+        "the upgrade must not lose or change any row"
+    );
+    let version: i64 = sqlx::query_scalar("SELECT max(version) FROM _sqlx_migrations")
+        .fetch_one(&mut conn)
+        .await
+        .expect("version");
+    assert_eq!(version, latest_version());
+    let non_null: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM client WHERE client_uri IS NOT NULL OR initiate_login_uri IS NOT NULL",
+    )
+    .fetch_one(&mut conn)
+    .await
+    .expect("count");
+    assert_eq!(non_null, 0, "the new columns are NULL on every rc.3 row");
+    conn.close().await.expect("close");
+
+    // Every client reads back through the traits with its source and NULL home URLs.
+    for (client_id, source) in RC3_CLIENTS {
+        let client = s
+            .clients()
+            .get(default, client_id)
+            .await
+            .expect("get client")
+            .unwrap_or_else(|| panic!("{client_id} survives"));
+        assert_eq!(client.registration_source, source, "{client_id}");
+        assert_eq!(client.client_uri, None, "{client_id}");
+        assert_eq!(client.initiate_login_uri, None, "{client_id}");
+    }
+    let listed = s
+        .clients()
+        .list(
+            default,
+            PageRequest {
+                after: None,
+                limit: 10,
+            },
+        )
+        .await
+        .expect("list");
+    assert_eq!(listed.items.len(), 4);
+
+    // The rc.3 column values survive on the confidential client.
+    let web = s
+        .clients()
+        .get(default, "rc3-web")
+        .await
+        .expect("get")
+        .expect("rc3-web");
+    assert_eq!(web.client_type, ClientType::Confidential);
+    assert_eq!(web.id_token_signed_response_alg.as_deref(), Some("ES256"));
+    assert!(web.require_pushed_authorization_requests);
+    assert_eq!(web.client_kind, ClientKind::Agent);
+    assert_eq!(web.secret_hash, Some(SecretHash([0xee; 32])));
+    let spa = s
+        .clients()
+        .get(default, "rc3-spa")
+        .await
+        .expect("get")
+        .expect("rc3-spa");
+    assert_eq!(spa.client_type, ClientType::Public);
+    assert_eq!(spa.auth_method, ClientAuthMethod::None);
+    assert!(
+        s.clients()
+            .get_by_registration_token(default, "rc3-dcr", &SecretHash([0x72; 32]))
+            .await
+            .expect("get_by_registration_token")
+            .is_some(),
+        "the DCR registration token still authenticates"
+    );
+    let cimd = s
+        .clients()
+        .get(default, "https://mcp.example.test/client.json")
+        .await
+        .expect("get")
+        .expect("cimd");
+    assert!(cimd.metadata_expires_at.is_some());
+
+    // The upgraded rows accept the new fields.
+    let updated = s
+        .clients()
+        .update(
+            default,
+            "rc3-spa",
+            &ClientUpdate {
+                client_uri: Some(Some("https://spa.example.test/".to_owned())),
+                initiate_login_uri: Some(Some("https://spa.example.test/login".to_owned())),
+                ..ClientUpdate::default()
+            },
+            now(),
+        )
+        .await
+        .expect("update")
+        .expect("rc3-spa");
+    assert_eq!(
+        updated.client_uri.as_deref(),
+        Some("https://spa.example.test/")
+    );
+    assert_eq!(
+        updated.initiate_login_uri.as_deref(),
+        Some("https://spa.example.test/login")
+    );
+
+    // The rc.3 token family and user are intact.
+    let families = s
+        .grants()
+        .families_for_user(default, UserId(RC3_CAROL))
+        .await
+        .expect("families_for_user");
+    assert_eq!(families.len(), 1);
+    assert_eq!(families[0].id, TokenFamilyId(RC3_FAMILY));
+}
+
+#[tokio::test]
+async fn upgrade_from_1_0_rc3_is_idempotent_on_restart() {
+    let up = upgraded_from_rc3().await;
+    up.storage
+        .migrate()
+        .await
+        .expect("a second start finds nothing pending");
+    let again = PostgresStorage::connect(&up.url, MAX_CONNECTIONS)
+        .await
+        .expect("reconnect");
+    again.migrate().await.expect("third start");
+    let mut conn = connect(&up.url).await;
+    assert_eq!(table_counts(&mut conn, &up.columns).await, up.counts_before);
+    assert_eq!(snapshot(&mut conn, &up.columns).await, up.before);
+    let applied: i64 = sqlx::query_scalar("SELECT count(*) FROM _sqlx_migrations")
+        .fetch_one(&mut conn)
+        .await
+        .expect("count");
+    assert_eq!(applied, latest_version(), "every migration recorded once");
+    conn.close().await.expect("close");
+}
+
+/// Contract-suite factory: a database built through the rc.3 upgrade path, with the fixture
+/// tenants deleted through the storage traits (the contract tests start uninstalled).
+pub async fn upgraded_rc3_postgres() -> TestStorage {
+    let up = upgraded_from_rc3().await;
+    for id in [RC3_DEFAULT, RC3_SYSTEM] {
+        assert!(
+            up.storage
+                .tenants()
+                .delete(TenantId(id))
+                .await
+                .expect("delete fixture tenant"),
+            "fixture tenant {id} missing"
+        );
+    }
+    TestStorage {
+        storage: Arc::new(up.storage),
+        _guard: Box::new(up.url),
+    }
+}
+
+mod upgraded_rc3_contract {
+    anvil_storage::storage_contract_tests!(crate::upgraded_rc3_postgres);
 }

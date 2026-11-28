@@ -52,6 +52,8 @@ pub(crate) struct ClientRow {
     require_pushed_authorization_requests: bool,
     client_kind: String,
     headless_native: bool,
+    client_uri: Option<String>,
+    initiate_login_uri: Option<String>,
 }
 
 impl ClientRow {
@@ -122,6 +124,8 @@ impl ClientRow {
             require_pushed_authorization_requests: self.require_pushed_authorization_requests,
             client_kind: enum_from("client.client_kind", &self.client_kind, ClientKind::parse)?,
             headless_native: self.headless_native,
+            client_uri: self.client_uri,
+            initiate_login_uri: self.initiate_login_uri,
         })
     }
 }
@@ -160,6 +164,8 @@ pub(crate) fn client_from_new(tenant: TenantId, c: &NewClient) -> Client {
         require_pushed_authorization_requests: c.require_pushed_authorization_requests,
         client_kind: c.client_kind,
         headless_native: c.headless_native,
+        client_uri: c.client_uri.clone(),
+        initiate_login_uri: c.initiate_login_uri.clone(),
     }
 }
 
@@ -187,9 +193,10 @@ where
               created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,
               backchannel_logout_session_required, allowed_resources, mfa_policy,
               registration_source, metadata_expires_at, registration_access_token_hash,
-              organization, require_pushed_authorization_requests, client_kind, headless_native)
+              organization, require_pushed_authorization_requests, client_kind, headless_native,
+              client_uri, initiate_login_uri)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-                 $18, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)",
+                 $18, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32)",
         c.id.0,
         tenant.0,
         c.client_id,
@@ -222,6 +229,8 @@ where
         c.require_pushed_authorization_requests,
         c.client_kind.as_str(),
         c.headless_native,
+        c.client_uri,
+        c.initiate_login_uri,
     )
     .execute(exec)
     .await
@@ -245,7 +254,8 @@ impl ClientRepo for PgClients {
                     created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,
                     backchannel_logout_session_required, allowed_resources, mfa_policy,
                     registration_source, metadata_expires_at, registration_access_token_hash,
-                    organization, require_pushed_authorization_requests, client_kind, headless_native
+                    organization, require_pushed_authorization_requests, client_kind, headless_native,
+                    client_uri, initiate_login_uri
                FROM client
               WHERE tenant_id = $1 AND client_id = $2",
             tenant.0,
@@ -272,7 +282,8 @@ impl ClientRepo for PgClients {
                     created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,
                     backchannel_logout_session_required, allowed_resources, mfa_policy,
                     registration_source, metadata_expires_at, registration_access_token_hash,
-                    organization, require_pushed_authorization_requests, client_kind, headless_native
+                    organization, require_pushed_authorization_requests, client_kind, headless_native,
+                    client_uri, initiate_login_uri
                FROM client
               WHERE tenant_id = $1 AND ($2::uuid IS NULL OR id > $2)
               ORDER BY id
@@ -336,6 +347,14 @@ impl ClientRepo for PgClients {
             Some(h) => (true, h.as_ref().map(|h| h.as_bytes().to_vec())),
             None => (false, None),
         };
+        let (set_client_uri, client_uri) = match &update.client_uri {
+            Some(u) => (true, u.clone()),
+            None => (false, None),
+        };
+        let (set_initiate_login_uri, initiate_login_uri) = match &update.initiate_login_uri {
+            Some(u) => (true, u.clone()),
+            None => (false, None),
+        };
         sqlx::query_as!(
             ClientRow,
             "UPDATE client
@@ -365,6 +384,8 @@ impl ClientRepo for PgClients {
                       COALESCE($28, require_pushed_authorization_requests),
                     client_kind = COALESCE($29, client_kind),
                     headless_native = COALESCE($30, headless_native),
+                    client_uri = CASE WHEN $31 THEN $32 ELSE client_uri END,
+                    initiate_login_uri = CASE WHEN $33 THEN $34 ELSE initiate_login_uri END,
                     updated_at = $10
               WHERE tenant_id = $1 AND client_id = $2
           RETURNING id, tenant_id, client_id, name, client_type, application_type, auth_method,
@@ -373,7 +394,8 @@ impl ClientRepo for PgClients {
                     created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,
                     backchannel_logout_session_required, allowed_resources, mfa_policy,
                     registration_source, metadata_expires_at, registration_access_token_hash,
-                    organization, require_pushed_authorization_requests, client_kind, headless_native",
+                    organization, require_pushed_authorization_requests, client_kind, headless_native,
+                    client_uri, initiate_login_uri",
             tenant.0,
             client_id,
             update.name,
@@ -404,6 +426,10 @@ impl ClientRepo for PgClients {
             update.require_pushed_authorization_requests,
             update.client_kind.map(|k| k.as_str()),
             update.headless_native,
+            set_client_uri,
+            client_uri,
+            set_initiate_login_uri,
+            initiate_login_uri,
         )
         .fetch_optional(&self.pool)
         .await
@@ -513,9 +539,11 @@ impl ClientRepo for PgClients {
                   created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,
                   backchannel_logout_session_required, allowed_resources, mfa_policy,
                   registration_source, metadata_expires_at, registration_access_token_hash,
-                  organization, require_pushed_authorization_requests, client_kind, headless_native)
+                  organization, require_pushed_authorization_requests, client_kind, headless_native,
+                  client_uri, initiate_login_uri)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-                     $18, $18, $19, $20, $21, $22, $23, 'cimd', $24, $25, $26, $27, $28, $29)
+                     $18, $18, $19, $20, $21, $22, $23, 'cimd', $24, $25, $26, $27, $28, $29,
+                     $30, $31)
              ON CONFLICT (tenant_id, client_id) DO UPDATE
                 SET name = EXCLUDED.name,
                     client_type = EXCLUDED.client_type,
@@ -544,7 +572,9 @@ impl ClientRepo for PgClients {
                     require_pushed_authorization_requests =
                       EXCLUDED.require_pushed_authorization_requests,
                     client_kind = EXCLUDED.client_kind,
-                    headless_native = EXCLUDED.headless_native
+                    headless_native = EXCLUDED.headless_native,
+                    client_uri = EXCLUDED.client_uri,
+                    initiate_login_uri = EXCLUDED.initiate_login_uri
               WHERE client.registration_source = 'cimd'
           RETURNING id, tenant_id, client_id, name, client_type, application_type, auth_method,
                     secret_hash, jwks, redirect_uris, grant_types, scopes, require_pkce,
@@ -552,7 +582,8 @@ impl ClientRepo for PgClients {
                     created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,
                     backchannel_logout_session_required, allowed_resources, mfa_policy,
                     registration_source, metadata_expires_at, registration_access_token_hash,
-                    organization, require_pushed_authorization_requests, client_kind, headless_native",
+                    organization, require_pushed_authorization_requests, client_kind, headless_native,
+                    client_uri, initiate_login_uri",
             c.id.0,
             tenant.0,
             c.client_id,
@@ -582,6 +613,8 @@ impl ClientRepo for PgClients {
             c.require_pushed_authorization_requests,
             c.client_kind.as_str(),
             c.headless_native,
+            c.client_uri,
+            c.initiate_login_uri,
         )
         .fetch_optional(&self.pool)
         .await
@@ -608,7 +641,8 @@ impl ClientRepo for PgClients {
                     created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,
                     backchannel_logout_session_required, allowed_resources, mfa_policy,
                     registration_source, metadata_expires_at, registration_access_token_hash,
-                    organization, require_pushed_authorization_requests, client_kind, headless_native
+                    organization, require_pushed_authorization_requests, client_kind, headless_native,
+                    client_uri, initiate_login_uri
                FROM client
               WHERE tenant_id = $1 AND client_id = $2 AND registration_source = 'dynamic'
                 AND registration_access_token_hash = $3",

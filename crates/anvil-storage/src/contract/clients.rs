@@ -893,3 +893,169 @@ pub async fn client_new_fields_round_trip(s: &TestStorage) {
         assert_eq!(read, updated, "step {i}: get after update");
     }
 }
+
+/// The rc.4 client home URLs (`client_uri`, `initiate_login_uri`): absent on create reads
+/// `None`; set values round-trip through create, get, list and update; `Some(None)` clears one
+/// without touching the other; an update that does not mention them leaves them alone; a CIMD
+/// refresh replaces them with the document's values.
+pub async fn client_home_urls_round_trip(s: &TestStorage) {
+    let tenant = seed_tenant(s).await;
+    let clients = s.storage.clients();
+
+    // Absent.
+    let plain = new_client();
+    let created = clients.create(tenant, &plain).await.expect("create");
+    assert_eq!(created.client_uri, None);
+    assert_eq!(created.initiate_login_uri, None);
+    let read = clients
+        .get(tenant, &plain.client_id)
+        .await
+        .expect("get")
+        .expect("client exists");
+    assert_eq!(read.client_uri, None);
+    assert_eq!(read.initiate_login_uri, None);
+
+    // Set on create.
+    let mut with_urls = new_client();
+    with_urls.client_uri = Some("https://app.example.test/".to_owned());
+    with_urls.initiate_login_uri = Some("https://app.example.test/login".to_owned());
+    let created = clients.create(tenant, &with_urls).await.expect("create");
+    assert_eq!(
+        created,
+        expected_client(tenant, &with_urls),
+        "create returns both URLs"
+    );
+    assert_eq!(
+        clients
+            .get(tenant, &with_urls.client_id)
+            .await
+            .expect("get"),
+        Some(created.clone()),
+        "get returns both URLs"
+    );
+    let listed = clients
+        .list(
+            tenant,
+            PageRequest {
+                after: None,
+                limit: 10,
+            },
+        )
+        .await
+        .expect("list");
+    assert!(listed.items.contains(&created), "list returns both URLs");
+
+    // An unrelated update keeps them.
+    let mut now = created.updated_at + Duration::seconds(1);
+    let renamed = clients
+        .update(
+            tenant,
+            &with_urls.client_id,
+            &ClientUpdate {
+                name: Some("renamed".into()),
+                ..ClientUpdate::default()
+            },
+            now,
+        )
+        .await
+        .expect("update")
+        .expect("client exists");
+    assert_eq!(renamed.client_uri, with_urls.client_uri);
+    assert_eq!(renamed.initiate_login_uri, with_urls.initiate_login_uri);
+
+    // Set on update (the client created without them).
+    now += Duration::seconds(1);
+    let set = clients
+        .update(
+            tenant,
+            &plain.client_id,
+            &ClientUpdate {
+                client_uri: Some(Some("https://plain.example.test/".to_owned())),
+                initiate_login_uri: Some(Some("https://plain.example.test/start".to_owned())),
+                ..ClientUpdate::default()
+            },
+            now,
+        )
+        .await
+        .expect("update")
+        .expect("client exists");
+    assert_eq!(
+        set.client_uri.as_deref(),
+        Some("https://plain.example.test/")
+    );
+    assert_eq!(
+        set.initiate_login_uri.as_deref(),
+        Some("https://plain.example.test/start")
+    );
+    assert_eq!(
+        clients.get(tenant, &plain.client_id).await.expect("get"),
+        Some(set.clone())
+    );
+
+    // Clear one; the other stays.
+    now += Duration::seconds(1);
+    let cleared = clients
+        .update(
+            tenant,
+            &plain.client_id,
+            &ClientUpdate {
+                client_uri: Some(None),
+                ..ClientUpdate::default()
+            },
+            now,
+        )
+        .await
+        .expect("update")
+        .expect("client exists");
+    assert_eq!(cleared.client_uri, None);
+    assert_eq!(
+        cleared.initiate_login_uri.as_deref(),
+        Some("https://plain.example.test/start")
+    );
+    now += Duration::seconds(1);
+    let cleared = clients
+        .update(
+            tenant,
+            &plain.client_id,
+            &ClientUpdate {
+                initiate_login_uri: Some(None),
+                ..ClientUpdate::default()
+            },
+            now,
+        )
+        .await
+        .expect("update")
+        .expect("client exists");
+    assert_eq!(cleared.client_uri, None);
+    assert_eq!(cleared.initiate_login_uri, None);
+    assert_eq!(
+        clients.get(tenant, &plain.client_id).await.expect("get"),
+        Some(cleared)
+    );
+
+    // CIMD: stored from the document, replaced on refresh.
+    let t1 = now + Duration::seconds(1);
+    let mut cimd = new_cimd_client();
+    cimd.client_uri = Some("https://mcp.example.test/".to_owned());
+    let inserted = clients
+        .upsert_cimd(tenant, &cimd, t1 + Duration::hours(1), t1)
+        .await
+        .expect("upsert_cimd");
+    assert_eq!(inserted.client_uri, cimd.client_uri);
+    assert_eq!(inserted.initiate_login_uri, None);
+    let t2 = t1 + Duration::minutes(5);
+    let mut refreshed = new_cimd_client();
+    refreshed.client_id = cimd.client_id.clone();
+    refreshed.client_uri = None;
+    refreshed.initiate_login_uri = Some("https://mcp.example.test/login".to_owned());
+    let replaced = clients
+        .upsert_cimd(tenant, &refreshed, t2 + Duration::hours(1), t2)
+        .await
+        .expect("upsert_cimd");
+    assert_eq!(replaced.client_uri, None);
+    assert_eq!(replaced.initiate_login_uri, refreshed.initiate_login_uri);
+    assert_eq!(
+        clients.get(tenant, &cimd.client_id).await.expect("get"),
+        Some(replaced)
+    );
+}

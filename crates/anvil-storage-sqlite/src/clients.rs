@@ -52,6 +52,8 @@ pub(crate) struct ClientRow {
     require_pushed_authorization_requests: bool,
     client_kind: String,
     headless_native: bool,
+    client_uri: Option<String>,
+    initiate_login_uri: Option<String>,
 }
 
 impl TryFrom<ClientRow> for Client {
@@ -112,6 +114,8 @@ impl TryFrom<ClientRow> for Client {
             require_pushed_authorization_requests: r.require_pushed_authorization_requests,
             client_kind: parse_enum(&r.client_kind, ClientKind::parse, "client.client_kind")?,
             headless_native: r.headless_native,
+            client_uri: r.client_uri,
+            initiate_login_uri: r.initiate_login_uri,
         })
     }
 }
@@ -155,9 +159,10 @@ pub(crate) async fn insert_client(
               can_introspect, post_logout_redirect_uris, backchannel_logout_uri,
               backchannel_logout_session_required, allowed_resources, mfa_policy,
               registration_source, metadata_expires_at, registration_access_token_hash,
-              organization, require_pushed_authorization_requests, client_kind, headless_native)
+              organization, require_pushed_authorization_requests, client_kind, headless_native,
+              client_uri, initiate_login_uri)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14, ?15, ?16, ?17,
-                 ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30)",
+                 ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32)",
         client.id.0,
         tenant.0,
         client.client_id,
@@ -188,6 +193,8 @@ pub(crate) async fn insert_client(
         client.require_pushed_authorization_requests,
         client_kind,
         client.headless_native,
+        client.client_uri,
+        client.initiate_login_uri,
     )
     .execute(conn)
     .await
@@ -224,6 +231,8 @@ pub(crate) async fn insert_client(
         require_pushed_authorization_requests: client.require_pushed_authorization_requests,
         client_kind: client.client_kind,
         headless_native: client.headless_native,
+        client_uri: client.client_uri.clone(),
+        initiate_login_uri: client.initiate_login_uri.clone(),
     })
 }
 
@@ -260,7 +269,8 @@ impl ClientRepo for SqliteClients {
                       require_pushed_authorization_requests
                         AS "require_pushed_authorization_requests!: bool",
                       client_kind AS "client_kind!",
-                      headless_native AS "headless_native!: bool"
+                      headless_native AS "headless_native!: bool",
+                      client_uri AS "client_uri?", initiate_login_uri AS "initiate_login_uri?"
                  FROM client WHERE tenant_id = ?1 AND client_id = ?2"#,
             tenant.0,
             client_id,
@@ -304,7 +314,8 @@ impl ClientRepo for SqliteClients {
                       require_pushed_authorization_requests
                         AS "require_pushed_authorization_requests!: bool",
                       client_kind AS "client_kind!",
-                      headless_native AS "headless_native!: bool"
+                      headless_native AS "headless_native!: bool",
+                      client_uri AS "client_uri?", initiate_login_uri AS "initiate_login_uri?"
                  FROM client
                 WHERE tenant_id = ?1 AND (?2 IS NULL OR id > ?2)
                 ORDER BY id
@@ -374,6 +385,10 @@ impl ClientRepo for SqliteClients {
             .map(|h| h.as_bytes().to_vec());
         let organization = update.organization.map(|p| p.as_str());
         let client_kind = update.client_kind.map(|k| k.as_str());
+        let set_client_uri = update.client_uri.is_some();
+        let client_uri = update.client_uri.clone().flatten();
+        let set_initiate_login_uri = update.initiate_login_uri.is_some();
+        let initiate_login_uri = update.initiate_login_uri.clone().flatten();
         let now_ms = odt_to_ms(now);
         sqlx::query_as!(
             ClientRow,
@@ -405,7 +420,9 @@ impl ClientRepo for SqliteClients {
                       require_pushed_authorization_requests =
                         COALESCE(?28, require_pushed_authorization_requests),
                       client_kind = COALESCE(?29, client_kind),
-                      headless_native = COALESCE(?30, headless_native)
+                      headless_native = COALESCE(?30, headless_native),
+                      client_uri = CASE WHEN ?31 THEN ?32 ELSE client_uri END,
+                      initiate_login_uri = CASE WHEN ?33 THEN ?34 ELSE initiate_login_uri END
                 WHERE tenant_id = ?1 AND client_id = ?2
             RETURNING id AS "id!: uuid::Uuid", tenant_id AS "tenant_id!: uuid::Uuid",
                       client_id AS "client_id!", name AS "name!", client_type AS "client_type!",
@@ -430,7 +447,8 @@ impl ClientRepo for SqliteClients {
                       require_pushed_authorization_requests
                         AS "require_pushed_authorization_requests!: bool",
                       client_kind AS "client_kind!",
-                      headless_native AS "headless_native!: bool""#,
+                      headless_native AS "headless_native!: bool",
+                      client_uri AS "client_uri?", initiate_login_uri AS "initiate_login_uri?""#,
             tenant.0,
             client_id,
             update.name,
@@ -461,6 +479,10 @@ impl ClientRepo for SqliteClients {
             update.require_pushed_authorization_requests,
             client_kind,
             update.headless_native,
+            set_client_uri,
+            client_uri,
+            set_initiate_login_uri,
+            initiate_login_uri,
         )
         .fetch_optional(&self.writer)
         .await
@@ -577,10 +599,11 @@ impl ClientRepo for SqliteClients {
                     backchannel_logout_uri, backchannel_logout_session_required,
                     allowed_resources, mfa_policy, registration_source, metadata_expires_at,
                     registration_access_token_hash, organization,
-                    require_pushed_authorization_requests, client_kind, headless_native)
+                    require_pushed_authorization_requests, client_kind, headless_native,
+                    client_uri, initiate_login_uri)
                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14, ?15,
                        ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, 'cimd', ?24, ?25, ?26, ?27, ?28,
-                       ?29)
+                       ?29, ?30, ?31)
                ON CONFLICT (tenant_id, client_id) DO UPDATE
                   SET name = excluded.name,
                       client_type = excluded.client_type,
@@ -609,7 +632,9 @@ impl ClientRepo for SqliteClients {
                       require_pushed_authorization_requests =
                         excluded.require_pushed_authorization_requests,
                       client_kind = excluded.client_kind,
-                      headless_native = excluded.headless_native
+                      headless_native = excluded.headless_native,
+                      client_uri = excluded.client_uri,
+                      initiate_login_uri = excluded.initiate_login_uri
                 WHERE client.registration_source = 'cimd'
             RETURNING id AS "id!: uuid::Uuid", tenant_id AS "tenant_id!: uuid::Uuid",
                       client_id AS "client_id!", name AS "name!", client_type AS "client_type!",
@@ -634,7 +659,8 @@ impl ClientRepo for SqliteClients {
                       require_pushed_authorization_requests
                         AS "require_pushed_authorization_requests!: bool",
                       client_kind AS "client_kind!",
-                      headless_native AS "headless_native!: bool""#,
+                      headless_native AS "headless_native!: bool",
+                      client_uri AS "client_uri?", initiate_login_uri AS "initiate_login_uri?""#,
             client.id.0,
             tenant.0,
             client.client_id,
@@ -664,6 +690,8 @@ impl ClientRepo for SqliteClients {
             client.require_pushed_authorization_requests,
             client_kind,
             client.headless_native,
+            client.client_uri,
+            client.initiate_login_uri,
         )
         .fetch_optional(&self.writer)
         .await
@@ -708,7 +736,8 @@ impl ClientRepo for SqliteClients {
                       require_pushed_authorization_requests
                         AS "require_pushed_authorization_requests!: bool",
                       client_kind AS "client_kind!",
-                      headless_native AS "headless_native!: bool"
+                      headless_native AS "headless_native!: bool",
+                      client_uri AS "client_uri?", initiate_login_uri AS "initiate_login_uri?"
                  FROM client
                 WHERE tenant_id = ?1 AND client_id = ?2 AND registration_source = 'dynamic'
                   AND registration_access_token_hash = ?3"#,

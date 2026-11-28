@@ -179,6 +179,8 @@ pub async fn register_with(
         require_pushed_authorization_requests: false,
         client_kind: anvil_core::model::ClientKind::Application,
         headless_native: false,
+        client_uri: None,
+        initiate_login_uri: None,
     };
     customise(&mut new);
     let client = app

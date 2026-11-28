@@ -704,6 +704,8 @@ mod tests {
                 require_pushed_authorization_requests: c.require_pushed_authorization_requests,
                 client_kind: c.client_kind,
                 headless_native: c.headless_native,
+                client_uri: c.client_uri.clone(),
+                initiate_login_uri: c.initiate_login_uri.clone(),
             };
             self.clients.lock().unwrap().push((tenant, client.clone()));
             Ok(client)
@@ -1765,6 +1767,8 @@ mod tests {
             require_pushed_authorization_requests: false,
             client_kind: crate::model::ClientKind::Application,
             headless_native: false,
+            client_uri: None,
+            initiate_login_uri: None,
         };
         assert_eq!(client_metadata(&client), v.metadata());
     }

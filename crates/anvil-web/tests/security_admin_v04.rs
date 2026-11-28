@@ -920,6 +920,8 @@ async fn legacy_admin_scope_client_stays_editable() {
                 require_pushed_authorization_requests: false,
                 client_kind: anvil_core::model::ClientKind::Application,
                 headless_native: false,
+                client_uri: None,
+                initiate_login_uri: None,
             },
         )
         .await

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "UPDATE client\n                SET name = COALESCE($3, name),\n                    redirect_uris = COALESCE($4, redirect_uris),\n                    grant_types = COALESCE($5, grant_types),\n                    scopes = COALESCE($6, scopes),\n                    require_pkce = COALESCE($7, require_pkce),\n                    jwks = CASE WHEN $8 THEN $9 ELSE jwks END,\n                    token_format = COALESCE($11, token_format),\n                    consent_mode = COALESCE($12, consent_mode),\n                    id_token_signed_response_alg =\n                      CASE WHEN $13 THEN $14 ELSE id_token_signed_response_alg END,\n                    can_introspect = COALESCE($15, can_introspect),\n                    post_logout_redirect_uris = COALESCE($16, post_logout_redirect_uris),\n                    backchannel_logout_uri =\n                      CASE WHEN $17 THEN $18 ELSE backchannel_logout_uri END,\n                    backchannel_logout_session_required =\n                      COALESCE($19, backchannel_logout_session_required),\n                    allowed_resources = COALESCE($20, allowed_resources),\n                    mfa_policy = CASE WHEN $21 THEN $22 ELSE mfa_policy END,\n                    metadata_expires_at = CASE WHEN $23 THEN $24 ELSE metadata_expires_at END,\n                    registration_access_token_hash =\n                      CASE WHEN $25 THEN $26 ELSE registration_access_token_hash END,\n                    organization = COALESCE($27, organization),\n                    require_pushed_authorization_requests =\n                      COALESCE($28, require_pushed_authorization_requests),\n                    client_kind = COALESCE($29, client_kind),\n                    headless_native = COALESCE($30, headless_native),\n                    updated_at = $10\n              WHERE tenant_id = $1 AND client_id = $2\n          RETURNING id, tenant_id, client_id, name, client_type, application_type, auth_method,\n                    secret_hash, jwks, redirect_uris, grant_types, scopes, require_pkce,\n                    token_format, consent_mode, id_token_signed_response_alg, can_introspect,\n                    created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,\n                    backchannel_logout_session_required, allowed_resources, mfa_policy,\n                    registration_source, metadata_expires_at, registration_access_token_hash,\n                    organization, require_pushed_authorization_requests, client_kind, headless_native",
+  "query": "UPDATE client\n                SET name = COALESCE($3, name),\n                    redirect_uris = COALESCE($4, redirect_uris),\n                    grant_types = COALESCE($5, grant_types),\n                    scopes = COALESCE($6, scopes),\n                    require_pkce = COALESCE($7, require_pkce),\n                    jwks = CASE WHEN $8 THEN $9 ELSE jwks END,\n                    token_format = COALESCE($11, token_format),\n                    consent_mode = COALESCE($12, consent_mode),\n                    id_token_signed_response_alg =\n                      CASE WHEN $13 THEN $14 ELSE id_token_signed_response_alg END,\n                    can_introspect = COALESCE($15, can_introspect),\n                    post_logout_redirect_uris = COALESCE($16, post_logout_redirect_uris),\n                    backchannel_logout_uri =\n                      CASE WHEN $17 THEN $18 ELSE backchannel_logout_uri END,\n                    backchannel_logout_session_required =\n                      COALESCE($19, backchannel_logout_session_required),\n                    allowed_resources = COALESCE($20, allowed_resources),\n                    mfa_policy = CASE WHEN $21 THEN $22 ELSE mfa_policy END,\n                    metadata_expires_at = CASE WHEN $23 THEN $24 ELSE metadata_expires_at END,\n                    registration_access_token_hash =\n                      CASE WHEN $25 THEN $26 ELSE registration_access_token_hash END,\n                    organization = COALESCE($27, organization),\n                    require_pushed_authorization_requests =\n                      COALESCE($28, require_pushed_authorization_requests),\n                    client_kind = COALESCE($29, client_kind),\n                    headless_native = COALESCE($30, headless_native),\n                    client_uri = CASE WHEN $31 THEN $32 ELSE client_uri END,\n                    initiate_login_uri = CASE WHEN $33 THEN $34 ELSE initiate_login_uri END,\n                    updated_at = $10\n              WHERE tenant_id = $1 AND client_id = $2\n          RETURNING id, tenant_id, client_id, name, client_type, application_type, auth_method,\n                    secret_hash, jwks, redirect_uris, grant_types, scopes, require_pkce,\n                    token_format, consent_mode, id_token_signed_response_alg, can_introspect,\n                    created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,\n                    backchannel_logout_session_required, allowed_resources, mfa_policy,\n                    registration_source, metadata_expires_at, registration_access_token_hash,\n                    organization, require_pushed_authorization_requests, client_kind, headless_native,\n                    client_uri, initiate_login_uri",
   "describe": {
     "columns": [
       {
@@ -343,6 +343,28 @@
             "name": "headless_native"
           }
         }
+      },
+      {
+        "ordinal": 31,
+        "name": "client_uri",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "client_uri"
+          }
+        }
+      },
+      {
+        "ordinal": 32,
+        "name": "initiate_login_uri",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "initiate_login_uri"
+          }
+        }
       }
     ],
     "parameters": {
@@ -376,7 +398,11 @@
         "Text",
         "Bool",
         "Text",
-        "Bool"
+        "Bool",
+        "Bool",
+        "Text",
+        "Bool",
+        "Text"
       ]
     },
     "nullable": [
@@ -410,8 +436,10 @@
       false,
       false,
       false,
-      false
+      false,
+      true,
+      true
     ]
   },
-  "hash": "cbf61515cf5bcbe84aad7b3ad536368159381d81bb3af2c22278e7c4807a4fb4"
+  "hash": "6e16c3a4563189eab7554f9aaee2d14a148ed5304a77bc33ea9d6b74c819cbfa"
 }

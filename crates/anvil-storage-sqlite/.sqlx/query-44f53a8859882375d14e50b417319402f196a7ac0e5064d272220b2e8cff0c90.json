@@ -1,12 +1,12 @@
 {
-  "db_name": "PostgreSQL",
-  "query": "SELECT id, tenant_id, client_id, name, client_type, application_type, auth_method,\n                    secret_hash, jwks, redirect_uris, grant_types, scopes, require_pkce,\n                    token_format, consent_mode, id_token_signed_response_alg, can_introspect,\n                    created_at, updated_at, post_logout_redirect_uris, backchannel_logout_uri,\n                    backchannel_logout_session_required, allowed_resources, mfa_policy,\n                    registration_source, metadata_expires_at, registration_access_token_hash,\n                    organization, require_pushed_authorization_requests, client_kind, headless_native\n               FROM client\n              WHERE tenant_id = $1 AND ($2::uuid IS NULL OR id > $2)\n              ORDER BY id\n              LIMIT $3",
+  "db_name": "SQLite",
+  "query": "SELECT id AS \"id!: uuid::Uuid\", tenant_id AS \"tenant_id!: uuid::Uuid\",\n                      client_id AS \"client_id!\", name AS \"name!\", client_type AS \"client_type!\",\n                      application_type AS \"application_type!\", auth_method AS \"auth_method!\",\n                      secret_hash AS \"secret_hash?\", jwks AS \"jwks?\",\n                      redirect_uris AS \"redirect_uris!\", grant_types AS \"grant_types!\",\n                      scopes AS \"scopes!\", require_pkce AS \"require_pkce!: bool\",\n                      token_format AS \"token_format!\", consent_mode AS \"consent_mode!\",\n                      id_token_signed_response_alg AS \"id_token_signed_response_alg?\",\n                      can_introspect AS \"can_introspect!: bool\",\n                      created_at AS \"created_at!\", updated_at AS \"updated_at!\",\n                      post_logout_redirect_uris AS \"post_logout_redirect_uris!\",\n                      backchannel_logout_uri AS \"backchannel_logout_uri?\",\n                      backchannel_logout_session_required\n                        AS \"backchannel_logout_session_required!: bool\",\n                      allowed_resources AS \"allowed_resources!\",\n                      mfa_policy AS \"mfa_policy?\",\n                      registration_source AS \"registration_source!\",\n                      metadata_expires_at AS \"metadata_expires_at?\",\n                      registration_access_token_hash AS \"registration_access_token_hash?\",\n                      organization AS \"organization!\",\n                      require_pushed_authorization_requests\n                        AS \"require_pushed_authorization_requests!: bool\",\n                      client_kind AS \"client_kind!\",\n                      headless_native AS \"headless_native!: bool\",\n                      client_uri AS \"client_uri?\", initiate_login_uri AS \"initiate_login_uri?\"\n                 FROM client\n                WHERE tenant_id = ?1 AND (?2 IS NULL OR id > ?2)\n                ORDER BY id\n                LIMIT ?3",
   "describe": {
     "columns": [
       {
+        "name": "id!: uuid::Uuid",
         "ordinal": 0,
-        "name": "id",
-        "type_info": "Uuid",
+        "type_info": "Blob",
         "origin": {
           "Table": {
             "table": "client",
@@ -15,9 +15,9 @@
         }
       },
       {
+        "name": "tenant_id!: uuid::Uuid",
         "ordinal": 1,
-        "name": "tenant_id",
-        "type_info": "Uuid",
+        "type_info": "Blob",
         "origin": {
           "Table": {
             "table": "client",
@@ -26,8 +26,8 @@
         }
       },
       {
+        "name": "client_id!",
         "ordinal": 2,
-        "name": "client_id",
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -37,8 +37,8 @@
         }
       },
       {
+        "name": "name!",
         "ordinal": 3,
-        "name": "name",
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -48,8 +48,8 @@
         }
       },
       {
+        "name": "client_type!",
         "ordinal": 4,
-        "name": "client_type",
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -59,8 +59,8 @@
         }
       },
       {
+        "name": "application_type!",
         "ordinal": 5,
-        "name": "application_type",
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -70,8 +70,8 @@
         }
       },
       {
+        "name": "auth_method!",
         "ordinal": 6,
-        "name": "auth_method",
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -81,9 +81,9 @@
         }
       },
       {
+        "name": "secret_hash?",
         "ordinal": 7,
-        "name": "secret_hash",
-        "type_info": "Bytea",
+        "type_info": "Blob",
         "origin": {
           "Table": {
             "table": "client",
@@ -92,8 +92,8 @@
         }
       },
       {
+        "name": "jwks?",
         "ordinal": 8,
-        "name": "jwks",
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -103,9 +103,9 @@
         }
       },
       {
+        "name": "redirect_uris!",
         "ordinal": 9,
-        "name": "redirect_uris",
-        "type_info": "TextArray",
+        "type_info": "Text",
         "origin": {
           "Table": {
             "table": "client",
@@ -114,9 +114,9 @@
         }
       },
       {
+        "name": "grant_types!",
         "ordinal": 10,
-        "name": "grant_types",
-        "type_info": "TextArray",
+        "type_info": "Text",
         "origin": {
           "Table": {
             "table": "client",
@@ -125,9 +125,9 @@
         }
       },
       {
+        "name": "scopes!",
         "ordinal": 11,
-        "name": "scopes",
-        "type_info": "TextArray",
+        "type_info": "Text",
         "origin": {
           "Table": {
             "table": "client",
@@ -136,9 +136,9 @@
         }
       },
       {
+        "name": "require_pkce!: bool",
         "ordinal": 12,
-        "name": "require_pkce",
-        "type_info": "Bool",
+        "type_info": "Integer",
         "origin": {
           "Table": {
             "table": "client",
@@ -147,8 +147,8 @@
         }
       },
       {
+        "name": "token_format!",
         "ordinal": 13,
-        "name": "token_format",
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -158,8 +158,8 @@
         }
       },
       {
+        "name": "consent_mode!",
         "ordinal": 14,
-        "name": "consent_mode",
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -169,8 +169,8 @@
         }
       },
       {
+        "name": "id_token_signed_response_alg?",
         "ordinal": 15,
-        "name": "id_token_signed_response_alg",
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -180,9 +180,9 @@
         }
       },
       {
+        "name": "can_introspect!: bool",
         "ordinal": 16,
-        "name": "can_introspect",
-        "type_info": "Bool",
+        "type_info": "Integer",
         "origin": {
           "Table": {
             "table": "client",
@@ -191,9 +191,9 @@
         }
       },
       {
+        "name": "created_at!",
         "ordinal": 17,
-        "name": "created_at",
-        "type_info": "Timestamptz",
+        "type_info": "Integer",
         "origin": {
           "Table": {
             "table": "client",
@@ -202,9 +202,9 @@
         }
       },
       {
+        "name": "updated_at!",
         "ordinal": 18,
-        "name": "updated_at",
-        "type_info": "Timestamptz",
+        "type_info": "Integer",
         "origin": {
           "Table": {
             "table": "client",
@@ -213,9 +213,9 @@
         }
       },
       {
+        "name": "post_logout_redirect_uris!",
         "ordinal": 19,
-        "name": "post_logout_redirect_uris",
-        "type_info": "Jsonb",
+        "type_info": "Text",
         "origin": {
           "Table": {
             "table": "client",
@@ -224,8 +224,8 @@
         }
       },
       {
+        "name": "backchannel_logout_uri?",
         "ordinal": 20,
-        "name": "backchannel_logout_uri",
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -235,9 +235,9 @@
         }
       },
       {
+        "name": "backchannel_logout_session_required!: bool",
         "ordinal": 21,
-        "name": "backchannel_logout_session_required",
-        "type_info": "Bool",
+        "type_info": "Integer",
         "origin": {
           "Table": {
             "table": "client",
@@ -246,9 +246,9 @@
         }
       },
       {
+        "name": "allowed_resources!",
         "ordinal": 22,
-        "name": "allowed_resources",
-        "type_info": "Jsonb",
+        "type_info": "Text",
         "origin": {
           "Table": {
             "table": "client",
@@ -257,8 +257,8 @@
         }
       },
       {
+        "name": "mfa_policy?",
         "ordinal": 23,
-        "name": "mfa_policy",
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -268,8 +268,8 @@
         }
       },
       {
+        "name": "registration_source!",
         "ordinal": 24,
-        "name": "registration_source",
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -279,9 +279,9 @@
         }
       },
       {
+        "name": "metadata_expires_at?",
         "ordinal": 25,
-        "name": "metadata_expires_at",
-        "type_info": "Timestamptz",
+        "type_info": "Integer",
         "origin": {
           "Table": {
             "table": "client",
@@ -290,9 +290,9 @@
         }
       },
       {
+        "name": "registration_access_token_hash?",
         "ordinal": 26,
-        "name": "registration_access_token_hash",
-        "type_info": "Bytea",
+        "type_info": "Blob",
         "origin": {
           "Table": {
             "table": "client",
@@ -301,8 +301,8 @@
         }
       },
       {
+        "name": "organization!",
         "ordinal": 27,
-        "name": "organization",
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -312,9 +312,9 @@
         }
       },
       {
+        "name": "require_pushed_authorization_requests!: bool",
         "ordinal": 28,
-        "name": "require_pushed_authorization_requests",
-        "type_info": "Bool",
+        "type_info": "Integer",
         "origin": {
           "Table": {
             "table": "client",
@@ -323,8 +323,8 @@
         }
       },
       {
+        "name": "client_kind!",
         "ordinal": 29,
-        "name": "client_kind",
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -334,23 +334,41 @@
         }
       },
       {
+        "name": "headless_native!: bool",
         "ordinal": 30,
-        "name": "headless_native",
-        "type_info": "Bool",
+        "type_info": "Integer",
         "origin": {
           "Table": {
             "table": "client",
             "name": "headless_native"
           }
         }
+      },
+      {
+        "name": "client_uri?",
+        "ordinal": 31,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "client_uri"
+          }
+        }
+      },
+      {
+        "name": "initiate_login_uri?",
+        "ordinal": 32,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "client",
+            "name": "initiate_login_uri"
+          }
+        }
       }
     ],
     "parameters": {
-      "Left": [
-        "Uuid",
-        "Uuid",
-        "Int8"
-      ]
+      "Right": 3
     },
     "nullable": [
       false,
@@ -383,8 +401,10 @@
       false,
       false,
       false,
-      false
+      false,
+      true,
+      true
     ]
   },
-  "hash": "6be9f28a1a1066e72f93e9e43f5e18e3e7c601515aced4929f21facd071a47e7"
+  "hash": "44f53a8859882375d14e50b417319402f196a7ac0e5064d272220b2e8cff0c90"
 }

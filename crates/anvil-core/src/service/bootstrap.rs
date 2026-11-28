@@ -185,6 +185,8 @@ pub fn build_mgmt_client(now: OffsetDateTime) -> (NewClient, SecretString) {
         require_pushed_authorization_requests: false,
         client_kind: crate::model::ClientKind::Application,
         headless_native: false,
+        client_uri: None,
+        initiate_login_uri: None,
     };
     (client, secret)
 }
@@ -234,6 +236,8 @@ pub fn build_console_client(now: OffsetDateTime, public_url: &PublicUrl) -> NewC
         require_pushed_authorization_requests: false,
         client_kind: crate::model::ClientKind::Application,
         headless_native: false,
+        client_uri: None,
+        initiate_login_uri: None,
     }
 }
 
@@ -659,6 +663,8 @@ mod tests {
             require_pushed_authorization_requests: false,
             client_kind: crate::model::ClientKind::Application,
             headless_native: false,
+            client_uri: None,
+            initiate_login_uri: None,
         }
     }
 
@@ -791,6 +797,8 @@ mod tests {
             require_pushed_authorization_requests: false,
             client_kind: crate::model::ClientKind::Application,
             headless_native: false,
+            client_uri: None,
+            initiate_login_uri: None,
         };
         let expected_secret = secret.expose_secret().to_owned();
         let r = setup_outcome(SetupOutcome::Completed { user, client }, secret).unwrap();

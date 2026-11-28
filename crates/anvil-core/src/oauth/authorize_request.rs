@@ -511,6 +511,8 @@ pub(crate) mod tests {
             require_pushed_authorization_requests: false,
             client_kind: crate::model::ClientKind::Application,
             headless_native: false,
+            client_uri: None,
+            initiate_login_uri: None,
         }
     }
 

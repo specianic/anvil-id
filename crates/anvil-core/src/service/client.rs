@@ -778,6 +778,8 @@ impl ClientService {
             require_pushed_authorization_requests: options.require_pushed_authorization_requests,
             client_kind: options.client_kind,
             headless_native: options.headless_native,
+            client_uri: None,
+            initiate_login_uri: None,
         };
         let action = if new.registration_access_token_hash.is_some() {
             AuditAction::ClientRegistered
@@ -1013,6 +1015,8 @@ impl ClientService {
             require_pushed_authorization_requests: options.require_pushed_authorization_requests,
             client_kind: options.client_kind,
             headless_native: options.headless_native,
+            client_uri: None,
+            initiate_login_uri: None,
         };
         let client = self
             .storage
