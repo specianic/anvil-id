@@ -1369,6 +1369,7 @@ release 1.0 rc.4 logout: no dynamic client URL, bad requests refused without a s
 release 1.0 rc.4 logout: no dynamic client URL, bad requests refused without a session, no request value rendered|$W/logout.rs|the_signed_out_page_ignores_unknown_repeated_or_url_client_ids
 release 1.0 rc.4 logout: no dynamic client URL, bad requests refused without a session, no request value rendered|$W/security_logout.rs|without_a_session_the_confirmation_creates_no_flow_and_posts_stay_forbidden
 release 1.0 rc.4 logout: no dynamic client URL, bad requests refused without a session, no request value rendered|$W/security_logout.rs|a_hand_made_signed_out_url_never_renders_a_request_value
+release 1.0 rc.4 SAML: a relay state naming a held recovery codes flow gets the generic refusal|$W/saml_login.rs|saml_relay_naming_a_held_recovery_codes_flow_is_refused
 EOF
 )
 

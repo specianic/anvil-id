@@ -63,7 +63,7 @@ use time::OffsetDateTime;
 
 use super::account::{AccountService, SettingsBinding};
 use super::audit::AuditService;
-use super::flow::{BindingError, FlowContext, FlowService, check_binding};
+use super::flow::{BindingError, FlowContext, FlowService, check_binding, holds_recovery_codes};
 use super::upstream::{StartResult, UpstreamOutcome, UpstreamRedirect, UpstreamService};
 use crate::error::CoreError;
 use crate::flow::engine::{FlowState, LoginState};
@@ -355,7 +355,8 @@ impl SamlService<'_> {
         else {
             return expired().await;
         };
-        if flow.kind != FlowKind::Login {
+        // A finished sign-in holding its recovery codes takes no sign-in step.
+        if flow.kind != FlowKind::Login || holds_recovery_codes(&flow) {
             return Err(CoreError::Forbidden);
         }
         match check_binding(&flow, binding.cookie_token, binding.csrf_token, now) {
@@ -457,7 +458,7 @@ impl SamlService<'_> {
         let Some(flow) = self.storage().flows().get(tenant, flow_id, now).await? else {
             refuse!(c, "relay_state")
         };
-        if flow.kind != FlowKind::Login {
+        if flow.kind != FlowKind::Login || holds_recovery_codes(&flow) {
             refuse!(c, "relay_state")
         }
         let mut state = login_state(&flow)?;
@@ -608,7 +609,7 @@ impl SamlService<'_> {
         let Some(flow) = self.storage().flows().get(tenant, flow_id, now).await? else {
             refuse!("relay_state")
         };
-        if flow.kind != FlowKind::Login {
+        if flow.kind != FlowKind::Login || holds_recovery_codes(&flow) {
             refuse!("relay_state")
         }
         let mut state = login_state(&flow)?;

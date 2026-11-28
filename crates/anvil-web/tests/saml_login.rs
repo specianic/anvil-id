@@ -1195,3 +1195,70 @@ async fn saml_routes_404_when_flag_off() {
     );
     disabled(svc.sp_metadata(t.id, issuer(), SLUG).await.map(|_| ()));
 }
+
+/// A flow that holds the recovery codes of a finished sign-in is never a SAML flow: a relay state
+/// naming it gets the generic refusal, not a corrupt-state error.
+#[tokio::test]
+async fn saml_relay_naming_a_held_recovery_codes_flow_is_refused() {
+    let s = setup().await;
+    let page = s.app.get("/ui/login").await;
+    let (flow, _) = page_flow(&s.app, &page.html());
+    let t = tenant(&s.app).id;
+    let login = s
+        .app
+        .storage()
+        .flows()
+        .get(
+            t,
+            FlowId(uuid::Uuid::parse_str(&flow).expect("flow")),
+            s.app.clock().now(),
+        )
+        .await
+        .expect("flow lookup")
+        .expect("flow exists");
+    let id = FlowId::new_v7();
+    let held = anvil_core::model::NewFlow {
+        id,
+        kind: login.kind,
+        state: anvil_core::service::flow::held_recovery_codes_state(
+            &s.app.kek_arc(),
+            t,
+            id,
+            &["aaaa-bbbb-cccc"],
+            None,
+        )
+        .expect("seal codes"),
+        csrf_hash: login.csrf_hash,
+        cookie_hash: login.cookie_hash,
+        auth_request_id: None,
+        created_at: login.created_at,
+        expires_at: login.expires_at,
+    };
+    s.app
+        .storage()
+        .flows()
+        .create(t, &held)
+        .await
+        .expect("create held flow");
+    let relay = relay_state(held.id, random_bytes::<16>());
+
+    let resp = s
+        .app
+        .get(&format!("/ui/login/saml/{SLUG}/continue?state={relay}"))
+        .await;
+    assert_refused(&resp);
+    let response = encode(&s.key, &ResponseOpts::valid(s.app.clock().now()));
+    let resp = post_acs(&s.app, SLUG, Some(&response), Some(&relay)).await;
+    assert_refused(&resp);
+    assert_eq!(saml_failures(&s.app).await, ["relay_state", "relay_state"]);
+    assert!(session(&s.app).await.is_none());
+    assert!(anvil_core::service::flow::holds_recovery_codes(
+        &s.app
+            .storage()
+            .flows()
+            .get(t, held.id, s.app.clock().now())
+            .await
+            .expect("flow lookup")
+            .expect("the held flow is untouched")
+    ));
+}
