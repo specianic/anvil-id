@@ -189,7 +189,11 @@ async fn system_info_reports_the_binary_version_to_admins_only() {
         .expect("info");
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.expect("info JSON");
-    assert_eq!(body, serde_json::json!({ "version": VERSION }));
+    // No ANVILID_SMTP_URL in this environment: smtp_configured is false (07.1-06).
+    assert_eq!(
+        body,
+        serde_json::json!({ "version": VERSION, "smtp_configured": false })
+    );
 
     // Nothing public carries it.
     for path in [

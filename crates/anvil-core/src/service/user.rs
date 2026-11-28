@@ -4,9 +4,13 @@
 //! through the [`PasswordHasher`] port) or with `invite: true`, which issues an `Invitation`
 //! self-service token and enqueues the `invitation` email in the same transaction as the user.
 //!
+//! [`UserService::send_recovery`] sends an existing user the self-service password-reset email
+//! through the one recovery email path ([`crate::service::flow::self_service_email`]: `Recovery`
+//! token, one hour, the user's current address), audited as `user_recovery_sent`.
+//!
 //! Every mutating [`UserService`] method takes the acting administrator and the request context
 //! and records exactly one audit event in the user's tenant (`user_created`, `user_updated`,
-//! `user_deleted`, target = user id) after the change commits. Failed calls record nothing;
+//! `user_deleted`, `user_recovery_sent`, target = user id) after the change commits. Failed calls record nothing;
 //! details hold changed field names only (never the email, password or claims).
 
 use std::collections::BTreeMap;
@@ -26,8 +30,9 @@ use crate::model::{
     normalize_email, seal_payload,
 };
 use crate::policy::{PasswordPolicy, check_password};
-use crate::ports::{PasswordHasher, Storage, StorageError};
+use crate::ports::{PasswordHasher, RelyingParty, Storage, StorageError};
 use crate::service::audit::AuditService;
+use crate::service::flow::{FlowContext, self_service_email};
 use crate::service::role::guard_user_removal;
 use crate::service::tenant::admin_page;
 
@@ -372,6 +377,62 @@ impl UserService {
         )
         .await?;
         Ok(user)
+    }
+
+    /// Sends the user a password-reset email: the same `Recovery` token and `recovery` email as
+    /// self-service recovery ([`self_service_email`]: one hour, link
+    /// `{issuer}/ui/recovery?token=…`, sealed payload), to the user's current address, token and
+    /// email stored in one transaction. `issuer` is the tenant's issuer. The token is never
+    /// returned. An unknown user (or one of another tenant) is `NotFound`; a blocked user is
+    /// `Conflict` (self-service recovery sends blocked users nothing either). Audited as
+    /// `user_recovery_sent`.
+    pub async fn send_recovery(
+        &self,
+        tenant: &Tenant,
+        issuer: &str,
+        id: UserId,
+        actor: AuditActor,
+        ctx: &RequestContext,
+    ) -> Result<(), CoreError> {
+        let user = self.get(tenant.id, id).await?;
+        if user.status != UserStatus::Active {
+            return Err(CoreError::Conflict(
+                "blocked users cannot reset their password; unblock the user first".to_owned(),
+            ));
+        }
+        let ui_base = format!("{}/ui", issuer.trim_end_matches('/'));
+        // Only passkey effects read the relying party; the recovery email does not.
+        let rp: Result<RelyingParty, CoreError> = Err(CoreError::Internal(
+            "passkeys are not used by an administrator-sent recovery email".to_owned(),
+        ));
+        let cx = FlowContext {
+            tenant,
+            issuer,
+            ui_base: &ui_base,
+            rp: &rp,
+            ctx,
+        };
+        let (token, mail) = self_service_email(
+            &self.kek,
+            &cx,
+            SelfServiceKind::Recovery,
+            user.id,
+            &user.email,
+            self.clock.now(),
+        )?;
+        self.storage
+            .users()
+            .issue_self_service_token(tenant.id, &token, Some(&mail))
+            .await?;
+        self.record(
+            tenant.id,
+            actor,
+            AuditAction::UserRecoverySent,
+            user.id,
+            ctx,
+            AuditDetails::empty(),
+        )
+        .await
     }
 
     /// Deletes the user; the repository removes credentials, sessions and tokens and revokes

@@ -11,7 +11,7 @@
         "tags": [
           "system"
         ],
-        "summary": "Version of the running server, for console administrators.",
+        "summary": "Version of the running server and whether installation SMTP is configured, for console\nadministrators.",
         "operationId": "getSystemInfo",
         "responses": {
           "200": {
@@ -2002,7 +2002,7 @@
         "tags": [
           "clients"
         ],
-        "summary": "Delete a client and revoke its tokens. A deleted CIMD client (URL client id, percent-encoded\nin the path) is fetched again on its next use if the tenant's CIMD policy still allows its\nhost; block a host with the `allow_listed` CIMD policy instead.",
+        "summary": "Delete a client and revoke its tokens. A deleted CIMD client (URL client id, percent-encoded\nin the path) is fetched again on its next use if the tenant's CIMD policy still allows its\nhost; block a host with the `allow_listed` CIMD policy instead. The built-in console client\n(`anvil-console` of the system tenant) cannot be deleted (409).",
         "operationId": "deleteClient",
         "parameters": [
           {
@@ -2050,6 +2050,16 @@
           },
           "404": {
             "description": "Unknown tenant or client",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The built-in console client cannot be deleted",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -11355,6 +11365,93 @@
         ]
       }
     },
+    "/api/admin/v1/tenants/{slug}/users/{user_id}/recovery": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Send the user a password-reset email: the same email, link and one-hour lifetime as\nself-service recovery, to the user's current address. The link is only in the email; the\nresponse has no body. Blocked users get nothing (409).",
+        "operationId": "sendUserRecovery",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Tenant slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "User id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "The password-reset email is queued for delivery"
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tenant or user",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The user is blocked",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "admin:users:write"
+            ]
+          },
+          {
+            "oauth2": [
+              "admin:write"
+            ]
+          }
+        ]
+      }
+    },
     "/api/admin/v1/tenants/{slug}/users/{user_id}/roles": {
       "get": {
         "tags": [
@@ -12957,7 +13054,8 @@
           "users_imported",
           "user_exported",
           "password_profile_created",
-          "password_profile_deleted"
+          "password_profile_deleted",
+          "user_recovery_sent"
         ]
       },
       "AuditActorView": {
@@ -13477,6 +13575,13 @@
           "client_type": {
             "$ref": "#/components/schemas/ClientType"
           },
+          "client_uri": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "OIDC `client_uri`, the app's home page; `null` = none. The end-user pages link to it\n(\"Back to <app>\") only for administrator-registered (static) clients; values of dynamic\nand metadata-document clients are stored and shown here but never rendered to end users."
+          },
           "consent_mode": {
             "$ref": "#/components/schemas/ConsentMode"
           },
@@ -13497,6 +13602,13 @@
           "id_token_signed_response_alg": {
             "type": "string",
             "description": "ID-token signing algorithm (one of the tenant's `signing_algs`)."
+          },
+          "initiate_login_uri": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "OIDC `initiate_login_uri`, where the app starts a sign-in (preferred over `client_uri`\nfor \"Back to <app>\"); `null` = none. Same rendering rule as `client_uri`."
           },
           "jwks": {
             "type": [
@@ -13960,6 +14072,13 @@
           "client_type": {
             "$ref": "#/components/schemas/ClientType"
           },
+          "client_uri": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The app's home page (OIDC `client_uri`): an absolute https URL with a host, no userinfo\nand no fragment, at most 2048 characters; http only for localhost and loopback addresses\n(422 otherwise). Shown to end users (\"Back to <app>\") for administrator-registered\nclients only."
+          },
           "consent_mode": {
             "oneOf": [
               {
@@ -13991,6 +14110,13 @@
               "null"
             ],
             "description": "Default `RS256`; must be enabled in the tenant's `signing_algs`."
+          },
+          "initiate_login_uri": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where the app starts a sign-in (OIDC `initiate_login_uri`); the rules of `client_uri`."
           },
           "jwks": {
             "type": [
@@ -16752,9 +16878,14 @@
         "type": "object",
         "description": "Facts about the running installation.",
         "required": [
-          "version"
+          "version",
+          "smtp_configured"
         ],
         "properties": {
+          "smtp_configured": {
+            "type": "boolean",
+            "description": "Whether the installation SMTP transport (`smtp_url`) is configured. Tenants without SMTP\nsettings of their own send email only when it is."
+          },
           "version": {
             "type": "string",
             "description": "Version of the running `anvilid` binary (e.g. `1.0.0`)."
@@ -17426,6 +17557,13 @@
               }
             ]
           },
+          "client_uri": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`null` removes the home page; the rules of `CreateClient.client_uri`."
+          },
           "consent_mode": {
             "oneOf": [
               {
@@ -17458,6 +17596,13 @@
               "null"
             ],
             "description": "`null` resets to RS256."
+          },
+          "initiate_login_uri": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`null` removes the initiate-login URI; the rules of `CreateClient.client_uri`."
           },
           "jwks": {
             "type": [

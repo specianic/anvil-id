@@ -115,9 +115,33 @@ async fn system_info_answers_any_admin_scope_with_the_configured_version() {
         assert_eq!(resp.header("cache-control"), Some("no-store"));
         assert_eq!(
             json(&resp),
-            serde_json::json!({ "version": VERSION }),
+            serde_json::json!({ "version": VERSION, "smtp_configured": false }),
             "{scope}"
         );
+    }
+}
+
+/// rc.4: `smtp_configured` reflects the installation SMTP transport (`smtp_url`), for admins
+/// only (the 401/403 tests above cover the same endpoint).
+#[tokio::test]
+async fn system_info_reports_whether_installation_smtp_is_configured() {
+    for configured in [false, true] {
+        let app = TestApp::with(|c| {
+            c.rate_limits.enabled = false;
+            c.server_version = Some(VERSION.to_owned());
+            c.installation_smtp = configured;
+        })
+        .await;
+        let token = admin_token(&app, "admin:read").await;
+        let resp = call(&app, Method::GET, &info(), Some(&token), None).await;
+        assert_eq!(resp.status, 200, "{}", resp.text());
+        assert_eq!(json(&resp)["smtp_configured"], configured);
+        // Never anything about the transport itself.
+        assert!(!resp.text().contains("smtp://"), "{}", resp.text());
+
+        // Still admin-only.
+        let resp = call(&app, Method::GET, &info(), None, None).await;
+        assert_problem(&resp, 401);
     }
 }
 

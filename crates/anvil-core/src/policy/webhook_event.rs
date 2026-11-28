@@ -158,7 +158,9 @@ fn classify(action: AuditAction) -> Option<(WebhookEventType, Subject)> {
         | A::UsersImported
         | A::UserExported
         | A::PasswordProfileCreated
-        | A::PasswordProfileDeleted => None,
+        | A::PasswordProfileDeleted
+        // An administrator-triggered password reset email: audited, not a lifecycle event.
+        | A::UserRecoverySent => None,
     }
 }
 
@@ -579,6 +581,7 @@ mod tests {
             AuditAction::UserExported,
             AuditAction::PasswordProfileCreated,
             AuditAction::PasswordProfileDeleted,
+            AuditAction::UserRecoverySent,
         ] {
             assert_eq!(
                 webhook_event("acme", &admin_event(action, ORG, org_details())),

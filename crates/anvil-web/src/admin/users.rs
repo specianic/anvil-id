@@ -1,12 +1,13 @@
 //! `/api/admin/v1/tenants/{slug}/users`: user management (password or invitation, claims,
-//! block, delete) and the user's credentials (list; remove a passkey or TOTP).
+//! block, delete), an administrator-sent password-reset email, and the user's credentials
+//! (list; remove a passkey or TOTP).
 
 use anvil_core::error::CoreError;
 use anvil_core::model::{CredentialId, Tenant, UserId};
 use anvil_core::service::admin_scope::{Access, Resource};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::response::Response;
+use axum::response::{IntoResponse as _, Response};
 
 use super::auth::{
     AdminAuth, AdminJson, AdminQuery, AdminResult, created, json, no_content, page_request,
@@ -317,4 +318,44 @@ pub(crate) async fn delete_user_credential(
         .admin_remove(tenant.id, user_id(&id)?, credential, &auth.claims.sub, &ctx)
         .await?;
     Ok(no_content())
+}
+
+/// Send the user a password-reset email: the same email, link and one-hour lifetime as
+/// self-service recovery, to the user's current address. The link is only in the email; the
+/// response has no body. Blocked users get nothing (409).
+#[utoipa::path(
+    post,
+    path = "/api/admin/v1/tenants/{slug}/users/{user_id}/recovery",
+    tag = "users",
+    operation_id = "sendUserRecovery",
+    params(
+        ("slug" = String, Path, description = "Tenant slug"),
+        ("user_id" = uuid::Uuid, Path, description = "User id"),
+    ),
+    responses(
+        (status = 202, description = "The password-reset email is queued for delivery"),
+        (status = 401, description = "Missing or invalid access token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Insufficient scope", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown tenant or user", body = Problem, content_type = "application/problem+json"),
+        (status = 409, description = "The user is blocked", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(
+        ("oauth2" = ["admin:users:write"]),
+        ("oauth2" = ["admin:write"]),
+    )
+)]
+pub(crate) async fn send_user_recovery(
+    auth: AdminAuth,
+    State(state): State<AppState>,
+    AuditContext(ctx): AuditContext,
+    Path((slug, id)): Path<(String, String)>,
+) -> AdminResult<Response> {
+    let tenant = authorize(&state, &auth, &slug, Access::Write).await?;
+    let issuer = state.admin_issuer_of(&tenant);
+    state
+        .admin_users()
+        .send_recovery(&tenant, &issuer, user_id(&id)?, auth.actor(), &ctx)
+        .await?;
+    // The outbox worker delivers the email.
+    Ok(StatusCode::ACCEPTED.into_response())
 }

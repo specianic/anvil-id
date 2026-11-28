@@ -4,12 +4,14 @@
 
 mod admin_support;
 mod support;
+mod token_support;
 
 use admin_support::{API, admin_token, assert_field_error, assert_problem, call};
 use anvil_core::model::{
     ApplicationType, AuditAction, AuditQuery, ClientAuthMethod, ClientId, ClientKind, ClientSource,
     ClientType, ConsentMode, GrantType, NewClient, OrgClientPolicy, TenantId, TokenFormat,
 };
+use anvil_core::model::{SelfServiceKind, open_payload};
 use anvil_core::ports::Clock as _;
 use anvil_core::service::bootstrap::CONSOLE_CLIENT_ID;
 use axum::http::Method;
@@ -275,4 +277,252 @@ async fn console_client_id_in_another_tenant_is_an_ordinary_client() {
             .is_none()
     );
     assert_eq!(deleted_events(&app, default).await, 1);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Administrator-sent password reset
+// ---------------------------------------------------------------------------------------------
+
+fn recovery_path(tenant: &str, user: impl std::fmt::Display) -> String {
+    format!("{API}/tenants/{tenant}/users/{user}/recovery")
+}
+
+/// Creates an active password user in the default tenant; returns its id.
+async fn create_user(app: &TestApp, token: &str, email: &str) -> String {
+    let resp = call(
+        app,
+        Method::POST,
+        &format!("{API}/tenants/default/users"),
+        Some(token),
+        Some(json!({"email": email, "password": "a long enough password"})),
+    )
+    .await;
+    assert_eq!(resp.status, 201, "{}", resp.text());
+    body_json(&resp)["id"].as_str().unwrap().to_owned()
+}
+
+async fn queued_emails(app: &TestApp) -> Vec<anvil_core::model::OutboxEmail> {
+    app.storage()
+        .outbox()
+        .claim_due(app.clock().now(), 50, std::time::Duration::from_secs(120))
+        .await
+        .unwrap()
+}
+
+async fn recovery_events(app: &TestApp, tenant: TenantId) -> Vec<anvil_core::model::AuditEvent> {
+    app.storage()
+        .audit()
+        .query(
+            tenant,
+            &AuditQuery {
+                limit: 500,
+                ..AuditQuery::default()
+            },
+        )
+        .await
+        .expect("audit query")
+        .items
+        .into_iter()
+        .filter(|e| e.action == AuditAction::UserRecoverySent)
+        .collect()
+}
+
+#[tokio::test]
+async fn admin_recovery_sends_the_self_service_recovery_email() {
+    let app = app().await;
+    let token = admin_token(&app, "admin:users:write").await;
+    let id = create_user(&app, &token, "dora@example.test").await;
+
+    let resp = call(
+        &app,
+        Method::POST,
+        &recovery_path("default", &id),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(resp.status, 202, "{}", resp.text());
+
+    // One recovery email to the user's address, sealed, with the self-service link.
+    let emails = queued_emails(&app).await;
+    assert_eq!(emails.len(), 1);
+    let mail = &emails[0];
+    assert_eq!(mail.template, "recovery");
+    assert_eq!(mail.to, "dora@example.test");
+    assert_eq!(mail.tenant_id, default_id(&app));
+    let payload = open_payload(app.kek(), default_id(&app), &mail.payload).unwrap();
+    let link = &payload["link"];
+    let prefix = format!("{}/ui/recovery?token=", app.issuer(None));
+    let plaintext = link
+        .strip_prefix(&prefix)
+        .expect("self-service recovery link");
+    assert_eq!(payload["expires_in"], "1 hour");
+
+    // The link opens the reset form (a live Recovery token).
+    let path = link
+        .strip_prefix(&format!(
+            "{}://{}",
+            app.config.public_url.scheme(),
+            app.config.public_url.host_port()
+        ))
+        .unwrap();
+    let page = app.get(path).await;
+    assert_eq!(page.status, 200, "{}", page.text());
+    let hash = anvil_core::model::SecretHash(anvil_jose::encoding::secret_hash(plaintext));
+    assert!(
+        app.storage()
+            .users()
+            .peek_self_service_token(
+                default_id(&app),
+                SelfServiceKind::Recovery,
+                &hash,
+                app.clock().now()
+            )
+            .await
+            .unwrap()
+    );
+
+    // Audited with the administrator as the actor, target = the user, no details.
+    let events = recovery_events(&app, default_id(&app)).await;
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].target.as_deref(), Some(id.as_str()));
+    assert_eq!(events[0].actor.kind, anvil_core::model::ActorKind::Admin);
+    assert!(events[0].actor.id.is_some());
+    assert!(events[0].details.as_map().is_empty());
+}
+
+#[tokio::test]
+async fn admin_recovery_requires_users_write_scope() {
+    let app = app().await;
+    let writer = admin_token(&app, "admin:users:write").await;
+    let id = create_user(&app, &writer, "erin@example.test").await;
+    for scope in ["admin:users:read", "admin:read", "admin:clients:write"] {
+        let token = admin_token(&app, scope).await;
+        let resp = call(
+            &app,
+            Method::POST,
+            &recovery_path("default", &id),
+            Some(&token),
+            None,
+        )
+        .await;
+        assert_problem(&resp, 403);
+    }
+    // No token at all: 401.
+    let resp = call(
+        &app,
+        Method::POST,
+        &recovery_path("default", &id),
+        None,
+        None,
+    )
+    .await;
+    assert_problem(&resp, 401);
+    assert!(queued_emails(&app).await.is_empty());
+    assert!(recovery_events(&app, default_id(&app)).await.is_empty());
+
+    // admin:write is the other accepted scope.
+    let full = admin_token(&app, "admin:write").await;
+    let resp = call(
+        &app,
+        Method::POST,
+        &recovery_path("default", &id),
+        Some(&full),
+        None,
+    )
+    .await;
+    assert_eq!(resp.status, 202, "{}", resp.text());
+}
+
+#[tokio::test]
+async fn admin_recovery_other_tenant_is_404() {
+    let app = app().await;
+    let token = admin_token(&app, "admin:write").await;
+    // A user of the system tenant, addressed through the default tenant's path.
+    let other = token_support::seed_user(&app, system_id(&app), "sys@example.test").await;
+    let resp = call(
+        &app,
+        Method::POST,
+        &recovery_path("default", other.id),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_problem(&resp, 404);
+    // Unknown and malformed ids: 404 as well.
+    for id in [uuid::Uuid::now_v7().to_string(), "not-a-uuid".to_owned()] {
+        let resp = call(
+            &app,
+            Method::POST,
+            &recovery_path("default", &id),
+            Some(&token),
+            None,
+        )
+        .await;
+        assert_problem(&resp, 404);
+    }
+    assert!(queued_emails(&app).await.is_empty());
+    assert!(recovery_events(&app, default_id(&app)).await.is_empty());
+    assert!(recovery_events(&app, system_id(&app)).await.is_empty());
+}
+
+#[tokio::test]
+async fn admin_recovery_blocked_user_refused() {
+    let app = app().await;
+    let token = admin_token(&app, "admin:users:write").await;
+    let id = create_user(&app, &token, "frank@example.test").await;
+    let resp = call(
+        &app,
+        Method::PATCH,
+        &format!("{API}/tenants/default/users/{id}"),
+        Some(&token),
+        Some(json!({"status": "blocked"})),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let resp = call(
+        &app,
+        Method::POST,
+        &recovery_path("default", &id),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_problem(&resp, 409);
+    assert!(queued_emails(&app).await.is_empty());
+    assert!(recovery_events(&app, default_id(&app)).await.is_empty());
+}
+
+#[tokio::test]
+async fn admin_recovery_response_has_no_token() {
+    let app = app().await;
+    let token = admin_token(&app, "admin:users:write").await;
+    let id = create_user(&app, &token, "gina@example.test").await;
+    let resp = call(
+        &app,
+        Method::POST,
+        &recovery_path("default", &id),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(resp.status, 202, "{}", resp.text());
+    // No body at all, so no token or link; no header carries one either.
+    assert!(resp.body.is_empty(), "{}", resp.text());
+    let emails = queued_emails(&app).await;
+    let payload = open_payload(app.kek(), default_id(&app), &emails[0].payload).unwrap();
+    let plaintext = payload["link"].split("token=").nth(1).unwrap().to_owned();
+    for (name, value) in &resp.headers {
+        assert!(
+            !value.to_str().unwrap_or_default().contains(&plaintext),
+            "header {name} carries the token"
+        );
+    }
+    // The stored payload is sealed (no plaintext link at rest) and the audit event has no
+    // details that could carry it.
+    for value in emails[0].payload.values() {
+        assert!(!value.contains(&plaintext));
+    }
+    let events = recovery_events(&app, default_id(&app)).await;
+    assert!(events[0].details.as_map().is_empty());
 }

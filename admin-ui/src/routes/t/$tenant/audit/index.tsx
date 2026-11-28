@@ -121,6 +121,7 @@ const ACTION_SET: Record<AuditAction, true> = {
   user_exported: true,
   password_profile_created: true,
   password_profile_deleted: true,
+  user_recovery_sent: true,
 };
 const ACTIONS = Object.keys(ACTION_SET).sort() as AuditAction[];
 const OUTCOMES: readonly AuditOutcome[] = ["success", "failure"];

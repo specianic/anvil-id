@@ -306,9 +306,19 @@ fn breaking_changes(base: &Value, current: &Value) -> Vec<String> {
         .kept
         .difference(&c.kept)
         .map(|x| format!("removed or narrowed: {x}"));
+    // A required input of an operation the baseline does not have is part of a new operation
+    // (additive); only new required inputs of existing operations break callers.
+    let in_baseline_operation = |fact: &&String| {
+        let mut words = fact.trim_start_matches("required request ").split(' ');
+        match (words.next(), words.next()) {
+            (Some(method), Some(path)) => b.kept.contains(&format!("operation {method} {path}")),
+            _ => true,
+        }
+    };
     let added = c
         .limited
         .difference(&b.limited)
+        .filter(in_baseline_operation)
         .map(|x| format!("new constraint: {x}"));
     let typed: BTreeSet<&str> = b
         .response_types
@@ -495,6 +505,15 @@ fn api_compat_allows_added_optional_field() {
     mutated["paths"]["/api/admin/v1/regions"] = json!({"get": {
         "responses": {"200": {"description": "ok"}},
         "security": [{"oauth2": ["admin:read"]}]
+    }});
+    // A new operation's own required path parameters and body are part of the new operation.
+    mutated["paths"]["/api/admin/v1/regions/{region}/drain"] = json!({"post": {
+        "parameters": [{"name": "region", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {
+            "type": "object", "required": ["reason"], "properties": {"reason": {"type": "string"}}
+        }}}},
+        "responses": {"202": {"description": "ok"}},
+        "security": [{"oauth2": ["admin:write"]}]
     }});
     mutated["paths"]["/api/admin/v1/tenants"]["get"]["security"]
         .as_array_mut()

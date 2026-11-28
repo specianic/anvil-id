@@ -224,6 +224,8 @@ pub enum AuditAction {
     PasswordProfileCreated,
     /// A tenant password hash profile was deleted.
     PasswordProfileDeleted,
+    /// An administrator sent a user a password-reset email (07.1-06). Never carries the token.
+    UserRecoverySent,
 }
 
 str_enum!(AuditAction {
@@ -329,6 +331,7 @@ str_enum!(AuditAction {
     UserExported => "user_exported",
     PasswordProfileCreated => "password_profile_created",
     PasswordProfileDeleted => "password_profile_deleted",
+    UserRecoverySent => "user_recovery_sent",
 });
 
 /// Structured event details. Only typed constructors build it, and none of them accepts a
@@ -588,7 +591,7 @@ mod tests {
         for v in AuditOutcome::ALL {
             assert_eq!(AuditOutcome::parse(v.as_str()), Some(*v));
         }
-        assert_eq!(AuditAction::ALL.len(), 102);
+        assert_eq!(AuditAction::ALL.len(), 103);
         for (action, name) in [
             (AuditAction::UsersImported, "users_imported"),
             (AuditAction::UserExported, "user_exported"),
@@ -600,6 +603,7 @@ mod tests {
                 AuditAction::PasswordProfileDeleted,
                 "password_profile_deleted",
             ),
+            (AuditAction::UserRecoverySent, "user_recovery_sent"),
         ] {
             assert_eq!(action.as_str(), name);
             assert_eq!(AuditAction::parse(name), Some(action));

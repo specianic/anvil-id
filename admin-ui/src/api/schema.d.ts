@@ -11,7 +11,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Version of the running server, for console administrators. */
+        /**
+         * Version of the running server and whether installation SMTP is configured, for console
+         *     administrators.
+         */
         get: operations["getSystemInfo"];
         put?: never;
         post?: never;
@@ -230,7 +233,8 @@ export interface paths {
         /**
          * Delete a client and revoke its tokens. A deleted CIMD client (URL client id, percent-encoded
          *     in the path) is fetched again on its next use if the tenant's CIMD policy still allows its
-         *     host; block a host with the `allow_listed` CIMD policy instead.
+         *     host; block a host with the `allow_listed` CIMD policy instead. The built-in console client
+         *     (`anvil-console` of the system tenant) cannot be deleted (409).
          */
         delete: operations["deleteClient"];
         options?: never;
@@ -1344,6 +1348,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/tenants/{slug}/users/{user_id}/recovery": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send the user a password-reset email: the same email, link and one-hour lifetime as
+         *     self-service recovery, to the user's current address. The link is only in the email; the
+         *     response has no body. Blocked users get nothing (409).
+         */
+        post: operations["sendUserRecovery"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/tenants/{slug}/users/{user_id}/roles": {
         parameters: {
             query?: never;
@@ -1592,7 +1617,7 @@ export interface components {
          * @description An audited action.
          * @enum {string}
          */
-        AuditAction: "login_succeeded" | "login_failed" | "second_factor_failed" | "passkey_registered" | "passkey_removed" | "passkey_clone_suspected" | "totp_enrolled" | "totp_removed" | "recovery_code_used" | "recovery_codes_regenerated" | "password_changed" | "user_registered" | "email_verified" | "consent_granted" | "consent_revoked" | "session_revoked" | "sessions_revoked_all" | "token_revoked" | "refresh_reuse_detected" | "code_reuse_detected" | "key_generated" | "key_activated" | "key_retired" | "key_rotation_requested" | "rate_limit_lockout" | "captcha_failed" | "user_created" | "user_updated" | "user_deleted" | "client_created" | "client_updated" | "client_deleted" | "client_secret_rotated" | "tenant_created" | "tenant_updated" | "tenant_deleted" | "email_template_updated" | "email_template_reset" | "smtp_settings_updated" | "smtp_test_sent" | "admin_setup_completed" | "identity_linked" | "identity_unlinked" | "upstream_login_failed" | "connection_created" | "connection_updated" | "connection_deleted" | "connection_secret_rotated" | "branding_updated" | "logout" | "backchannel_logout_failed" | "email_change_requested" | "email_changed" | "profile_updated" | "step_up_completed" | "email_code_sent" | "role_created" | "role_updated" | "role_deleted" | "role_assigned" | "role_unassigned" | "attribute_defined" | "attribute_deleted" | "user_attributes_updated" | "webhook_endpoint_created" | "webhook_endpoint_updated" | "webhook_endpoint_deleted" | "webhook_secret_rotated" | "webhook_endpoint_disabled" | "webhook_delivery_failed" | "webhook_test_sent" | "webhook_redelivered" | "client_registered" | "client_registration_updated" | "client_registration_deleted" | "cimd_client_refreshed" | "initial_access_token_created" | "initial_access_token_revoked" | "tenant_config_applied" | "admin_recovery_issued" | "organization_created" | "organization_updated" | "organization_deleted" | "org_member_added" | "org_member_removed" | "org_role_assigned" | "org_role_unassigned" | "org_invitation_created" | "org_invitation_revoked" | "org_invitation_accepted" | "org_domain_created" | "org_domain_verified" | "org_domain_verification_failed" | "org_domain_unverified" | "org_domain_updated" | "org_domain_deleted" | "saml_login_succeeded" | "saml_login_failed" | "users_imported" | "user_exported" | "password_profile_created" | "password_profile_deleted";
+        AuditAction: "login_succeeded" | "login_failed" | "second_factor_failed" | "passkey_registered" | "passkey_removed" | "passkey_clone_suspected" | "totp_enrolled" | "totp_removed" | "recovery_code_used" | "recovery_codes_regenerated" | "password_changed" | "user_registered" | "email_verified" | "consent_granted" | "consent_revoked" | "session_revoked" | "sessions_revoked_all" | "token_revoked" | "refresh_reuse_detected" | "code_reuse_detected" | "key_generated" | "key_activated" | "key_retired" | "key_rotation_requested" | "rate_limit_lockout" | "captcha_failed" | "user_created" | "user_updated" | "user_deleted" | "client_created" | "client_updated" | "client_deleted" | "client_secret_rotated" | "tenant_created" | "tenant_updated" | "tenant_deleted" | "email_template_updated" | "email_template_reset" | "smtp_settings_updated" | "smtp_test_sent" | "admin_setup_completed" | "identity_linked" | "identity_unlinked" | "upstream_login_failed" | "connection_created" | "connection_updated" | "connection_deleted" | "connection_secret_rotated" | "branding_updated" | "logout" | "backchannel_logout_failed" | "email_change_requested" | "email_changed" | "profile_updated" | "step_up_completed" | "email_code_sent" | "role_created" | "role_updated" | "role_deleted" | "role_assigned" | "role_unassigned" | "attribute_defined" | "attribute_deleted" | "user_attributes_updated" | "webhook_endpoint_created" | "webhook_endpoint_updated" | "webhook_endpoint_deleted" | "webhook_secret_rotated" | "webhook_endpoint_disabled" | "webhook_delivery_failed" | "webhook_test_sent" | "webhook_redelivered" | "client_registered" | "client_registration_updated" | "client_registration_deleted" | "cimd_client_refreshed" | "initial_access_token_created" | "initial_access_token_revoked" | "tenant_config_applied" | "admin_recovery_issued" | "organization_created" | "organization_updated" | "organization_deleted" | "org_member_added" | "org_member_removed" | "org_role_assigned" | "org_role_unassigned" | "org_invitation_created" | "org_invitation_revoked" | "org_invitation_accepted" | "org_domain_created" | "org_domain_verified" | "org_domain_verification_failed" | "org_domain_unverified" | "org_domain_updated" | "org_domain_deleted" | "saml_login_succeeded" | "saml_login_failed" | "users_imported" | "user_exported" | "password_profile_created" | "password_profile_deleted" | "user_recovery_sent";
         /** @description Who performed an audited action. */
         AuditActorView: {
             id?: string | null;
@@ -1801,6 +1826,12 @@ export interface components {
             /** @description Returned once, on create (secret-based auth methods only). */
             client_secret?: string | null;
             client_type: components["schemas"]["ClientType"];
+            /**
+             * @description OIDC `client_uri`, the app's home page; `null` = none. The end-user pages link to it
+             *     ("Back to <app>") only for administrator-registered (static) clients; values of dynamic
+             *     and metadata-document clients are stored and shown here but never rendered to end users.
+             */
+            client_uri?: string | null;
             consent_mode: components["schemas"]["ConsentMode"];
             /** Format: date-time */
             created_at: string;
@@ -1812,6 +1843,11 @@ export interface components {
             headless_native: boolean;
             /** @description ID-token signing algorithm (one of the tenant's `signing_algs`). */
             id_token_signed_response_alg: string;
+            /**
+             * @description OIDC `initiate_login_uri`, where the app starts a sign-in (preferred over `client_uri`
+             *     for "Back to <app>"); `null` = none. Same rendering rule as `client_uri`.
+             */
+            initiate_login_uri?: string | null;
             /** @description Inline public JWK Set (`private_key_jwt` only). */
             jwks?: Record<string, never> | null;
             /**
@@ -1959,6 +1995,13 @@ export interface components {
             can_introspect?: boolean | null;
             client_kind?: components["schemas"]["ClientKind"] | null;
             client_type: components["schemas"]["ClientType"];
+            /**
+             * @description The app's home page (OIDC `client_uri`): an absolute https URL with a host, no userinfo
+             *     and no fragment, at most 2048 characters; http only for localhost and loopback addresses
+             *     (422 otherwise). Shown to end users ("Back to <app>") for administrator-registered
+             *     clients only.
+             */
+            client_uri?: string | null;
             consent_mode?: components["schemas"]["ConsentMode"] | null;
             /** @description Default `["authorization_code"]`. */
             grant_types?: components["schemas"]["GrantType"][];
@@ -1969,6 +2012,8 @@ export interface components {
             headless_native?: boolean | null;
             /** @description Default `RS256`; must be enabled in the tenant's `signing_algs`. */
             id_token_signed_response_alg?: string | null;
+            /** @description Where the app starts a sign-in (OIDC `initiate_login_uri`); the rules of `client_uri`. */
+            initiate_login_uri?: string | null;
             /** @description Inline public JWK Set, required for `private_key_jwt`. */
             jwks?: Record<string, never> | null;
             /** @description Not supported in this release (rejected with 422). */
@@ -3118,6 +3163,11 @@ export interface components {
         };
         /** @description Facts about the running installation. */
         SystemInfo: {
+            /**
+             * @description Whether the installation SMTP transport (`smtp_url`) is configured. Tenants without SMTP
+             *     settings of their own send email only when it is.
+             */
+            smtp_configured: boolean;
             /** @description Version of the running `anvilid` binary (e.g. `1.0.0`). */
             version: string;
         };
@@ -3349,6 +3399,8 @@ export interface components {
             backchannel_logout_uri?: string | null;
             can_introspect?: boolean | null;
             client_kind?: components["schemas"]["ClientKind"] | null;
+            /** @description `null` removes the home page; the rules of `CreateClient.client_uri`. */
+            client_uri?: string | null;
             consent_mode?: components["schemas"]["ConsentMode"] | null;
             grant_types?: components["schemas"]["GrantType"][] | null;
             /**
@@ -3358,6 +3410,8 @@ export interface components {
             headless_native?: boolean | null;
             /** @description `null` resets to RS256. */
             id_token_signed_response_alg?: string | null;
+            /** @description `null` removes the initiate-login URI; the rules of `CreateClient.client_uri`. */
+            initiate_login_uri?: string | null;
             jwks?: Record<string, never> | null;
             mfa_policy?: components["schemas"]["MfaPolicy"] | null;
             name?: string | null;
@@ -4799,6 +4853,15 @@ export interface operations {
             };
             /** @description Unknown tenant or client */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The built-in console client cannot be deleted */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10559,6 +10622,65 @@ export interface operations {
             };
             /** @description Unknown tenant or user */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    sendUserRecovery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tenant slug */
+                slug: string;
+                /** @description User id */
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The password-reset email is queued for delivery */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unknown tenant or user */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The user is blocked */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

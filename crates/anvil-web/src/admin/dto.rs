@@ -256,6 +256,7 @@ wire_enum!(
         UserExported,
         PasswordProfileCreated,
         PasswordProfileDeleted,
+        UserRecoverySent,
     }
 );
 wire_enum!(

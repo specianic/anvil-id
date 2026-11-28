@@ -195,6 +195,7 @@ fn api_router() -> OpenApiRouter<AppState> {
             users::update_user,
             users::delete_user
         ))
+        .routes(routes!(users::send_user_recovery))
         .routes(routes!(users::list_user_credentials))
         .routes(routes!(organizations::list_user_organizations))
         .routes(routes!(users::delete_user_credential))

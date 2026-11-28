@@ -2,7 +2,9 @@
 //!
 //! - `GET …/system/info` (any admin scope): the version of the running server binary, shown in
 //!   the console footer. This is the only place the version is disclosed over HTTP: discovery,
-//!   JWKS, health, metrics, pages, headers and error bodies never carry it.
+//!   JWKS, health, metrics, pages, headers and error bodies never carry it. It also says whether
+//!   the installation SMTP transport is configured (`smtp_configured`), for the console's email
+//!   settings and onboarding; never the SMTP URL or any part of it.
 //!
 //! Any admin scope suffices (see [`AdminAuth::require_any_admin_scope`]): every console
 //! administrator holds at least one, whatever their role, while application-tenant tokens (401,
@@ -31,9 +33,13 @@ pub(crate) fn routes() -> OpenApiRouter<AppState> {
 pub struct SystemInfo {
     /// Version of the running `anvilid` binary (e.g. `1.0.0`).
     pub version: String,
+    /// Whether the installation SMTP transport (`smtp_url`) is configured. Tenants without SMTP
+    /// settings of their own send email only when it is.
+    pub smtp_configured: bool,
 }
 
-/// Version of the running server, for console administrators.
+/// Version of the running server and whether installation SMTP is configured, for console
+/// administrators.
 #[utoipa::path(
     get,
     path = "/api/admin/v1/system/info",
@@ -73,7 +79,13 @@ pub(crate) async fn get_system_info(
         state.config().server_version.clone().ok_or_else(|| {
             CoreError::Internal("the server version is not configured".to_owned())
         })?;
-    Ok(json(StatusCode::OK, &SystemInfo { version }))
+    Ok(json(
+        StatusCode::OK,
+        &SystemInfo {
+            version,
+            smtp_configured: state.config().installation_smtp,
+        },
+    ))
 }
 
 #[cfg(test)]
