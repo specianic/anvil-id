@@ -33,7 +33,7 @@ use super::account_attributes::attributes_nav_or_page;
 use super::account_confirm::{Confirmation, Destructive, confirm_page, confirmed};
 use super::account_security::{AccountHeader, account_header, client_id_param};
 use super::consent::{PageMessage, account_locale, localized};
-use super::format::{human, iso};
+use super::format::{device, human, iso};
 use super::login::{UiQuery, csrf_page, rejected_form};
 use super::logout::signed_out_url;
 use super::nav::{AccountSection, NavContext};
@@ -45,8 +45,6 @@ use crate::state::AppState;
 use crate::tenant::ResolvedTenant;
 
 const PAGE: &str = "/ui/account/sessions";
-/// Longest user agent shown (characters); longer ones end in an ellipsis.
-const DEVICE_MAX_CHARS: usize = 80;
 
 /// The routes of this module (tenant-relative paths).
 pub fn routes() -> Router<AppState> {
@@ -113,20 +111,27 @@ fn to_login(tenant: &ResolvedTenant, jar: CookieJar) -> Response {
     with_headers((StatusCode::SEE_OTHER, jar, [(header::LOCATION, location)]).into_response())
 }
 
-/// The user agent as shown: trimmed, at most [`DEVICE_MAX_CHARS`] characters (then `…`), or
-/// `None` when there is none (the page says "Unknown device"). Escaping is left to the template
-/// engine.
-fn device_label(user_agent: Option<&str>) -> Option<String> {
+/// The device as shown (U-M16): "Firefox on Linux" from the browser and OS families of the user
+/// agent ([`device`]); "Unknown browser" when it names no known browser (with the OS when known);
+/// "Unknown device" without a user agent. The raw string is never shown.
+fn device_label(state: &AppState, loc: &Locale, user_agent: Option<&str>) -> String {
     let ua = user_agent.map(str::trim).unwrap_or_default();
     if ua.is_empty() {
-        return None;
+        return state.renderer().text(loc, "sessions.unknown_device");
     }
-    if ua.chars().count() <= DEVICE_MAX_CHARS {
-        return Some(ua.to_owned());
+    let d = device(ua);
+    let browser = d
+        .browser
+        .map(str::to_owned)
+        .unwrap_or_else(|| state.renderer().text(loc, "sessions.unknown_browser"));
+    match d.os {
+        Some(os) => state.renderer().catalogs().text(
+            loc,
+            "sessions.device",
+            &[("browser", browser.into()), ("os", os.into())],
+        ),
+        None => browser,
     }
-    let mut short: String = ua.chars().take(DEVICE_MAX_CHARS - 1).collect();
-    short.push('…');
-    Some(short)
 }
 
 fn flow_url(tenant: &ResolvedTenant, path: &str, flow: FlowId) -> String {
@@ -142,8 +147,7 @@ fn row(
 ) -> SessionRow {
     SessionRow {
         id: s.id.to_string(),
-        device: device_label(s.user_agent.as_deref())
-            .unwrap_or_else(|| state.renderer().text(loc, "sessions.unknown_device")),
+        device: device_label(state, loc, s.user_agent.as_deref()),
         ip: s.ip.clone(),
         created: human(s.created_at),
         created_iso: iso(s.created_at),
@@ -537,23 +541,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn device_label_truncates_long_and_flags_missing_agents() {
-        assert_eq!(device_label(None), None);
-        assert_eq!(device_label(Some("  ")), None);
-        assert_eq!(device_label(Some("Firefox")).as_deref(), Some("Firefox"));
-        let long = "x".repeat(200);
-        let label = device_label(Some(&long)).expect("label");
-        assert_eq!(label.chars().count(), DEVICE_MAX_CHARS);
-        assert!(label.ends_with('…'));
-        // Multi-byte characters are never split.
-        let wide = "é".repeat(100);
-        assert_eq!(
-            device_label(Some(&wide)).expect("label").chars().count(),
-            DEVICE_MAX_CHARS
-        );
-    }
-
-    #[test]
     fn page_message_keys_have_english_text() {
         let catalogs = crate::i18n::Catalogs::load(None).expect("catalogs");
         let en = Locale::fallback();
@@ -563,6 +550,8 @@ mod tests {
             MSG_OTHERS_REVOKED,
             MSG_SESSION_NOT_FOUND,
             "sessions.unknown_device",
+            "sessions.unknown_browser",
+            "sessions.device",
         ] {
             assert_ne!(catalogs.text(&en, key, &[]), key, "{key}");
         }

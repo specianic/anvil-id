@@ -550,6 +550,9 @@ fn render_enrolment(
         account_header => sub.header.value(),
         csrf_token => &sub.csrf,
         qr_svg => minijinja::Value::from_safe_string(svg),
+        // The same server-side URI as the QR code, for a phone that cannot scan its own screen
+        // (#link-otpauth; auto-escaped; the page is no-store).
+        otpauth_uri => enrolment.otpauth_uri.expose_secret(),
         secret_groups => grouped(enrolment.secret_base32.expose_secret()),
         confirm_url => flow_url(tenant, "/ui/account/security/totp/confirm", sub.flow_id),
         security_url => tenant.ui_url(PAGE),

@@ -341,10 +341,22 @@ async fn page_lists_both_sessions_with_ip_and_agent_and_marks_the_current_one() 
         !html.contains(&format!("session-{bobs}")),
         "only own sessions"
     );
-    for text in ["192.0.2.10", "2001:db8::7", UA_A, UA_B] {
+    // U-M16: readable devices, never the raw user agent.
+    for text in [
+        "192.0.2.10",
+        "2001:db8::7",
+        "<bdi>Firefox on Linux</bdi>",
+        "<bdi>Safari on iOS</bdi>",
+    ] {
         assert!(html.contains(text), "{text} in {html}");
     }
-    assert!(html.contains(&format!("aria-label=\"Sign out {UA_B}\"")));
+    for raw in [UA_A, UA_B, "Mozilla/5.0"] {
+        assert!(!html.contains(raw), "raw {raw} in {html}");
+    }
+    assert!(html.contains("aria-label=\"Sign out Safari on iOS\""));
+    // Times are machine-readable and labelled UTC (the page runs no script).
+    assert!(html.contains("<time datetime=\""), "{html}");
+    assert!(html.contains(" UTC</time>"), "{html}");
     assert!(html.contains("id=\"sessions-revoke-others\""));
     assert!(
         html.contains("aria-current=\"page\""),
@@ -353,16 +365,28 @@ async fn page_lists_both_sessions_with_ip_and_agent_and_marks_the_current_one() 
 }
 
 #[tokio::test]
-async fn user_agents_are_escaped_and_truncated() {
+async fn unknown_or_hostile_user_agents_are_never_shown() {
     let app = TestApp::new().await;
     let alice = user(&app, "alice@example.com").await;
     let ua = format!("<script>alert(1)</script>{}", "x".repeat(200));
     let (_, browser) = sign_in(&app, alice, "192.0.2.10", &ua).await;
+    sign_in(&app, alice, "192.0.2.11", "").await;
+    sign_in(
+        &app,
+        alice,
+        "192.0.2.12",
+        "Mozilla/5.0 (Linux; Android 15) Chrome/142.0 Mobile",
+    )
+    .await;
     let html = browser.page().await;
-    assert!(!html.contains("<script>alert"), "user agent escaped");
-    assert!(html.contains("&lt;script&gt;alert(1)&lt;"));
-    assert!(!html.contains(&"x".repeat(100)), "user agent truncated");
-    assert!(html.contains('…'));
+    assert!(!html.contains("alert(1)"), "the user agent is not shown");
+    assert!(
+        !html.contains(&"x".repeat(20)),
+        "the user agent is not shown"
+    );
+    assert!(html.contains("<bdi>Unknown browser</bdi>"), "{html}");
+    assert!(html.contains("<bdi>Unknown device</bdi>"), "{html}");
+    assert!(html.contains("<bdi>Chrome on Android</bdi>"), "{html}");
 }
 
 #[tokio::test]

@@ -474,12 +474,18 @@ pub(crate) async fn confirm_link(
     else {
         return failed("connection_disabled").await;
     };
+    let now = audit.clock.now();
     match storage
         .connections()
-        .create_link(tenant, &new_link(user, &conn, &identity, audit.clock.now()))
+        .create_link(tenant, &new_link(user, &conn, &identity, now))
         .await
     {
-        Ok(_) => {
+        Ok(created) => {
+            // Made by a sign-in through the identity: used now (U-L7).
+            storage
+                .connections()
+                .touch_link(tenant, created.id, now)
+                .await?;
             audit
                 .record(
                     tenant,
@@ -1554,7 +1560,13 @@ impl UpstreamService<'_> {
                     .create_link(tenant, &new_link(u.id, conn, &identity, now))
                     .await
                 {
-                    Ok(_) => {}
+                    // Made by this sign-in: used now (U-L7).
+                    Ok(created) => {
+                        storage
+                            .connections()
+                            .touch_link(tenant, created.id, now)
+                            .await?;
+                    }
                     Err(StorageError::Conflict(_)) => {
                         return self.fail(cx, Some(conn), to, "link_conflict").await;
                     }
@@ -1622,12 +1634,13 @@ impl UpstreamService<'_> {
                     }),
                     None => None,
                 };
+                let link = new_link(new_user.id, conn, &identity, now);
                 let created = storage
                     .connections()
                     .create_user_with_link(
                         tenant,
                         &new_user,
-                        &new_link(new_user.id, conn, &identity, now),
+                        &link,
                         verification.as_ref().map(|(t, _)| t),
                         verification.as_ref().map(|(_, e)| e),
                         membership.as_ref(),
@@ -1640,6 +1653,11 @@ impl UpstreamService<'_> {
                     }
                     Err(e) => return Err(e.into()),
                 };
+                // The link was made by this sign-in: used now (U-L7).
+                storage
+                    .connections()
+                    .touch_link(tenant, link.id, now)
+                    .await?;
                 self.audit()
                     .record(
                         tenant,
@@ -1928,7 +1946,10 @@ impl UpstreamService<'_> {
             .create_link(tenant, &new_link(user_id, conn, &identity, now))
             .await
         {
-            Ok(_) => {}
+            // Linking signs in at the provider: the link is used now (U-L7).
+            Ok(created) => {
+                connections.touch_link(tenant, created.id, now).await?;
+            }
             Err(StorageError::Conflict(_)) => {
                 return self
                     .fail(cx, Some(conn), FailTo::Link, "already_linked")

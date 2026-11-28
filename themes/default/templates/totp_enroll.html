@@ -1,11 +1,14 @@
-{#- TOTP enrolment (plan 03-14). Variables: csrf_token, qr_svg (trusted inline SVG), secret_groups,
-    confirm_url, security_url, code_error ({level, key, text} or none).
-    Selectors: totp-qr, totp-secret, form totp-confirm with input code, totp-confirm-submit. -#}
+{#- TOTP enrolment (plan 03-14). Variables: csrf_token, qr_svg (trusted inline SVG), otpauth_uri
+    (the otpauth:// URI of the QR code, plan 07.1-21), secret_groups, confirm_url, security_url,
+    code_error ({level, key, text} or none).
+    Selectors: totp-qr, link-otpauth, totp-secret, form totp-confirm with input code,
+    totp-confirm-submit. -#}
 {% extends "account_base.html" %}
 {% block account %}
 <h2 id="totp-enroll-heading">{{ t("totp_enroll.heading") }}</h2>
 <p id="totp-instructions">{{ t("totp_enroll.instructions") }}</p>
 <div class="anvil-qr" id="totp-qr">{{ qr_svg }}</div>
+{% if otpauth_uri %}<p><a id="link-otpauth" href="{{ otpauth_uri }}">{{ t("mfa_enroll.otpauth_link") }}</a></p>{% endif %}
 <p id="totp-manual">{{ t("totp_enroll.manual") }}</p>
 <p><code class="anvil-secret" id="totp-secret">{{ secret_groups }}</code></p>
 <form id="totp-confirm" method="post" action="{{ confirm_url }}" novalidate>

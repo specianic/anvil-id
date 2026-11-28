@@ -965,6 +965,57 @@ async fn removing_a_passkey_works_without_javascript_and_only_for_its_owner() {
     );
 }
 
+/// 07.1-21 (U-M13): the account TOTP enrolment offers the QR code's otpauth:// URI as a link
+/// (#link-otpauth) for a phone that cannot scan its own screen. The link is auto-escaped, only on
+/// the no-store enrolment page (with a wrong code too), never on the overview.
+#[tokio::test]
+async fn otpauth_link_only_on_no_store_enrolment_pages() {
+    let app = signed_in().await;
+    let html = open_page(&app).await;
+    assert!(!html.contains("link-otpauth"), "not on the overview");
+    assert!(!html.contains("otpauth:"), "not on the overview");
+    let csrf = csrf_from(&html);
+    let resp = post(
+        &app,
+        &action_of(&app, &html, "totp-begin"),
+        &[("csrf_token", &csrf)],
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_no_store(&resp);
+    let page = resp.html();
+    let href = |page: &str| {
+        let marker = "id=\"link-otpauth\" href=\"";
+        let a = page.find(marker).expect("#link-otpauth") + marker.len();
+        let b = page[a..].find('"').expect("quoted") + a;
+        page[a..b].to_owned()
+    };
+    let raw = href(&page);
+    // Auto-escaped attribute: no raw '&' or '<' can break out of it.
+    assert!(!raw.contains('<') && !raw.contains('"'), "{raw}");
+    assert!(
+        !raw.replace("&amp;", "").replace("&#x2f;", "").contains('&'),
+        "{raw}"
+    );
+    let decoded = raw.replace("&amp;", "&").replace("&#x2f;", "/");
+    assert!(decoded.starts_with("otpauth://totp/"), "{decoded}");
+    let base32: String = element_text(&page, "totp-secret")
+        .split_whitespace()
+        .collect();
+    assert!(decoded.contains(&format!("secret={base32}")), "{decoded}");
+
+    // A wrong code shows the same link again (still no-store).
+    let resp = post(
+        &app,
+        &action_of(&app, &page, "totp-confirm"),
+        &[("csrf_token", &csrf), ("code", "000000")],
+    )
+    .await;
+    assert_eq!(resp.status, 400);
+    assert_no_store(&resp);
+    assert_eq!(href(&resp.html()), raw);
+}
+
 /// Enrols TOTP through the page (no JavaScript); returns the recovery codes shown.
 async fn enrol_totp(app: &TestApp) -> Vec<String> {
     let html = open_page(app).await;

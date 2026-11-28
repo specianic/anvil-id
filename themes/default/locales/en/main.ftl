@@ -277,6 +277,9 @@ sessions-col_action = Action
 sessions-this_device = (this device)
 sessions-unknown_ip = Unknown
 sessions-unknown_device = Unknown device
+sessions-unknown_browser = Unknown browser
+# A session's device: browser and operating system families (plan 07.1-21).
+sessions-device = { $browser } on { $os }
 sessions-sign_out = Sign out
 # $device: the browser's user agent (or "Unknown device").
 sessions-sign_out_device = Sign out { $device }

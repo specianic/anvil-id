@@ -589,3 +589,39 @@ async fn destructive_post_without_confirm_changes_nothing() {
     assert!(!resp.html().contains("id=\"form-confirm\""));
     assert_eq!(links(&u.app, &bob).await.len(), 1);
 }
+
+/// U-L7: a link made by a sign-in or a linking is used at that moment, and a later sign-in
+/// through the provider moves "Last used" forward; the page shows it instead of "Never".
+#[tokio::test]
+async fn last_used_updates_after_an_upstream_sign_in() {
+    let u = setup(true).await;
+    // Linked from the account page: used now.
+    let bob = bob_signed_in(&u).await;
+    connect(&u).await;
+    let link = links(&u.app, &bob).await.remove(0);
+    let linked_at = link.last_used_at.expect("used when linked");
+    let html = page(&u.app).await;
+    let row_start = html
+        .find(&format!("id=\"linked-{}\"", link.id))
+        .expect("row");
+    let row = &html[row_start..html[row_start..].find("</tr>").unwrap() + row_start];
+    assert!(!row.contains("Never"), "{row}");
+    assert_eq!(row.matches("<time datetime=").count(), 2, "{row}");
+
+    // A later sign-in through the provider moves it forward.
+    u.app.clear_cookies();
+    u.app.clock().advance(Duration::from_secs(60));
+    let resp = sign_in(&u, json!({})).await;
+    assert!(resp.status == 200 || resp.status == 303, "{}", resp.text());
+    let after = links(&u.app, &bob)
+        .await
+        .remove(0)
+        .last_used_at
+        .expect("used");
+    assert!(after > linked_at, "{after} > {linked_at}");
+
+    // Registered through the provider (JIT): used at once.
+    let u = setup(true).await;
+    let user = upstream_only_user(&u).await;
+    assert!(links(&u.app, &user).await[0].last_used_at.is_some());
+}
