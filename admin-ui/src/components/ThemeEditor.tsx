@@ -9,6 +9,8 @@ import { type ChangeEvent, type ReactNode, useId, useMemo, useRef, useState } fr
 import { ApiError, api, unwrap } from "@/api/client";
 import type { components } from "@/api/schema";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { UnsavedChangesGuard } from "@/components/UnsavedChangesGuard";
+import { useUnsavedChanges } from "@/lib/unsaved";
 import { ProblemAlert } from "@/components/ProblemAlert";
 import {
   type BrandingScope,
@@ -256,9 +258,9 @@ function ColorGrid({
   );
 }
 
-function Section({ title, children, testId }: { title: string; children: ReactNode; testId?: string }) {
+function Section({ title, children, testId, id }: { title: string; children: ReactNode; testId?: string; id?: string }) {
   return (
-    <Card data-testid={testId}>
+    <Card data-testid={testId} id={id} className={id ? "scroll-mt-4" : undefined}>
       <CardHeader>
         <CardTitle>
           <h2>{title}</h2>
@@ -473,7 +475,8 @@ function LogoSection({
   const hintId = `${inputId}-hint`;
 
   return (
-    <Section title="Logo" testId="theme-logo">
+    // `#logo` is the anchor the getting-started checklist links to.
+    <Section title="Logo" testId="theme-logo" id="logo">
       <div className="flex flex-wrap items-center gap-4">
         {view.logo_url ? (
           <img
@@ -623,6 +626,9 @@ export function ThemeEditor({ scope, view: initialView }: ThemeEditorProps) {
   const queryClient = useQueryClient();
   const [view, setView] = useState<BrandingView>(initialView);
   const [values, setValues] = useState<ThemeValues>(() => valuesFromView(initialView));
+  // What the sign-in pages use now; edits differing from it are unpublished (C-M13 guard). Logo
+  // changes apply immediately and are not part of it.
+  const [published, setPublished] = useState<ThemeValues>(() => valuesFromView(initialView));
   const [refreshKey, setRefreshKey] = useState(0);
   const [status, setStatus] = useState<string | null>(null);
   const [confirmReset, setConfirmReset] = useState(false);
@@ -646,9 +652,13 @@ export function ThemeEditor({ scope, view: initialView }: ThemeEditorProps) {
     setValues((v) => ({ ...v, [set]: { ...v[set], [key]: value } }));
 
   const publish = useMutation({
-    mutationFn: async () => postPublish(scope, await preview.freshToken()),
+    mutationFn: async (draft: ThemeValues) => {
+      const saved = await postPublish(scope, await preview.freshToken());
+      return { saved, draft };
+    },
     onMutate: () => setStatus(null),
-    onSuccess: (saved) => {
+    onSuccess: ({ saved, draft }) => {
+      setPublished(draft);
       stored(saved);
       setStatus("Theme published. The sign-in pages use it now.");
       // The published draft is consumed; the next preview starts a new one.
@@ -670,6 +680,7 @@ export function ThemeEditor({ scope, view: initialView }: ThemeEditorProps) {
       setConfirmReset(false);
       setView(fresh);
       setValues(valuesFromView(fresh));
+      setPublished(valuesFromView(fresh));
       setRefreshKey((k) => k + 1);
       setStatus(
         scope.kind === "tenant"
@@ -681,11 +692,14 @@ export function ThemeEditor({ scope, view: initialView }: ThemeEditorProps) {
 
   const lightWarnings = preview.preview ? warningsFor(preview.preview.warnings, "light") : warningsFor(view.warnings, "light");
   const darkWarnings = preview.preview ? warningsFor(preview.preview.warnings, "dark") : warningsFor(view.warnings, "dark");
+  const unpublished = JSON.stringify(values) !== JSON.stringify(published);
+  const blocker = useUnsavedChanges(unpublished && !publish.isPending && !reset.isPending);
   const radiusShown = values.radius ?? DEFAULT_RADIUS;
   const inheritNote = SCOPE_TEXT[scope.kind].inherit;
 
   return (
     <div className="grid gap-6 lg:grid-cols-2" data-testid="theme-editor">
+      <UnsavedChangesGuard blocker={blocker} />
       <div className="space-y-6">
         <div className="space-y-1 text-sm">
           <p data-testid="branding-state">
@@ -714,6 +728,17 @@ export function ThemeEditor({ scope, view: initialView }: ThemeEditorProps) {
             ))}
           </ul>
         )}
+
+        {/* The logo comes first so admins find it without scrolling past the colours. */}
+        <LogoSection
+          scope={scope}
+          view={view}
+          onSaved={(saved) => {
+            stored(saved);
+            // The preview shows the scope's live logo: reload it.
+            setRefreshKey((k) => k + 1);
+          }}
+        />
 
         <Section title="Colours" testId="theme-colors">
           <ColorGrid
@@ -816,16 +841,6 @@ export function ThemeEditor({ scope, view: initialView }: ThemeEditorProps) {
           </div>
         </Section>
 
-        <LogoSection
-          scope={scope}
-          view={view}
-          onSaved={(saved) => {
-            stored(saved);
-            // The preview shows the scope's live logo: reload it.
-            setRefreshKey((k) => k + 1);
-          }}
-        />
-
         <Section title="Custom CSS" testId="theme-custom-css">
           <CustomCssField
             value={values.customCss}
@@ -839,7 +854,7 @@ export function ThemeEditor({ scope, view: initialView }: ThemeEditorProps) {
         <div className="flex flex-wrap items-center gap-2">
           <Button
             type="button"
-            onClick={() => publish.mutate()}
+            onClick={() => publish.mutate(values)}
             disabled={publish.isPending || preview.pending || !preview.current}
             data-testid="publish-theme"
           >

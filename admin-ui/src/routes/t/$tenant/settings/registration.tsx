@@ -1,4 +1,4 @@
-// Client registration settings (OIDC-17, AGT-02): the dynamic client registration policy (RFC 7591)
+// Dynamic client registration settings (OIDC-17, AGT-02): the dynamic client registration policy (RFC 7591)
 // with its allow-lists, the Client ID Metadata Document policy, and initial access tokens for
 // `allow_listed` registration. The system tenant always has both policies disabled (read-only here).
 // An initial access token's value is shown once and kept only in this page's state.
@@ -161,7 +161,7 @@ function PoliciesForm({ tenant }: { tenant: TenantView }) {
         <Card>
           <CardHeader>
             <CardTitle>
-              <h2>Dynamic client registration</h2>
+              <h2>Registration endpoint (RFC 7591)</h2>
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -512,8 +512,17 @@ function RegistrationPage() {
         ← Login settings
       </Link>
       <h1 id="registration-heading" className="text-xl font-semibold">
-        Client registration
+        Dynamic client registration
       </h1>
+      <p className="text-muted-foreground text-sm" data-testid="registration-explainer">
+        Lets apps register themselves with this tenant (RFC 7591 dynamic registration and Client ID Metadata
+        Documents) instead of an administrator creating them. It has nothing to do with users signing up: that is
+        the{" "}
+        <Link to="/t/$tenant/settings" hash="sign-up" params={{ tenant }} className="underline underline-offset-4">
+          Sign-up
+        </Link>{" "}
+        setting in Login settings.
+      </p>
       {query.isPending ? (
         <div role="status" aria-label="Loading registration settings" className="space-y-2">
           <Skeleton className="h-6 w-1/2" />

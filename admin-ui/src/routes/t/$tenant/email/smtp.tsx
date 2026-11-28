@@ -2,11 +2,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { type FormEvent, useState } from "react";
 import { ApiError, api, unwrap } from "@/api/client";
+import { type SmtpState, fetchTenantSmtp, smtpQueryKey, smtpState, useSystemInfo } from "@/lib/smtp";
 import { useTenant } from "@/lib/tenant";
 import type { components } from "@/api/schema";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ProblemAlert } from "@/components/ProblemAlert";
 import { SelectField, StatusMessage, TextField, fieldErrors } from "@/components/form";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -20,19 +22,41 @@ const TLS_OPTIONS: readonly { value: SmtpTls; label: string }[] = [
   { value: "none", label: "None (plain text, local relays only)" },
 ];
 
-const smtpKey = (tenant: string) => ["smtp", tenant] as const;
+const smtpKey = smtpQueryKey;
 
-/** Tenant SMTP settings, or null when the tenant uses the installation's SMTP server (404). */
-async function fetchSmtp(tenant: string, signal: AbortSignal): Promise<SmtpSettingsView | null> {
-  try {
-    return unwrap(await api.GET("/api/admin/v1/tenants/{slug}/smtp", { params: { path: { slug: tenant } }, signal }));
-  } catch (error) {
-    if (error instanceof ApiError && error.status === 404) return null;
-    throw error;
+/**
+ * Where this tenant's mail goes right now (C-M14), from the tenant settings and the installation's
+ * `smtp_configured`; never assumed.
+ */
+function SmtpSource({ state }: { state: SmtpState }) {
+  if (state === "none") {
+    return (
+      <Alert variant="destructive" data-testid="smtp-source" data-state={state}>
+        <AlertTitle>No SMTP server configured</AlertTitle>
+        <AlertDescription>
+          <p>
+            No SMTP server configured — verification, recovery and invitation emails can't be sent. Enter a server
+            below, or ask the operator to configure the installation's SMTP server.
+          </p>
+        </AlertDescription>
+      </Alert>
+    );
   }
+  const text: Record<Exclude<SmtpState, "none">, string> = {
+    tenant: "This tenant sends email through its own SMTP server (below).",
+    installation:
+      "This tenant uses the installation's SMTP server, configured by the operator. Save settings here to use a different server.",
+    unknown:
+      "This tenant has no SMTP settings of its own. Whether the installation has an SMTP server could not be read.",
+  };
+  return (
+    <p className="text-muted-foreground text-sm" data-testid="smtp-source" data-state={state}>
+      {text[state]}
+    </p>
+  );
 }
 
-function SmtpForm({ current }: { current: SmtpSettingsView | null }) {
+function SmtpForm({ current, state }: { current: SmtpSettingsView | null; state: SmtpState }) {
   const tenant = useTenant();
   const queryClient = useQueryClient();
   const [host, setHost] = useState(current?.host ?? "");
@@ -43,6 +67,7 @@ function SmtpForm({ current }: { current: SmtpSettingsView | null }) {
   const [from, setFrom] = useState(current?.from ?? "");
   const [status, setStatus] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const installationConfigured = useSystemInfo().data?.smtp_configured;
 
   const save = useMutation({
     mutationFn: async () =>
@@ -76,7 +101,11 @@ function SmtpForm({ current }: { current: SmtpSettingsView | null }) {
     onSuccess: async () => {
       setConfirmRemove(false);
       queryClient.setQueryData(smtpKey(tenant), null);
-      setStatus("Tenant SMTP settings removed; the installation's SMTP server is used.");
+      setStatus(
+        installationConfigured === false
+          ? "Tenant SMTP settings removed. No SMTP server is configured now: emails can't be sent."
+          : "Tenant SMTP settings removed; the installation's SMTP server is used.",
+      );
       await queryClient.invalidateQueries({ queryKey: smtpKey(tenant) });
     },
   });
@@ -101,11 +130,7 @@ function SmtpForm({ current }: { current: SmtpSettingsView | null }) {
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        {current === null && (
-          <p className="text-muted-foreground text-sm" data-testid="smtp-source">
-            This tenant uses the installation's SMTP server. Save settings here to use a different server.
-          </p>
-        )}
+        <SmtpSource state={state} />
         <form onSubmit={submit} aria-label="SMTP settings" className="grid gap-4 sm:grid-cols-2" noValidate>
           {otherError ? (
             <div className="sm:col-span-2">
@@ -180,7 +205,7 @@ function SmtpForm({ current }: { current: SmtpSettingsView | null }) {
             </Button>
             {current !== null && (
               <Button type="button" variant="outline" onClick={() => setConfirmRemove(true)}>
-                Use installation SMTP
+                {installationConfigured === false ? "Remove tenant SMTP settings" : "Use installation SMTP"}
               </Button>
             )}
           </div>
@@ -191,7 +216,13 @@ function SmtpForm({ current }: { current: SmtpSettingsView | null }) {
         <ConfirmDialog
           open={confirmRemove}
           title="Remove tenant SMTP settings?"
-          description={<p>Mail for this tenant is sent through the installation's SMTP server again.</p>}
+          description={
+            <p>
+              {installationConfigured === false
+                ? "The installation has no SMTP server: this tenant can't send email until a server is configured again."
+                : "Mail for this tenant is sent through the installation's SMTP server again."}
+            </p>
+          }
           confirmLabel="Remove settings"
           onConfirm={() => remove.mutate()}
           onCancel={() => {
@@ -271,8 +302,9 @@ function SmtpPage() {
     queryKey: smtpKey(tenant),
     // Edits live in local state; a background refetch must not overwrite them.
     staleTime: Number.POSITIVE_INFINITY,
-    queryFn: ({ signal }) => fetchSmtp(tenant, signal),
+    queryFn: ({ signal }) => fetchTenantSmtp(tenant, signal),
   });
+  const info = useSystemInfo();
 
   return (
     <section aria-labelledby="smtp-heading" className="space-y-4">
@@ -286,7 +318,7 @@ function SmtpPage() {
       <h1 id="smtp-heading" className="text-xl font-semibold">
         SMTP settings
       </h1>
-      {query.isPending ? (
+      {query.isPending || info.isPending ? (
         <div role="status" aria-label="Loading SMTP settings" className="space-y-2">
           <Skeleton className="h-6 w-1/2" />
           <Skeleton className="h-6 w-2/3" />
@@ -295,7 +327,10 @@ function SmtpPage() {
         <ProblemAlert error={query.error} />
       ) : (
         <>
-          <SmtpForm current={query.data} />
+          <SmtpForm
+            current={query.data}
+            state={smtpState(query.data, info.data?.smtp_configured)}
+          />
           <TestSend />
         </>
       )}

@@ -1,8 +1,10 @@
 // Tenant branding: theme tokens, custom CSS and logo of the tenant's sign-in and consent pages,
 // with a live preview. Clients are branded from their own page (Clients -> client -> Branding).
+// The logo control comes first; `#logo` (linked from the getting-started checklist) scrolls to it
+// once the branding has loaded.
 import { useQuery } from "@tanstack/react-query";
-import { Link, createFileRoute } from "@tanstack/react-router";
-import { useMemo } from "react";
+import { Link, createFileRoute, useLocation } from "@tanstack/react-router";
+import { useEffect, useMemo } from "react";
 import { api, unwrap } from "@/api/client";
 import { useTenant } from "@/lib/tenant";
 import { ProblemAlert } from "@/components/ProblemAlert";
@@ -25,6 +27,12 @@ function TenantBrandingPage() {
     // The editor keeps local edits; a background refetch must not replace its starting point.
     refetchOnWindowFocus: false,
   });
+  const hash = useLocation({ select: (l) => l.hash });
+  const loaded = query.isSuccess;
+  useEffect(() => {
+    // The router scrolls to a hash on navigation, but the section only exists after the load.
+    if (loaded && hash === "logo") document.getElementById("logo")?.scrollIntoView({ block: "start" });
+  }, [loaded, hash]);
 
   return (
     <section aria-labelledby="branding-heading" className="space-y-4">
@@ -32,7 +40,7 @@ function TenantBrandingPage() {
         Branding
       </h1>
       <p className="text-muted-foreground text-sm">
-        The look of this tenant's sign-in and consent pages. To brand a single application, open it under{" "}
+        The logo and look of this tenant's sign-in and consent pages. To brand a single application, open it under{" "}
         <Link to="/t/$tenant/clients" params={{ tenant }} className="underline underline-offset-4">
           Clients
         </Link>{" "}

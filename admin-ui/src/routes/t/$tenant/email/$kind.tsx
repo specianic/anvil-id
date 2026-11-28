@@ -6,12 +6,14 @@ import { useTenant } from "@/lib/tenant";
 import type { components } from "@/api/schema";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ProblemAlert } from "@/components/ProblemAlert";
+import { UnsavedChangesGuard } from "@/components/UnsavedChangesGuard";
 import { StatusMessage, TextField, TextareaField, fieldErrors } from "@/components/form";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EMAIL_KIND_LABELS, type EmailKind, isEmailKind } from "@/lib/email";
 import { formatDateTime } from "@/lib/format";
+import { useUnsavedChanges } from "@/lib/unsaved";
 
 type EmailTemplateView = components["schemas"]["EmailTemplateView"];
 
@@ -41,6 +43,10 @@ function TemplateEditor({ kind, template }: { kind: EmailKind; template: EmailTe
     onMutate: () => setStatus(null),
     onSuccess: async (saved) => {
       queryClient.setQueryData(["email-template", tenant, kind], saved);
+      // Show what is stored (the server may normalise), so the form is clean after a save.
+      setSubject(saved.subject);
+      setBodyHtml(saved.body_html);
+      setBodyText(saved.body_text);
       setStatus("Template saved.");
       await invalidate();
     },
@@ -78,6 +84,10 @@ function TemplateEditor({ kind, template }: { kind: EmailKind; template: EmailTe
   const invalid = save.error instanceof ApiError && save.error.status === 422;
   // The parent's query data: updated by setQueryData after a save or reset.
   const current = template;
+  // Unsaved edits (C-M13): compared with the stored template, which a save or reset replaces.
+  const dirty =
+    subject !== current.subject || bodyHtml !== current.body_html || bodyText !== current.body_text;
+  const blocker = useUnsavedChanges(dirty && !save.isPending && !reset.isPending);
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -86,6 +96,7 @@ function TemplateEditor({ kind, template }: { kind: EmailKind; template: EmailTe
 
   return (
     <div className="space-y-4">
+      <UnsavedChangesGuard blocker={blocker} />
       <p className="text-sm">
         {current.customized ? (
           <Badge data-testid="template-status">Customized</Badge>

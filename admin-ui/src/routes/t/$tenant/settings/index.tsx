@@ -1,11 +1,12 @@
-// Tenant login settings (0.3): MFA policy, passwordless email sign-in, automatic account linking,
-// registration through upstream connections and the default page language. Saved with a
-// field-wise PATCH of the tenant: only changed fields are sent. Since 0.4 also the token claim
-// mapping of roles and permissions, and links to the registration, configuration and webhook pages.
-// Since 1.0 also the tenant PAR policy and the headless flow API's allowed browser origins.
+// Tenant login settings: who may sign up (registration mode, first), MFA policy, passwordless email
+// sign-in, automatic account linking, registration through upstream connections, the default page
+// language, the token claim mapping of roles and permissions, the tenant PAR policy and the
+// headless flow API's allowed browser origins. One form with one Save (C-M12): a field-wise PATCH
+// of the tenant that sends only what changed, and an unsaved-changes guard. Links to the other
+// settings pages follow; deleting the tenant sits in the Danger zone at the bottom (C-M13).
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, type ReactNode, useId, useState } from "react";
 import { ApiError, api, unwrap } from "@/api/client";
 import {
   UNDELETABLE_TENANTS,
@@ -16,17 +17,29 @@ import {
   useTenantView,
 } from "@/lib/tenant";
 import type { components } from "@/api/schema";
-import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { DangerZone } from "@/components/DangerZone";
 import { ProblemAlert } from "@/components/ProblemAlert";
 import { TOKEN_TARGETS } from "@/components/AttributeForm";
-import { CheckboxField, CheckboxGroup, type FieldErrors, SelectField, StatusMessage, TextField } from "@/components/form";
+import { UnsavedChangesGuard } from "@/components/UnsavedChangesGuard";
+import {
+  CheckboxField,
+  CheckboxGroup,
+  type FieldErrors,
+  type FieldMessage,
+  SelectField,
+  StatusMessage,
+  TextField,
+} from "@/components/form";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useFormState } from "@/lib/formState";
+import { useUnsavedChanges } from "@/lib/unsaved";
 
 type TenantView = components["schemas"]["TenantView"];
 type TenantSettingsPatch = components["schemas"]["TenantSettingsPatch"];
 type MfaPolicy = components["schemas"]["MfaPolicy"];
+type RegistrationMode = components["schemas"]["RegistrationMode"];
 type TokenClaimRule = components["schemas"]["TokenClaimRule"];
 type TokenTarget = components["schemas"]["TokenTarget"];
 
@@ -36,22 +49,65 @@ const MFA_OPTIONS: readonly { value: MfaPolicy; label: string }[] = [
   { value: "required", label: "Required (users without one enrol first)" },
 ];
 
+const SIGN_UP_OPTIONS: readonly { value: RegistrationMode; label: string; hint: string }[] = [
+  {
+    value: "open",
+    label: "Open",
+    hint: "Anyone can create an account: the sign-in page shows “Create an account”.",
+  },
+  {
+    value: "invite_only",
+    label: "Invite only",
+    hint: "People join through an invitation an administrator sends. There is no public sign-up page.",
+  },
+  {
+    value: "disabled",
+    label: "Disabled",
+    hint: "Nobody signs up. Administrators create users here in the console or through the API.",
+  },
+];
+
+const SIGN_UP_LABEL: Record<RegistrationMode, string> = { open: "open", invite_only: "invite only", disabled: "disabled" };
+
 type UpstreamChoice = "follow" | "allow" | "deny";
 
-const FIELDS = ["mfa_policy", "email_otp", "magic_link", "auto_link", "upstream_registration", "default_locale"] as const;
+interface RuleValues {
+  enabled: boolean;
+  claim: string;
+  tokens: TokenTarget[];
+  scope: string;
+}
 
 interface Values {
+  registration: RegistrationMode;
   mfa_policy: MfaPolicy;
   email_otp: boolean;
   magic_link: boolean;
   auto_link: boolean;
   upstream_registration: UpstreamChoice;
   default_locale: string;
+  claims: { roles: RuleValues; permissions: RuleValues };
+  require_par: boolean;
+  origins: string[];
+}
+
+function ruleValues(rule: TokenClaimRule | null | undefined, fallbackClaim: string): RuleValues {
+  return {
+    enabled: Boolean(rule),
+    claim: rule?.claim ?? fallbackClaim,
+    tokens: rule?.tokens ?? ["access_token"],
+    scope: rule?.scope ?? "",
+  };
+}
+
+function ruleBody(v: RuleValues): TokenClaimRule | null {
+  return v.enabled ? { claim: v.claim.trim(), tokens: v.tokens, scope: v.scope.trim() || null } : null;
 }
 
 function valuesFromTenant(t: TenantView): Values {
   const s = t.settings;
   return {
+    registration: s.registration,
     mfa_policy: s.mfa_policy,
     email_otp: s.email_otp,
     magic_link: s.magic_link,
@@ -59,6 +115,9 @@ function valuesFromTenant(t: TenantView): Values {
     upstream_registration:
       s.upstream_registration === true ? "allow" : s.upstream_registration === false ? "deny" : "follow",
     default_locale: s.default_locale,
+    claims: { roles: ruleValues(s.claims.roles, "roles"), permissions: ruleValues(s.claims.permissions, "permissions") },
+    require_par: s.par.require_pushed_authorization_requests,
+    origins: [...s.headless.allowed_origins],
   };
 }
 
@@ -66,9 +125,12 @@ function upstreamValue(choice: UpstreamChoice): boolean | null {
   return choice === "allow" ? true : choice === "deny" ? false : null;
 }
 
+const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+
 /** Only the fields that differ from the saved settings (absent fields keep their value). */
 function patchBody(saved: Values, values: Values): TenantSettingsPatch {
   const patch: TenantSettingsPatch = {};
+  if (values.registration !== saved.registration) patch.registration = values.registration;
   if (values.mfa_policy !== saved.mfa_policy) patch.mfa_policy = values.mfa_policy;
   if (values.email_otp !== saved.email_otp) patch.email_otp = values.email_otp;
   if (values.magic_link !== saved.magic_link) patch.magic_link = values.magic_link;
@@ -76,6 +138,12 @@ function patchBody(saved: Values, values: Values): TenantSettingsPatch {
   if (values.upstream_registration !== saved.upstream_registration)
     patch.upstream_registration = upstreamValue(values.upstream_registration);
   if (values.default_locale !== saved.default_locale) patch.default_locale = values.default_locale;
+  if (!same(values.claims, saved.claims))
+    patch.claims = { roles: ruleBody(values.claims.roles), permissions: ruleBody(values.claims.permissions) };
+  // PAR and headless objects are replaced whole; the API validates the origins.
+  if (values.require_par !== saved.require_par)
+    patch.par = { require_pushed_authorization_requests: values.require_par };
+  if (!same(values.origins, saved.origins)) patch.headless = { allowed_origins: values.origins };
   return patch;
 }
 
@@ -90,6 +158,28 @@ function settingsErrors(error: unknown): FieldErrors {
   return out;
 }
 
+/** Field errors under `key` (`headless.allowed_origins[0]`, `claims.roles.claim`, ...). */
+function errorsUnder(errors: FieldErrors, key: string): FieldMessage[] {
+  return Object.entries(errors)
+    .filter(([field]) => field === key || field.startsWith(`${key}.`) || field.startsWith(`${key}[`))
+    .flatMap(([, messages]) => messages);
+}
+
+/** Fields the form places next to their control; anything else goes to the problem alert. */
+const PLACED = [
+  "registration",
+  "mfa_policy",
+  "email_otp",
+  "magic_link",
+  "auto_link",
+  "upstream_registration",
+  "default_locale",
+  "claims",
+  "par",
+  "headless",
+];
+const placed = (field: string) => PLACED.some((p) => field === p || field.startsWith(`${p}.`) || field.startsWith(`${p}[`));
+
 /** Languages the tenant's sign-in pages offer (`ui_locales_supported` of its discovery document). */
 function useUiLocales(slug: string): { locales: string[]; failed: boolean } {
   const query = useDiscovery(slug);
@@ -98,16 +188,94 @@ function useUiLocales(slug: string): { locales: string[]; failed: boolean } {
   return { locales, failed: query.isError };
 }
 
+function Section({ title, id, testId, children }: { title: string; id?: string; testId?: string; children: ReactNode }) {
+  return (
+    <Card id={id} data-testid={testId} className="scroll-mt-4">
+      <CardHeader>
+        <CardTitle>
+          <h2>{title}</h2>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">{children}</CardContent>
+    </Card>
+  );
+}
+
+const CLAIM_RULES = [
+  { key: "roles", title: "Roles", hint: "The names of the user's roles." },
+  { key: "permissions", title: "Permissions", hint: "The union of the permissions of the user's roles." },
+] as const;
+
+function SignUpField({
+  value,
+  onChange,
+  errors,
+}: {
+  value: RegistrationMode;
+  onChange: (mode: RegistrationMode) => void;
+  errors?: FieldMessage[];
+}) {
+  const name = useId();
+  const errorId = `${name}-error`;
+  return (
+    <fieldset
+      className="space-y-3"
+      data-testid="sign-up-mode"
+      aria-describedby={errors?.length ? errorId : undefined}
+    >
+      <legend className="text-sm font-medium">Who can create an account</legend>
+      {SIGN_UP_OPTIONS.map((o) => {
+        const id = `${name}-${o.value}`;
+        return (
+          <div key={o.value} className="flex items-start gap-2">
+            <input
+              id={id}
+              type="radio"
+              name="registration"
+              value={o.value}
+              checked={value === o.value}
+              onChange={() => onChange(o.value)}
+              aria-describedby={`${id}-hint`}
+              className="mt-0.5 size-4 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+              data-testid={`sign-up-${o.value}`}
+            />
+            <div>
+              <label htmlFor={id} className="text-sm font-medium">
+                {o.label}
+              </label>
+              <p id={`${id}-hint`} className="text-muted-foreground text-xs">
+                {o.hint}
+              </p>
+            </div>
+          </div>
+        );
+      })}
+      {errors?.length ? (
+        <ul id={errorId} className="text-destructive space-y-0.5 text-sm" data-field-error>
+          {errors.map((e) => (
+            <li key={e.message}>{e.message}</li>
+          ))}
+        </ul>
+      ) : null}
+    </fieldset>
+  );
+}
+
 function SettingsForm({ tenant }: { tenant: TenantView }) {
   const slug = tenant.slug;
   const queryClient = useQueryClient();
   const saved = valuesFromTenant(tenant);
-  const [values, setValues] = useState<Values>(saved);
+  const form = useFormState<Values>(saved);
+  const { values, setValues } = form;
   const [status, setStatus] = useState<string | null>(null);
   // Set when the API refused to turn on an email sign-in method because no SMTP server is configured.
   const [smtpMissing, setSmtpMissing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [localError, setLocalError] = useState<string | null>(null);
   const { locales, failed: localesFailed } = useUiLocales(slug);
   const set = <K extends keyof Values>(key: K, value: Values[K]) => setValues((v) => ({ ...v, [key]: value }));
+  const setRule = (key: "roles" | "permissions", patch: Partial<RuleValues>) =>
+    setValues((v) => ({ ...v, claims: { ...v.claims, [key]: { ...v.claims[key], ...patch } } }));
 
   const save = useMutation({
     mutationFn: async (body: TenantSettingsPatch) =>
@@ -120,7 +288,6 @@ function SettingsForm({ tenant }: { tenant: TenantView }) {
     onMutate: () => setStatus(null),
     onSuccess: async (updated) => {
       queryClient.setQueryData(tenantQueryKey(slug), updated);
-      setValues(valuesFromTenant(updated));
       setStatus("Login settings saved.");
       await queryClient.invalidateQueries({ queryKey: ["tenant"] });
     },
@@ -138,13 +305,17 @@ function SettingsForm({ tenant }: { tenant: TenantView }) {
     },
   });
 
+  const blocker = useUnsavedChanges(form.isDirty && !save.isPending);
+
   const errors = settingsErrors(save.error);
+  const parErrors = errorsUnder(errors, "par");
+  const originErrors = errorsUnder(errors, "headless");
   const otherError =
     save.error &&
     !(
       save.error instanceof ApiError &&
       save.error.problem.errors.length > 0 &&
-      Object.keys(errors).every((f) => (FIELDS as readonly string[]).includes(f))
+      Object.keys(errors).every((f) => placed(f))
     )
       ? save.error
       : null;
@@ -152,8 +323,6 @@ function SettingsForm({ tenant }: { tenant: TenantView }) {
   const localeOptions = (locales.includes(values.default_locale) ? locales : [values.default_locale, ...locales]).map(
     (l) => ({ value: l, label: l }),
   );
-  const registrationLabel = tenant.settings.registration;
-  const dirty = Object.keys(patchBody(saved, values)).length > 0;
 
   const smtpHint = (
     <>
@@ -165,6 +334,19 @@ function SettingsForm({ tenant }: { tenant: TenantView }) {
     </>
   );
 
+  const addOrigin = () => {
+    const value = draft.trim();
+    if (value === "") return;
+    // Exact comparison only; the API checks the form of each origin.
+    if (values.origins.includes(value)) {
+      setLocalError(`${value} is already in the list.`);
+      return;
+    }
+    setLocalError(null);
+    setValues((v) => ({ ...v, origins: [...v.origins, value] }));
+    setDraft("");
+  };
+
   const submit = (e: FormEvent) => {
     e.preventDefault();
     const body = patchBody(saved, values);
@@ -172,25 +354,33 @@ function SettingsForm({ tenant }: { tenant: TenantView }) {
       setStatus("Nothing changed.");
       return;
     }
+    form.markSubmitted();
     save.mutate(body);
   };
 
   return (
-    <form onSubmit={submit} aria-label="Login settings" className="space-y-6" noValidate data-testid="login-settings-form">
-      {save.error instanceof ApiError && save.error.status === 422 && (
-        <p role="alert" className="text-destructive text-sm">
-          The settings were not saved. Fix the errors below.
-        </p>
-      )}
-      {otherError ? <ProblemAlert error={otherError} /> : null}
+    <>
+      <UnsavedChangesGuard blocker={blocker} />
+      <form onSubmit={submit} aria-label="Login settings" className="space-y-6" noValidate data-testid="login-settings-form">
+        {save.error instanceof ApiError && save.error.status === 422 && (
+          <p role="alert" className="text-destructive text-sm" data-testid="login-settings-invalid">
+            The settings were not saved. Fix the errors below.
+          </p>
+        )}
+        {otherError ? <ProblemAlert error={otherError} /> : null}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>
-            <h2>Multi-factor authentication</h2>
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
+        <Section title="Sign-up" id="sign-up" testId="sign-up-section">
+          <SignUpField value={values.registration} onChange={(mode) => set("registration", mode)} errors={errors.registration} />
+          <p className="text-muted-foreground text-xs">
+            This is about people creating accounts. Apps registering themselves are configured under{" "}
+            <Link to="/t/$tenant/settings/registration" params={{ tenant: slug }} className="underline underline-offset-4">
+              Dynamic client registration
+            </Link>
+            .
+          </p>
+        </Section>
+
+        <Section title="Multi-factor authentication">
           <SelectField
             label="MFA policy"
             name="mfa_policy"
@@ -200,16 +390,9 @@ function SettingsForm({ tenant }: { tenant: TenantView }) {
             hint="A client may make this stricter; the strictest of tenant and client policy applies."
             errors={errors.mfa_policy}
           />
-        </CardContent>
-      </Card>
+        </Section>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>
-            <h2>Passwordless sign-in by email</h2>
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
+        <Section title="Passwordless sign-in by email">
           <CheckboxField
             label="One-time sign-in code by email"
             name="email_otp"
@@ -238,16 +421,9 @@ function SettingsForm({ tenant }: { tenant: TenantView }) {
               and reload this page.
             </p>
           )}
-        </CardContent>
-      </Card>
+        </Section>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>
-            <h2>Upstream connections</h2>
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
+        <Section title="Upstream connections">
           <CheckboxField
             label="Link verified emails automatically"
             name="auto_link"
@@ -262,22 +438,15 @@ function SettingsForm({ tenant }: { tenant: TenantView }) {
             value={values.upstream_registration}
             onChange={(e) => set("upstream_registration", e.target.value as UpstreamChoice)}
             options={[
-              { value: "follow", label: `Follow the registration setting (currently: ${registrationLabel})` },
+              { value: "follow", label: `Follow the sign-up setting (currently: ${SIGN_UP_LABEL[values.registration]})` },
               { value: "allow", label: "Allow: first upstream sign-in creates an account" },
               { value: "deny", label: "Deny: only existing or linked accounts" },
             ]}
             errors={errors.upstream_registration}
           />
-        </CardContent>
-      </Card>
+        </Section>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>
-            <h2>Language</h2>
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
+        <Section title="Language">
           <SelectField
             label="Default language"
             name="default_locale"
@@ -291,93 +460,9 @@ function SettingsForm({ tenant }: { tenant: TenantView }) {
             }
             errors={errors.default_locale}
           />
-        </CardContent>
-      </Card>
+        </Section>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <Button type="submit" disabled={save.isPending} data-testid="save-login-settings">
-          {save.isPending ? "Saving…" : "Save login settings"}
-        </Button>
-        {dirty && <span className="text-muted-foreground text-sm">Unsaved changes</span>}
-      </div>
-      <StatusMessage message={status} />
-    </form>
-  );
-}
-
-interface RuleValues {
-  enabled: boolean;
-  claim: string;
-  tokens: TokenTarget[];
-  scope: string;
-}
-
-function ruleValues(rule: TokenClaimRule | null | undefined, fallbackClaim: string): RuleValues {
-  return {
-    enabled: Boolean(rule),
-    claim: rule?.claim ?? fallbackClaim,
-    tokens: rule?.tokens ?? ["access_token"],
-    scope: rule?.scope ?? "",
-  };
-}
-
-function ruleBody(v: RuleValues): TokenClaimRule | null {
-  return v.enabled ? { claim: v.claim.trim(), tokens: v.tokens, scope: v.scope.trim() || null } : null;
-}
-
-const CLAIM_RULES = [
-  { key: "roles", title: "Roles", hint: "The names of the user's roles." },
-  { key: "permissions", title: "Permissions", hint: "The union of the permissions of the user's roles." },
-] as const;
-
-/** Mapping of roles and permissions into tokens (`settings.claims`, ORG-05). */
-function ClaimMapping({ tenant }: { tenant: TenantView }) {
-  const slug = tenant.slug;
-  const queryClient = useQueryClient();
-  const initial = {
-    roles: ruleValues(tenant.settings.claims.roles, "roles"),
-    permissions: ruleValues(tenant.settings.claims.permissions, "permissions"),
-  };
-  const [values, setValues] = useState(initial);
-  const [status, setStatus] = useState<string | null>(null);
-  const set = (key: "roles" | "permissions", patch: Partial<RuleValues>) =>
-    setValues((v) => ({ ...v, [key]: { ...v[key], ...patch } }));
-
-  const save = useMutation({
-    mutationFn: async () =>
-      unwrap(
-        await api.PATCH("/api/admin/v1/tenants/{slug}", {
-          params: { path: { slug } },
-          body: { settings: { claims: { roles: ruleBody(values.roles), permissions: ruleBody(values.permissions) } } },
-        }),
-      ),
-    onMutate: () => setStatus(null),
-    onSuccess: async (updated) => {
-      queryClient.setQueryData(tenantQueryKey(slug), updated);
-      setStatus("Token claims saved.");
-      await queryClient.invalidateQueries({ queryKey: ["tenant"] });
-    },
-  });
-  const errors = settingsErrors(save.error);
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>
-          <h2>Token claims</h2>
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        <form
-          className="space-y-4"
-          aria-label="Token claims"
-          noValidate
-          data-testid="claim-mapping-form"
-          onSubmit={(e) => {
-            e.preventDefault();
-            save.mutate();
-          }}
-        >
+        <Section title="Token claims" testId="claim-mapping-form">
           <p className="text-muted-foreground text-sm">
             Which tokens carry the user's roles and permissions. A claim with a required scope appears only when the
             client was granted that scope. Attribute claims are set on each{" "}
@@ -386,16 +471,15 @@ function ClaimMapping({ tenant }: { tenant: TenantView }) {
             </Link>
             .
           </p>
-          {save.error ? <ProblemAlert error={save.error} /> : null}
           {CLAIM_RULES.map(({ key, title, hint }) => {
-            const v = values[key];
+            const v = values.claims[key];
             return (
               <fieldset key={key} className="space-y-3 rounded-md border p-4" data-testid={`claim-rule-${key}`}>
                 <legend className="px-1 text-sm font-medium">{title}</legend>
                 <CheckboxField
                   label={`Put ${key} into tokens`}
                   checked={v.enabled}
-                  onChange={(e) => set(key, { enabled: e.target.checked })}
+                  onChange={(e) => setRule(key, { enabled: e.target.checked })}
                   hint={hint}
                 />
                 {v.enabled && (
@@ -403,7 +487,7 @@ function ClaimMapping({ tenant }: { tenant: TenantView }) {
                     <TextField
                       label="Claim name"
                       value={v.claim}
-                      onChange={(e) => set(key, { claim: e.target.value })}
+                      onChange={(e) => setRule(key, { claim: e.target.value })}
                       errors={errors[`claims.${key}.claim`] ?? errors[`claims.${key}`]}
                       autoComplete="off"
                     />
@@ -411,14 +495,14 @@ function ClaimMapping({ tenant }: { tenant: TenantView }) {
                       legend="Tokens"
                       options={TOKEN_TARGETS}
                       value={v.tokens}
-                      onChange={(next) => set(key, { tokens: next })}
+                      onChange={(next) => setRule(key, { tokens: next })}
                       errors={errors[`claims.${key}.tokens`]}
                     />
                     <TextField
                       label="Required scope"
                       optional
                       value={v.scope}
-                      onChange={(e) => set(key, { scope: e.target.value })}
+                      onChange={(e) => setRule(key, { scope: e.target.value })}
                       hint="Empty = always included."
                       errors={errors[`claims.${key}.scope`]}
                       autoComplete="off"
@@ -428,108 +512,15 @@ function ClaimMapping({ tenant }: { tenant: TenantView }) {
               </fieldset>
             );
           })}
-          <Button type="submit" disabled={save.isPending} data-testid="save-claim-mapping">
-            {save.isPending ? "Saving…" : "Save token claims"}
-          </Button>
-          <StatusMessage message={status} />
-        </form>
-      </CardContent>
-    </Card>
-  );
-}
+        </Section>
 
-/** Field errors of the PAR/headless PATCH under `key` (`headless.allowed_origins` and the like). */
-function errorsUnder(errors: FieldErrors, key: string) {
-  return Object.entries(errors)
-    .filter(([field]) => field === key || field.startsWith(`${key}.`))
-    .flatMap(([, messages]) => messages);
-}
-
-/**
- * Pushed authorization requests for every client (`settings.par`, OIDC-18) and the browser origins
- * allowed to call the headless flow API (`settings.headless`, UI-05). Both objects are replaced
- * whole on save; the API validates the origins.
- */
-function ParAndHeadless({ tenant }: { tenant: TenantView }) {
-  const slug = tenant.slug;
-  const queryClient = useQueryClient();
-  const [requirePar, setRequirePar] = useState(tenant.settings.par.require_pushed_authorization_requests);
-  const [origins, setOrigins] = useState<string[]>([...tenant.settings.headless.allowed_origins]);
-  const [draft, setDraft] = useState("");
-  const [localError, setLocalError] = useState<string | null>(null);
-  const [status, setStatus] = useState<string | null>(null);
-
-  const save = useMutation({
-    mutationFn: async () =>
-      unwrap(
-        await api.PATCH("/api/admin/v1/tenants/{slug}", {
-          params: { path: { slug } },
-          body: {
-            settings: {
-              par: { require_pushed_authorization_requests: requirePar },
-              headless: { allowed_origins: origins },
-            },
-          },
-        }),
-      ),
-    onMutate: () => setStatus(null),
-    onSuccess: async (updated) => {
-      queryClient.setQueryData(tenantQueryKey(slug), updated);
-      setRequirePar(updated.settings.par.require_pushed_authorization_requests);
-      setOrigins([...updated.settings.headless.allowed_origins]);
-      setStatus("Authorization request and headless settings saved.");
-      await queryClient.invalidateQueries({ queryKey: ["tenant"] });
-    },
-  });
-
-  const errors = settingsErrors(save.error);
-  const parErrors = errorsUnder(errors, "par");
-  const originErrors = errorsUnder(errors, "headless");
-  const otherError = save.error && parErrors.length === 0 && originErrors.length === 0 ? save.error : null;
-
-  const addOrigin = () => {
-    const value = draft.trim();
-    if (value === "") return;
-    // Exact comparison only; the API checks the form of each origin.
-    if (origins.includes(value)) {
-      setLocalError(`${value} is already in the list.`);
-      return;
-    }
-    setLocalError(null);
-    setOrigins((o) => [...o, value]);
-    setDraft("");
-  };
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>
-          <h2>Authorization requests and headless sign-in</h2>
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        <form
-          className="space-y-4"
-          aria-label="Authorization requests and headless sign-in"
-          noValidate
-          data-testid="par-headless-form"
-          onSubmit={(e) => {
-            e.preventDefault();
-            save.mutate();
-          }}
-        >
-          {save.error instanceof ApiError && save.error.status === 422 && (
-            <p role="alert" className="text-destructive text-sm">
-              The settings were not saved. Fix the errors below.
-            </p>
-          )}
-          {otherError ? <ProblemAlert error={otherError} /> : null}
+        <Section title="Authorization requests and headless sign-in" testId="par-headless-form">
           <CheckboxField
             label="Require PAR for all clients"
             name="require_pushed_authorization_requests"
             hint="Every client of this tenant must send its authorization requests to the pushed authorization request endpoint first (RFC 9126). Clients can also require it individually."
-            checked={requirePar}
-            onChange={(e) => setRequirePar(e.target.checked)}
+            checked={values.require_par}
+            onChange={(e) => set("require_par", e.target.checked)}
             errors={parErrors}
             data-testid="tenant-require-par"
           />
@@ -540,13 +531,13 @@ function ParAndHeadless({ tenant }: { tenant: TenantView }) {
               <code>https://host[:port]</code> without a path or wildcard; the app must be on the same site as the
               issuer. Empty: only the tenant's own origin. At most 50.
             </p>
-            {origins.length === 0 ? (
+            {values.origins.length === 0 ? (
               <p className="text-muted-foreground text-sm" data-testid="headless-origins-empty">
                 No extra origins.
               </p>
             ) : (
               <ul className="space-y-1">
-                {origins.map((origin) => (
+                {values.origins.map((origin) => (
                   <li key={origin} className="flex items-center gap-2" data-testid="headless-origin" data-origin={origin}>
                     <code className="text-sm break-all">{origin}</code>
                     <Button
@@ -554,7 +545,7 @@ function ParAndHeadless({ tenant }: { tenant: TenantView }) {
                       variant="outline"
                       size="sm"
                       aria-label={`Remove ${origin}`}
-                      onClick={() => setOrigins((o) => o.filter((x) => x !== origin))}
+                      onClick={() => setValues((v) => ({ ...v, origins: v.origins.filter((x) => x !== origin) }))}
                     >
                       Remove
                     </Button>
@@ -571,15 +562,13 @@ function ParAndHeadless({ tenant }: { tenant: TenantView }) {
                   autoComplete="off"
                   onChange={(e) => setDraft(e.target.value)}
                   onKeyDown={(e) => {
+                    // Enter adds the origin instead of submitting the whole form.
                     if (e.key === "Enter") {
                       e.preventDefault();
                       addOrigin();
                     }
                   }}
-                  errors={[
-                    ...(localError ? [{ message: localError }] : []),
-                    ...originErrors,
-                  ]}
+                  errors={[...(localError ? [{ message: localError }] : []), ...originErrors]}
                   data-testid="headless-origin-input"
                 />
               </div>
@@ -588,13 +577,24 @@ function ParAndHeadless({ tenant }: { tenant: TenantView }) {
               </Button>
             </div>
           </fieldset>
-          <Button type="submit" disabled={save.isPending} data-testid="save-par-headless">
-            {save.isPending ? "Saving…" : "Save authorization request settings"}
+        </Section>
+
+        <div
+          className="bg-background sticky bottom-0 z-10 flex flex-wrap items-center gap-3 border-t py-3"
+          data-testid="login-settings-save-bar"
+        >
+          <Button type="submit" disabled={save.isPending} data-testid="save-login-settings">
+            {save.isPending ? "Saving…" : "Save login settings"}
           </Button>
+          {form.isDirty && (
+            <span className="text-muted-foreground text-sm" data-testid="login-settings-dirty">
+              Unsaved changes
+            </span>
+          )}
           <StatusMessage message={status} />
-        </form>
-      </CardContent>
-    </Card>
+        </div>
+      </form>
+    </>
   );
 }
 
@@ -613,10 +613,11 @@ function MoreSettings() {
         <ul className="space-y-2 text-sm">
           <li>
             <Link to="/t/$tenant/settings/registration" params={{ tenant }} className={link} data-testid="registration-settings-link">
-              Client registration
+              Dynamic client registration
             </Link>{" "}
             <span className="text-muted-foreground">
-              Dynamic client registration, Client ID Metadata Documents and initial access tokens.
+              Lets apps register themselves (RFC 7591, Client ID Metadata Documents, initial access tokens). Not about
+              user sign-up.
             </span>
           </li>
           <li>
@@ -647,13 +648,11 @@ function MoreSettings() {
 function DeleteTenant({ tenant }: { tenant: TenantView }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const [confirm, setConfirm] = useState(false);
   const remove = useMutation({
     mutationFn: async () => {
       await api.DELETE("/api/admin/v1/tenants/{slug}", { params: { path: { slug: tenant.slug } } });
     },
     onSuccess: async () => {
-      setConfirm(false);
       forgetTenant(tenant.slug);
       await navigate({ to: "/tenants" });
       queryClient.removeQueries({ queryKey: tenantQueryKey(tenant.slug) });
@@ -669,35 +668,20 @@ function DeleteTenant({ tenant }: { tenant: TenantView }) {
     );
   }
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>
-          <h2>Delete tenant</h2>
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <p className="text-muted-foreground text-sm">
+    <DangerZone
+      title="Delete this tenant"
+      description={
+        <p>
           Deletes <code>{tenant.slug}</code> with all its users, clients, connections, sessions and keys. Relying
-          parties of this tenant stop working.
+          parties of this tenant stop working. This cannot be undone.
         </p>
-        <Button variant="destructive" onClick={() => setConfirm(true)} data-testid="delete-tenant">
-          Delete tenant
-        </Button>
-      </CardContent>
-      <ConfirmDialog
-        open={confirm}
-        title="Delete this tenant?"
-        description={<p>{`The tenant ${tenant.slug} and all its data are removed. This cannot be undone.`}</p>}
-        confirmLabel="Delete tenant"
-        onConfirm={() => remove.mutate()}
-        onCancel={() => {
-          setConfirm(false);
-          remove.reset();
-        }}
-        pending={remove.isPending}
-        error={remove.error}
-      />
-    </Card>
+      }
+      confirmText={tenant.slug}
+      actionLabel="Delete tenant"
+      onConfirm={() => remove.mutate()}
+      pending={remove.isPending}
+      error={remove.error}
+    />
   );
 }
 
@@ -721,8 +705,6 @@ function LoginSettingsPage() {
         // The form keeps local edits; it is keyed by tenant so another tenant starts fresh.
         <>
           <SettingsForm key={query.data.id} tenant={query.data} />
-          <ClaimMapping key={`claims-${query.data.id}`} tenant={query.data} />
-          <ParAndHeadless key={`par-${query.data.id}`} tenant={query.data} />
           <MoreSettings />
           <DeleteTenant tenant={query.data} />
         </>

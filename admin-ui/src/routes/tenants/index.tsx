@@ -1,6 +1,7 @@
 // Tenant list (ORG-01): every tenant of the installation with its issuer and the discovery URL a
 // relying party is configured with. Both come from the tenant view (`issuer`, `discovery_url`),
-// computed by the server from the public URL and the tenant's custom host.
+// computed by the server from the public URL and the tenant's custom host. A slug opens the tenant's
+// Overview (getting-started checklist).
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { createColumnHelper } from "@tanstack/react-table";
@@ -62,7 +63,7 @@ const columns = col.columns([
   col.accessor("slug", {
     header: "Slug",
     cell: (info) => (
-      <Link to="/t/$tenant/users" params={{ tenant: info.getValue() }} className={linkClass}>
+      <Link to="/t/$tenant" params={{ tenant: info.getValue() }} className={linkClass}>
         {info.getValue()}
       </Link>
     ),
