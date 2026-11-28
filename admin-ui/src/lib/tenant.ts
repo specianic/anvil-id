@@ -111,21 +111,52 @@ export function useTenantView(slug: string) {
   });
 }
 
-/** The tenant-scoped console sections (main navigation; the switcher keeps the section). */
-export const TENANT_PAGES = [
-  { to: "/t/$tenant/users", label: "Users" },
-  { to: "/t/$tenant/organizations", label: "Organizations" },
-  { to: "/t/$tenant/clients", label: "Clients" },
-  { to: "/t/$tenant/connections", label: "Connections" },
-  { to: "/t/$tenant/sessions", label: "Sessions" },
-  { to: "/t/$tenant/roles", label: "Roles" },
-  { to: "/t/$tenant/attributes", label: "Attributes" },
-  { to: "/t/$tenant/webhooks", label: "Webhooks" },
-  { to: "/t/$tenant/audit", label: "Audit log" },
-  { to: "/t/$tenant/email", label: "Email" },
-  { to: "/t/$tenant/branding", label: "Branding" },
-  { to: "/t/$tenant/keys", label: "Signing keys" },
-  { to: "/t/$tenant/settings", label: "Login settings" },
+/** Headings of the main navigation, in display order. */
+export const NAV_GROUPS = [
+  "Applications",
+  "Users and access",
+  "Branding and email",
+  "Security",
+  "Advanced",
 ] as const;
 
+export type NavGroup = (typeof NAV_GROUPS)[number];
+
+/**
+ * The tenant-scoped console sections: the single source of the main navigation (grouped by `group`)
+ * and of the tenant switcher's "keep the section" logic. `systemTenant: false` hides a section in
+ * the system tenant; only sections the API refuses there are hidden (organizations do not exist in
+ * the system tenant), working features stay visible.
+ */
+export const TENANT_PAGES = [
+  { to: "/t/$tenant", label: "Overview", group: "Applications", systemTenant: true },
+  { to: "/t/$tenant/clients", label: "Clients", group: "Applications", systemTenant: true },
+  { to: "/t/$tenant/connections", label: "Connections", group: "Applications", systemTenant: true },
+  { to: "/t/$tenant/users", label: "Users", group: "Users and access", systemTenant: true },
+  { to: "/t/$tenant/organizations", label: "Organizations", group: "Users and access", systemTenant: false },
+  { to: "/t/$tenant/roles", label: "Roles", group: "Users and access", systemTenant: true },
+  { to: "/t/$tenant/attributes", label: "Attributes", group: "Users and access", systemTenant: true },
+  { to: "/t/$tenant/sessions", label: "Sessions", group: "Users and access", systemTenant: true },
+  { to: "/t/$tenant/branding", label: "Branding", group: "Branding and email", systemTenant: true },
+  { to: "/t/$tenant/email", label: "Email", group: "Branding and email", systemTenant: true },
+  { to: "/t/$tenant/keys", label: "Signing keys", group: "Security", systemTenant: true },
+  { to: "/t/$tenant/password-profiles", label: "Password hash profiles", group: "Security", systemTenant: true },
+  { to: "/t/$tenant/audit", label: "Audit log", group: "Security", systemTenant: true },
+  { to: "/t/$tenant/settings", label: "Login settings", group: "Advanced", systemTenant: true },
+  { to: "/t/$tenant/webhooks", label: "Webhooks", group: "Advanced", systemTenant: true },
+] as const satisfies readonly { to: string; label: string; group: NavGroup; systemTenant: boolean }[];
+
 export type TenantPage = (typeof TENANT_PAGES)[number]["to"];
+
+/** The sections shown for `tenant`, grouped under NAV_GROUPS (empty groups are dropped). */
+export function navGroupsFor(tenant: string) {
+  const visible = TENANT_PAGES.filter((p) => tenant !== SYSTEM_TENANT || p.systemTenant);
+  return NAV_GROUPS.map((group) => ({ group, pages: visible.filter((p) => p.group === group) })).filter(
+    (g) => g.pages.length > 0,
+  );
+}
+
+/** Whether a section exists in `tenant` (sections refused by the API in the system tenant do not). */
+export function pageAvailableIn(page: TenantPage, tenant: string): boolean {
+  return tenant !== SYSTEM_TENANT || TENANT_PAGES.some((p) => p.to === page && p.systemTenant);
+}

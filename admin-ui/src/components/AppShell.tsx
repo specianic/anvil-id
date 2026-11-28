@@ -1,21 +1,18 @@
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
-import type { ReactNode } from "react";
+import { Link, useRouterState } from "@tanstack/react-router";
+import { Menu, X } from "lucide-react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { api, unwrap } from "@/api/client";
 import { useAuth } from "@/auth/AuthProvider";
 import { TenantSwitcher } from "@/components/TenantSwitcher";
 import { Button } from "@/components/ui/button";
-import { TENANT_PAGES, lastTenant, useOptionalTenant } from "@/lib/tenant";
+import { lastTenant, navGroupsFor, useOptionalTenant } from "@/lib/tenant";
 
-// Tenant-scoped pages; the tenant comes from the route (or the last used one on the tenant list pages).
-// Password hash profiles (07-20) sit between Signing keys and Login settings; they are a navigation
-// entry only (the tenant switcher keeps the TENANT_PAGES sections).
-const NAV = [
-  ...TENANT_PAGES.slice(0, -1),
-  { to: "/t/$tenant/password-profiles", label: "Password hash profiles" },
-  ...TENANT_PAGES.slice(-1),
-] as const;
+// The main navigation is rendered from TENANT_PAGES (lib/tenant.ts), grouped under eyebrow headings;
+// the tenant comes from the route (or the last used one on the tenant list pages). Below 768px the
+// navigation collapses behind a "Menu" button (aria-expanded / aria-controls).
 
+const NAV_ID = "main-nav";
 const focusRing = "focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none";
 
 // The running server version, from the admin-only GET /api/admin/v1/system/info. The shell renders
@@ -30,7 +27,7 @@ function VersionFooter() {
   });
   if (!data?.version) return null;
   return (
-    <footer className="mx-auto max-w-6xl px-4 pb-6">
+    <footer className="mx-auto max-w-7xl px-4 pb-6">
       <p className="text-muted-foreground text-xs" data-testid="console-version">
         AnvilID {data.version}
       </p>
@@ -38,10 +35,63 @@ function VersionFooter() {
   );
 }
 
+/** Text of the signed-in admin in the header: email, else name, else the subject. */
+function adminLabel(profile: { email?: string; name?: string; preferred_username?: string; sub: string }): string {
+  return profile.email ?? profile.name ?? profile.preferred_username ?? profile.sub;
+}
+
+function MainNav({ tenant, id, className }: { tenant: string; id: string; className: string }) {
+  return (
+    <nav aria-label="Main" id={id} className={className}>
+      <div className="space-y-5">
+        {navGroupsFor(tenant).map(({ group, pages }) => {
+          const headingId = `${id}-${group.toLowerCase().replaceAll(" ", "-")}`;
+          return (
+            <div key={group}>
+              <h2
+                id={headingId}
+                className="text-muted-foreground mb-1 px-3 text-xs font-semibold tracking-[0.14em] uppercase"
+              >
+                {group}
+              </h2>
+              <ul aria-labelledby={headingId} className="space-y-0.5">
+                {pages.map((item) => (
+                  <li key={item.to}>
+                    <Link
+                      to={item.to}
+                      params={{ tenant }}
+                      activeOptions={{ exact: item.to === "/t/$tenant" }}
+                      className={`text-muted-foreground hover:text-foreground hover:bg-accent block rounded-md border-l-2 border-transparent px-3 py-1.5 text-sm ${focusRing}`}
+                      activeProps={{
+                        className: "border-link! bg-accent text-foreground font-medium",
+                        "aria-current": "page",
+                      }}
+                    >
+                      {item.label}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          );
+        })}
+      </div>
+    </nav>
+  );
+}
+
 export function AppShell({ children }: { children: ReactNode }) {
   const { user, signOut } = useAuth();
-  const who = user.profile.email ?? user.profile.preferred_username ?? user.profile.sub;
+  const who = adminLabel(user.profile);
   const tenant = useOptionalTenant() ?? lastTenant();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuButton = useRef<HTMLButtonElement>(null);
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+
+  // Following a link closes the mobile menu.
+  useEffect(() => {
+    setMenuOpen(false);
+  }, [pathname]);
 
   return (
     <div className="min-h-screen">
@@ -52,38 +102,50 @@ export function AppShell({ children }: { children: ReactNode }) {
         Skip to content
       </a>
       <header className="border-b">
-        <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-6 gap-y-2 px-4 pt-3">
-          <span className="font-semibold">AnvilID</span>
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3">
+          <span className="font-semibold tracking-[0.14em] uppercase">AnvilID</span>
           <TenantSwitcher />
           <div className="ml-auto flex items-center gap-3">
-            <span className="text-muted-foreground text-sm">{who}</span>
+            <span className="text-muted-foreground max-w-64 truncate text-sm" data-testid="console-admin" title={who}>
+              {who}
+            </span>
             <Button variant="outline" size="sm" onClick={() => void signOut()}>
               Sign out
             </Button>
           </div>
-        </div>
-        <div className="mx-auto max-w-6xl px-4 py-2">
-          <nav aria-label="Main">
-            <ul className="flex flex-wrap gap-1">
-              {NAV.map((item) => (
-                <li key={item.to}>
-                  <Link
-                    to={item.to}
-                    params={{ tenant }}
-                    className={`text-muted-foreground hover:text-foreground rounded-md px-3 py-1.5 text-sm ${focusRing}`}
-                    activeProps={{ className: "bg-accent text-foreground", "aria-current": "page" }}
-                  >
-                    {item.label}
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          </nav>
+          <Button
+            ref={menuButton}
+            variant="outline"
+            size="sm"
+            className="md:hidden"
+            aria-expanded={menuOpen}
+            aria-controls={NAV_ID}
+            onClick={() => setMenuOpen((open) => !open)}
+          >
+            {menuOpen ? <X aria-hidden="true" /> : <Menu aria-hidden="true" />}
+            Menu
+          </Button>
         </div>
       </header>
-      <main id="main" tabIndex={-1} className="mx-auto max-w-6xl px-4 py-6 focus:outline-none">
-        {children}
-      </main>
+      <div className="mx-auto flex max-w-7xl flex-col md:flex-row">
+        <div
+          onKeyDown={(e) => {
+            if (e.key === "Escape" && menuOpen) {
+              setMenuOpen(false);
+              menuButton.current?.focus();
+            }
+          }}
+        >
+          <MainNav
+            tenant={tenant}
+            id={NAV_ID}
+            className={`${menuOpen ? "block" : "hidden"} border-b px-1 py-4 md:block md:w-60 md:shrink-0 md:border-r md:border-b-0`}
+          />
+        </div>
+        <main id="main" tabIndex={-1} className="min-w-0 flex-1 px-4 py-6 focus:outline-none md:px-8">
+          {children}
+        </main>
+      </div>
       <VersionFooter />
     </div>
   );

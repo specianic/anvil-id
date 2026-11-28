@@ -72,6 +72,50 @@ test('admin console: users, sessions, audit, clients, email and SMTP', async ({ 
     await expectNoA11yViolations(page);
   });
 
+  await test.step('header names the admin by email; the navigation is grouped', async () => {
+    // The console requests profile + email and loads UserInfo, so the header shows the email, not a UUID.
+    await expect(page.getByTestId('console-admin')).toHaveText(admin.email);
+    const mainNav = page.getByRole('navigation', { name: 'Main' });
+    for (const group of ['Applications', 'Users and access', 'Branding and email', 'Security', 'Advanced']) {
+      await expect(mainNav.getByRole('heading', { level: 2, name: group })).toBeVisible();
+    }
+    await expect(mainNav.getByRole('link', { name: 'Overview', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Menu' })).toBeHidden();
+  });
+
+  await test.step('at 390px the navigation collapses behind a menu button', async () => {
+    const desktop = page.viewportSize();
+    await page.setViewportSize({ width: 390, height: 844 });
+    const mainNav = page.getByRole('navigation', { name: 'Main' });
+    const menu = page.getByRole('button', { name: 'Menu' });
+    await expect(menu).toBeVisible();
+    await expect(menu).toHaveAttribute('aria-expanded', 'false');
+    await expect(menu).toHaveAttribute('aria-controls', 'main-nav');
+    await expect(mainNav).toBeHidden();
+
+    // Keyboard: the button opens the menu, Escape closes it and returns focus to the button.
+    await menu.focus();
+    await page.keyboard.press('Enter');
+    await expect(menu).toHaveAttribute('aria-expanded', 'true');
+    await expect(mainNav).toBeVisible();
+    await expectNoA11yViolations(page);
+    await mainNav.getByRole('link', { name: 'Users', exact: true }).focus();
+    await page.keyboard.press('Escape');
+    await expect(mainNav).toBeHidden();
+    await expect(menu).toBeFocused();
+
+    // Following a link closes the menu.
+    await menu.click();
+    await mainNav.getByRole('link', { name: 'Clients', exact: true }).click();
+    await expect(page.getByRole('heading', { level: 1, name: 'Clients' })).toBeVisible();
+    await expect(mainNav).toBeHidden();
+    await expect(menu).toHaveAttribute('aria-expanded', 'false');
+
+    if (desktop) await page.setViewportSize(desktop);
+    await page.goto(consoleUrl('t/default/users'));
+    await expect(page.getByRole('heading', { level: 1, name: 'Users' })).toBeVisible();
+  });
+
   await test.step('the footer shows the running version to the signed-in admin only', async () => {
     const info = await fetch(`${anvilUrl()}/api/admin/v1/system/info`, {
       headers: { Authorization: `Bearer ${token}` },

@@ -5,7 +5,14 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { type TenantView, api, unwrap } from "@/api/client";
 import { Badge } from "@/components/ui/badge";
-import { SYSTEM_TENANT, TENANT_PAGES, type TenantPage, useOptionalTenant } from "@/lib/tenant";
+import {
+  DEFAULT_TENANT,
+  SYSTEM_TENANT,
+  TENANT_PAGES,
+  type TenantPage,
+  pageAvailableIn,
+  useOptionalTenant,
+} from "@/lib/tenant";
 
 const PAGE_LIMIT = 200;
 /** Upper bound on pages fetched for the switcher (2000 tenants); the tenant list page pages through all. */
@@ -39,6 +46,17 @@ function useCurrentSection(): TenantPage {
   return page ? page.to : TENANT_PAGES[0].to;
 }
 
+/**
+ * Option text of a tenant (C-L1): "System" and "Default" for the built-in tenants, otherwise
+ * "<display name> (slug)", or just the slug when the display name adds nothing.
+ */
+export function tenantOptionLabel(slug: string, displayName: string | undefined): string {
+  if (slug === SYSTEM_TENANT) return "System";
+  if (slug === DEFAULT_TENANT) return "Default";
+  if (!displayName || displayName.trim() === "" || displayName === slug) return slug;
+  return `${displayName} (${slug})`;
+}
+
 const focusRing = "focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none";
 
 export function TenantSwitcher() {
@@ -53,11 +71,7 @@ export function TenantSwitcher() {
     current && !tenants.some((t) => t.slug === current)
       ? [current, ...tenants.map((t) => t.slug)]
       : tenants.map((t) => t.slug);
-  const label = (slug: string) => {
-    const t = tenants.find((x) => x.slug === slug);
-    const name = t && t.display_name !== slug ? `${slug} (${t.display_name})` : slug;
-    return slug === SYSTEM_TENANT ? `${name} [system]` : name;
-  };
+  const label = (slug: string) => tenantOptionLabel(slug, tenants.find((x) => x.slug === slug)?.display_name);
 
   return (
     <div className="flex items-center gap-2" data-testid="tenant-switcher">
@@ -71,7 +85,10 @@ export function TenantSwitcher() {
         aria-busy={query.isPending}
         onChange={(e) => {
           const slug = e.target.value;
-          if (slug && slug !== current) void navigate({ to: section, params: { tenant: slug } });
+          if (!slug || slug === current) return;
+          // A section the target tenant does not have (organizations in the system tenant) opens its overview.
+          const to = pageAvailableIn(section, slug) ? section : TENANT_PAGES[0].to;
+          void navigate({ to, params: { tenant: slug } });
         }}
       >
         {!current && (
@@ -101,7 +118,7 @@ export function TenantSwitcher() {
       )}
       <Link
         to="/tenants"
-        className={`text-muted-foreground hover:text-foreground rounded-md px-2 py-1 text-sm underline-offset-4 hover:underline ${focusRing}`}
+        className={`text-link rounded-md px-2 py-1 text-sm underline-offset-4 hover:underline ${focusRing}`}
         activeProps={{ "aria-current": "page", className: "text-foreground" }}
         activeOptions={{ exact: true }}
         data-testid="all-tenants-link"

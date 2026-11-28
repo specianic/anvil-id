@@ -11,7 +11,10 @@ export const userManager = new UserManager({
   client_id: CONSOLE_CLIENT_ID,
   redirect_uri: `${window.location.origin}/console/callback`,
   response_type: "code",
-  scope: "openid admin:read admin:write",
+  // profile + email so the header can show who is signed in; AnvilID puts scope claims only in the
+  // UserInfo response (not the ID token), hence loadUserInfo.
+  scope: "openid profile email admin:read admin:write",
+  loadUserInfo: true,
   // Tokens live for the browser tab only.
   userStore: new WebStorageStateStore({ store: window.sessionStorage }),
   stateStore: new WebStorageStateStore({ store: window.sessionStorage }),
