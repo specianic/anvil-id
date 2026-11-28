@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "./fonts.css";
 
 /* Specianic design tokens mapped onto the shadcn/ui variable names (07.1-specianic-tokens.json).
    Everything is in this stylesheet: the console's CSP has no 'unsafe-inline' for scripts, and no

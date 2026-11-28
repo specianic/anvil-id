@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
+import { defineConfig, searchForWorkspaceRoot } from "vite";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 
@@ -21,6 +21,8 @@ export default defineConfig({
     alias: { "@": path.resolve(root, "src") },
   },
   server: {
+    // src/fonts.css loads the end-user theme's self-hosted fonts from the repository's themes dir.
+    fs: { allow: [searchForWorkspaceRoot(root), path.resolve(root, "../themes/default/static/fonts")] },
     proxy: {
       "/api": "http://localhost:8080",
       "/t": "http://localhost:8080",

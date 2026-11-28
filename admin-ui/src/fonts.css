@@ -1,0 +1,29 @@
+/* The console's fonts: the same self-hosted, hash-pinned files the end-user theme ships
+   (themes/default/static/fonts, checked by scripts/check-fonts.sh). Vite bundles them from there
+   into dist/assets with content hashes; there is no copy in admin-ui and no font CDN. The console
+   CSP (default-src 'self') already allows them. Licences: OFL-HankenGrotesk.txt and OFL-IBMPlex.txt
+   next to the files. */
+
+@font-face {
+  font-family: "Hanken Grotesk";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("../../themes/default/static/fonts/HankenGrotesk-wght.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../../themes/default/static/fonts/IBMPlexMono-Regular.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("../../themes/default/static/fonts/IBMPlexMono-Medium.woff2") format("woff2");
+}
