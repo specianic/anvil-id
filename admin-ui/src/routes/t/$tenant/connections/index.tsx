@@ -4,7 +4,7 @@ import { createColumnHelper } from "@tanstack/react-table";
 import { useMemo } from "react";
 import { api, unwrap } from "@/api/client";
 import { useTenant } from "@/lib/tenant";
-import { type ConnectionView, KIND_LABELS } from "@/components/ConnectionForm";
+import { ConnectionStatusBadges, type ConnectionView, KIND_LABELS } from "@/components/ConnectionForm";
 import { DataTable, type DataTableFeatures, useCursorPager } from "@/components/DataTable";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -67,8 +67,8 @@ function columnsFor(tenant: string, orgNames: OrgNames) {
   }),
   col.accessor("enabled", {
     header: "Status",
-    cell: (info) =>
-      info.getValue() ? <Badge>Enabled</Badge> : <Badge variant="outline">Disabled</Badge>,
+    // Text and icon, never colour alone; "Incomplete" = no secret yet (cannot be enabled).
+    cell: (info) => <ConnectionStatusBadges connection={info.row.original} />,
   }),
   col.accessor("secret_configured", {
     header: "Secret",

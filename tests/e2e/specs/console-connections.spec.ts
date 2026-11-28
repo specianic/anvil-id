@@ -1,6 +1,7 @@
 // AUTH-07, ADM-04: managing an upstream connection in the admin console (/console/t/{tenant}/connections).
 // A console administrator creates a Google connection with a client secret, sees the secret as
-// "Configured" and the redirect URI to register at the provider, edits the display name, rotates
+// "Configured" and the redirect URI to register at the provider, enables the connection (new
+// connections are saved disabled, 07.1-09), edits the display name, rotates
 // the secret, removes it (status "Not set"), sets it again and deletes the connection. The secret
 // is write-only: it never appears on a console page nor in any admin API response the console
 // receives. The secret card is the shared SecretRotation component (06-29), the same one the org
@@ -100,6 +101,16 @@ test('admin console: create, edit, rotate and delete a connection', async ({ pag
     await expect(page.getByLabel('New client secret')).toHaveValue('');
     await expectSecretsHidden();
     await expectNoA11yViolations(page);
+  });
+
+  await test.step('the new connection is disabled until it is enabled', async () => {
+    // Created disabled (07.1-09): register the redirect URI at the provider first, then enable.
+    await expect(page.getByTestId('connection-status-badges')).toContainText('Disabled');
+    expect((await listConnections(tok, tenantSlug)).find((c) => c.slug === slug)?.enabled).toBe(false);
+    await page.getByTestId('enable-connection').click();
+    await expect(page.getByText('Connection enabled.')).toBeVisible();
+    await expect(page.getByTestId('connection-status-badges')).toContainText('Enabled');
+    expect((await listConnections(tok, tenantSlug)).find((c) => c.slug === slug)?.enabled).toBe(true);
   });
 
   await test.step('edit the display name', async () => {

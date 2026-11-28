@@ -2,12 +2,21 @@
 // by /connections/new, /connections/$connectionId and an organization's OIDC connections. Secrets
 // are write-only: they are read from the password field (or the Apple .p8 file) at submit time and
 // never shown again.
+//
+// New connections start disabled (C-H6): the natural order is save, register the redirect URI at
+// the provider, then enable. The server refuses to enable an incomplete connection (or a generic
+// OIDC one whose issuer fails discovery) and names the field; the form shows that message. The
+// redirect URI ({issuer}/ui/login/upstream/{slug}/callback) is shown before saving, the slug follows
+// the display name until edited, and leaving with unsaved changes asks first.
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { type FormEvent, type RefObject, useId, useRef, useState } from "react";
+import { CircleCheck, CircleDashed, CircleOff } from "lucide-react";
+import { type FormEvent, type RefObject, useEffect, useId, useRef, useState } from "react";
 import { ApiError, api, unwrap } from "@/api/client";
 import type { components } from "@/api/schema";
 import { ProblemAlert } from "@/components/ProblemAlert";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { CopyField } from "@/components/CopyField";
+import { UnsavedChangesGuard } from "@/components/UnsavedChangesGuard";
 import {
   CheckboxField,
   type FieldErrors,
@@ -22,6 +31,10 @@ import {
 } from "@/components/form";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { useFormState } from "@/lib/formState";
+import { slugify, useSlugFromName } from "@/lib/slug";
+import { useTenant, useTenantView } from "@/lib/tenant";
+import { useUnsavedChanges } from "@/lib/unsaved";
 
 export type ConnectionView = components["schemas"]["ConnectionView"];
 export type ConnectionKind = components["schemas"]["ConnectionKind"];
@@ -142,12 +155,74 @@ export interface ConnectionFormValues {
   use_pkce: boolean;
 }
 
+/**
+ * The callback URL a connection with `slug` gets in the tenant with `issuer` (the tenant view's
+ * canonical issuer): the same format as the server's `redirect_uri` (route
+ * /ui/login/upstream/{slug}/callback). Used to show the URI before saving and to check the saved view.
+ */
+export function redirectUriFor(issuer: string, slug: string): string {
+  return `${issuer.replace(/\/+$/, "")}/ui/login/upstream/${slug}/callback`;
+}
+
+/** Hint of the Enabled control: connections are enabled once the provider knows the redirect URI. */
+export const ENABLE_HINT =
+  "Turn on after you registered the redirect URI at the provider. Disabled connections are hidden from the sign-in page.";
+
+/** Human names of the fields the server reports when it refuses to enable a connection. */
+export const ENABLE_FIELD_LABELS: Record<string, string> = {
+  secret: "Client secret",
+  "config.client_id": "Client ID",
+  "config.issuer": "Issuer",
+  "config.apple": "Apple team and key",
+  "config.apple.team_id": "Team ID",
+  "config.apple.key_id": "Key ID",
+  "config.authorization_endpoint": "Authorization endpoint",
+  "config.token_endpoint": "Token endpoint",
+  "config.userinfo_endpoint": "Profile (userinfo) endpoint",
+  "config.mapping.subject": "Subject mapping",
+};
+
+/**
+ * Whether a connection lacks its secret (every kind but SAML needs one). Such a connection cannot be
+ * enabled, and the sign-in page never offers it.
+ */
+export function isIncomplete(c: Pick<ConnectionView, "kind" | "secret_configured">): boolean {
+  return c.kind !== "saml" && !c.secret_configured;
+}
+
+/** Status badges of a connection: Enabled / Disabled and Incomplete, with text and an icon. */
+export function ConnectionStatusBadges({ connection }: { connection: ConnectionView }) {
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1" data-testid="connection-status-badges">
+      {connection.enabled ? (
+        <Badge>
+          <CircleCheck aria-hidden="true" />
+          Enabled
+        </Badge>
+      ) : (
+        <Badge variant="outline">
+          <CircleOff aria-hidden="true" />
+          Disabled
+        </Badge>
+      )}
+      {isIncomplete(connection) && (
+        <Badge variant="outline" title="No client secret: the connection cannot be enabled yet.">
+          <CircleDashed aria-hidden="true" />
+          Incomplete
+        </Badge>
+      )}
+    </span>
+  );
+}
+
 export function newConnectionValues(kind: ConnectionKind): ConnectionFormValues {
   return {
     kind,
     slug: kind === "oidc" || kind === "oauth2" ? "" : kind,
     display_name: kind === "oidc" || kind === "oauth2" ? "" : KIND_LABELS[kind],
-    enabled: true,
+    // Off until the redirect URI is registered at the provider (the server also refuses to
+    // enable an incomplete connection).
+    enabled: false,
     client_id: "",
     scopes: PRESET_SCOPES[kind],
     trust_email_verified: TRUST_DEFAULT[kind],
@@ -267,10 +342,14 @@ export function createBody(v: ConnectionFormValues, secret: string | null): Crea
   };
 }
 
-export function updateBody(v: ConnectionFormValues): UpdateConnection {
+/**
+ * The PATCH body for the form values. `includeEnabled: false` leaves `enabled` unchanged (pages with
+ * a separate Enable action).
+ */
+export function updateBody(v: ConnectionFormValues, includeEnabled = true): UpdateConnection {
   return {
     display_name: v.display_name.trim(),
-    enabled: v.enabled,
+    ...(includeEnabled ? { enabled: v.enabled } : {}),
     config: configFromValues(v),
     trust_email_verified: v.trust_email_verified,
     accept_email_trust_risk: v.kind === "microsoft" && v.trust_email_verified && v.accept_email_trust_risk,
@@ -435,13 +514,60 @@ interface ConnectionFormProps {
   /** `secret` is only read in create mode (edit mode rotates it separately). */
   onSubmit: (values: ConnectionFormValues, secret: string | null) => void;
   status?: string | null;
+  /**
+   * Whether the form has the Enabled checkbox (default). Pages with their own Enable action pass
+   * `false` and send the PATCH body with `updateBody(values, false)`.
+   */
+  showEnabled?: boolean;
 }
 
-export function ConnectionForm({ mode, initial, submitLabel, pending, error, onSubmit, status }: ConnectionFormProps) {
-  const [values, setValues] = useState<ConnectionFormValues>(initial);
+/** The redirect URI the connection will get, shown before saving (create mode). */
+function RedirectUriPreview({ slug, providerName }: { slug: string; providerName: string }) {
+  const view = useTenantView(useTenant());
+  const issuer = view.data?.issuer;
+  if (!issuer) return null;
+  return (
+    <div className="space-y-1" data-testid="connection-redirect-uri-preview">
+      <CopyField label="Redirect URI" value={slug.trim() ? redirectUriFor(issuer, slug.trim()) : ""} mono />
+      <p className="text-muted-foreground text-sm">
+        {slug.trim()
+          ? `Register this callback URL at ${providerName} (authorized redirect URI / callback URL), then enable the connection.`
+          : "Enter a slug to see the redirect URI to register at the provider."}
+      </p>
+    </div>
+  );
+}
+
+export function ConnectionForm({
+  mode,
+  initial,
+  submitLabel,
+  pending,
+  error,
+  onSubmit,
+  status,
+  showEnabled = true,
+}: ConnectionFormProps) {
+  const form = useFormState<ConnectionFormValues>(initial);
+  const { values, setValues } = form;
   const [password, setPassword] = useState("");
   const [localError, setLocalError] = useState<LocalFieldError | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  // A typed secret counts as an unsaved change too.
+  const blocker = useUnsavedChanges((form.isDirty || password !== "") && !pending);
+  // The slug follows the display name until edited (create only; it cannot change later). A preset's
+  // starting slug ("google" for "Google") follows the name as well.
+  const followsName = mode === "create" && initial.slug === slugify(initial.display_name);
+  const slugFill = useSlugFromName(followsName ? "" : initial.slug);
+  const { onNameChange } = slugFill;
+  useEffect(() => {
+    if (followsName) onNameChange(initial.display_name);
+    // Once, for the starting display name.
+  }, []);
+  useEffect(() => {
+    if (mode !== "create") return;
+    setValues((v) => (v.slug === slugFill.slug ? v : { ...v, slug: slugFill.slug }));
+  }, [mode, slugFill.slug, setValues]);
   const set = <K extends keyof ConnectionFormValues>(key: K, value: ConnectionFormValues[K]) =>
     setValues((v) => ({ ...v, [key]: value }));
   const setEndpoint = (key: keyof EndpointOverrides, value: string) =>
@@ -477,6 +603,8 @@ export function ConnectionForm({ mode, initial, submitLabel, pending, error, onS
         throw err;
       }
     }
+    form.markSubmitted();
+    if (mode === "create") setPassword("");
     onSubmit(values, secret);
   };
 
@@ -490,6 +618,7 @@ export function ConnectionForm({ mode, initial, submitLabel, pending, error, onS
       noValidate
       data-testid="connection-form"
     >
+      <UnsavedChangesGuard blocker={blocker} />
       {shownError instanceof ApiError && shownError.status === 422 && (
         <p role="alert" className="text-destructive text-sm">
           The connection was not saved. Fix the errors below.
@@ -505,7 +634,10 @@ export function ConnectionForm({ mode, initial, submitLabel, pending, error, onS
           required
           hint="Shown on the sign-in button."
           value={values.display_name}
-          onChange={(e) => set("display_name", e.target.value)}
+          onChange={(e) => {
+            set("display_name", e.target.value);
+            if (mode === "create") onNameChange(e.target.value);
+          }}
           errors={errors.display_name}
         />
         <TextField
@@ -516,22 +648,25 @@ export function ConnectionForm({ mode, initial, submitLabel, pending, error, onS
           hint={
             mode === "edit"
               ? "The slug cannot change; it is part of the redirect URI."
-              : "Lowercase letters, digits and '-'. Part of the redirect URI; cannot change later."
+              : "Filled from the display name. Lowercase letters, digits and '-'. Part of the redirect URI; cannot change later."
           }
           value={values.slug}
-          onChange={(e) => set("slug", e.target.value)}
+          onChange={(e) => slugFill.setSlug(e.target.value)}
           errors={errors.slug}
         />
-        <div className="sm:col-span-2">
-          <CheckboxField
-            label="Enabled"
-            name="enabled"
-            hint="Disabled connections are hidden from the sign-in page."
-            checked={values.enabled}
-            onChange={(e) => set("enabled", e.target.checked)}
-            errors={errors.enabled}
-          />
-        </div>
+        {showEnabled && (
+          <div className="sm:col-span-2">
+            <CheckboxField
+              label="Enabled"
+              name="enabled"
+              hint={ENABLE_HINT}
+              checked={values.enabled}
+              onChange={(e) => set("enabled", e.target.checked)}
+              // The edit form has no secret field: a refusal to enable for a missing secret shows here.
+              errors={mode === "edit" ? [...(errors.enabled ?? []), ...(errors.secret ?? [])] : errors.enabled}
+            />
+          </div>
+        )}
       </fieldset>
 
       <fieldset className="grid gap-4 sm:grid-cols-2">
@@ -813,6 +948,8 @@ export function ConnectionForm({ mode, initial, submitLabel, pending, error, onS
           />
         </fieldset>
       )}
+
+      {mode === "create" && <RedirectUriPreview slug={values.slug} providerName={KIND_LABELS[kind]} />}
 
       <Button type="submit" disabled={pending} data-testid="connection-submit">
         {pending ? "Saving…" : submitLabel}

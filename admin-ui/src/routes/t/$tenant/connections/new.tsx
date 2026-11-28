@@ -92,7 +92,8 @@ function NewConnectionPage() {
       {kind && (
         <>
           <p className="text-muted-foreground text-sm">
-            After saving, the connection page shows the redirect URI to register at {KIND_LABELS[kind]}.
+            The connection is saved disabled. Register the redirect URI shown below at {KIND_LABELS[kind]}, then enable
+            the connection on its page.
           </p>
           <ConnectionForm
             // A new kind starts from that kind's defaults.

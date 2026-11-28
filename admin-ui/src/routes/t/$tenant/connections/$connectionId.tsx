@@ -1,14 +1,19 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
+import { AlertTriangle, CircleOff, CirclePower } from "lucide-react";
 import { useState } from "react";
-import { api, unwrap } from "@/api/client";
-import { useTenant } from "@/lib/tenant";
+import { ApiError, api, unwrap } from "@/api/client";
+import { useTenant, useTenantView } from "@/lib/tenant";
 import {
   ConnectionForm,
   type ConnectionFormValues,
+  ConnectionStatusBadges,
   type ConnectionView,
+  ENABLE_FIELD_LABELS,
+  ENABLE_HINT,
   KIND_LABELS,
   SecretRotation,
+  redirectUriFor,
   updateBody,
   valuesFromConnection,
 } from "@/components/ConnectionForm";
@@ -25,6 +30,11 @@ const queryKey = (tenant: string, id: string) => ["connection", tenant, id] as c
 
 function RedirectUri({ connection }: { connection: ConnectionView }) {
   const [status, setStatus] = useState<string | null>(null);
+  // The URI the console showed before saving, computed from the tenant's issuer and the slug: the
+  // saved view must carry the same one, or what the admin registered at the provider is wrong.
+  const issuer = useTenantView(useTenant()).data?.issuer;
+  const expected = issuer ? redirectUriFor(issuer, connection.slug) : null;
+  const mismatch = expected !== null && expected !== connection.redirect_uri;
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(connection.redirect_uri);
@@ -53,6 +63,15 @@ function RedirectUri({ connection }: { connection: ConnectionView }) {
           </Button>
         </div>
         <StatusMessage message={status} />
+        {mismatch && (
+          <p role="alert" className="text-destructive flex items-start gap-2 text-sm" data-testid="redirect-uri-mismatch">
+            <AlertTriangle aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
+            <span>
+              This differs from the redirect URI shown before saving ({expected}). Register the URI above at the
+              provider, and check the tenant's issuer settings.
+            </span>
+          </p>
+        )}
         <dl className="text-muted-foreground grid grid-cols-3 gap-2 text-sm">
           <dt>Created</dt>
           <dd className="col-span-2">{formatDateTime(connection.created_at)}</dd>
@@ -73,7 +92,8 @@ function EditConnection({ connection }: { connection: ConnectionView }) {
       unwrap(
         await api.PATCH("/api/admin/v1/tenants/{slug}/connections/{id}", {
           params: { path: { slug: tenant, id: connection.id } },
-          body: updateBody(values),
+          // Enabling is the separate Enable action (EnableConnection).
+          body: updateBody(values, false),
         }),
       ),
     onMutate: () => setStatus(null),
@@ -99,7 +119,97 @@ function EditConnection({ connection }: { connection: ConnectionView }) {
           error={update.error}
           onSubmit={(values) => update.mutate(values)}
           status={status}
+          showEnabled={false}
         />
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Enable / disable. The server refuses to enable an incomplete connection (or a generic OIDC one whose
+ * issuer fails discovery) with 422 naming the field; the reason is shown here.
+ */
+function EnableConnection({ connection }: { connection: ConnectionView }) {
+  const tenant = useTenant();
+  const queryClient = useQueryClient();
+  const [status, setStatus] = useState<string | null>(null);
+  const toggle = useMutation({
+    mutationFn: async (enabled: boolean) =>
+      unwrap(
+        await api.PATCH("/api/admin/v1/tenants/{slug}/connections/{id}", {
+          params: { path: { slug: tenant, id: connection.id } },
+          body: { enabled },
+        }),
+      ),
+    onMutate: () => setStatus(null),
+    onSuccess: async (saved) => {
+      queryClient.setQueryData(queryKey(tenant, connection.id), saved);
+      setStatus(saved.enabled ? "Connection enabled." : "Connection disabled.");
+      await queryClient.invalidateQueries({ queryKey: ["connections"] });
+    },
+  });
+  const refusal =
+    toggle.error instanceof ApiError && toggle.error.status === 422 && toggle.error.problem.errors.length > 0
+      ? toggle.error.problem.errors
+      : null;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>
+          <h2>Status</h2>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-sm" data-testid="connection-enabled-status">
+          {connection.enabled ? (
+            <>
+              <strong>Enabled.</strong>{" "}
+              <span className="text-muted-foreground">The sign-in page offers this connection.</span>
+            </>
+          ) : (
+            <>
+              <strong>Disabled.</strong> <span className="text-muted-foreground">{ENABLE_HINT}</span>
+            </>
+          )}
+        </p>
+        {connection.enabled ? (
+          <Button
+            type="button"
+            variant="outline"
+            disabled={toggle.isPending}
+            onClick={() => toggle.mutate(false)}
+            data-testid="disable-connection"
+          >
+            <CircleOff aria-hidden="true" />
+            {toggle.isPending ? "Disabling…" : "Disable"}
+          </Button>
+        ) : (
+          <Button
+            type="button"
+            disabled={toggle.isPending}
+            onClick={() => toggle.mutate(true)}
+            data-testid="enable-connection"
+          >
+            <CirclePower aria-hidden="true" />
+            {toggle.isPending ? "Checking…" : "Enable"}
+          </Button>
+        )}
+        {refusal ? (
+          <div role="alert" className="text-destructive space-y-1 text-sm" data-testid="enable-connection-error">
+            <p>The connection was not enabled:</p>
+            <ul className="list-disc space-y-0.5 pl-5">
+              {refusal.map((e) => (
+                <li key={`${e.field}:${e.message}`}>
+                  {ENABLE_FIELD_LABELS[e.field] ?? e.field}: {e.message}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : toggle.error ? (
+          <ProblemAlert error={toggle.error} />
+        ) : null}
+        <StatusMessage message={status} />
       </CardContent>
     </Card>
   );
@@ -223,7 +333,7 @@ function ConnectionPage() {
         {connection && (
           <>
             <Badge variant="secondary">{KIND_LABELS[connection.kind]}</Badge>
-            {connection.enabled ? <Badge>Enabled</Badge> : <Badge variant="outline">Disabled</Badge>}
+            <ConnectionStatusBadges connection={connection} />
           </>
         )}
       </div>
@@ -238,6 +348,7 @@ function ConnectionPage() {
       ) : (
         <>
           <RedirectUri connection={query.data} />
+          <EnableConnection connection={query.data} />
           <EditConnection connection={query.data} />
           <ConnectionSecret connection={query.data} />
           <DangerZone connection={query.data} />
