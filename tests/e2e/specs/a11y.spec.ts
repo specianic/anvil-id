@@ -6,7 +6,11 @@
 // first in a fresh run.sh instance), login (clean and with an error), registration (clean and with
 // field errors), the registration "check your email" message, verification (via the Mailpit link),
 // recovery request, the recovery "sent" message, recovery reset (via the Mailpit link) and error
-// pages (unknown client, invalid setup token).
+// pages (unknown client, page not found, a reopened setup link).
+//
+// 07.1-08: before setup, `/` and `/console/` show the setup guidance (naming
+// `anvilid admin setup-url`); the setup success page links the console (#link-console); the tenant
+// root page (signed out) is audited after setup.
 //
 // 0.2 pages (plan 03-27): login with the passkey button, second factor (clean, with an error, with
 // the recovery-code disclosure open), consent, the form_post interstitial, account security (empty,
@@ -20,6 +24,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { expect, test, type Browser, type Page } from '@playwright/test';
 import { expectNoA11yViolations } from '../fixtures/axe';
+import { expectWayForward } from '../lib/layout';
 import { test as webauthnTest } from '../fixtures/webauthn';
 import {
   adminToken,
@@ -80,6 +85,15 @@ test('setup and setup-done pages', async ({ page }) => {
     !stateIsEmpty(stateFile),
     'instance already installed by an earlier spec; the setup form is covered by the render snapshots',
   );
+  // Before setup the root and the console explain how to finish it instead of a sign-in form.
+  for (const path of ['/', '/console/']) {
+    await page.goto(`${anvilUrl()}${path}`);
+    await expect(page.locator('h1')).toHaveText('Setup is not complete');
+    await expect(page.locator('#setup-command')).toHaveText('anvilid admin setup-url');
+    await expect(page.locator('#link-login')).toHaveCount(0);
+  }
+  await auditPage(page);
+
   // GET does not consume the setup token; only the form POST does.
   await page.goto(requireEnv('SETUP_URL'));
   await expect(page.locator('form#setup')).toBeVisible();
@@ -94,6 +108,11 @@ test('setup and setup-done pages', async ({ page }) => {
     email: randomEmail('admin'),
     password: randomPassword(),
   });
+  // The way forward is the console; the credentials are the "For automation" block.
+  const consoleLink = page.locator('#link-console');
+  await expect(consoleLink).toBeVisible();
+  await expect(consoleLink).toHaveAttribute('href', `${anvilUrl()}/console/`);
+  await expect(page.locator('#setup-automation #mgmt-client-secret')).toBeVisible();
   await auditPage(page);
   // Share the credential with the other specs of this run (same format as sharedManagementCredential).
   writeFileSync(stateFile, JSON.stringify(creds), { mode: 0o600 });
@@ -176,6 +195,7 @@ test('recovery request, sent message and reset pages', async ({ page }) => {
 });
 
 test('error pages', async ({ page }) => {
+  creds ??= await sharedManagementCredential(page.context().browser()!);
   const unknownClient = new URL(`${anvilUrl()}/authorize`);
   unknownClient.search = new URLSearchParams({
     client_id: 'a11y-unknown-client',
@@ -187,8 +207,25 @@ test('error pages', async ({ page }) => {
   await expect(page.locator('#error-message')).toHaveAttribute('data-error-key', 'unknown_client');
   await auditPage(page);
 
+  await expectWayForward(page);
+
+  await page.goto(`${anvilUrl()}/a11y-does-not-exist`);
+  await expect(page.locator('#error-message')).toHaveAttribute('data-error-key', 'not_found');
+  await expectWayForward(page);
+  await auditPage(page);
+
+  // After setup, a reopened (or made-up) setup link explains that setup is complete.
   await page.goto(`${anvilUrl()}/setup?token=a11y-bogus`);
-  await expect(page.locator('#error-message')).toBeVisible();
+  await expect(page.locator('#message-body')).toHaveAttribute('data-message-key', 'errors_friendly.setup_used');
+  await expect(page.locator('#link-console')).toBeVisible();
+  await auditPage(page);
+});
+
+test('tenant root page', async ({ page }) => {
+  creds ??= await sharedManagementCredential(page.context().browser()!);
+  await page.goto(`${anvilUrl()}/`);
+  await expect(page.locator('#link-login')).toBeVisible();
+  await expect(page.locator('#link-administration')).toHaveAttribute('href', `${anvilUrl()}/console/`);
   await auditPage(page);
 });
 

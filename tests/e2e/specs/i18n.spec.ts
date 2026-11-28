@@ -199,3 +199,33 @@ test('account security page in German via ui_locales and via the browser', async
     await german.close();
   }
 });
+
+// 07.1-08: error pages follow the request's language too. The friendly heading is new copy; the
+// contract sentence in #error-message is the unchanged main.ftl text in each language.
+test('error pages follow ui_locales and the browser language, contract sentences unchanged', async ({ page, browser }) => {
+  const redirectMismatch = authorizeUrl({ redirect_uri: 'https://elsewhere.example/cb', ui_locales: 'de' });
+  await page.goto(redirectMismatch);
+  await expect(page.locator('html')).toHaveAttribute('lang', 'de');
+  await expect(page.locator('#page-heading')).toHaveText('Der Anmeldelink dieser Anwendung ist falsch eingerichtet');
+  await expect(page.locator('#error-message')).toHaveText(
+    'Die Weiterleitungs-URI dieser Anfrage ist für diesen Client nicht registriert.',
+  );
+
+  await page.goto(authorizeUrl({ redirect_uri: 'https://elsewhere.example/cb' }));
+  await expect(page.locator('html')).toHaveAttribute('lang', 'en');
+  await expect(page.locator('#error-message')).toHaveText(
+    'The redirect URI in this request is not registered for this client.',
+  );
+
+  const german = await browser.newContext({ locale: 'de-DE' });
+  try {
+    const de = await german.newPage();
+    await de.goto(`${anvilUrl()}/i18n-does-not-exist`);
+    await expect(de.locator('html')).toHaveAttribute('lang', 'de');
+    await expect(de.locator('#error-message')).toHaveText('Seite nicht gefunden.');
+    await expect(de.locator('#link-login')).toHaveText('Zur Anmeldung');
+    await expectReflowAt320(de);
+  } finally {
+    await german.close();
+  }
+});
