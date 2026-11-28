@@ -335,10 +335,28 @@ Plans:
   5. The console and the default end-user theme use the Specianic design system tokens and fonts (no Specianic wordmark shipped); customer branding (tokens, logo) still overrides the default theme, and the logo upload is discoverable
   6. Tenant YAML export/plan/apply carries logos and organizations
   7. Every fix has an e2e assertion; the review journeys (setup to console, console app creation, user lifecycle, sign-up mode, second admin, incomplete connection, all end-user detours) are covered by specs
-**Plans**: TBD (run /gsd:plan-phase 07.1)
+**Plans**: 19 plans in 5 waves
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 07.1 to break down)
+- [ ] 07.1-01-PLAN.md — Flow navigation context: one NavContext link builder, detours keep the request, emailed links carry it, stale request on GET, signed-in way forward (wave 1)
+- [ ] 07.1-02-PLAN.md — End-user Specianic theme: tokens, official self-hosted fonts with OFL + pinned sha256, CSP font-src, customer overrides kept (wave 1)
+- [ ] 07.1-03-PLAN.md — Console foundation: Specianic tokens/fonts, grouped nav + mobile menu, admin email in header, shared DangerZone/CopyField/unsaved guard/slug fill, lucide-react (wave 1)
+- [ ] 07.1-04-PLAN.md — Storage: client_uri/initiate_login_uri (SQLite 0011, Postgres 0009, rc.3 upgrade tests), read-only self-service token peek, console client profile/email scopes (wave 1)
+- [ ] 07.1-05-PLAN.md — e2e helper port from the UX review (ux-state, console-ux, layout) + smoke spec (wave 1)
+- [ ] 07.1-06-PLAN.md — Admin API additions: client home URLs (admin/DCR/CIMD), console client delete guard, admin password reset, smtp_configured, redirect URI messages, OpenAPI regen (wave 2)
+- [ ] 07.1-07-PLAN.md — PRG for every flow form: derived CSRF, sealed flash, stale reset/verification links on GET, migrated security tests (wave 2)
+- [ ] 07.1-08-PLAN.md — Error pages (localized, way forward, dev-only detail), tenant root, setup to console, logout ways forward (conformance-safe) (wave 2)
+- [ ] 07.1-09-PLAN.md — Upstream connection safety: server-side enablement rule with discovery check, sign-in filter, console form disabled by default with redirect URI before save (wave 2)
+- [ ] 07.1-10-PLAN.md — Console orgs/roles/attributes/webhooks: slug fill, typed org delete, unsaved guards, attributes/new (wave 2)
+- [ ] 07.1-11-PLAN.md — Tenant YAML: logos (tenant/client/org), organizations section, client home URLs; docs, schema, security map rows (wave 3)
+- [ ] 07.1-12-PLAN.md — Account area: return_to to account pages (negative tests), header with identity/sign-out/back to app, no-JS confirmations, PRG, otpauth, readable sessions (wave 3)
+- [ ] 07.1-13-PLAN.md — Sign-in screens: reload-safe recovery codes page, otpauth in-flow, one email field, empty submit, focus, upstream link confirmation (wave 3)
+- [ ] 07.1-14-PLAN.md — Consent account + switch, consent copy, org non-member page (still access_denied), org chooser, magic-link guidance (wave 3)
+- [ ] 07.1-15-PLAN.md — Console users: create/invite/search/edit/block/reset/delete, second administrator, CSV import, readable audit log (wave 3)
+- [ ] 07.1-16-PLAN.md — Console apps: type picker with correct defaults, integration card, client home URLs, danger zone, console client protected (wave 3)
+- [ ] 07.1-17-PLAN.md — Console guided start: getting-started overview, sign-up mode, tenant created page, SMTP truth, logo discoverability, settings safety (wave 3)
+- [ ] 07.1-18-PLAN.md — End-user journey e2e (detours chromium + nojs), 390px sweep, axe on changed pages, fonts, full SQLite e2e (wave 4)
+- [ ] 07.1-19-PLAN.md — Gate: security map, theme contract, UPGRADING rc.4 + deferred list, just ci, both e2e backends, conformance, 1.0.0-rc.4 + migration pins; owner checkpoint (push + tag) (wave 5)
 
 ## Progress
 
@@ -354,7 +372,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 7.1 (
 | 5. Release 0.4 "Operate it" | 32/33 | In Progress|  |
 | 6. Release 1.0 (Organizations and SSO) | 26/31 | In Progress|  |
 | 7. Release 1.0 (Certification and release) | 5/27 | In Progress|  |
-| 7.1 Operability and UX (rc.4) | 0/? | Not started |  |
+| 7.1 Operability and UX (rc.4) | 0/19 | Planned |  |
 
 ---
 *Roadmap created: 2026-11-25*
