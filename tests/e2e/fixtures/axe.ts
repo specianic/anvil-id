@@ -33,8 +33,28 @@ export function formatViolations(violations: AxeViolation[]): string {
     .join('\n');
 }
 
+/**
+ * Waits for running CSS transitions (the console's buttons fade between states, e.g. from disabled
+ * back to enabled after a click), so axe measures the settled colours, not a colour halfway through.
+ * Only transitions: they always end, unlike an infinite spinner animation.
+ */
+async function settleTransitions(page: Page): Promise<void> {
+  await page.evaluate(() =>
+    Promise.race([
+      Promise.allSettled(
+        document
+          .getAnimations()
+          .filter((a) => typeof CSSTransition !== 'undefined' && a instanceof CSSTransition)
+          .map((a) => a.finished),
+      ),
+      new Promise((resolve) => setTimeout(resolve, 2000)),
+    ]),
+  );
+}
+
 /** Runs axe with the WCAG 2.0/2.1/2.2 A and AA tags on the current page; fails on any violation. */
 export async function expectNoA11yViolations(page: Page, options: A11yOptions = {}): Promise<void> {
+  await settleTransitions(page);
   let builder = new AxeBuilder({ page }).withTags([...WCAG_TAGS]);
   for (const selector of options.exclude ?? []) {
     builder = builder.exclude(selector);
