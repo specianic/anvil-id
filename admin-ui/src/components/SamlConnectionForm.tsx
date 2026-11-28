@@ -4,11 +4,12 @@
 // parse), the NameID format and the attribute mapping. The SP values the IdP needs are shown with
 // copy buttons once the connection exists. A SAML connection has no secret.
 import { useMutation } from "@tanstack/react-query";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import { ApiError, api, unwrap } from "@/api/client";
 import type { components } from "@/api/schema";
 import type { ConnectionView, CreateConnection, UpdateConnection } from "@/components/ConnectionForm";
 import { ProblemAlert } from "@/components/ProblemAlert";
+import { UnsavedChangesGuard } from "@/components/UnsavedChangesGuard";
 import {
   CheckboxField,
   type FieldErrors,
@@ -21,6 +22,9 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { formatDateTime } from "@/lib/format";
+import { useFormState } from "@/lib/formState";
+import { useSlugFromName } from "@/lib/slug";
+import { useUnsavedChanges } from "@/lib/unsaved";
 
 type NameIdFormat = components["schemas"]["NameIdFormat"];
 type SamlSpValuesView = components["schemas"]["SamlSpValues"];
@@ -72,7 +76,9 @@ export function newSamlValues(): SamlFormValues {
   return {
     slug: "",
     display_name: "",
-    enabled: true,
+    // New connections start disabled: the server refuses to enable one until it is complete, and
+    // the admin turns it on after registering the SP values at the IdP (07.1-09 enablement rule).
+    enabled: false,
     idp_entity_id: "",
     sso_url: "",
     certs: [""],
@@ -481,7 +487,14 @@ export function SamlConnectionForm({
   onSubmit,
   status,
 }: SamlConnectionFormProps) {
-  const [values, setValues] = useState<SamlFormValues>(initial);
+  const form = useFormState<SamlFormValues>(initial);
+  const { values, setValues } = form;
+  const blocker = useUnsavedChanges(form.isDirty && !pending);
+  // The slug follows the display name until edited (create only; it cannot change later).
+  const slugFill = useSlugFromName(initial.slug);
+  useEffect(() => {
+    setValues((v) => (v.slug === slugFill.slug ? v : { ...v, slug: slugFill.slug }));
+  }, [slugFill.slug, setValues]);
   const set = <K extends keyof SamlFormValues>(key: K, value: SamlFormValues[K]) =>
     setValues((v) => ({ ...v, [key]: value }));
   const setCert = (i: number, pem: string) =>
@@ -502,11 +515,13 @@ export function SamlConnectionForm({
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
+    form.markSubmitted();
     onSubmit(values);
   };
 
   return (
     <div className="space-y-6">
+      <UnsavedChangesGuard blocker={blocker} />
       <div className="flex flex-wrap items-center gap-2">
         <ExperimentalBadge />
         <p className="text-muted-foreground text-sm">
@@ -557,7 +572,10 @@ export function SamlConnectionForm({
             required
             hint="Shown on the single sign-on button."
             value={values.display_name}
-            onChange={(e) => set("display_name", e.target.value)}
+            onChange={(e) => {
+              set("display_name", e.target.value);
+              if (mode === "create") slugFill.onNameChange(e.target.value);
+            }}
             errors={errors.display_name}
             data-testid="saml-display-name"
           />
@@ -572,7 +590,10 @@ export function SamlConnectionForm({
                 : "Lowercase letters, digits and '-'. Part of the SP entity ID and ACS URL; cannot change later."
             }
             value={values.slug}
-            onChange={(e) => set("slug", e.target.value)}
+            onChange={(e) => {
+              set("slug", e.target.value);
+              slugFill.setSlug(e.target.value);
+            }}
             errors={errors.slug}
             data-testid="saml-slug"
           />
@@ -580,7 +601,11 @@ export function SamlConnectionForm({
             <CheckboxField
               label="Enabled"
               name="enabled"
-              hint="Domains route only to enabled connections."
+              hint={
+                mode === "create"
+                  ? "Turn on after you registered the SP values at the identity provider. Domains route only to enabled connections."
+                  : "Domains route only to enabled connections. The server refuses to enable an incomplete connection and says what is missing."
+              }
               checked={values.enabled}
               onChange={(e) => set("enabled", e.target.checked)}
               errors={errors.enabled}

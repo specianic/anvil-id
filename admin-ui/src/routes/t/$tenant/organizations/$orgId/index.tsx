@@ -1,9 +1,10 @@
-// Organization overview: edit slug, display name, MFA policy and default roles; delete.
+// Organization overview: edit slug, display name, MFA policy and default roles; delete in the danger
+// zone at the bottom (the admin types the organization slug to confirm).
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { api, unwrap } from "@/api/client";
-import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { DangerZone } from "@/components/DangerZone";
 import {
   OrgForm,
   type OrgFormValues,
@@ -14,7 +15,6 @@ import {
   valuesFromOrg,
 } from "@/components/OrgForm";
 import { StatusMessage } from "@/components/form";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatDateTime } from "@/lib/format";
 import { useTenant } from "@/lib/tenant";
@@ -70,55 +70,35 @@ function DeleteOrganization({ org }: { org: OrganizationView }) {
   const tenant = useTenant();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const [open, setOpen] = useState(false);
   const remove = useMutation({
     mutationFn: async () => {
+      // Errors are thrown by the client middleware; a 204 has no body to unwrap.
       await api.DELETE("/api/admin/v1/tenants/{slug}/organizations/{org}", {
         params: { path: { slug: tenant, org: org.id } },
       });
     },
     onSuccess: async () => {
-      setOpen(false);
       queryClient.removeQueries({ queryKey: orgQueryKey(tenant, org.id) });
       await queryClient.invalidateQueries({ queryKey: ["organizations", tenant] });
       await navigate({ to: "/t/$tenant/organizations", params: { tenant } });
     },
   });
   return (
-    <Card className="border-destructive/50">
-      <CardHeader>
-        <CardTitle>
-          <h2>Delete organization</h2>
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <p className="text-muted-foreground text-sm">
-          Removes the memberships, organization roles and their assignments, connections, domains and invitations.
-          Members' sign-ins bound to this organization end. The users themselves stay in the tenant.
+    <DangerZone
+      title="Delete this organization"
+      description={
+        <p>
+          Removes the memberships, organization roles and their assignments, connections, domains and invitations of{" "}
+          <strong>{org.display_name}</strong>. Members' sign-ins bound to this organization end. The users themselves
+          stay in the tenant. This cannot be undone.
         </p>
-        <Button variant="destructive" onClick={() => setOpen(true)} data-testid="delete-org">
-          Delete organization
-        </Button>
-        <ConfirmDialog
-          open={open}
-          title={`Delete ${org.display_name}?`}
-          description={
-            <p>
-              The organization <code>{org.slug}</code> and everything that belongs to it are removed. This cannot be
-              undone.
-            </p>
-          }
-          confirmLabel="Delete organization"
-          onConfirm={() => remove.mutate()}
-          onCancel={() => {
-            setOpen(false);
-            remove.reset();
-          }}
-          pending={remove.isPending}
-          error={remove.error}
-        />
-      </CardContent>
-    </Card>
+      }
+      confirmText={org.slug}
+      actionLabel="Delete organization"
+      onConfirm={() => remove.mutate()}
+      pending={remove.isPending}
+      error={remove.error}
+    />
   );
 }
 

@@ -145,6 +145,10 @@ function AddConnection({
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
+        <p className="text-muted-foreground text-sm" data-testid="org-connection-disabled-note">
+          New connections start disabled. Open the connection and turn on Enabled once the provider knows its values;
+          if something is missing, the server says what.
+        </p>
         <KindPicker
           value={kind}
           samlEnabled={samlEnabled}
@@ -157,7 +161,9 @@ function AddConnection({
           <ConnectionForm
             key="oidc"
             mode="create"
-            initial={newConnectionValues("oidc")}
+            // Disabled by default, like tenant connections: the server refuses to enable an
+            // incomplete connection, and a half-configured provider must not appear at sign-in.
+            initial={{ ...newConnectionValues("oidc"), enabled: false }}
             submitLabel="Create connection"
             pending={create.isPending}
             error={create.error}
@@ -407,7 +413,7 @@ function OrgConnectionsPage() {
           org={orgId}
           samlEnabled={samlEnabled}
           onCreated={(created) => {
-            setStatus(`${created.display_name} created.`);
+            setStatus(created.enabled ? `${created.display_name} created.` : `${created.display_name} created (disabled).`);
             setSelectedId(created.id);
           }}
         />

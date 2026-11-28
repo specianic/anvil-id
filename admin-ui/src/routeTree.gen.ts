@@ -17,6 +17,7 @@ import { Route as TenantsNewRouteImport } from './routes/tenants/new'
 import { Route as TTenantIndexRouteImport } from './routes/t/$tenant/index'
 import { Route as TTenantAttributesIndexRouteImport } from './routes/t/$tenant/attributes/index'
 import { Route as TTenantAttributesAttributeNameRouteImport } from './routes/t/$tenant/attributes/$attributeName'
+import { Route as TTenantAttributesNewRouteImport } from './routes/t/$tenant/attributes/new'
 import { Route as TTenantAuditIndexRouteImport } from './routes/t/$tenant/audit/index'
 import { Route as TTenantBrandingIndexRouteImport } from './routes/t/$tenant/branding/index'
 import { Route as TTenantBrandingClientIdRouteImport } from './routes/t/$tenant/branding/$clientId'
@@ -96,6 +97,11 @@ const TTenantAttributesAttributeNameRoute =
     path: '/attributes/$attributeName',
     getParentRoute: () => TTenantRoute,
   } as any)
+const TTenantAttributesNewRoute = TTenantAttributesNewRouteImport.update({
+  id: '/attributes/new',
+  path: '/attributes/new',
+  getParentRoute: () => TTenantRoute,
+} as any)
 const TTenantAuditIndexRoute = TTenantAuditIndexRouteImport.update({
   id: '/audit/',
   path: '/audit/',
@@ -303,6 +309,7 @@ export interface FileRoutesByFullPath {
   '/tenants/': typeof TenantsIndexRoute
   '/t/$tenant/': typeof TTenantIndexRoute
   '/t/$tenant/attributes/$attributeName': typeof TTenantAttributesAttributeNameRoute
+  '/t/$tenant/attributes/new': typeof TTenantAttributesNewRoute
   '/t/$tenant/branding/$clientId': typeof TTenantBrandingClientIdRoute
   '/t/$tenant/clients/$clientId': typeof TTenantClientsClientIdRoute
   '/t/$tenant/clients/new': typeof TTenantClientsNewRoute
@@ -349,6 +356,7 @@ export interface FileRoutesByTo {
   '/tenants': typeof TenantsIndexRoute
   '/t/$tenant': typeof TTenantIndexRoute
   '/t/$tenant/attributes/$attributeName': typeof TTenantAttributesAttributeNameRoute
+  '/t/$tenant/attributes/new': typeof TTenantAttributesNewRoute
   '/t/$tenant/branding/$clientId': typeof TTenantBrandingClientIdRoute
   '/t/$tenant/clients/$clientId': typeof TTenantClientsClientIdRoute
   '/t/$tenant/clients/new': typeof TTenantClientsNewRoute
@@ -396,6 +404,7 @@ export interface FileRoutesById {
   '/tenants/': typeof TenantsIndexRoute
   '/t/$tenant/': typeof TTenantIndexRoute
   '/t/$tenant/attributes/$attributeName': typeof TTenantAttributesAttributeNameRoute
+  '/t/$tenant/attributes/new': typeof TTenantAttributesNewRoute
   '/t/$tenant/branding/$clientId': typeof TTenantBrandingClientIdRoute
   '/t/$tenant/clients/$clientId': typeof TTenantClientsClientIdRoute
   '/t/$tenant/clients/new': typeof TTenantClientsNewRoute
@@ -445,6 +454,7 @@ export interface FileRouteTypes {
     | '/tenants/'
     | '/t/$tenant/'
     | '/t/$tenant/attributes/$attributeName'
+    | '/t/$tenant/attributes/new'
     | '/t/$tenant/branding/$clientId'
     | '/t/$tenant/clients/$clientId'
     | '/t/$tenant/clients/new'
@@ -491,6 +501,7 @@ export interface FileRouteTypes {
     | '/tenants'
     | '/t/$tenant'
     | '/t/$tenant/attributes/$attributeName'
+    | '/t/$tenant/attributes/new'
     | '/t/$tenant/branding/$clientId'
     | '/t/$tenant/clients/$clientId'
     | '/t/$tenant/clients/new'
@@ -537,6 +548,7 @@ export interface FileRouteTypes {
     | '/tenants/'
     | '/t/$tenant/'
     | '/t/$tenant/attributes/$attributeName'
+    | '/t/$tenant/attributes/new'
     | '/t/$tenant/branding/$clientId'
     | '/t/$tenant/clients/$clientId'
     | '/t/$tenant/clients/new'
@@ -641,6 +653,13 @@ declare module '@tanstack/react-router' {
       path: '/attributes/$attributeName'
       fullPath: '/t/$tenant/attributes/$attributeName'
       preLoaderRoute: typeof TTenantAttributesAttributeNameRouteImport
+      parentRoute: typeof TTenantRoute
+    }
+    '/t/$tenant/attributes/new': {
+      id: '/t/$tenant/attributes/new'
+      path: '/attributes/new'
+      fullPath: '/t/$tenant/attributes/new'
+      preLoaderRoute: typeof TTenantAttributesNewRouteImport
       parentRoute: typeof TTenantRoute
     }
     '/t/$tenant/audit/': {
@@ -939,6 +958,7 @@ const TTenantOrganizationsOrgIdRouteWithChildren =
 interface TTenantRouteChildren {
   TTenantIndexRoute: typeof TTenantIndexRoute
   TTenantAttributesAttributeNameRoute: typeof TTenantAttributesAttributeNameRoute
+  TTenantAttributesNewRoute: typeof TTenantAttributesNewRoute
   TTenantBrandingClientIdRoute: typeof TTenantBrandingClientIdRoute
   TTenantClientsClientIdRoute: typeof TTenantClientsClientIdRoute
   TTenantClientsNewRoute: typeof TTenantClientsNewRoute
@@ -975,6 +995,7 @@ interface TTenantRouteChildren {
 const TTenantRouteChildren: TTenantRouteChildren = {
   TTenantIndexRoute: TTenantIndexRoute,
   TTenantAttributesAttributeNameRoute: TTenantAttributesAttributeNameRoute,
+  TTenantAttributesNewRoute: TTenantAttributesNewRoute,
   TTenantBrandingClientIdRoute: TTenantBrandingClientIdRoute,
   TTenantClientsClientIdRoute: TTenantClientsClientIdRoute,
   TTenantClientsNewRoute: TTenantClientsNewRoute,

@@ -2,15 +2,19 @@
 // it exists, the default roles for just-in-time members) and an org-owned role. Client-side rules
 // mirror the API's; the API decides.
 import { useQuery } from "@tanstack/react-query";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import { ApiError, api, unwrap } from "@/api/client";
 import type { components } from "@/api/schema";
 import { RolePicker, isAdminPermission, useAssignableRoles } from "@/components/OrgRoleAssignments";
 import { ProblemAlert } from "@/components/ProblemAlert";
+import { UnsavedChangesGuard } from "@/components/UnsavedChangesGuard";
 import { MAX_PERMISSIONS, PERMISSION_PATTERN, ROLE_NAME_PATTERN } from "@/components/RoleForm";
 import { type FieldErrors, SelectField, TextField, TextareaField, fieldErrors, tokens } from "@/components/form";
 import { Button } from "@/components/ui/button";
+import { useFormState } from "@/lib/formState";
+import { useSlugFromName } from "@/lib/slug";
 import { SLUG_PATTERN } from "@/lib/tenant";
+import { useUnsavedChanges } from "@/lib/unsaved";
 
 export type OrganizationView = components["schemas"]["OrganizationView"];
 type MfaPolicy = components["schemas"]["MfaPolicy"];
@@ -127,7 +131,14 @@ function DefaultRoles({
 }
 
 export function OrgForm({ editing, initial, submitLabel, pending, error, onSubmit }: OrgFormProps) {
-  const [values, setValues] = useState<OrgFormValues>(initial);
+  const form = useFormState<OrgFormValues>(initial);
+  const { values, setValues } = form;
+  const blocker = useUnsavedChanges(form.isDirty && !pending);
+  // The slug follows the display name until the admin edits it (an existing slug counts as edited).
+  const slugFill = useSlugFromName(initial.slug);
+  useEffect(() => {
+    setValues((v) => (v.slug === slugFill.slug ? v : { ...v, slug: slugFill.slug }));
+  }, [slugFill.slug, setValues]);
   const [local, setLocal] = useState<FieldErrors>({});
   const server = fieldErrors(error);
   const otherError = error && !onlyFieldErrors(error, ORG_FIELDS) ? error : null;
@@ -143,68 +154,79 @@ export function OrgForm({ editing, initial, submitLabel, pending, error, onSubmi
     if (name.length < 1 || name.length > 200) issues.display_name = [{ message: "1-200 characters." }];
     setLocal(issues);
     if (Object.keys(issues).length > 0) return;
+    form.markSubmitted();
     onSubmit(values);
   };
 
   return (
-    <form onSubmit={submit} className="space-y-4" noValidate aria-label="Organization" data-testid="org-form">
-      {otherError ? <ProblemAlert error={otherError} /> : null}
-      <TextField
-        label="Display name"
-        name="display_name"
-        value={values.display_name}
-        maxLength={200}
-        onChange={(e) => set("display_name", e.target.value)}
-        hint="Shown to members, for example on the organization switcher at sign-in."
-        errors={local.display_name ?? server.display_name}
-        autoComplete="off"
-        data-testid="org-display-name"
-      />
-      <TextField
-        label="Slug"
-        name="slug"
-        value={values.slug}
-        onChange={(e) => set("slug", e.target.value)}
-        hint="Unique in the tenant. Applications may pass it as the organization authorization parameter."
-        errors={local.slug ?? server.slug}
-        autoComplete="off"
-        data-testid="org-slug"
-      />
-      <SelectField
-        label="Multi-factor authentication"
-        name="mfa_policy"
-        value={values.mfa_policy}
-        onChange={(e) => set("mfa_policy", e.target.value as MfaPolicy | "inherit")}
-        options={ORG_MFA_OPTIONS}
-        hint="Applies when a member signs in to this organization; the strictest policy wins."
-        errors={server.mfa_policy}
-        data-testid="org-mfa-policy"
-      />
-      {editing ? (
-        <>
-          <DefaultRoles
-            tenant={editing.tenant}
-            org={editing.org}
-            value={values.default_role_ids}
-            onChange={(next) => set("default_role_ids", next)}
-          />
-          {server.default_role_ids && (
-            <ul className="text-destructive space-y-0.5 text-sm" data-field-error>
-              {server.default_role_ids.map((m) => (
-                <li key={m.message}>{m.message}</li>
-              ))}
-            </ul>
-          )}
-        </>
-      ) : (
-        <p className="text-muted-foreground text-sm">
-          Default roles for just-in-time members can be chosen once the organization exists.
-        </p>
-      )}
-      <Button type="submit" disabled={pending} data-testid="org-submit">
-        {pending ? "Saving…" : submitLabel}
-      </Button>
-    </form>
+    <>
+      {/* Outside the form: the guard's buttons must not submit it. */}
+      <UnsavedChangesGuard blocker={blocker} />
+      <form onSubmit={submit} className="space-y-4" noValidate aria-label="Organization" data-testid="org-form">
+        {otherError ? <ProblemAlert error={otherError} /> : null}
+        <TextField
+          label="Display name"
+          name="display_name"
+          value={values.display_name}
+          maxLength={200}
+          onChange={(e) => {
+            set("display_name", e.target.value);
+            slugFill.onNameChange(e.target.value);
+          }}
+          hint="Shown to members, for example on the organization switcher at sign-in."
+          errors={local.display_name ?? server.display_name}
+          autoComplete="off"
+          data-testid="org-display-name"
+        />
+        <TextField
+          label="Slug"
+          name="slug"
+          value={values.slug}
+          onChange={(e) => {
+            set("slug", e.target.value);
+            slugFill.setSlug(e.target.value);
+          }}
+          hint="Unique in the tenant. Applications may pass it as the organization authorization parameter."
+          errors={local.slug ?? server.slug}
+          autoComplete="off"
+          data-testid="org-slug"
+        />
+        <SelectField
+          label="Multi-factor authentication"
+          name="mfa_policy"
+          value={values.mfa_policy}
+          onChange={(e) => set("mfa_policy", e.target.value as MfaPolicy | "inherit")}
+          options={ORG_MFA_OPTIONS}
+          hint="Applies when a member signs in to this organization; the strictest policy wins."
+          errors={server.mfa_policy}
+          data-testid="org-mfa-policy"
+        />
+        {editing ? (
+          <>
+            <DefaultRoles
+              tenant={editing.tenant}
+              org={editing.org}
+              value={values.default_role_ids}
+              onChange={(next) => set("default_role_ids", next)}
+            />
+            {server.default_role_ids && (
+              <ul className="text-destructive space-y-0.5 text-sm" data-field-error>
+                {server.default_role_ids.map((m) => (
+                  <li key={m.message}>{m.message}</li>
+                ))}
+              </ul>
+            )}
+          </>
+        ) : (
+          <p className="text-muted-foreground text-sm">
+            Default roles for just-in-time members can be chosen once the organization exists.
+          </p>
+        )}
+        <Button type="submit" disabled={pending} data-testid="org-submit">
+          {pending ? "Saving…" : submitLabel}
+        </Button>
+      </form>
+    </>
   );
 }
 
