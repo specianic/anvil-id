@@ -452,7 +452,7 @@ pub fn held_recovery_codes_state(
     .map_err(|e| CoreError::Internal(format!("flow state encoding failed: {e}")))
 }
 
-/// Whether the stored flow holds recovery codes ([`HeldCodesState`]) rather than an engine state.
+/// Whether the stored flow holds recovery codes (`HeldCodesState`) rather than an engine state.
 pub fn holds_recovery_codes(flow: &Flow) -> bool {
     flow.kind == FlowKind::Login && serde_json::from_str::<HeldCodesState>(&flow.state).is_ok()
 }
@@ -472,7 +472,7 @@ fn open_held(kek: &Kek, tenant: TenantId, flow: &Flow) -> Option<HeldPayload> {
     serde_json::from_slice(&plain).ok()
 }
 
-/// The recovery codes held in the stored flow `flow` of `tenant` (see [`open_held`]).
+/// The recovery codes held in the stored flow `flow` of `tenant` (see `open_held`).
 pub fn open_held_recovery_codes(
     kek: &Kek,
     tenant: TenantId,
