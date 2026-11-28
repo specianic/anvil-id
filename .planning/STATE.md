@@ -6,14 +6,14 @@ current_phase: 05
 current_phase_name: release 0 4 operate it
 current_plan: 33
 status: verifying
-stopped_at: Completed 07.1-16-PLAN.md
-last_updated: "2026-11-28T05:35:20.487Z"
+stopped_at: Completed 07.1-17-PLAN.md
+last_updated: "2026-11-28T05:37:55.056Z"
 last_activity: 2026-11-28
 progress:
   total_phases: 8
   completed_phases: 3
   total_plans: 215
-  completed_plans: 197
+  completed_plans: 198
   percent: 92
 ---
 
@@ -232,6 +232,7 @@ done before 05-29 tags v0.4.0.
 | Phase 07.1 P08 | 50min | 3 tasks | 37 files |
 | Phase 07.1 P07 | 210min | 3 tasks | 40 files |
 | Phase 07.1 P16 | 45min | 3 tasks | 9 files |
+| Phase 07.1 P17 | 75min | 3 tasks | 20 files |
 
 ## Accumulated Context
 
@@ -552,6 +553,7 @@ Recent decisions affecting current work:
 - [Phase 07.1]: Reset token rides sealed in the flash (never in flow state); expired verification link offers sign-in (resend deferred)
 - [Phase 07.1]: Client type picker sits atop the create form with Web preselected; APP_TYPES defaults (SPA/Native public+PKCE+skip_first_party, M2M client_credentials, agent consent required)
 - [Phase 07.1]: C-L7 deferred: secret rotation grace period needs server dual-secret support; UI states the old secret stops immediately
+- [Phase 07.1]: Console lands on the tenant Overview (getting-started checklist from API state); Login settings is one form with one Save and an editable sign-up mode
 
 ### Roadmap Evolution
 
@@ -569,6 +571,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-28T05:35:20.484Z
-Stopped at: Completed 07.1-16-PLAN.md
+Last session: 2026-11-28T05:37:55.053Z
+Stopped at: Completed 07.1-17-PLAN.md
 Resume file: None
