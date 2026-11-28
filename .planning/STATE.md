@@ -6,14 +6,14 @@ current_phase: 05
 current_phase_name: release 0 4 operate it
 current_plan: 33
 status: verifying
-stopped_at: Completed 07.1-15-PLAN.md
-last_updated: "2026-11-28T05:39:42.530Z"
+stopped_at: Completed 07.1-12-PLAN.md
+last_updated: "2026-11-28T05:48:32.311Z"
 last_activity: 2026-11-28
 progress:
   total_phases: 8
   completed_phases: 3
   total_plans: 215
-  completed_plans: 199
+  completed_plans: 200
   percent: 93
 ---
 
@@ -234,6 +234,7 @@ done before 05-29 tags v0.4.0.
 | Phase 07.1 P16 | 45min | 3 tasks | 9 files |
 | Phase 07.1 P17 | 75min | 3 tasks | 20 files |
 | Phase 07.1 P15 | 65min | 3 tasks | 12 files |
+| Phase 07.1 P12 | 60min | 2 tasks | 21 files |
 
 ## Accumulated Context
 
@@ -558,6 +559,9 @@ Recent decisions affecting current work:
 - [Phase 07.1]: Console email change also sends email_verified: false; admin re-verifies with Mark email verified
 - [Phase 07.1]: CSV import: dotted columns (claims.x, attributes.x, password.x) converted in the browser to NDJSON; one server import pipeline
 - [Phase 07.1]: Audit admin actors resolve by id shape: UUID = system-tenant user, else system-tenant client
+- [Phase 07.1]: return_to account targets: exact const list (ACCOUNT_PATHS), byte-equal, no query/fragment, no normalisation
+- [Phase 07.1]: Account header sign-out posts to the existing end-session endpoint; CSRF lives on the /ui/logout confirmation (no second sign-out route)
+- [Phase 07.1]: Account ?client_id= is carried between pages only when it resolved to a static client's home; never echoed otherwise
 
 ### Roadmap Evolution
 
@@ -575,6 +579,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-28T05:39:42.527Z
-Stopped at: Completed 07.1-15-PLAN.md
+Last session: 2026-11-28T05:48:32.307Z
+Stopped at: Completed 07.1-12-PLAN.md
 Resume file: None
