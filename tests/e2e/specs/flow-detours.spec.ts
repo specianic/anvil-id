@@ -12,8 +12,10 @@
 //   - MFA enrolment Start over (and the reload-safe recovery codes page)
 //   - email code "Use another way"
 //   - upstream link confirmation: Cancel after a wrong password
-// plus: a stale or unknown `?request=` fails on GET with a way forward and no password field, and
-// the "Signed in" page (no app) links the account and offers sign-out.
+// plus: a stale or unknown `?request=` fails on GET with a way forward and no password field, the
+// "Signed in" page (no app) links the account and offers sign-out, the consent step names the
+// account and explains offline access (U-M15, U-L4), and a link confirmed during sign-in shows
+// when it was last used (U-L7).
 //
 // The journeys live in lib/detours.ts; nojs-flow-detours.spec.ts runs the ones that need no
 // JavaScript with JavaScript disabled.
@@ -40,7 +42,7 @@ import {
 } from '../lib/detours';
 import { deleteTenant } from '../lib/email-code';
 import { createTenant, githubMockConnection, randomSlug, tenantIssuer } from '../lib/upstream';
-import { fakeRp, fakeRpOrigin, token, uxState, type FakeRp } from '../lib/ux-state';
+import { atRp, authorizeUrl, fakeRp, fakeRpOrigin, token, uxState, type FakeRp } from '../lib/ux-state';
 
 let rp: FakeRp | undefined;
 let ctx: DetourContext;
@@ -146,4 +148,77 @@ test('a stale or unknown request= stops on GET with a way forward and no passwor
 
 test('the Signed in page without an app links the account and signs out', async ({ page }) => {
   await signedInPageWithoutClient(page, ctx, anvilUrl());
+});
+
+test('consent names the account and says what offline access means; Allow returns to the app', async ({
+  page,
+  browser,
+}) => {
+  // U-M15 and U-L4 on the journey: the consent step in the middle of an app sign-in.
+  const s = await uxState(browser);
+  const user = await detourUser(ctx.token, 'detour-consent');
+  const req = authorizeUrl(s.clients.thirdParty, { scope: 'openid email offline_access', prompt: 'consent' });
+  await page.goto(req.url);
+  await login(page, user.email, user.password);
+  await expect(page.locator('form#consent-form')).toBeVisible();
+  await expect(page.locator('#consent-account-email')).toHaveText(user.email);
+  await expect(page.locator('#consent-other')).toBeVisible();
+  await expect(page.locator('[data-scope="offline_access"]')).toContainText('Stay signed in to UX journeys third-party app');
+  await expect(page.locator('#consent-offline-note')).toBeVisible();
+  await page.locator('#consent-allow').click();
+  const params = await atRp(page);
+  expect(params.get('code')).toBeTruthy();
+  expect(params.get('state')).toBe(req.state);
+});
+
+test('upstream link confirmed with the password returns to the app; Linked shows when it was last used', async ({
+  page,
+}) => {
+  // U-L7: a link created by a sign-in is "used" at that moment (not "Never").
+  test.setTimeout(120_000);
+  const tenant = randomSlug('detour-lastused');
+  await createTenant(ctx.token, tenant, { auto_link: false });
+  const mocks: Array<{ stop(): Promise<void> }> = [];
+  try {
+    const user = await detourUser(ctx.token, 'detour-lastused', tenant);
+    const { mock } = await githubMockConnection(ctx.token, tenant, 'github', [
+      { sub: '8180002', id: 8180002, login: 'octo-lastused', name: 'Octo Used', email: user.email },
+    ]);
+    mocks.push(mock);
+    const created = await createClient(
+      ctx.token,
+      {
+        name: 'Detour last used app',
+        client_type: 'public',
+        application_type: 'web',
+        auth_method: 'none',
+        redirect_uris: [`${fakeRpOrigin()}/lastused-callback`],
+        grant_types: ['authorization_code'],
+        scopes: ['openid', 'profile', 'email'],
+      },
+      tenant,
+      'skip_first_party',
+    );
+    const client = { client_id: created.client_id, redirect_uri: `${fakeRpOrigin()}/lastused-callback` };
+    const started = await startAtLogin(page, client, tenantIssuer(tenant));
+    await page.locator('#upstream-github').click();
+    await expect(page).toHaveURL((url) => url.origin === mock.url);
+    await page.locator('#mock-continue').click();
+    await expect(page.locator('form#upstream-link')).toBeVisible();
+    await page.locator('#identifier').fill(user.email);
+    await page.locator('#password').fill(user.password);
+    await page.locator('#upstream-link-submit').click();
+    await expectCodeAtRp(page, started);
+
+    await page.goto(`${tenantIssuer(tenant)}/ui/account/linked`);
+    const row = page.locator('tr[id^="linked-"]').first();
+    await expect(row).toBeVisible();
+    // Columns: provider, email, linked, last used, action.
+    const lastUsed = row.locator('td').nth(3);
+    await expect(lastUsed.locator('time')).toHaveAttribute('datetime', /\d{4}-\d{2}-\d{2}T/);
+    await expect(lastUsed).not.toHaveText('Never');
+  } finally {
+    for (const m of mocks) await m.stop();
+    await deleteTenant(ctx.token, tenant);
+  }
 });

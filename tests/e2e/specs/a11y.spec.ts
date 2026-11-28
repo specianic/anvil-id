@@ -17,6 +17,15 @@
 // with a passkey, with an authenticator app), TOTP enrolment (clean and with a wrong code), recovery
 // codes, sessions (two browsers) and connected apps (empty and with an app).
 //
+// 07.1 pages (plan 07.1-18), light and dark: Signed in, root signed in, logout confirmation, signed
+// out, the expired sign-in link page, request-bound message pages with "Continue to <app>"
+// (check-email naming the address, verification done, recovery sent), a used verification link,
+// MFA enrolment with the otpauth link, the in-flow recovery codes page, sign-in with email sign-in
+// on and the email code page, account pages with the account header, the account confirmation
+// step, the org chooser, the non-member page, the upstream link confirmation and the changed
+// console pages (overview, users list, user page, new client picker, client page, new connection,
+// login settings, new tenant).
+//
 // Env: ANVIL_URL, MAILPIT_URL, SETUP_URL, E2E_STATE_FILE (see tests/e2e/run.sh).
 
 import { createHash, randomBytes } from 'node:crypto';
@@ -31,6 +40,7 @@ import {
   anvilUrl,
   completeSetup,
   createClient,
+  createConsoleAdmin,
   createUser,
   login,
   randomEmail,
@@ -42,6 +52,14 @@ import {
 } from '../lib/anvil';
 import { extractLink, latestMessageTo } from '../lib/mailpit';
 import { totp } from '../lib/totp';
+import { withTenantSettings } from '../lib/admin';
+import { consoleUrl } from '../lib/console';
+import { consoleSignIn } from '../lib/console-ux';
+import { detourUser, startAtLogin } from '../lib/detours';
+import { deleteTenant } from '../lib/email-code';
+import { addMember, createOrg, createOrgClient, createOrgTenant } from '../lib/org';
+import { createTenant, githubMockConnection, randomSlug, tenantIssuer } from '../lib/upstream';
+import { atRp, authorizeUrl as uxAuthorizeUrl, fakeRp, fakeRpOrigin, token, uxState } from '../lib/ux-state';
 
 const VIEWPORTS = [
   { name: 'mobile', width: 375, height: 812 },
@@ -461,5 +479,245 @@ test('sessions page with two browsers', async ({ page, browser }) => {
     await auditPage(page);
   } finally {
     await other.close();
+  }
+});
+
+// ---------------------------------------------------------------------------------------------
+// 07.1 pages (plan 07.1-18): every new or changed end-user page and the changed console pages, in
+// the light and the dark scheme. Journeys go through the fake RP (lib/ux-state.ts) where an app is
+// involved; tenant settings are changed with withTenantSettings (restored afterwards) or in a
+// tenant of the test's own.
+
+/** Runs `fn` with the fake RP listening, then stops it. */
+async function withFakeRp<T>(fn: () => Promise<T>): Promise<T> {
+  const rp = await fakeRp();
+  try {
+    return await fn();
+  } finally {
+    await rp.close();
+  }
+}
+
+test('signed in, root signed in, logout confirmation and signed out', async ({ page, browser }) => {
+  const tok = await token(await uxState(browser));
+  const user = await detourUser(tok, 'a11y-out');
+  await page.goto(`${anvilUrl()}/ui/login`);
+  await login(page, user.email, user.password);
+  await expect(page.locator('#message-body')).toHaveAttribute('data-message-key', 'login.signed_in');
+  await expect(page.locator('#link-account')).toBeVisible();
+  await auditPage(page);
+
+  await page.goto(`${anvilUrl()}/`);
+  await expect(page.locator('#form-sign-out button')).toBeVisible();
+  await auditPage(page);
+
+  await page.goto(`${anvilUrl()}/ui/logout`);
+  await expect(page.locator('#logout-confirm-submit')).toBeVisible();
+  await auditPage(page);
+  await page.locator('#logout-confirm-submit').click();
+  await expect(page).toHaveURL((url) => url.pathname.endsWith('/ui/signed-out'));
+  await expect(page.locator('#link-login')).toBeVisible();
+  await auditPage(page);
+});
+
+test('request-bound pages: expired link, check-email with Continue, verification done, recovery sent', async ({
+  page,
+  browser,
+}) => {
+  const s = await uxState(browser);
+  const tok = await token(s);
+  await page.goto(`${anvilUrl()}/ui/login?request=0190a6d4-0000-7000-8000-0000000a11aa`);
+  await expect(page.locator('#error-message')).toHaveAttribute('data-error-key', 'flow_expired');
+  await auditPage(page);
+
+  await withFakeRp(() =>
+    withTenantSettings(tok, { require_verified_email: true }, async () => {
+      await startAtLogin(page, s.clients.web);
+      await page.locator('#link-registration').click();
+      const email = randomEmail('a11y-verify');
+      await register(page, email, randomPassword());
+      await expect(page.locator('#message-sent-to')).toContainText(email);
+      await expect(page.locator('#link-continue')).toBeVisible();
+      await auditPage(page);
+
+      const link = extractLink((await latestMessageTo(email)).Text, '/ui/verification');
+      await page.goto(link);
+      await page.locator('#verification-submit').click();
+      await expect(page.locator('#message-body')).toHaveAttribute('data-message-key', 'verification.done');
+      await expect(page.locator('#link-continue')).toBeVisible();
+      await auditPage(page);
+      // The used link: notice plus a way forward, no button.
+      await page.goto(link);
+      await expect(page.locator('[data-message-key="links.expired"]')).toBeVisible();
+      await auditPage(page);
+
+      await startAtLogin(page, s.clients.web);
+      await page.locator('#link-recovery').click();
+      await page.locator('#email').fill(randomEmail('a11y-nobody'));
+      await page.locator('#recovery-submit').click();
+      await expect(page.locator('#message-body')).toHaveAttribute('data-message-key', 'recovery.sent');
+      await expect(page.locator('#link-continue')).toBeVisible();
+      await auditPage(page);
+    }),
+  );
+});
+
+test('MFA enrolment with the otpauth link and the in-flow recovery codes page', async ({ page, browser }) => {
+  const s = await uxState(browser);
+  const tok = await token(s);
+  const user = await detourUser(tok, 'a11y-mfa');
+  await withFakeRp(() =>
+    withTenantSettings(tok, { mfa_policy: 'required' }, async () => {
+      await startAtLogin(page, s.clients.web);
+      await login(page, user.email, user.password);
+      await expect(page.locator('form#mfa-enroll')).toBeVisible();
+      await expect(page.locator('#link-otpauth')).toBeVisible();
+      await auditPage(page);
+      const secret = ((await page.locator('#totp-secret').textContent()) ?? '').replace(/\s+/g, '');
+      await page.locator('#code').fill(totp(secret));
+      await page.locator('#mfa-enroll-submit').click();
+      await expect(page).toHaveURL(/\/ui\/login\/recovery-codes\?flow=/);
+      await expect(page.locator('#recovery-codes li')).toHaveCount(10);
+      await auditPage(page);
+      await page.locator('#recovery-codes-confirm-submit').click();
+      expect((await atRp(page)).get('code')).toBeTruthy();
+    }),
+  );
+});
+
+test('sign-in with email sign-in on and the email code page', async ({ page, browser }) => {
+  const s = await uxState(browser);
+  const tok = await token(s);
+  const user = await detourUser(tok, 'a11y-email');
+  await withFakeRp(() =>
+    withTenantSettings(tok, { email_otp: true }, async () => {
+      await startAtLogin(page, s.clients.web);
+      await expect(page.locator('#email-code-request-submit')).toBeVisible();
+      await auditPage(page);
+      await page.locator('#identifier').fill(user.email);
+      await page.locator('#email-code-request-submit').click();
+      await expect(page.locator('form#email-code')).toBeVisible();
+      await auditPage(page);
+    }),
+  );
+});
+
+test('account pages with the account header and the confirmation step', async ({ page, browser }) => {
+  const tok = await token(await uxState(browser));
+  const user = await detourUser(tok, 'a11y-acct');
+  await signIn(page, user.email, user.password);
+  for (const section of ['profile', 'email', 'password', 'linked', 'attributes']) {
+    await page.goto(`${anvilUrl()}/ui/account/${section}`);
+    await expect(page.locator('#account-identity')).toContainText(user.email);
+    await expect(page.locator('#sign-out-submit')).toBeVisible();
+    await auditPage(page);
+  }
+
+  // A destructive action asks first (07.1-21): the confirmation step.
+  const secret = await beginTotp(page);
+  await page.locator('#code').fill(totp(secret));
+  await page.locator('#totp-confirm-submit').click();
+  await expect(page.locator('#recovery-codes li')).toHaveCount(10);
+  await page.goto(`${anvilUrl()}/ui/account/security`);
+  await page.locator('#recovery-codes-regenerate-submit').click();
+  await expect(page.locator('form#form-confirm')).toBeVisible();
+  await auditPage(page);
+});
+
+test('org chooser and the non-member page', async ({ page, browser }) => {
+  const tok = await token(await uxState(browser));
+  const tenant = await createOrgTenant(tok, 'a11y-org');
+  try {
+    const acme = await createOrg(tok, tenant.slug, { slug: 'acme', display_name: 'Acme Corp' });
+    const beta = await createOrg(tok, tenant.slug, { slug: 'beta', display_name: 'Beta Labs' });
+    await createOrg(tok, tenant.slug, { slug: 'gamma', display_name: 'Gamma Works' });
+    const user = await detourUser(tok, 'a11y-org', tenant.slug);
+    await addMember(tok, tenant.slug, acme.id, user.id);
+    await addMember(tok, tenant.slug, beta.id, user.id);
+    const client = await createOrgClient(tok, tenant.slug, `${fakeRpOrigin()}/a11y-org`, 'required');
+    await withFakeRp(async () => {
+      await page.goto(uxAuthorizeUrl(client, {}, tenant.issuer).url);
+      await login(page, user.email, user.password);
+      await expect(page.locator('form#select-organization-form')).toBeVisible();
+      await auditPage(page);
+      await page.locator('#organization-acme').check();
+      await page.locator('#select-organization-form-submit').click();
+      await atRp(page);
+
+      await page.goto(uxAuthorizeUrl(client, { organization: 'gamma' }, tenant.issuer).url);
+      await expect(page.locator('#org-not-member-email')).toHaveText(user.email);
+      await auditPage(page);
+    });
+  } finally {
+    await tenant.cleanup();
+  }
+});
+
+test('upstream link confirmation page', async ({ page, browser }) => {
+  const tok = await token(await uxState(browser));
+  const tenant = randomSlug('a11y-link');
+  await createTenant(tok, tenant, { auto_link: false });
+  let stop: (() => Promise<void>) | undefined;
+  try {
+    const user = await detourUser(tok, 'a11y-link', tenant);
+    const { mock } = await githubMockConnection(tok, tenant, 'github', [
+      { sub: '8190001', id: 8190001, login: 'octo-a11y', name: 'Octo A11y', email: user.email },
+    ]);
+    stop = () => mock.stop();
+    await page.goto(`${tenantIssuer(tenant)}/ui/login`);
+    await page.locator('#upstream-github').click();
+    await expect(page).toHaveURL((url) => url.origin === mock.url);
+    await page.locator('#mock-continue').click();
+    await expect(page.locator('form#upstream-link')).toBeVisible();
+    await auditPage(page);
+  } finally {
+    await stop?.();
+    await deleteTenant(tok, tenant);
+  }
+});
+
+/** axe on a console page in both schemes at 390px and desktop (the console has its own reflow checks). */
+async function auditConsolePage(page: Page): Promise<void> {
+  for (const scheme of SCHEMES) {
+    await page.emulateMedia({ colorScheme: scheme });
+    // The console's controls animate their colours (transition-*): audit the settled scheme, not a
+    // colour halfway between light and dark.
+    await page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished)));
+    for (const vp of [
+      { name: 'mobile', width: 390, height: 844 },
+      { name: 'desktop', width: 1280, height: 800 },
+    ]) {
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await test.step(`console axe ${vp.name} ${scheme}`, async () => {
+        await expectNoA11yViolations(page);
+      });
+    }
+  }
+  await page.emulateMedia({ colorScheme: 'light' });
+  await page.setViewportSize({ width: 1280, height: 800 });
+}
+
+test('changed console pages', async ({ page, browser }) => {
+  const s = await uxState(browser);
+  const tok = await token(s);
+  const admin = { email: randomEmail('a11y-console'), password: randomPassword() };
+  await createConsoleAdmin(tok, admin);
+  const user = await detourUser(tok, 'a11y-console-user');
+  await consoleSignIn(page, admin);
+  const visits: Array<[string, () => Promise<void>]> = [
+    ['t/default', () => expect(page.getByTestId('tenant-overview')).toBeVisible()],
+    ['t/default/users', () => expect(page.getByRole('heading', { level: 1, name: 'Users' })).toBeVisible()],
+    [`t/default/users/${user.id}`, () => expect(page.getByRole('heading', { level: 1, name: user.email })).toBeVisible()],
+    ['t/default/clients/new', () => expect(page.getByTestId('app-type-picker')).toBeVisible()],
+    [`t/default/clients/${s.clients.web.client_id}`, () => expect(page.getByTestId('integration-card')).toBeVisible()],
+    ['t/default/connections/new', () => expect(page.getByRole('heading', { level: 1, name: 'New connection' })).toBeVisible()],
+    ['t/default/settings', () => expect(page.getByTestId('login-settings-form')).toBeVisible()],
+    ['tenants/new', () => expect(page.getByTestId('tenant-form')).toBeVisible()],
+  ];
+  for (const [path, ready] of visits) {
+    await page.goto(consoleUrl(path));
+    await ready();
+    await page.waitForLoadState('networkidle');
+    await auditConsolePage(page);
   }
 });
