@@ -108,11 +108,13 @@ mod pg {
     }
 
     /// Connect to the test server's `postgres` database, retrying while the container finishes
-    /// starting (it can report "ready" a moment before it accepts connections under load).
+    /// starting (it can report "ready" a moment before it accepts connections under load; behind
+    /// Docker Desktop's port forwarding the mapped port can refuse connections for over 10 s, so
+    /// the budget is 30 s).
     async fn connect_admin(server: &str) -> sqlx::PgConnection {
         let url = format!("{server}/postgres");
         let mut last_err = None;
-        for _ in 0..50 {
+        for _ in 0..150 {
             match sqlx::PgConnection::connect(&url).await {
                 Ok(conn) => return conn,
                 Err(e) => {
