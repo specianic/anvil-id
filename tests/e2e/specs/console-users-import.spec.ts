@@ -6,7 +6,11 @@
 // all (NDJSON)" downloads every user without any password hash, and the user page's Export and
 // GDPR export download that user's documents.
 //
-// Runs in a tenant of its own, deleted afterwards, signed in as a console administrator created
+// 07.1-15 (C-M10): a CSV file is converted to NDJSON in the browser and posted to the same import
+// endpoint. Malformed CSV is reported with its line numbers before anything is uploaded; the dry
+// run says "Would create"; the page links the import docs and offers an example CSV.
+//
+// Each test runs in a tenant of its own, deleted afterwards, signed in as a console administrator created
 // with createConsoleAdmin (its token carries admin:write, which allows exports).
 //
 // Console test ids (admin-ui, plan 07-20):
@@ -16,6 +20,7 @@
 //   (`data-dry-run`), `import-count-{created|updated|unchanged|conflict|rejected|weak}`, rows
 //   `import-row` (`data-line`, `data-outcome`, `data-reason`, `data-weak`)
 // - user page: `user-export`, `export-user`, `export-user-gdpr`
+// - CSV (07.1-15): `import-csv-errors` (items carry `data-line`), `import-docs-link`, `import-example`
 //
 // Env: ANVIL_URL, SETUP_URL, E2E_STATE_FILE (see tests/e2e/run.sh).
 
@@ -26,10 +31,10 @@ import { randomEmail } from '../lib/anvil';
 import { openTenantPage, setUpConsoleTenant, type ConsoleTenant } from '../lib/console-v10';
 import { signInAtTenant, tenantUsers } from '../lib/upstream';
 
-let tenant: ConsoleTenant | undefined;
+const tenants: ConsoleTenant[] = [];
 
 test.afterAll(async () => {
-  await tenant?.cleanup();
+  for (const t of tenants) await t.cleanup();
 });
 
 /** Openwall crypt_blowfish test vector (public): password `U*U`, cost 5 (below 10, so weak). */
@@ -48,7 +53,8 @@ async function download(page: Page, testId: string): Promise<{ name: string; tex
 
 test('console: import users with a dry run, sign in with the old bcrypt password, export', async ({ page, browser }) => {
   test.setTimeout(150_000);
-  tenant = await setUpConsoleTenant(browser, page, 'cimp');
+  const tenant = await setUpConsoleTenant(browser, page, 'cimp');
+  tenants.push(tenant);
   const { token, slug } = tenant;
 
   const bcryptEmail = randomEmail('imp-bcrypt');
@@ -174,5 +180,72 @@ test('console: import users with a dry run, sign in with the old bcrypt password
     expect(gdpr.name).toBe(`user-${user.id}.gdpr.json`);
     expect(gdpr.text).toContain(bcryptEmail);
     expect(gdpr.text).not.toContain('$argon2');
+  });
+});
+
+test('console: import users from CSV (line-numbered errors, Would create, then created)', async ({ page, browser }) => {
+  test.setTimeout(120_000);
+  const tenant = await setUpConsoleTenant(browser, page, 'ccsv');
+  tenants.push(tenant);
+  const { token, slug } = tenant;
+  const ada = randomEmail('csv-ada');
+  const grace = randomEmail('csv-grace');
+
+  await test.step('the page links the docs and offers an example CSV', async () => {
+    await openTenantPage(page, slug, 'users/import');
+    await expect(page.getByRole('heading', { level: 1, name: 'Import users' })).toBeVisible();
+    await expect(page.getByTestId('import-docs-link')).toHaveAttribute('href', /IMPORT-EXPORT\.html$/);
+    const example = await download(page, 'import-example');
+    expect(example.name).toBe('users-example.csv');
+    expect(example.text.split(/\r?\n/)[0]).toBe('email,email_verified,claims.name,claims.locale,attributes.department');
+  });
+
+  await test.step('malformed CSV is reported with line numbers and nothing is uploaded', async () => {
+    const broken = ['email,claims.name,nickname', `${ada},Ada`, `${grace},"Hopper, Grace`].join('\n');
+    await page.getByTestId('import-file').setInputFiles({ name: 'broken.csv', mimeType: 'text/csv', buffer: Buffer.from(broken) });
+    // An unknown column fails the header row (line 1) before any record is read.
+    await expect(page.getByTestId('import-file-error')).toContainText('could not be converted');
+    await expect(page.getByTestId('import-csv-errors').locator('li[data-line="1"]')).toContainText('nickname');
+    await expect(page.getByTestId('import-submit')).toBeDisabled();
+    await expectNoA11yViolations(page);
+
+    const rows = ['email,claims.name', `${ada},Ada,extra`, `${grace},"Hopper, Grace`].join('\n');
+    await page.getByTestId('import-file').setInputFiles({ name: 'rows.csv', mimeType: 'text/csv', buffer: Buffer.from(rows) });
+    const errors = page.getByTestId('import-csv-errors');
+    await expect(errors.locator('li[data-line="2"]')).toContainText('Expected 2 fields');
+    await expect(errors.locator('li[data-line="3"]')).toContainText('never closed');
+    await expect(page.getByTestId('import-submit')).toBeDisabled();
+    expect((await tenantUsers(token, slug)).map((u) => u.email)).not.toContain(ada);
+  });
+
+  await test.step('a valid CSV converts; the dry run says Would create; the real run creates', async () => {
+    const csv = [
+      '\uFEFFemail,email_verified,claims.name,claims.locale',
+      `${ada},true,Ada Lovelace,en`,
+      `${grace},false,"Hopper, Grace",en`,
+      '',
+    ].join('\r\n');
+    await page.getByTestId('import-file').setInputFiles({ name: 'users.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) });
+    await expect(page.getByTestId('import-file-error')).toHaveCount(0);
+    await expect(page.getByTestId('import-file-summary')).toContainText('2 records (converted from CSV)');
+    await expect(page.getByTestId('import-dry-run')).toBeChecked();
+    await page.getByTestId('import-submit').click();
+
+    const report = page.getByTestId('import-report');
+    await expect(report).toHaveAttribute('data-dry-run', 'true');
+    await expect(report.getByText('Would create', { exact: true }).first()).toBeVisible();
+    await expect(report.getByTestId('import-count-created')).toHaveText('2');
+    await expect(report.locator('[data-testid="import-row"][data-line="1"]')).toContainText('Would create');
+    await expectNoA11yViolations(page);
+    expect((await tenantUsers(token, slug)).map((u) => u.email)).not.toContain(ada);
+
+    await page.getByTestId('import-dry-run').uncheck();
+    await page.getByTestId('import-submit').click();
+    await expect(report).toHaveAttribute('data-dry-run', 'false');
+    await expect(report.getByTestId('import-count-created')).toHaveText('2');
+    await expect(report.locator('[data-testid="import-row"][data-line="2"]')).toContainText('Created');
+
+    const users = await tenantUsers(token, slug);
+    expect(users.map((u) => u.email)).toEqual(expect.arrayContaining([ada, grace]));
   });
 });
