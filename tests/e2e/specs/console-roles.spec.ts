@@ -100,8 +100,9 @@ test('console: define a role, assign it, map the claim and see it in the ID toke
     const rule = page.getByTestId('claim-rule-roles');
     await expect(rule.getByLabel('Put roles into tokens')).toBeChecked();
     await rule.getByLabel('Claim name').fill('app_roles');
-    await page.getByTestId('save-claim-mapping').click();
-    await expect(page.getByTestId('claim-mapping-form').getByRole('status')).toHaveText('Token claims saved.');
+    // 07.1-17: Login settings has one Save for all its sections.
+    await page.getByTestId('save-login-settings').click();
+    await expect(page.getByTestId('login-settings-save-bar').getByRole('status')).toHaveText('Login settings saved.');
     await expectNoA11yViolations(page);
   });
 

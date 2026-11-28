@@ -18,7 +18,7 @@ export function consoleUrl(path = ''): string {
 
 /**
  * Opens /console/, follows the OIDC redirect to the system tenant's hosted login page, signs in
- * and waits for the console shell (the default tenant's Users page is the landing page).
+ * and waits for the console shell on its landing page (the default tenant's Overview, 07.1-17).
  */
 export async function consoleLogin(page: Page, admin: AdminAccount): Promise<void> {
   await page.goto(consoleUrl());
@@ -28,13 +28,15 @@ export async function consoleLogin(page: Page, admin: AdminAccount): Promise<voi
 }
 
 /**
- * The signed-in console shell on its landing page: the Users page of the tenant used last in this
- * browser tab, `default` in a fresh one (05-04: tenant pages live under /console/t/{tenant}/).
+ * The signed-in console shell on its landing page: the Overview (getting-started checklist) of the
+ * tenant used last in this browser tab, `default` in a fresh one (05-04: tenant pages live under
+ * /console/t/{tenant}/; 07.1-17: the Overview replaced the Users page as the landing page).
  */
 export async function expectConsoleHome(page: Page, tenant = 'default'): Promise<void> {
-  await expect(page).toHaveURL((url) => url.pathname === `/console/t/${tenant}/users`);
+  await expect(page).toHaveURL((url) => url.pathname.replace(/\/+$/, '') === `/console/t/${tenant}`);
   await expect(page.getByRole('navigation', { name: 'Main' })).toBeVisible();
-  await expect(page.getByRole('heading', { level: 1, name: 'Users' })).toBeVisible();
+  await expect(page.getByTestId('tenant-overview')).toBeVisible();
+  await expect(page.getByRole('heading', { level: 2, name: 'Getting started' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
 }
 

@@ -1,9 +1,11 @@
 // ORG-01: the multi-tenant console (05-04). An admin of the system tenant reaches the tenant
 // switcher by keyboard, lists the tenants (the system tenant is marked), creates a tenant from the
-// console, switches between tenants (the section is kept), creates a client in the new tenant only,
-// reads the tenant's issuer and discovery URL from the list and checks it against the published
-// discovery document, checks that a pre-0.4 deep link shows the not-found page and deletes
-// the tenant again. Every console page visited passes the axe audit and the console CSP holds.
+// console (07.1-17: the slug follows the display name until edited, and a "Tenant created" page
+// shows the issuer and discovery URL with "Create your first app"), switches between tenants (the
+// section is kept), creates a client in the new tenant only, reads the tenant's issuer and
+// discovery URL from the list and checks it against the published discovery document, checks that
+// a pre-0.4 deep link shows the not-found page and deletes the tenant again from the Danger zone by
+// typing its slug. Every console page visited passes the axe audit and the console CSP holds.
 //
 // Env: ANVIL_URL, SETUP_URL, E2E_STATE_FILE (see tests/e2e/run.sh).
 
@@ -88,7 +90,7 @@ test('admin console: create, switch to and delete a tenant', async ({ page, brow
     await expectNoA11yViolations(page);
   });
 
-  await test.step('create a tenant: the slug is checked, then the console opens the new tenant', async () => {
+  await test.step('create a tenant: the slug follows the name, is checked, and the created page shows the URLs', async () => {
     // Back to the first page of the list (findInPagedTable may have paged).
     await page.goto(consoleUrl('tenants'));
     await page.getByTestId('new-tenant').click();
@@ -96,22 +98,47 @@ test('admin console: create, switch to and delete a tenant', async ({ page, brow
     await expect(page.getByRole('heading', { level: 1, name: 'New tenant' })).toBeVisible();
     await expectNoA11yViolations(page);
 
+    // The slug is filled in from the display name (accents folded, spaces to '-').
+    await page.getByLabel('Display name').fill('Ünïcödé Straße');
+    await expect(page.getByLabel('Slug')).toHaveValue('unicode-strasse');
+    await page.getByLabel('Display name').fill(`Console ${slug}`);
+    await expect(page.getByLabel('Slug')).toHaveValue(`console-${slug}`);
+
     // One character is below the slug rule (2-63 of a-z, 0-9, '-'): refused before any request.
+    // Editing the slug stops the name from overwriting it.
     await page.getByLabel('Slug').fill('a');
     await page.getByLabel('Display name').fill(`Console ${slug}`);
+    await expect(page.getByLabel('Slug')).toHaveValue('a');
     await page.getByTestId('create-tenant').click();
     await expect(page.getByText('The tenant was not created. Fix the errors below.')).toBeVisible();
     await expect(page.getByLabel('Slug')).toHaveAttribute('aria-invalid', 'true');
     await expectNoA11yViolations(page);
 
     await page.getByLabel('Slug').fill(slug);
-    await page.getByLabel('Registration').selectOption('invite_only');
+    await page.getByLabel('Sign-up').selectOption('invite_only');
     await page.getByTestId('create-tenant').click();
-    await expect(page).toHaveURL((url) => url.pathname === `/console/t/${slug}/users`);
-    await expect(page.getByRole('heading', { level: 1, name: 'Users' })).toBeVisible();
-    await expect(switcher).toHaveValue(slug);
+
+    // A success page with the tenant's URLs instead of an empty Users page.
+    await expect(page.getByRole('heading', { level: 1, name: 'Tenant created' })).toBeVisible();
+    const created = page.getByTestId('tenant-created');
+    const issuer = tenantIssuer(slug);
+    await expect(created.getByLabel('Issuer', { exact: true })).toHaveValue(issuer);
+    await expect(created.getByLabel('Discovery URL', { exact: true })).toHaveValue(
+      `${issuer}/.well-known/openid-configuration`,
+    );
+    await expect(created.getByRole('button', { name: 'Copy Issuer' })).toBeVisible();
+    await expect(created.getByRole('button', { name: 'Copy Discovery URL' })).toBeVisible();
+    await expect(created.getByRole('link', { name: 'Create your first app' })).toHaveAttribute(
+      'href',
+      `/console/t/${slug}/clients/new`,
+    );
     expect((await tenantSettings(token, slug)).registration).toBe('invite_only');
     await expectNoA11yViolations(page);
+
+    await created.getByRole('link', { name: 'Open the tenant overview' }).click();
+    await expect(page).toHaveURL((url) => url.pathname === `/console/t/${slug}`);
+    await expect(page.getByRole('heading', { level: 1, name: `Console ${slug}` })).toBeVisible();
+    await expect(switcher).toHaveValue(slug);
   });
 
   await test.step('switching tenants keeps the section', async () => {
@@ -178,20 +205,28 @@ test('admin console: create, switch to and delete a tenant', async ({ page, brow
     await page.goto(consoleUrl('audit?action=session_revoked'));
     await expect(page.getByRole('heading', { level: 1, name: 'Page not found' })).toBeVisible();
 
-    // The default tenant cannot be deleted; its settings page says so.
+    // The default tenant cannot be deleted; its settings page says so and has no danger zone.
     await page.goto(consoleUrl('t/default/settings'));
     await expect(page.getByTestId('tenant-undeletable')).toBeVisible();
-    await expect(page.getByTestId('delete-tenant')).toHaveCount(0);
+    await expect(page.getByTestId('danger-zone')).toHaveCount(0);
   });
 
-  await test.step('delete the tenant from its settings page', async () => {
+  await test.step('delete the tenant from the Danger zone by typing its slug', async () => {
     await switcher.selectOption(slug);
     await expect(page).toHaveURL((url) => url.pathname === `/console/t/${slug}/settings`);
-    await page.getByTestId('delete-tenant').click();
+    const zone = page.getByTestId('danger-zone');
+    await expect(zone.getByRole('heading', { name: 'Danger zone' })).toBeVisible();
+    await zone.getByRole('button', { name: 'Delete tenant' }).click();
     const dialog = page.getByRole('alertdialog', { name: 'Delete this tenant?' });
     await expect(dialog).toBeVisible();
     await expectNoA11yViolations(page);
-    await dialog.getByRole('button', { name: 'Delete tenant' }).click();
+    const confirm = dialog.getByRole('button', { name: 'Delete tenant' });
+    await expect(confirm).toBeDisabled();
+    await dialog.getByTestId('danger-zone-confirm-input').fill(slug.toUpperCase());
+    await expect(confirm).toBeDisabled();
+    await dialog.getByTestId('danger-zone-confirm-input').fill(slug);
+    await expect(confirm).toBeEnabled();
+    await confirm.click();
     await expect(page).toHaveURL((url) => url.pathname === '/console/tenants');
     await expect(page.getByRole('heading', { level: 1, name: 'Tenants' })).toBeVisible();
 

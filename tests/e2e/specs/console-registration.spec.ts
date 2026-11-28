@@ -46,9 +46,13 @@ test('console: DCR policy, initial access token and dynamic client badge', async
 
   await test.step('open the registration settings from Login settings and set DCR open', async () => {
     await openTenantPage(page, slug, 'settings');
+    await expect(page.getByTestId('registration-settings-link')).toHaveText('Dynamic client registration');
     await page.getByTestId('registration-settings-link').click();
     await expect(page).toHaveURL((url) => url.pathname === `/console/t/${slug}/settings/registration`);
-    await expect(page.getByRole('heading', { level: 1, name: 'Client registration' })).toBeVisible();
+    await expect(page.getByRole('heading', { level: 1, name: 'Dynamic client registration' })).toBeVisible();
+    // 07.1-17: the page says it is about apps registering themselves, not user sign-up.
+    await expect(page.getByTestId('registration-explainer')).toContainText('Lets apps register themselves');
+    await expect(page.getByTestId('registration-explainer')).toContainText('nothing to do with users signing up');
     await expect(page.getByTestId('dcr-policy')).toHaveValue('disabled');
     await expectNoA11yViolations(page);
     await page.getByTestId('dcr-policy').selectOption('open');
@@ -89,7 +93,7 @@ test('console: DCR policy, initial access token and dynamic client badge', async
       await openTenantPage(page, slug, 'clients');
       const badge = page.getByTestId(`client-source-${clientId}`);
       await findInPagedTable(page, badge);
-      await expect(badge).toHaveText('Dynamic');
+      await expect(badge).toHaveText('Dynamic registration');
       await expectNoA11yViolations(page);
     });
   });

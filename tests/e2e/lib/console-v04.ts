@@ -8,7 +8,8 @@
 // - roles: `new-role`, `role-form`, `role-name`, `role-permission-input`, `role-permission-add`,
 //   `role-permissions`, `role-submit`, `delete-role`, `last-administrator`; user page tab "Roles":
 //   `assign-role-select`, `assign-role`, `user-role-{name}`
-// - claim mapping (Login settings): `claim-mapping-form`, `claim-rule-roles`, `save-claim-mapping`
+// - claim mapping (Login settings): `claim-mapping-form`, `claim-rule-roles`; saved with the page's
+//   one `save-login-settings` button (07.1-17)
 // - webhooks: `new-webhook`, `webhook-form`, `webhook-name`, `webhook-url`, `webhook-submit`,
 //   `open-webhook`, `webhook-status`, `send-webhook-test`, `toggle-webhook`, `rotate-webhook-secret`,
 //   `delete-webhook`, `delivery-log` (rows: `tr[data-event][data-status]`), `refresh-deliveries`
