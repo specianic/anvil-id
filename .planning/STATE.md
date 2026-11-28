@@ -6,15 +6,15 @@ current_phase: 05
 current_phase_name: release 0 4 operate it
 current_plan: 33
 status: verifying
-stopped_at: Completed 07.1-11-PLAN.md
-last_updated: "2026-11-28T05:57:16.813Z"
+stopped_at: Completed 07.1-13-PLAN.md
+last_updated: "2026-11-28T06:07:41.559Z"
 last_activity: 2026-11-28
 progress:
   total_phases: 8
   completed_phases: 3
   total_plans: 215
-  completed_plans: 203
-  percent: 94
+  completed_plans: 204
+  percent: 95
 ---
 
 # Project State
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 **Status:** Phase complete — ready for verification
 **Last Activity:** 2026-11-28
 **Last Activity Description:** 06-26 phase gate complete (921-pair security map, 1.0 plaintext scans, `just doc`, legacy console redirects removed, anvilid 1.0.0-beta.1, 1.0 migrations pinned, every workflow incl. load, deploy and the macOS release dry run green on 9c40f61). Open: 04-33/v0.3.0 and 05-29/v0.4.0 (owner), then 06-27 (v1.0.0-beta.1)
-**Progress:** [█████████░] 94%
+**Progress:** [██████████] 95%
 
 Phase 5 has 33 plans (05-01 through 05-33). Every plan except 05-29 (release v0.4.0 after owner sign-off) has a
 SUMMARY. Current Plan counts plans in execution order: 05-29 is the 33rd and last. Phase 4 still has one open plan, 04-33 (manual real-provider checklist, then tag v0.3.0); it must be
@@ -238,6 +238,7 @@ done before 05-29 tags v0.4.0.
 | Phase 07.1 P20 | 80min | 2 tasks | 11 files |
 | Phase 07.1 P14 | 100min | 3 tasks | 39 files |
 | Phase 07.1 P11 | 120min | 3 tasks | 14 files |
+| Phase 07.1 P13 | 180min | 3 tasks | 40 files |
 
 ## Accumulated Context
 
@@ -573,6 +574,9 @@ Recent decisions affecting current work:
 - [Phase 07.1]: Tenant YAML: absent logo/organizations keep rc.3 meaning even with prune; export omits both when empty so old exports are byte-identical
 - [Phase 07.1]: Tenant YAML: a document never verifies a domain; routing of unverified claims is held at stored values and applied by an apply after DNS verification
 - [Phase 07.1]: Tenant YAML: organizations are never pruned; prune deletes only roles/connections/domains/branding missing from a listed org entry
+- [Phase 07.1]: Recovery codes of an in-flow enrolment are held KEK-sealed (anvilid/flow-recovery-codes/v1) in a new non-engine flow until confirmed on GET /ui/login/recovery-codes
+- [Phase 07.1]: Sign-in page has one address field; the email-code button posts it via formaction and UiForm falls back email<-identifier
+- [Phase 07.1]: U-L9 (registration reveals existing account) deferred: needs a new email kind
 
 ### Roadmap Evolution
 
@@ -590,6 +594,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-28T05:57:16.807Z
-Stopped at: Completed 07.1-11-PLAN.md
+Last session: 2026-11-28T06:07:41.553Z
+Stopped at: Completed 07.1-13-PLAN.md
 Resume file: None
