@@ -41,6 +41,7 @@ import {
   type DetourContext,
 } from '../lib/detours';
 import { deleteTenant } from '../lib/email-code';
+import { expectWayForward } from '../lib/layout';
 import { createTenant, githubMockConnection, randomSlug, tenantIssuer } from '../lib/upstream';
 import { atRp, authorizeUrl, fakeRp, fakeRpOrigin, token, uxState, type FakeRp } from '../lib/ux-state';
 
@@ -220,5 +221,15 @@ test('upstream link confirmed with the password returns to the app; Linked shows
   } finally {
     for (const m of mocks) await m.stop();
     await deleteTenant(ctx.token, tenant);
+  }
+});
+
+test('consent, account chooser and org chooser opened without a request offer a way forward', async ({ page }) => {
+  // U-H5: these pages used to be dead ends when opened without (or after) their request.
+  for (const path of ['/ui/consent', '/ui/select-account', '/ui/select-organization']) {
+    const resp = await page.goto(`${anvilUrl()}${path}`);
+    expect(resp?.status() ?? 0, path).toBeGreaterThanOrEqual(400);
+    await expect(page.locator('#error-message')).toBeVisible();
+    await expectWayForward(page);
   }
 });

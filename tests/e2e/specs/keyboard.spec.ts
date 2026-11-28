@@ -7,6 +7,8 @@
 // by keyboard), consent buttons, account security / TOTP enrolment / recovery codes, sessions and
 // connected apps (tab order follows the DOM, visible unobscured focus, 24 px targets).
 //
+// 07.1-18: the console's keyboard order (skip link, tenant switcher, Sign out, navigation; C-L8).
+//
 // Env: ANVIL_URL, SETUP_URL, E2E_STATE_FILE (see tests/e2e/run.sh).
 
 import { createHash, randomBytes } from 'node:crypto';
@@ -16,12 +18,14 @@ import {
   adminToken,
   anvilUrl,
   createClient,
+  createConsoleAdmin,
   createUser,
   login,
   randomEmail,
   randomPassword,
   sharedManagementCredential,
 } from '../lib/anvil';
+import { consoleSignIn } from '../lib/console-ux';
 import { totp } from '../lib/totp';
 
 /** The account navigation, in DOM order (themes/default/templates/account_base.html). */
@@ -510,3 +514,34 @@ for (const vp of PHASE3_VIEWPORTS) {
     });
   });
 }
+
+// C-L8 (the admin review's "works well" list, kept): the console's keyboard order starts with the
+// skip link, then the tenant switcher, then Sign out, then the main navigation.
+test('console: skip link, tenant switcher, sign out, then the navigation', async ({ page, browser }) => {
+  const token = await adminToken(await sharedManagementCredential(browser));
+  const admin = { email: randomEmail('kbd-console'), password: randomPassword() };
+  await createConsoleAdmin(token, admin);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await consoleSignIn(page, admin);
+  await expect(page.getByTestId('tenant-overview')).toBeVisible();
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+
+  const stops: string[] = [];
+  for (let i = 0; i < 12; i++) {
+    await page.keyboard.press('Tab');
+    stops.push(
+      await page.evaluate(() => {
+        const el = document.activeElement as HTMLElement | null;
+        if (!el) return '';
+        if (el.id === 'tenant-switcher-select') return 'tenant-switcher';
+        if (el.closest('nav[aria-label="Main"]')) return 'nav';
+        return (el.textContent ?? '').trim() || el.tagName.toLowerCase();
+      }),
+    );
+  }
+  const at = (name: string) => stops.indexOf(name);
+  expect(at('Skip to content'), `tab stops: ${stops.join(' > ')}`).toBe(0);
+  expect(at('tenant-switcher')).toBeGreaterThan(at('Skip to content'));
+  expect(at('Sign out')).toBeGreaterThan(at('tenant-switcher'));
+  expect(at('nav')).toBeGreaterThan(at('Sign out'));
+});
