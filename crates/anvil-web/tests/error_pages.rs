@@ -533,3 +533,94 @@ async fn app_home_never_for_dynamic_or_cimd_clients() {
         assert_eq!(way_forward(&html), ["link-login"], "{source:?}");
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Tenant root pages
+// ---------------------------------------------------------------------------------------------
+
+/// Seeds the first administrator, so setup is complete.
+async fn set_up(app: &TestApp) {
+    let system = ui_helpers::system_tenant(app).id;
+    token_support::seed_user(app, system, "admin@example.com").await;
+}
+
+#[tokio::test]
+async fn root_pages_before_setup_show_setup_guidance() {
+    let app = TestApp::new().await;
+    for path in ["/", "/ui", "/t/system", "/t/default/ui"] {
+        let resp = app.get(path).await;
+        assert_eq!(resp.status, 200, "{path}");
+        assert_eq!(resp.header("cache-control"), Some("no-store"), "{path}");
+        let html = resp.text();
+        assert!(html.contains("Setup is not complete"), "{path}: {html}");
+        assert!(
+            html.contains("id=\"setup-command\">anvilid admin setup-url<"),
+            "{path}"
+        );
+        assert!(!html.contains("id=\"link-login\""), "{path}");
+    }
+    let resp = app.send(get_with("/", &[("accept-language", "de")])).await;
+    let html = resp.text();
+    assert!(html.contains("<html lang=\"de\""));
+    assert!(html.contains(&catalog(
+        "de",
+        "errors_friendly.ftl",
+        "errors_friendly-setup_pending_title"
+    )));
+}
+
+#[tokio::test]
+async fn root_pages_signed_out_offer_sign_in_and_administration_on_the_default_tenant() {
+    let app = TestApp::new().await;
+    set_up(&app).await;
+    ui_helpers::create_tenant(&app, "acme").await;
+    for (path, admin) in [
+        ("/", true),
+        ("/ui", true),
+        ("/t/default/", true),
+        ("/t/system", false),
+        ("/t/acme/ui", false),
+    ] {
+        let resp = app.get(path).await;
+        assert_eq!(resp.status, 200, "{path}");
+        assert_eq!(resp.header("cache-control"), Some("no-store"), "{path}");
+        let html = resp.text();
+        assert!(href(&html, "link-login").is_some(), "{path}: {html}");
+        assert!(!html.contains("id=\"form-sign-out\""), "{path}");
+        assert_eq!(
+            href(&html, "link-administration").as_deref(),
+            admin.then_some("https://op.test/console/"),
+            "{path}"
+        );
+        assert!(!html.contains("setup-command"), "{path}");
+    }
+    assert_eq!(
+        href(&app.get("/t/acme/").await.text(), "link-login").as_deref(),
+        Some("https://op.test/t/acme/ui/login")
+    );
+}
+
+#[tokio::test]
+async fn root_page_signed_in_offers_account_and_sign_out() {
+    let app = TestApp::new().await;
+    set_up(&app).await;
+    ui_helpers::register(&app, "", ALICE, PASSWORD).await;
+    let resp = ui_helpers::login(&app, "", ALICE, PASSWORD).await;
+    assert!(resp.status == 200 || resp.status == 303, "{}", resp.status);
+    for path in ["/", "/ui"] {
+        let resp = app.get(path).await;
+        assert_eq!(resp.status, 200);
+        let html = resp.text();
+        assert_eq!(
+            href(&html, "link-account").as_deref(),
+            Some("https://op.test/ui/account/profile"),
+            "{html}"
+        );
+        assert!(
+            html.contains("id=\"form-sign-out\" method=\"post\""),
+            "{html}"
+        );
+        assert!(!html.contains("id=\"link-login\""));
+        assert!(html.contains("id=\"link-administration\""));
+    }
+}

@@ -24,3 +24,21 @@ errors_friendly-danger_label = Fehler
 errors_friendly-detail_label = Technische Details (Entwicklungsmodus):
 errors_friendly-back_to_app = Zurück zu { $app }
 errors_friendly-go_home = Zur Startseite
+
+## Tenant root page and setup guidance (`/`, `/ui`, `/console/` before setup, setup pages)
+
+errors_friendly-root_title = Willkommen
+errors_friendly-root_heading = Willkommen
+errors_friendly-root_signed_out = Melden Sie sich an, um die Anwendungen dieses Dienstes zu nutzen und Ihr Konto zu verwalten.
+errors_friendly-root_signed_in = Sie sind angemeldet.
+errors_friendly-root_sign_in = Anmelden
+errors_friendly-root_administration = Verwaltung
+errors_friendly-setup_pending_title = Die Einrichtung ist nicht abgeschlossen
+errors_friendly-setup_pending_lead = Diese AnvilID-Installation hat noch keinen Administrator.
+errors_friendly-setup_pending_how = Öffnen Sie den Einrichtungslink, den der Server beim ersten Start ausgegeben hat, oder erstellen Sie einen neuen, indem Sie diesen Befehl dort ausführen, wo der Server läuft:
+errors_friendly-setup_pending_after = Über den Einrichtungslink legen Sie den ersten Administrator an. Danach ist hier die Admin-Konsole verfügbar.
+errors_friendly-setup_used_title = Die Einrichtung ist bereits abgeschlossen
+errors_friendly-setup_used = Der erste Administrator wurde bereits angelegt, daher kann dieser Einrichtungslink nicht mehr verwendet werden. Melden Sie sich stattdessen an der Admin-Konsole an.
+errors_friendly-setup_done_next = Melden Sie sich als Nächstes mit dem Administratorkonto an der Admin-Konsole an, um Ihre erste Anwendung anzulegen.
+errors_friendly-setup_done_automation = Für die Automatisierung
+errors_friendly-setup_done_automation_lead = Skripte und CI-Pipelines können die Admin-API mit diesen Verwaltungs-Zugangsdaten aufrufen.

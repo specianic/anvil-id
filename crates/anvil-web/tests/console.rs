@@ -5,9 +5,12 @@
 //! `cd admin-ui && npm run build` has been run. HTML assertions accept the placeholder or the real
 //! index; the asset assertions (negotiation, caching, 304, missing chunk) run only when the real
 //! `index.html` is served, using the hashed asset names it references.
+//! Before setup (no administrator in the system tenant) the index routes serve the "Setup is not
+//! complete" guidance instead (07.1-08); the tests that need the console seed an administrator.
 //! Selected backend via `ANVILID_TEST_DB`.
 
 mod support;
+mod token_support;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -65,6 +68,16 @@ fn entry_script(html: &str) -> String {
     html[start..end].to_owned()
 }
 
+const SETUP_PENDING_MARKER: &str = "id=\"setup-command\"";
+
+/// The harness app with a system administrator, so setup is complete.
+async fn set_up() -> TestApp {
+    let app = TestApp::new().await;
+    let system = app.system.as_ref().expect("installed").tenant.id;
+    token_support::seed_user(&app, system, "admin@example.com").await;
+    app
+}
+
 #[tokio::test]
 async fn bare_console_redirects_to_trailing_slash() {
     let app = TestApp::new().await;
@@ -75,7 +88,7 @@ async fn bare_console_redirects_to_trailing_slash() {
 
 #[tokio::test]
 async fn console_root_and_deep_links_serve_the_index_or_placeholder() {
-    let app = TestApp::new().await;
+    let app = set_up().await;
     let root = app.get("/console/").await;
     let built = assert_console_html("/console/", &root);
 
@@ -92,16 +105,44 @@ async fn console_root_and_deep_links_serve_the_index_or_placeholder() {
 }
 
 #[tokio::test]
-async fn console_works_before_installation() {
-    // Installation-wide and outside tenant resolution: no tenant needed.
-    let app = TestApp::uninstalled().await;
+async fn console_before_setup_shows_setup_guidance() {
+    // Installation-wide and outside tenant resolution: no tenant needed. Uninstalled, and
+    // installed without an administrator, both show the guidance with the console's headers.
+    for app in [TestApp::uninstalled().await, TestApp::new().await] {
+        for path in ["/console/", "/console/users/123"] {
+            let resp = app
+                .send(
+                    Request::get(path)
+                        .header("accept-language", "de")
+                        .body(Body::empty())
+                        .expect("request"),
+                )
+                .await;
+            assert_eq!(resp.status, StatusCode::OK, "{path}");
+            assert_eq!(resp.header("content-security-policy"), Some(CSP), "{path}");
+            assert_eq!(resp.header("cache-control"), Some("no-cache"), "{path}");
+            let html = resp.text();
+            assert!(html.contains(SETUP_PENDING_MARKER), "{path}: {html}");
+            assert!(html.contains("anvilid admin setup-url"), "{path}");
+            assert!(html.contains("<html lang=\"de\""), "{path}: localized");
+            assert!(!html.contains("<div id=\"root\">"), "{path}: not the SPA");
+            assert!(!html.contains("<script"), "{path}: no script");
+            assert!(!html.contains(" style="), "{path}: no inline style");
+        }
+        // Assets are unaffected: a missing chunk is still a 404.
+        let resp = app.get("/console/assets/missing.css").await;
+        assert_eq!(resp.status, StatusCode::NOT_FOUND);
+    }
+    // After setup the console itself is served.
+    let app = set_up().await;
     let resp = app.get("/console/").await;
-    assert_console_html("uninstalled /console/", &resp);
+    assert_console_html("set up /console/", &resp);
+    assert!(!resp.text().contains(SETUP_PENDING_MARKER));
 }
 
 #[tokio::test]
 async fn console_is_not_tenant_scoped() {
-    let app = TestApp::new().await;
+    let app = set_up().await;
     let resp = app.get("/t/system/console/").await;
     assert_eq!(resp.status, StatusCode::NOT_FOUND);
     assert_ne!(resp.header("content-security-policy"), Some(CSP));
@@ -111,7 +152,7 @@ async fn console_is_not_tenant_scoped() {
 
 #[tokio::test]
 async fn missing_files_and_traversal_are_404() {
-    let app = TestApp::new().await;
+    let app = set_up().await;
     for path in [
         "/console/assets/does-not-exist-abc123.js",
         "/console/assets/missing.css",
@@ -130,7 +171,7 @@ async fn missing_files_and_traversal_are_404() {
 
 #[tokio::test]
 async fn hashed_assets_are_negotiated_cached_and_revalidated() {
-    let app = TestApp::new().await;
+    let app = set_up().await;
     let index = app.get("/console/").await;
     if !assert_console_html("/console/", &index) {
         // Placeholder build: no assets to check (run `cd admin-ui && npm run build` to cover them).

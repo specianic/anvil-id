@@ -20,6 +20,8 @@ pub mod observability;
 pub mod protocol;
 pub mod render;
 pub mod request_context;
+// Phase 7.1 (plan 07.1-08): tenant root pages and the setup guidance page.
+mod root;
 pub mod state;
 pub mod tenant;
 mod theme;
@@ -60,6 +62,7 @@ pub fn router(state: AppState) -> Router {
         // (it brings its own origin and CORS layers).
         .merge(api_flows::routes())
         .merge(theme::routes())
+        .merge(root::routes())
         .merge(admin::routes())
         .route("/assets/{*path}", get(assets::handler))
         // Hands the matched (tenant-relative) route template to the request layer.
@@ -84,7 +87,7 @@ pub fn router(state: AppState) -> Router {
     };
     let mut outer = Router::new()
         // Installation-wide, outside tenant resolution: `/t/{slug}/console/` is not the console.
-        .merge(console::routes())
+        .merge(console::routes().with_state(state.clone()))
         // Probes never depend on tenant lookups and are never rate limited.
         .merge(health::routes().with_state(state.clone()));
     // `metrics_on_main_port`: the same /metrics route as the separate listener, outside tenant

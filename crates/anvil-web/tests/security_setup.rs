@@ -116,6 +116,17 @@ async fn setup_creates_the_admin_and_a_working_management_client_once() {
         element_text(&html, "admin-api-base"),
         "https://op.test/api/admin/v1"
     );
+    // The way forward is the console (07.1-08); the credentials are the automation block.
+    let console = html.find("id=\"link-console\"").expect("#link-console");
+    assert!(
+        html.contains("href=\"https://op.test/console/\""),
+        "console link: {html}"
+    );
+    let automation = html
+        .find("id=\"setup-automation\"")
+        .expect("automation block");
+    assert!(console < automation, "the console link comes first");
+    assert!(html.find("id=\"mgmt-client-secret\"").expect("secret") > automation);
     assert_eq!(user_count(&app, SYSTEM_TENANT_SLUG).await, 1);
     assert_eq!(user_count(&app, DEFAULT_TENANT_SLUG).await, 0);
 
@@ -169,11 +180,51 @@ async fn setup_creates_the_admin_and_a_working_management_client_once() {
         "a wrong secret is rejected"
     );
 
-    // The token is single-use: a second submission (fresh form, same token) is refused.
+    // The token is single-use. Reopening the link explains that setup is complete and links the
+    // console (no form, no secret); a second submission (same token) is refused.
     let resp = Client::get(&app, &setup_path(&app.setup_token)).await;
-    assert_eq!(resp.status, 403);
+    assert_setup_already_complete(&resp);
     let resp = post_setup(&app, &action, &csrf, &app.setup_token).await;
     assert_eq!(resp.status, 403);
+    assert!(!resp.html().contains("mgmt-client-secret"));
+    assert_eq!(user_count(&app, SYSTEM_TENANT_SLUG).await, 1);
+}
+
+/// "Setup is already complete": 200, `no-store`, `#link-console`, no form and no credentials.
+fn assert_setup_already_complete(resp: &support::TestResponse) {
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_eq!(resp.header("cache-control"), Some("no-store"));
+    let html = resp.html();
+    assert!(
+        html.contains("data-message-key=\"errors_friendly.setup_used\""),
+        "{html}"
+    );
+    assert!(html.contains("Setup is already complete"), "{html}");
+    assert!(
+        html.contains("id=\"link-console\" href=\"https://op.test/console/\""),
+        "{html}"
+    );
+    assert!(!html.contains("setup-submit"), "no form");
+    assert!(!html.contains("name=\"password\""), "no form");
+    assert!(!html.contains("mgmt-client-secret"), "no credentials");
+}
+
+#[tokio::test]
+async fn unknown_setup_token_after_setup_grants_nothing() {
+    let app = OwnApp::installed().await;
+    let (action, csrf) = open_setup(&app).await;
+    let resp = post_setup(&app, &action, &csrf, &app.setup_token).await;
+    assert_eq!(resp.status, 200);
+    // Once an administrator exists, any unusable link (consumed, expired or forged) explains
+    // that setup is complete: no form, nothing created.
+    for path in ["/setup", "/setup?token=", "/setup?token=not-a-real-token"] {
+        let resp = Client::get(&app, path).await;
+        assert_setup_already_complete(&resp);
+    }
+    // A forged token is still refused on submission, before any flow work.
+    let resp = post_setup(&app, &action, &csrf, "not-a-real-token").await;
+    assert_eq!(resp.status, 403);
+    assert_eq!(error_key(&resp.html()).as_deref(), Some("invalid_request"));
     assert!(!resp.html().contains("mgmt-client-secret"));
     assert_eq!(user_count(&app, SYSTEM_TENANT_SLUG).await, 1);
 }

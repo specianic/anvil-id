@@ -18,6 +18,13 @@ expression: html
 <h1 id="page-heading">Setup complete</h1>
 
 <p class="anvil-lead">The administrator account <strong id="admin-email">admin@example.test</strong> has been created.</p>
+<p>Next, sign in to the admin console with the administrator account to create your first app.</p>
+<nav class="anvil-links" aria-label="Next steps">
+<a id="link-console" href="https:&#x2f;&#x2f;op.test&#x2f;console&#x2f;">Open the admin console</a>
+</nav>
+<section id="setup-automation" aria-labelledby="setup-automation-heading">
+<h2 id="setup-automation-heading">For automation</h2>
+<p>Scripts and CI pipelines can call the admin API with these management credentials.</p>
 <div class="anvil-callout anvil-callout-warning" role="note">
 <p><strong>Copy these credentials now.</strong> The client secret is shown only once and cannot be displayed again.</p>
 </div>
@@ -32,6 +39,7 @@ expression: html
 <dd><code id="admin-api-base">https:&#x2f;&#x2f;op.test&#x2f;api&#x2f;admin&#x2f;v1</code></dd>
 </dl>
 <p class="anvil-muted">Use the client ID and secret with the client credentials grant at the token endpoint to call the admin API.</p>
+</section>
 
 </main>
 </body>

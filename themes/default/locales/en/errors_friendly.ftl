@@ -24,3 +24,21 @@ errors_friendly-danger_label = Error
 errors_friendly-detail_label = Technical detail (development mode):
 errors_friendly-back_to_app = Back to { $app }
 errors_friendly-go_home = Go to the start page
+
+## Tenant root page and setup guidance (`/`, `/ui`, `/console/` before setup, setup pages)
+
+errors_friendly-root_title = Welcome
+errors_friendly-root_heading = Welcome
+errors_friendly-root_signed_out = Sign in to use the apps of this service and manage your account.
+errors_friendly-root_signed_in = You are signed in.
+errors_friendly-root_sign_in = Sign in
+errors_friendly-root_administration = Administration
+errors_friendly-setup_pending_title = Setup is not complete
+errors_friendly-setup_pending_lead = This AnvilID installation has no administrator yet.
+errors_friendly-setup_pending_how = Open the setup link the server printed when it first started, or create a new one by running this command where the server runs:
+errors_friendly-setup_pending_after = The setup link creates the first administrator. Afterwards, the admin console is available here.
+errors_friendly-setup_used_title = Setup is already complete
+errors_friendly-setup_used = The first administrator has already been created, so this setup link can no longer be used. Sign in to the admin console instead.
+errors_friendly-setup_done_next = Next, sign in to the admin console with the administrator account to create your first app.
+errors_friendly-setup_done_automation = For automation
+errors_friendly-setup_done_automation_lead = Scripts and CI pipelines can call the admin API with these management credentials.

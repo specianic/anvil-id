@@ -31,9 +31,10 @@ use crate::error::CoreError;
 use crate::model::{
     ApplicationType, AuditAction, AuditActor, AuditDetails, AuditOutcome, Client, ClientAuthMethod,
     ClientId, ClientType, ClientUpdate, ConsentMode, DEFAULT_TENANT_SLUG, GrantType, InstallPlan,
-    KeyState, NewClient, NewPasswordCredential, NewSetupToken, NewTenant, NewUser, PublicUrl,
-    RegistrationMode, RequestContext, SYSTEM_TENANT_SLUG, SecretHash, StandardClaims, Tenant,
-    TenantId, TenantSettings, TenantUpdate, TokenFormat, User, UserId, UserStatus, normalize_email,
+    KeyState, NewClient, NewPasswordCredential, NewSetupToken, NewTenant, NewUser, PageRequest,
+    PublicUrl, RegistrationMode, RequestContext, SYSTEM_TENANT_SLUG, SecretHash, StandardClaims,
+    Tenant, TenantId, TenantSettings, TenantUpdate, TokenFormat, User, UserId, UserStatus,
+    normalize_email,
 };
 use crate::policy::{PasswordPolicy, check_password};
 use crate::ports::{InstallOutcome, PasswordHasher, SetupOutcome, Storage, StorageError};
@@ -496,6 +497,33 @@ impl BootstrapService {
             .setup()
             .peek_setup_token(&hash, self.clock.now())
             .await?)
+    }
+
+    /// Whether setup is complete: the installation exists and its system tenant has a user (the
+    /// first administrator, created by [`Self::complete_setup`]). Read-only. Drives the "setup is
+    /// not complete" guidance of the tenant root and the console, and the "setup is already
+    /// complete" answer to a reopened setup link.
+    pub async fn setup_complete(&self) -> Result<bool, CoreError> {
+        let Some(system) = self
+            .storage
+            .tenants()
+            .get_by_slug(SYSTEM_TENANT_SLUG)
+            .await?
+        else {
+            return Ok(false);
+        };
+        let users = self
+            .storage
+            .users()
+            .list(
+                system.id,
+                PageRequest {
+                    after: None,
+                    limit: 1,
+                },
+            )
+            .await?;
+        Ok(!users.items.is_empty())
     }
 
     /// Consumes the setup token and creates the first administrator (system tenant) and the

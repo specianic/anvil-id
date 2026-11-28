@@ -211,12 +211,14 @@ fn setup() {
 fn setup_done() {
     let token_endpoint = "https://op.test/t/system/token";
     let api = "https://op.test/api/admin/v1";
+    let console = "https://op.test/console/";
     let html = renderer()
         .page(
             "setup_done.html",
             context! {
                 page => page("Setup complete"),
                 admin_email => "admin@example.test",
+                console_url => console,
                 mgmt_client_id => "mgmt-123",
                 mgmt_client_secret => "secret-shown-once",
                 token_endpoint => token_endpoint,
@@ -231,11 +233,40 @@ fn setup_done() {
         "token-endpoint",
         "admin-api-base",
         "admin-email",
+        "link-console",
+        "setup-automation",
     ] {
         assert!(html.contains(&format!("id=\"{id}\"")), "{id}");
     }
-    assert_no_external("setup_done.html", &html, &[token_endpoint, api]);
+    // The console is the way forward; the credentials sit in the automation block below it.
+    let console_at = html.find("id=\"link-console\"").expect("console link");
+    assert!(console_at < html.find("id=\"setup-automation\"").expect("automation"));
+    assert_no_external("setup_done.html", &html, &[token_endpoint, api, console]);
     insta::assert_snapshot!("setup_done", html);
+}
+
+#[test]
+fn root_and_setup_pending() {
+    let console = "https://op.test/console/";
+    let html = renderer()
+        .page(
+            "root.html",
+            context! { page => page("Welcome"), signed_in => false, administration => console },
+        )
+        .expect("renders")
+        .0;
+    assert!(html.contains("id=\"link-login\""), "{html}");
+    assert!(html.contains("id=\"link-administration\""), "{html}");
+    assert_no_external("root.html", &html, &[console]);
+    let html = renderer()
+        .page(
+            "console_setup_pending.html",
+            context! { page => page("Setup is not complete") },
+        )
+        .expect("renders")
+        .0;
+    assert!(html.contains("<code id=\"setup-command\">anvilid admin setup-url</code>"));
+    assert_no_external("console_setup_pending.html", &html, &[]);
 }
 
 #[test]

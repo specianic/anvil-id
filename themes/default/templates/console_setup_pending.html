@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{#- "Setup is not complete": shown by the tenant root and /console/ before the first
+    administrator exists. Only `page`. #setup-command names the command that prints a new
+    setup link. -#}
+{% block heading %}{{ t("errors_friendly.setup_pending_title") }}{% endblock %}
+{% block content %}
+<p class="anvil-lead" id="setup-pending">{{ t("errors_friendly.setup_pending_lead") }}</p>
+<p>{{ t("errors_friendly.setup_pending_how") }}</p>
+<pre><code id="setup-command">anvilid admin setup-url</code></pre>
+<p class="anvil-muted">{{ t("errors_friendly.setup_pending_after") }}</p>
+{% endblock %}

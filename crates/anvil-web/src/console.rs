@@ -17,15 +17,20 @@
 //!   Release artifacts must contain the real console; CI enforces that, not `build.rs`.
 //! - Every console response carries [`CONSOLE_CSP`]. The console needs no inline script or style
 //!   (03-03), so `script-src` and `style-src` are both `'self'`.
+//! - Before setup (no administrator yet) the index routes serve the server-rendered "Setup is not
+//!   complete" page (`console_setup_pending.html`, naming `anvilid admin setup-url`) instead of
+//!   the SPA or the placeholder: nobody can sign in yet. Assets are unaffected.
 
 use axum::Router;
 use axum::body::Body;
-use axum::extract::Path;
+use axum::extract::{Path, RawQuery, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
 
 use crate::http_cache::{etag_from_digest, if_none_match};
+use crate::root::console_setup_pending;
+use crate::state::AppState;
 
 #[derive(rust_embed::Embed)]
 #[folder = "$CARGO_MANIFEST_DIR/../../admin-ui/dist"]
@@ -44,7 +49,7 @@ pub const NO_CACHE: &str = "no-cache";
 const INDEX: &str = "index.html";
 
 /// Routes of the console, merged into the outer (installation-wide) router.
-pub fn routes<S: Clone + Send + Sync + 'static>() -> Router<S> {
+pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/console", get(redirect_to_root))
         .route("/console/", get(root))
@@ -55,22 +60,70 @@ async fn redirect_to_root() -> Redirect {
     Redirect::permanent("/console/")
 }
 
-async fn root(headers: HeaderMap) -> Response {
-    serve(String::new(), &headers)
+async fn root(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    RawQuery(query): RawQuery,
+) -> Response {
+    serve(&state, String::new(), &headers, query.as_deref()).await
 }
 
-async fn handler(Path(path): Path<String>, headers: HeaderMap) -> Response {
-    serve(path, &headers)
+async fn handler(
+    State(state): State<AppState>,
+    Path(path): Path<String>,
+    headers: HeaderMap,
+    RawQuery(query): RawQuery,
+) -> Response {
+    serve(&state, path, &headers, query.as_deref()).await
 }
 
-fn serve(path: String, headers: &HeaderMap) -> Response {
+async fn serve(
+    state: &AppState,
+    path: String,
+    headers: &HeaderMap,
+    query: Option<&str>,
+) -> Response {
     let built = ConsoleAssets::get(INDEX).is_some();
     match resolve_path(&path, |p| ConsoleAssets::get(p).is_some()) {
         PathTarget::NotFound => not_found(),
-        PathTarget::Index if !built => placeholder(),
-        PathTarget::Index => serve_file(INDEX, headers),
+        PathTarget::Index => match state.ui_bootstrap_service().setup_complete().await {
+            Ok(true) if built => serve_file(INDEX, headers),
+            Ok(true) => placeholder(),
+            Ok(false) => setup_pending(state, headers, query),
+            Err(e) => {
+                tracing::error!(error = %e, "console: reading the setup state failed");
+                server_error()
+            }
+        },
         PathTarget::Asset(p) => serve_file(&p, headers),
     }
+}
+
+/// The "Setup is not complete" page with the console's headers (CSP, `no-cache`).
+fn setup_pending(state: &AppState, headers: &HeaderMap, query: Option<&str>) -> Response {
+    let mut resp = console_setup_pending(state, headers, query);
+    let h = resp.headers_mut();
+    h.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(CONSOLE_CSP),
+    );
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static(NO_CACHE));
+    resp
+}
+
+fn server_error() -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        [
+            csp(),
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/plain; charset=utf-8"),
+            ),
+        ],
+        "internal server error",
+    )
+        .into_response()
 }
 
 /// What a request path below `/console/` maps to.

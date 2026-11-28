@@ -1,7 +1,17 @@
 {% extends "base.html" %}
+{#- Setup success. Variables besides `page`: admin_email, console_url (primary #link-console),
+    and, for automation, mgmt_client_id, mgmt_client_secret (shown once), token_endpoint,
+    admin_api_base. -#}
 {% block heading %}{{ t("title.setup_done") }}{% endblock %}
 {% block content %}
 <p class="anvil-lead">{{ t("setup_done.lead_before") }} <strong id="admin-email">{{ admin_email }}</strong> {{ t("setup_done.lead_after") }}</p>
+<p>{{ t("errors_friendly.setup_done_next") }}</p>
+<nav class="anvil-links" aria-label="{{ t("nav.next_steps") }}">
+<a id="link-console" href="{{ console_url }}">{{ t("nav.open_console") }}</a>
+</nav>
+<section id="setup-automation" aria-labelledby="setup-automation-heading">
+<h2 id="setup-automation-heading">{{ t("errors_friendly.setup_done_automation") }}</h2>
+<p>{{ t("errors_friendly.setup_done_automation_lead") }}</p>
 <div class="anvil-callout anvil-callout-warning" role="note">
 <p><strong>{{ t("setup_done.copy_now") }}</strong> {{ t("setup_done.copy_note") }}</p>
 </div>
@@ -16,4 +26,5 @@
 <dd><code id="admin-api-base">{{ admin_api_base }}</code></dd>
 </dl>
 <p class="anvil-muted">{{ t("setup_done.usage") }}</p>
+</section>
 {% endblock %}

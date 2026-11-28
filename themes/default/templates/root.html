@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{#- Tenant root page (`/` and `/ui`). Variables besides `page`: signed_in, administration (the
+    console URL on the default tenant, else none). The way forward comes from page.links
+    (ui::nav::NavContext): link-login when signed out; link-account, link-console (system
+    tenant) and the sign-out form form-sign-out when signed in. -#}
+{% block heading %}{{ t("errors_friendly.root_heading") }}{% endblock %}
+{% block content %}
+<p class="anvil-lead" id="root-lead">{% if signed_in %}{{ t("errors_friendly.root_signed_in") }}{% else %}{{ t("errors_friendly.root_signed_out") }}{% endif %}</p>
+{% if page.links.login or page.links.account or page.links.console -%}
+<nav class="anvil-links" aria-label="{{ t("nav.next_steps") }}">
+{% if page.links.login -%}
+<a id="link-login" href="{{ page.links.login }}">{{ t("errors_friendly.root_sign_in") }}</a>
+{% endif -%}
+{% if page.links.account -%}
+<a id="link-account" href="{{ page.links.account }}">{{ t("nav.go_to_account") }}</a>
+{% endif -%}
+{% if page.links.console -%}
+<a id="link-console" href="{{ page.links.console }}">{{ t("nav.open_console") }}</a>
+{% endif -%}
+</nav>
+{% endif -%}
+{% if page.links.sign_out -%}
+<form id="form-sign-out" method="post" action="{{ page.links.sign_out }}">
+<button type="submit" id="sign-out-submit">{{ t("nav.sign_out") }}</button>
+</form>
+{% endif -%}
+{% if administration and not page.links.console -%}
+<p class="anvil-muted"><a id="link-administration" href="{{ administration }}">{{ t("errors_friendly.root_administration") }}</a></p>
+{% endif %}
+{% endblock %}

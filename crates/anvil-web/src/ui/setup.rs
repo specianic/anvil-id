@@ -1,12 +1,17 @@
 //! First-run setup page (`GET/POST /setup?token=…`, ADM-03). Installation-level: the page ignores
 //! the addressed tenant (only the root answers it) and keeps its flow row in the `system` tenant.
 //!
-//! - GET shows the form only for a usable (unknown, unused, unexpired) setup token; otherwise the
-//!   `invalid_request` error page with 403 and no form.
+//! - GET shows the form only for a usable (unknown, unused, unexpired) setup token. An unusable
+//!   token is the `invalid_request` error page with 403 and no form while setup is incomplete;
+//!   once the first administrator exists, reopening a setup link answers "Setup is already
+//!   complete" with a link to the admin console (200, no form, nothing changes). Consumed,
+//!   expired and unknown tokens look the same there: the root page already says whether setup is
+//!   complete, so this reveals nothing new. A POST with an unusable token is always refused.
 //! - POST validates the input through the setup flow, then calls
 //!   `BootstrapService::complete_setup`, which consumes the token atomically: of concurrent
-//!   submissions exactly one succeeds. The page then shows the management client id and secret
-//!   once (`Cache-Control: no-store`).
+//!   submissions exactly one succeeds. The page then leads to the admin console (primary link)
+//!   and shows the management client id and secret once under "For automation"
+//!   (`Cache-Control: no-store`).
 //! - A fresh installation has no users at all: there are no default credentials.
 //! - Completing setup is audited (`admin_setup_completed`) with the request context.
 
@@ -31,6 +36,7 @@ use crate::errors::{core_error_page_in, error_page_in};
 use crate::i18n::{Locale, RequestLocale};
 use crate::render::PageContext;
 use crate::request_context::AuditContext;
+use crate::root::console_url;
 use crate::state::AppState;
 use crate::tenant::ResolvedTenant;
 
@@ -66,6 +72,35 @@ fn invalid_token(state: &AppState, loc: &Locale) -> Response {
         "invalid_request",
         "",
     )
+}
+
+/// `GET` with an unusable token: "Setup is already complete" (link to the console) once an
+/// administrator exists, else the `invalid_request` refusal.
+async fn unusable_link(state: &AppState, loc: &Locale) -> Response {
+    match state.ui_bootstrap_service().setup_complete().await {
+        Ok(true) => already_complete(state, loc),
+        Ok(false) => invalid_token(state, loc),
+        Err(e) => core_error_page_in(state, None, loc, &e),
+    }
+}
+
+/// "Setup is already complete" (200, `no-store`, no form) with `#link-console`.
+fn already_complete(state: &AppState, loc: &Locale) -> Response {
+    let mut page = PageContext::installation(state, loc, "errors_friendly.setup_used_title");
+    page.links.console = Some(console_url(state));
+    let ctx = minijinja::context! {
+        page => page.into_value(),
+        heading => state.renderer().text(loc, "errors_friendly.setup_used_title"),
+        body_key => "errors_friendly.setup_used",
+        body => state.renderer().text(loc, "errors_friendly.setup_used"),
+    };
+    match state.renderer().page("message.html", ctx) {
+        Ok(html) => no_store((StatusCode::OK, html).into_response()),
+        Err(e) => {
+            tracing::error!(error = %e, "rendering the setup complete page failed");
+            core_error_page_in(state, None, loc, &CoreError::Internal("render".into()))
+        }
+    }
 }
 
 fn not_found(state: &AppState, tenant: Option<&ResolvedTenant>, loc: &Locale) -> Response {
@@ -134,7 +169,7 @@ async fn show(
     let token = q.token();
     match token_usable(&state, token.as_deref()).await {
         Ok(true) => {}
-        Ok(false) => return invalid_token(&state, &loc),
+        Ok(false) => return unusable_link(&state, &loc).await,
         Err(e) => return core_error_page_in(&state, None, &loc, &e),
     }
     let Some(token) = token else {
@@ -301,6 +336,7 @@ async fn complete(
             let ctx = minijinja::context! {
                 page => PageContext::installation(state, loc, "title.setup_done").into_value(),
                 admin_email => result.admin.email,
+                console_url => console_url(state),
                 mgmt_client_id => result.mgmt_client_id,
                 mgmt_client_secret => result.mgmt_client_secret.expose_secret(),
                 token_endpoint => format!("{public}/t/{SYSTEM_TENANT_SLUG}/token"),
