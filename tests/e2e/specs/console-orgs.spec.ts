@@ -1,9 +1,10 @@
 // ADM-02 "organizations" / ORG-02 from the console (06-21): an operator creates an organization,
 // defines an org role, adds a tenant user as a member and gives them the role within the org,
 // invites a new address (listed as pending; the console never shows a token), revokes another
-// invitation, sees the membership on the user's page, sets a client's organization policy and
-// deletes a throwaway organization. Every new page and dialog passes the axe audit. Delivery of the
-// invitation email is asserted by the invitations spec (06-24).
+// invitation, sees the membership on the user's page, sets a client's organization policy, sees that
+// new org connections start disabled and deletes a throwaway organization in the danger zone (typed
+// slug). Every new page and dialog passes the axe audit. Delivery of the invitation email is
+// asserted by the invitations spec (06-24).
 //
 // Each lookup is one admin API request (06-29): "add member by email" asks
 // `listUsers?email=`, and the user's Organizations card asks
@@ -281,15 +282,31 @@ test('console: organizations with members, org roles, invitations and client pol
     expect(stored.organization).toBe('optional');
   });
 
-  await test.step('delete a throwaway organization after confirming', async () => {
+  await test.step('new org connections start disabled', async () => {
+    await openTenantPage(page, slug, `organizations/${orgId}/connections`);
+    await expect(page.getByText('No connections yet.')).toBeVisible();
+    await expect(page.getByTestId('org-connection-disabled-note')).toContainText('New connections start disabled');
+    await page.getByTestId('org-connection-kind-oidc').check();
+    await expect(page.getByLabel('Enabled', { exact: true })).not.toBeChecked();
+  });
+
+  await test.step('delete a throwaway organization in the danger zone by typing its slug', async () => {
     const temp = await createOrg(token, slug, { slug: 'temp-org', display_name: 'Temp Org' });
     await openTenantPage(page, slug, `organizations/${temp.id}`);
     await expect(page.getByRole('heading', { level: 1, name: 'Temp Org' })).toBeVisible();
-    await page.getByTestId('delete-org').click();
-    const dialog = page.getByRole('alertdialog', { name: 'Delete Temp Org?' });
+    const zone = page.getByTestId('danger-zone');
+    await expect(zone).toContainText('Delete this organization');
+    await zone.getByRole('button', { name: 'Delete organization' }).click();
+    const dialog = page.getByRole('alertdialog', { name: 'Delete this organization?' });
     await expect(dialog).toBeVisible();
+    const confirm = dialog.getByRole('button', { name: 'Delete organization' });
+    await expect(confirm).toBeDisabled();
+    await dialog.getByTestId('danger-zone-confirm-input').fill('temp-or');
+    await expect(confirm).toBeDisabled();
     await expectNoA11yViolations(page);
-    await dialog.getByRole('button', { name: 'Delete organization' }).click();
+    await dialog.getByTestId('danger-zone-confirm-input').fill('temp-org');
+    await expect(confirm).toBeEnabled();
+    await confirm.click();
     await expect(page).toHaveURL((url) => url.pathname === `/console/t/${slug}/organizations`);
     await expect(page.getByTestId('open-org-acme')).toBeVisible();
     await expect(page.getByTestId('open-org-temp-org')).toHaveCount(0);

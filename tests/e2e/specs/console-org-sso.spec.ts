@@ -123,6 +123,11 @@ test('console: org SAML/OIDC connections, verified domain with routing, org bran
     await expectNoA11yViolations(page);
 
     await page.getByTestId('saml-sso-url').fill(httpsSsoUrl);
+    // New org connections start disabled (07.1-10); this one is complete, so it is turned on here
+    // (domain routing below needs an enabled connection).
+    const enabled = form.getByLabel('Enabled', { exact: true });
+    await expect(enabled).not.toBeChecked();
+    await enabled.check();
     await page.getByTestId('saml-submit').click();
 
     const panel = page.getByRole('dialog', { name: 'Connection Acme SAML' });

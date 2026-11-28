@@ -5,9 +5,12 @@ import { type FormEvent, type KeyboardEvent, useId, useState } from "react";
 import { ApiError } from "@/api/client";
 import type { components } from "@/api/schema";
 import { ProblemAlert } from "@/components/ProblemAlert";
+import { UnsavedChangesGuard } from "@/components/UnsavedChangesGuard";
 import { TextField, TextareaField, controlClass, fieldErrors } from "@/components/form";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { useFormState } from "@/lib/formState";
+import { useUnsavedChanges } from "@/lib/unsaved";
 
 export type RoleDto = components["schemas"]["RoleDto"];
 
@@ -166,7 +169,9 @@ interface RoleFormProps {
 }
 
 export function RoleForm({ initial, submitLabel, pending, error, onSubmit }: RoleFormProps) {
-  const [values, setValues] = useState<RoleFormValues>(initial);
+  const form = useFormState<RoleFormValues>(initial);
+  const { values, setValues } = form;
+  const blocker = useUnsavedChanges(form.isDirty && !pending);
   const [nameIssue, setNameIssue] = useState<string | null>(null);
   const server = fieldErrors(error);
   const known = ["name", "description", "permissions"];
@@ -183,41 +188,46 @@ export function RoleForm({ initial, submitLabel, pending, error, onSubmit }: Rol
       return;
     }
     setNameIssue(null);
+    form.markSubmitted();
     onSubmit({ ...values, description: values.description.trim() });
   };
 
   return (
-    <form onSubmit={submit} className="space-y-4" noValidate aria-label="Role" data-testid="role-form">
-      {otherError ? <RoleProblem error={otherError} /> : null}
-      <TextField
-        label="Name"
-        name="name"
-        value={values.name}
-        onChange={(e) => setValues((v) => ({ ...v, name: e.target.value }))}
-        hint="Unique in the tenant. Tokens carry role names in the roles claim."
-        errors={nameIssue ? [{ message: nameIssue }] : server.name}
-        autoComplete="off"
-        data-testid="role-name"
-      />
-      <TextareaField
-        label="Description"
-        name="description"
-        optional
-        rows={2}
-        value={values.description}
-        maxLength={500}
-        onChange={(e) => setValues((v) => ({ ...v, description: e.target.value }))}
-        errors={server.description}
-        className="font-sans"
-      />
-      <PermissionsInput
-        value={values.permissions}
-        onChange={(permissions) => setValues((v) => ({ ...v, permissions }))}
-        serverErrors={server.permissions}
-      />
-      <Button type="submit" disabled={pending} data-testid="role-submit">
-        {pending ? "Saving…" : submitLabel}
-      </Button>
-    </form>
+    <>
+      {/* Outside the form: the guard's buttons must not submit it. */}
+      <UnsavedChangesGuard blocker={blocker} />
+      <form onSubmit={submit} className="space-y-4" noValidate aria-label="Role" data-testid="role-form">
+        {otherError ? <RoleProblem error={otherError} /> : null}
+        <TextField
+          label="Name"
+          name="name"
+          value={values.name}
+          onChange={(e) => setValues((v) => ({ ...v, name: e.target.value }))}
+          hint="Unique in the tenant. Tokens carry role names in the roles claim."
+          errors={nameIssue ? [{ message: nameIssue }] : server.name}
+          autoComplete="off"
+          data-testid="role-name"
+        />
+        <TextareaField
+          label="Description"
+          name="description"
+          optional
+          rows={2}
+          value={values.description}
+          maxLength={500}
+          onChange={(e) => setValues((v) => ({ ...v, description: e.target.value }))}
+          errors={server.description}
+          className="font-sans"
+        />
+        <PermissionsInput
+          value={values.permissions}
+          onChange={(permissions) => setValues((v) => ({ ...v, permissions }))}
+          serverErrors={server.permissions}
+        />
+        <Button type="submit" disabled={pending} data-testid="role-submit">
+          {pending ? "Saving…" : submitLabel}
+        </Button>
+      </form>
+    </>
   );
 }

@@ -6,6 +6,7 @@ import { type FormEvent, useMemo, useState } from "react";
 import { ApiError } from "@/api/client";
 import type { components } from "@/api/schema";
 import { ProblemAlert } from "@/components/ProblemAlert";
+import { UnsavedChangesGuard } from "@/components/UnsavedChangesGuard";
 import {
   CheckboxField,
   CheckboxGroup,
@@ -17,6 +18,8 @@ import {
   fieldErrors,
 } from "@/components/form";
 import { Button } from "@/components/ui/button";
+import { useFormState } from "@/lib/formState";
+import { useUnsavedChanges } from "@/lib/unsaved";
 
 export type AttributeDefinition = components["schemas"]["AttributeDefinitionDto"];
 type TokenTarget = components["schemas"]["TokenTarget"];
@@ -164,7 +167,9 @@ interface AttributeFormProps {
 }
 
 export function AttributeForm({ mode, initial, submitLabel, pending, error, onSubmit }: AttributeFormProps) {
-  const [values, setValues] = useState<AttributeFormValues>(initial);
+  const form = useFormState<AttributeFormValues>(initial);
+  const { values, setValues } = form;
+  const blocker = useUnsavedChanges(form.isDirty && !pending);
   const [local, setLocal] = useState<FieldErrors>({});
   const set = <K extends keyof AttributeFormValues>(key: K, value: AttributeFormValues[K]) =>
     setValues((v) => ({ ...v, [key]: value }));
@@ -197,6 +202,7 @@ export function AttributeForm({ mode, initial, submitLabel, pending, error, onSu
     }
     setLocal(issues);
     if (Object.keys(issues).length > 0) return;
+    form.markSubmitted();
     onSubmit(values.name, {
       schema: toApiJson(parsed.value),
       required: values.required,
@@ -209,106 +215,110 @@ export function AttributeForm({ mode, initial, submitLabel, pending, error, onSu
   };
 
   return (
-    <form onSubmit={submit} className="space-y-4" noValidate aria-label="Attribute definition" data-testid="attribute-form">
-      {otherError ? <ProblemAlert error={otherError} /> : null}
-      <TextField
-        label="Name"
-        name="name"
-        value={values.name}
-        disabled={mode === "edit"}
-        onChange={(e) => set("name", e.target.value)}
-        hint="The key of the value (and the default claim name). Standard claims such as email or name are refused."
-        errors={errorsFor("name")}
-        autoComplete="off"
-        data-testid="attribute-name"
-      />
-      <TextareaField
-        label="JSON Schema"
-        name="schema"
-        rows={8}
-        value={values.schema}
-        onChange={(e) => set("schema", e.target.value)}
-        hint="Draft 2020-12, at most 16 KiB; only local #/$defs references. The server checks it when you save."
-        errors={errorsFor("schema")}
-        spellCheck={false}
-        data-testid="attribute-schema"
-      />
-      <p className="text-sm" role="status" data-testid="attribute-schema-feedback">
-        {parsed.error ? (
-          <span className="text-destructive">{parsed.error}</span>
-        ) : (
-          <span className="text-muted-foreground">
-            Parsed. Input on the user page: <strong>{shapeLabel(shape ?? null)}</strong>
-          </span>
-        )}
-      </p>
-      <div className="grid gap-4 sm:grid-cols-2">
-        <CheckboxField
-          label="Required"
-          name="required"
-          checked={values.required}
-          onChange={(e) => set("required", e.target.checked)}
-          hint="Every write of a user's values must include it."
-          errors={errorsFor("required")}
+    <>
+      {/* Outside the form: the guard's buttons must not submit it. */}
+      <UnsavedChangesGuard blocker={blocker} />
+      <form onSubmit={submit} className="space-y-4" noValidate aria-label="Attribute definition" data-testid="attribute-form">
+        {otherError ? <ProblemAlert error={otherError} /> : null}
+        <TextField
+          label="Name"
+          name="name"
+          value={values.name}
+          disabled={mode === "edit"}
+          onChange={(e) => set("name", e.target.value)}
+          hint="The key of the value (and the default claim name). Standard claims such as email or name are refused."
+          errors={errorsFor("name")}
+          autoComplete="off"
+          data-testid="attribute-name"
         />
-        <CheckboxField
-          label="Editable by the user"
-          name="user_editable"
-          checked={values.user_editable}
-          onChange={(e) => set("user_editable", e.target.checked)}
-          hint="Shown on the account page (simple shapes only)."
-          errors={errorsFor("user_editable")}
+        <TextareaField
+          label="JSON Schema"
+          name="schema"
+          rows={8}
+          value={values.schema}
+          onChange={(e) => set("schema", e.target.value)}
+          hint="Draft 2020-12, at most 16 KiB; only local #/$defs references. The server checks it when you save."
+          errors={errorsFor("schema")}
+          spellCheck={false}
+          data-testid="attribute-schema"
         />
-      </div>
-      <TextField
-        label="Position"
-        name="position"
-        type="number"
-        step={1}
-        value={values.position}
-        onChange={(e) => set("position", e.target.value)}
-        hint="Display order (ascending)."
-        errors={errorsFor("position")}
-        className="max-w-32"
-      />
-      <fieldset className="space-y-3 rounded-md border p-4">
-        <legend className="px-1 text-sm font-medium">Token claim</legend>
-        <CheckboxField
-          label="Include the value in tokens"
-          checked={values.claimEnabled}
-          onChange={(e) => set("claimEnabled", e.target.checked)}
-          hint="Only values that pass the current schema are included."
+        <p className="text-sm" role="status" data-testid="attribute-schema-feedback">
+          {parsed.error ? (
+            <span className="text-destructive">{parsed.error}</span>
+          ) : (
+            <span className="text-muted-foreground">
+              Parsed. Input on the user page: <strong>{shapeLabel(shape ?? null)}</strong>
+            </span>
+          )}
+        </p>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <CheckboxField
+            label="Required"
+            name="required"
+            checked={values.required}
+            onChange={(e) => set("required", e.target.checked)}
+            hint="Every write of a user's values must include it."
+            errors={errorsFor("required")}
+          />
+          <CheckboxField
+            label="Editable by the user"
+            name="user_editable"
+            checked={values.user_editable}
+            onChange={(e) => set("user_editable", e.target.checked)}
+            hint="Shown on the account page (simple shapes only)."
+            errors={errorsFor("user_editable")}
+          />
+        </div>
+        <TextField
+          label="Position"
+          name="position"
+          type="number"
+          step={1}
+          value={values.position}
+          onChange={(e) => set("position", e.target.value)}
+          hint="Display order (ascending)."
+          errors={errorsFor("position")}
+          className="max-w-32"
         />
-        {values.claimEnabled && (
-          <>
-            <TextField
-              label="Claim name"
-              value={values.claim}
-              onChange={(e) => set("claim", e.target.value)}
-              errors={errorsFor("claim")}
-              autoComplete="off"
-            />
-            <CheckboxGroup
-              legend="Tokens"
-              options={TOKEN_TARGETS}
-              value={values.claimTokens}
-              onChange={(next) => set("claimTokens", next)}
-            />
-            <TextField
-              label="Required scope"
-              optional
-              value={values.claimScope}
-              onChange={(e) => set("claimScope", e.target.value)}
-              hint="A single scope the client must be granted; empty = always."
-              autoComplete="off"
-            />
-          </>
-        )}
-      </fieldset>
-      <Button type="submit" disabled={pending} data-testid="attribute-submit">
-        {pending ? "Saving…" : submitLabel}
-      </Button>
-    </form>
+        <fieldset className="space-y-3 rounded-md border p-4">
+          <legend className="px-1 text-sm font-medium">Token claim</legend>
+          <CheckboxField
+            label="Include the value in tokens"
+            checked={values.claimEnabled}
+            onChange={(e) => set("claimEnabled", e.target.checked)}
+            hint="Only values that pass the current schema are included."
+          />
+          {values.claimEnabled && (
+            <>
+              <TextField
+                label="Claim name"
+                value={values.claim}
+                onChange={(e) => set("claim", e.target.value)}
+                errors={errorsFor("claim")}
+                autoComplete="off"
+              />
+              <CheckboxGroup
+                legend="Tokens"
+                options={TOKEN_TARGETS}
+                value={values.claimTokens}
+                onChange={(next) => set("claimTokens", next)}
+              />
+              <TextField
+                label="Required scope"
+                optional
+                value={values.claimScope}
+                onChange={(e) => set("claimScope", e.target.value)}
+                hint="A single scope the client must be granted; empty = always."
+                autoComplete="off"
+              />
+            </>
+          )}
+        </fieldset>
+        <Button type="submit" disabled={pending} data-testid="attribute-submit">
+          {pending ? "Saving…" : submitLabel}
+        </Button>
+      </form>
+    </>
   );
 }
 
