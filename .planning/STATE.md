@@ -6,14 +6,14 @@ current_phase: 05
 current_phase_name: release 0 4 operate it
 current_plan: 33
 status: verifying
-stopped_at: Completed 07.1-05-PLAN.md
-last_updated: "2026-11-28T02:36:23.161Z"
+stopped_at: Completed 07.1-03-PLAN.md
+last_updated: "2026-11-28T02:40:12.770Z"
 last_activity: 2026-11-28
 progress:
   total_phases: 8
   completed_phases: 3
   total_plans: 215
-  completed_plans: 187
+  completed_plans: 188
   percent: 87
 ---
 
@@ -222,6 +222,7 @@ done before 05-29 tags v0.4.0.
 | Phase 06 P26 | 160min | 3 tasks | 53 files |
 | Phase 07 P04 | 70 min | 2 tasks | 22 files |
 | Phase 07.1 P05 | 25min | 2 tasks | 4 files |
+| Phase 07.1 P03 | 35min | 3 tasks | 17 files |
 
 ## Accumulated Context
 
@@ -518,6 +519,9 @@ Recent decisions affecting current work:
 - [Phase 06]: 06-26: tenant connections page org-name paging deferred to Phase 7 (needs org name on the connection view)
 - [Phase 07]: 07-04: api_flows serves a JSON 404 catch-all below /api/flows/v1 (outside ui Fetch-Metadata); users import/export run(cfg,args) fail with TRANSITIONAL(07-14/07-15)
 - [Phase 07.1]: 07.1-05: journey helpers in tests/e2e/lib (ux-state, console-ux, layout); clients cached in E2E_STATE_FILE.ux.json; fake RP on E2E_FAKE_RP_PORT (default 18199); consoleSignIn waits for the shell only (not consoleLogin's Users landing)
+- [Phase 07.1]: 07.1-03: console dark mode follows prefers-color-scheme (media custom variant); links use text-link; destructive Alert renders its own icon
+- [Phase 07.1]: 07.1-03: TENANT_PAGES (group, systemTenant) is the only nav source; only Organizations is hidden in the system tenant
+- [Phase 07.1]: 07.1-03: DangerZone/CopyField/UnsavedChangesGuard/useUnsavedChanges/useSlugFromName are the shared console safety components; DangerZone and the guard build on Modal from ConfirmDialog.tsx
 
 ### Roadmap Evolution
 
@@ -535,6 +539,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-28T02:36:23.158Z
-Stopped at: Completed 07.1-05-PLAN.md
+Last session: 2026-11-28T02:40:12.766Z
+Stopped at: Completed 07.1-03-PLAN.md
 Resume file: None
