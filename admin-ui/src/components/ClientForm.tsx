@@ -240,6 +240,19 @@ export const AUTH_METHOD_LABELS: Record<ClientAuthMethod, string> = {
   none: "None (public client, PKCE)",
 };
 
+/** Who created a client (C-L3), instead of the registration_source wire values. */
+export const CREATED_BY_LABELS: Record<ClientView["registration_source"], string> = {
+  static: "Admin",
+  dynamic: "Dynamic registration",
+  cimd: "Metadata document",
+};
+
+export const CREATED_BY_HINTS: Record<ClientView["registration_source"], string> = {
+  static: "Created by an administrator (console, admin API or configuration file)",
+  dynamic: "Registered through dynamic client registration (RFC 7591)",
+  cimd: "Created from a Client ID Metadata Document (the client ID is its URL)",
+};
+
 export const CLIENT_TYPE_LABELS: Record<ClientType, string> = {
   confidential: "Confidential",
   public: "Public",

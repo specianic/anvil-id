@@ -5,8 +5,10 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { api, unwrap } from "@/api/client";
-import { useTenant } from "@/lib/tenant";
+import { useTenant, useTenantView } from "@/lib/tenant";
 import { ClientForm, type ClientFormValues, createBody, newClientValues } from "@/components/ClientForm";
+import { IntegrationCard } from "@/components/IntegrationCard";
+import { ProblemAlert } from "@/components/ProblemAlert";
 import { OneTimeSecret } from "@/components/WebhookForm";
 
 const linkClass =
@@ -17,6 +19,7 @@ const INITIAL = newClientValues("web");
 
 function NewClientPage() {
   const tenant = useTenant();
+  const tenantView = useTenantView(tenant);
   const queryClient = useQueryClient();
   const [secret, setSecret] = useState<string | null>(null);
   // Whether the created client had a secret (it stays true after the secret is dismissed).
@@ -70,6 +73,17 @@ function NewClientPage() {
               </p>
             )
           )}
+          {tenantView.data ? (
+            <IntegrationCard
+              issuer={tenantView.data.issuer}
+              discoveryUrl={tenantView.data.discovery_url}
+              clientId={created.client_id}
+              redirectUris={created.redirect_uris}
+              secret={secret}
+            />
+          ) : tenantView.isError ? (
+            <ProblemAlert error={tenantView.error} />
+          ) : null}
           <div className="flex gap-4">
             <Link
               to="/t/$tenant/clients/$clientId"

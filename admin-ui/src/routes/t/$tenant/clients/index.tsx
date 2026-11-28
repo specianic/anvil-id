@@ -4,59 +4,49 @@ import { createColumnHelper } from "@tanstack/react-table";
 import { useMemo } from "react";
 import { type ClientView, api, unwrap } from "@/api/client";
 import { useTenant } from "@/lib/tenant";
+import { AUTH_METHOD_LABELS, CLIENT_TYPE_LABELS, CREATED_BY_HINTS, CREATED_BY_LABELS } from "@/components/ClientForm";
 import { DataTable, type DataTableFeatures, useCursorPager } from "@/components/DataTable";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
 const PAGE_SIZE = 50;
 
-const SOURCE_LABELS: Record<ClientView["registration_source"], string> = {
-  static: "Static",
-  dynamic: "Dynamic",
-  cimd: "CIMD",
-};
 const col = createColumnHelper<DataTableFeatures, ClientView>();
 
 function columnsFor(tenant: string) {
   return col.columns([
-    col.accessor("client_id", {
-      header: "Client ID",
+    col.accessor("name", {
+      header: "Client",
       cell: (info) => (
         <Link
           to="/t/$tenant/clients/$clientId"
-          params={{ tenant, clientId: info.getValue() }}
-          className="font-mono font-medium underline-offset-4 hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+          params={{ tenant, clientId: info.row.original.client_id }}
+          className="group block underline-offset-4 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
         >
-          {info.getValue()}
+          <span className="block font-medium group-hover:underline">{info.getValue()}</span>
+          <span className="text-muted-foreground block font-mono text-xs break-all">{info.row.original.client_id}</span>
         </Link>
       ),
     }),
-    col.accessor("name", { header: "Name" }),
     col.accessor("client_type", {
       header: "Type",
-      cell: (info) => <Badge variant="secondary">{info.getValue()}</Badge>,
+      cell: (info) => <Badge variant="secondary">{CLIENT_TYPE_LABELS[info.getValue()]}</Badge>,
     }),
     col.accessor("registration_source", {
-      header: "Source",
+      header: "Created by",
       cell: (info) => (
         <Badge
           variant={info.getValue() === "static" ? "outline" : "default"}
-          title={
-            info.getValue() === "dynamic"
-              ? "Registered through dynamic client registration (RFC 7591)"
-              : info.getValue() === "cimd"
-                ? "Created from a Client ID Metadata Document (the client ID is its URL)"
-                : "Created by an administrator"
-          }
+          title={CREATED_BY_HINTS[info.getValue()]}
           data-testid={`client-source-${info.row.original.client_id}`}
         >
-          {SOURCE_LABELS[info.getValue()]}
+          {CREATED_BY_LABELS[info.getValue()]}
         </Badge>
       ),
     }),
     col.accessor("auth_method", {
-      header: "Auth method",
-      cell: (info) => <code className="text-xs">{info.getValue()}</code>,
+      header: "Authentication",
+      cell: (info) => AUTH_METHOD_LABELS[info.getValue()],
     }),
   ]);
 }

@@ -1,130 +1,80 @@
+// One client: its integration values (issuer, discovery URL, client id, redirect URIs) with copy
+// buttons, the edit form (one Save), secret rotation and, in a danger zone, deletion. The built-in
+// console client of the system tenant cannot be deleted (the server refuses with 409), so the page
+// offers no Delete for it.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
+import { KeyRound, ShieldCheck } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { type ClientView, api, unwrap } from "@/api/client";
-import { useTenant } from "@/lib/tenant";
-import { ClientForm, type ClientFormValues, updateBody, valuesFromClient } from "@/components/ClientForm";
+import { CONSOLE_CLIENT_ID } from "@/auth/oidc";
+import { SYSTEM_TENANT, useTenant, useTenantView } from "@/lib/tenant";
+import {
+  AUTH_METHOD_LABELS,
+  CLIENT_TYPE_LABELS,
+  CREATED_BY_HINTS,
+  CREATED_BY_LABELS,
+  ClientForm,
+  type ClientFormValues,
+  updateBody,
+  valuesFromClient,
+} from "@/components/ClientForm";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { DangerZone } from "@/components/DangerZone";
+import { IntegrationCard } from "@/components/IntegrationCard";
 import { ProblemAlert } from "@/components/ProblemAlert";
 import { StatusMessage } from "@/components/form";
 import { OneTimeSecret } from "@/components/WebhookForm";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatDateTime } from "@/lib/format";
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
+/** The anvil-console client of the system tenant: built in, not deletable. */
+function isBuiltInConsoleClient(tenant: string, client: ClientView): boolean {
+  return tenant === SYSTEM_TENANT && client.client_id === CONSOLE_CLIENT_ID;
+}
+
+function Meta({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="grid grid-cols-3 gap-4 py-2">
-      <dt className="text-muted-foreground text-sm">{label}</dt>
-      <dd className="col-span-2 text-sm break-all">{children}</dd>
+    <div className="space-y-0.5">
+      <dt className="text-muted-foreground text-xs">{label}</dt>
+      <dd className="text-sm">{children}</dd>
     </div>
   );
 }
 
-function List({ items, empty }: { items: readonly string[]; empty: string }) {
-  if (items.length === 0) return <span className="text-muted-foreground">{empty}</span>;
+/** Facts the form cannot change: type, authentication, origin and dates. */
+function ClientFacts({ client }: { client: ClientView }) {
   return (
-    <ul className="space-y-1">
-      {items.map((item) => (
-        <li key={item}>
-          <code className="text-xs">{item}</code>
-        </li>
-      ))}
-    </ul>
+    <dl className="grid gap-4 sm:grid-cols-3 lg:grid-cols-5" data-testid="client-facts">
+      <Meta label="Client type">{CLIENT_TYPE_LABELS[client.client_type]}</Meta>
+      <Meta label="Authentication">
+        {AUTH_METHOD_LABELS[client.auth_method]}{" "}
+        <code className="text-muted-foreground font-mono text-xs">{client.auth_method}</code>
+      </Meta>
+      <Meta label="Created by">
+        <span title={CREATED_BY_HINTS[client.registration_source]}>{CREATED_BY_LABELS[client.registration_source]}</span>
+      </Meta>
+      <Meta label="Created">{formatDateTime(client.created_at)}</Meta>
+      <Meta label="Updated">{formatDateTime(client.updated_at)}</Meta>
+    </dl>
   );
 }
 
-const MFA_LABELS: Record<NonNullable<ClientView["mfa_policy"]>, string> = {
-  off: "Off",
-  optional: "Optional",
-  required: "Required",
-};
-
-const ORG_POLICY_LABELS: Record<ClientView["organization"], string> = {
-  off: "Off",
-  optional: "Optional",
-  required: "Required",
-};
-
-function ClientDetails({ client }: { client: ClientView }) {
+function Integration({ client }: { client: ClientView }) {
+  const tenant = useTenant();
+  const view = useTenantView(tenant);
+  if (view.isError) return <ProblemAlert error={view.error} />;
+  if (!view.data) return <Skeleton className="h-24 w-full" />;
   return (
-    <div className="space-y-4">
-      <Card>
-        <CardHeader>
-          <CardTitle>Settings</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <dl className="divide-y">
-            <Field label="Client ID">
-              <code>{client.client_id}</code>
-            </Field>
-            <Field label="Name">{client.name}</Field>
-            <Field label="Client type">{client.client_type}</Field>
-            <Field label="Application type">{client.application_type}</Field>
-            <Field label="Auth method">
-              <code className="text-xs">{client.auth_method}</code>
-            </Field>
-            <Field label="PKCE required">{client.require_pkce ? "Yes" : "No"}</Field>
-            <Field label="Access token format">{client.token_format}</Field>
-            <Field label="Consent">{client.consent_mode === "required" ? "Required" : "Skipped (first party)"}</Field>
-            <Field label="ID token signing">{client.id_token_signed_response_alg}</Field>
-            <Field label="Tenant-wide introspection">{client.can_introspect ? "Yes" : "No"}</Field>
-            <Field label="Created">{formatDateTime(client.created_at)}</Field>
-            <Field label="Updated">{formatDateTime(client.updated_at)}</Field>
-          </dl>
-        </CardContent>
-      </Card>
-      <Card>
-        <CardHeader>
-          <CardTitle>Authorization</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <dl className="divide-y">
-            <Field label="Redirect URIs">
-              <List items={client.redirect_uris} empty="None" />
-            </Field>
-            <Field label="Grant types">
-              <List items={client.grant_types} empty="None" />
-            </Field>
-            <Field label="Scopes">
-              <List items={client.scopes} empty="None" />
-            </Field>
-          </dl>
-        </CardContent>
-      </Card>
-      <Card data-testid="client-logout-security">
-        <CardHeader>
-          <CardTitle>Logout and security</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <dl className="divide-y">
-            <Field label="Post-logout redirect URIs">
-              <List items={client.post_logout_redirect_uris} empty="None" />
-            </Field>
-            <Field label="Back-channel logout URI">
-              {client.backchannel_logout_uri ? (
-                <code className="text-xs">{client.backchannel_logout_uri}</code>
-              ) : (
-                <span className="text-muted-foreground">None</span>
-              )}
-            </Field>
-            {client.backchannel_logout_uri && (
-              <Field label="Back-channel session required">
-                {client.backchannel_logout_session_required ? "Yes" : "No"}
-              </Field>
-            )}
-            <Field label="Allowed resources">
-              <List items={client.allowed_resources} empty="None: tokens are for this client" />
-            </Field>
-            <Field label="MFA policy">{client.mfa_policy ? MFA_LABELS[client.mfa_policy] : "Tenant default"}</Field>
-            <Field label="Organizations">
-              <span data-testid="client-organization">{ORG_POLICY_LABELS[client.organization]}</span>
-            </Field>
-          </dl>
-        </CardContent>
-      </Card>
-    </div>
+    <IntegrationCard
+      issuer={view.data.issuer}
+      discoveryUrl={view.data.discovery_url}
+      clientId={client.client_id}
+      redirectUris={client.redirect_uris}
+    />
   );
 }
 
@@ -151,7 +101,7 @@ function EditClient({ client }: { client: ClientView }) {
     <Card>
       <CardHeader>
         <CardTitle>
-          <h2>Edit client</h2>
+          <h2>Settings</h2>
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -169,13 +119,13 @@ function EditClient({ client }: { client: ClientView }) {
   );
 }
 
-function DangerZone({ client }: { client: ClientView }) {
+/**
+ * Secret rotation. The old secret stops working at once: a grace period with two valid secrets
+ * needs dual-secret support on the server, which does not exist (C-L7, deferred).
+ */
+function ClientSecret({ client }: { client: ClientView }) {
   const tenant = useTenant();
-  const queryClient = useQueryClient();
-  const navigate = useNavigate();
-  const [confirm, setConfirm] = useState<"rotate" | "delete" | null>(null);
-  const hasSecret = client.auth_method === "client_secret_basic" || client.auth_method === "client_secret_post";
-
+  const [confirm, setConfirm] = useState(false);
   // The rotated secret lives only in component state; the cached mutation result has none.
   const [secret, setSecret] = useState<string | null>(null);
   const rotate = useMutation({
@@ -188,29 +138,14 @@ function DangerZone({ client }: { client: ClientView }) {
       setSecret(rotated.client_secret);
       return { client_id: rotated.client_id };
     },
-    onSuccess: () => setConfirm(null),
+    onSuccess: () => setConfirm(false),
   });
 
-  const remove = useMutation({
-    mutationFn: async () => {
-      await api.DELETE("/api/admin/v1/tenants/{slug}/clients/{client_id}", {
-        params: { path: { slug: tenant, client_id: client.client_id } },
-      });
-    },
-    onSuccess: async () => {
-      setConfirm(null);
-      queryClient.removeQueries({ queryKey: ["client", tenant, client.client_id] });
-      await queryClient.invalidateQueries({ queryKey: ["clients"] });
-      await navigate({ to: "/t/$tenant/clients", params: { tenant } });
-    },
-  });
-
-  const active = confirm === "rotate" ? rotate : remove;
   return (
     <Card>
       <CardHeader>
         <CardTitle>
-          <h2>Credentials and removal</h2>
+          <h2>Client secret</h2>
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -223,38 +158,62 @@ function DangerZone({ client }: { client: ClientView }) {
             onDone={() => setSecret(null)}
           />
         )}
-        <div className="flex flex-wrap gap-2">
-          {hasSecret && (
-            <Button variant="outline" onClick={() => setConfirm("rotate")}>
-              Rotate secret
-            </Button>
-          )}
-          <Button variant="destructive" onClick={() => setConfirm("delete")}>
-            Delete client
-          </Button>
-        </div>
+        <p className="text-muted-foreground text-sm">
+          Rotating generates a new secret. The old secret stops working immediately, so update the app right away.
+        </p>
+        <Button variant="outline" onClick={() => setConfirm(true)}>
+          <KeyRound aria-hidden="true" />
+          Rotate secret
+        </Button>
       </CardContent>
       <ConfirmDialog
-        open={confirm !== null}
-        title={confirm === "rotate" ? "Rotate the client secret?" : "Delete this client?"}
+        open={confirm}
+        title="Rotate the client secret?"
         description={
           <p>
-            {confirm === "rotate"
-              ? "A new secret is generated and the current one stops working immediately."
-              : "The client is removed and every token issued to it is revoked. This cannot be undone."}
+            A new secret is generated and the old secret stops working immediately. Apps using it fail to sign in
+            until they are updated with the new one.
           </p>
         }
-        confirmLabel={confirm === "rotate" ? "Rotate secret" : "Delete client"}
-        onConfirm={() => active.mutate()}
+        confirmLabel="Rotate secret"
+        onConfirm={() => rotate.mutate()}
         onCancel={() => {
           rotate.reset();
-          remove.reset();
-          setConfirm(null);
+          setConfirm(false);
         }}
-        pending={active.isPending}
-        error={active.error}
+        pending={rotate.isPending}
+        error={rotate.error}
       />
     </Card>
+  );
+}
+
+function DeleteClient({ client }: { client: ClientView }) {
+  const tenant = useTenant();
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const remove = useMutation({
+    mutationFn: async () => {
+      await api.DELETE("/api/admin/v1/tenants/{slug}/clients/{client_id}", {
+        params: { path: { slug: tenant, client_id: client.client_id } },
+      });
+    },
+    onSuccess: async () => {
+      queryClient.removeQueries({ queryKey: ["client", tenant, client.client_id] });
+      await queryClient.invalidateQueries({ queryKey: ["clients"] });
+      await navigate({ to: "/t/$tenant/clients", params: { tenant } });
+    },
+  });
+  return (
+    <DangerZone
+      title="Delete this client"
+      description="The client is removed and every token issued to it is revoked. Apps using it can no longer sign users in. This cannot be undone."
+      confirmText={client.name}
+      actionLabel="Delete client"
+      onConfirm={() => remove.mutate()}
+      pending={remove.isPending}
+      error={remove.error}
+    />
   );
 }
 
@@ -271,6 +230,9 @@ function ClientPage() {
         }),
       ),
   });
+  const client = query.data;
+  const builtIn = client ? isBuiltInConsoleClient(tenant, client) : false;
+  const hasSecret = client?.auth_method === "client_secret_basic" || client?.auth_method === "client_secret_post";
 
   return (
     <section aria-labelledby="client-heading" className="space-y-4">
@@ -282,9 +244,17 @@ function ClientPage() {
         ← Clients
       </Link>
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h1 id="client-heading" className="text-xl font-semibold break-all">
-          {query.data?.name ?? "Client"}
-        </h1>
+        <div className="flex flex-wrap items-center gap-2">
+          <h1 id="client-heading" className="text-xl font-semibold break-all">
+            {client?.name ?? "Client"}
+          </h1>
+          {builtIn ? (
+            <Badge variant="outline" data-testid="built-in-client">
+              <ShieldCheck aria-hidden="true" />
+              Built-in client
+            </Badge>
+          ) : null}
+        </div>
         <Link
           to="/t/$tenant/branding/$clientId"
           params={{ tenant, clientId }}
@@ -304,9 +274,16 @@ function ClientPage() {
         <ProblemAlert error={query.error} />
       ) : (
         <>
-          <ClientDetails client={query.data} />
+          <ClientFacts client={query.data} />
+          {builtIn ? (
+            <p className="text-muted-foreground text-sm" data-testid="built-in-client-note">
+              The console signs in with this client. It is part of AnvilID and cannot be deleted.
+            </p>
+          ) : null}
+          <Integration client={query.data} />
           <EditClient client={query.data} />
-          <DangerZone client={query.data} />
+          {hasSecret ? <ClientSecret client={query.data} /> : null}
+          {builtIn ? null : <DeleteClient client={query.data} />}
         </>
       )}
     </section>
