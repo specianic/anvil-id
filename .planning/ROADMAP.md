@@ -27,6 +27,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 5: Release 0.4 "Operate it"** - Multi-tenant console, RBAC, webhooks, declarative config, DCR, MCP basics, HA on Postgres, observability, Helm
 - [ ] **Phase 6: Release 1.0 "Credible for business" (Organizations and SSO)** - Organizations, per-org SAML/OIDC SSO with JIT, home-realm discovery, complete admin console
 - [ ] **Phase 7: Release 1.0 "Credible for business" (Certification and release)** - PAR, headless flow API, agent consent, user import/export, API stability, OpenID certification, external security review
+- [ ] **Phase 07.1: Operability and UX (rc.4)** (INSERTED) - UX review fixes, console user management, guided defaults, Specianic design system, YAML logos/orgs, e2e for every fix
 
 ## Phase Details
 
@@ -322,10 +323,27 @@ Plans:
 - [ ] 07-26-PLAN.md — Owner: real-IdP SAML interop checklist, SAML flag and chrono decisions, AUTH-07 status (wave 9)
 - [ ] 07-27-PLAN.md — Release v1.0.0 after owner sign-off: version, pins, ticks OIDC-23/SEC-08, tag, verify, publish Pages (wave 10)
 
+### Phase 07.1: Operability and UX (rc.4) (INSERTED)
+**Goal**: A self-hoster and their end users can complete every common task without dead ends, broken defaults or click-only configuration gaps, on a consistent visual system, before 1.0 final
+**Depends on**: Phase 7 implementation (07-01..07-23, 07-28); 07-27 (1.0.0 final) depends on this phase
+**Requirements**: UX findings of the 2026-11-28 hands-on review (end-user H1-H7, M1-M16, L1-L9; console H1-H7, M1-M15, L1-L8), tenant YAML logos and organizations
+**Success Criteria** (what must be TRUE):
+  1. An end user who leaves the sign-in page for any detour (registration, recovery, email code, second factor, MFA enrolment, upstream link confirmation, verification) returns to the app that started the flow; no page in the end-user UI is a dead end (signed in, signed out, every error page and the tenant root offer a way forward)
+  2. Account pages show who is signed in, offer sign-out and a way back to the app, return to the requested page after sign-in, and confirm destructive actions; failed form posts follow Post/Redirect/Get and stale or reloaded flows fail before the user types credentials, without losing recovery codes
+  3. An admin can create, invite, edit, block, reset and delete users and add a second admin from the console, change the sign-up mode, and is guided from setup to a first working app
+  4. Console defaults cannot produce a broken setup: app creation is guided by app type with correct defaults (native and SPA public with PKCE), issuer and discovery URL are shown with every app, upstream connections stay disabled until complete and show their redirect URI before save, and destructive actions sit in a confirmed danger zone
+  5. The console and the default end-user theme use the Specianic design system tokens and fonts (no Specianic wordmark shipped); customer branding (tokens, logo) still overrides the default theme, and the logo upload is discoverable
+  6. Tenant YAML export/plan/apply carries logos and organizations
+  7. Every fix has an e2e assertion; the review journeys (setup to console, console app creation, user lifecycle, sign-up mode, second admin, incomplete connection, all end-user detours) are covered by specs
+**Plans**: TBD (run /gsd:plan-phase 07.1)
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 07.1 to break down)
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 7.1 (07-24..07-27 owner gates run alongside; 07-27 1.0 final waits for 7.1)
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -336,6 +354,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 5. Release 0.4 "Operate it" | 32/33 | In Progress|  |
 | 6. Release 1.0 (Organizations and SSO) | 26/31 | In Progress|  |
 | 7. Release 1.0 (Certification and release) | 5/27 | In Progress|  |
+| 7.1 Operability and UX (rc.4) | 0/? | Not started |  |
 
 ---
 *Roadmap created: 2026-11-25*

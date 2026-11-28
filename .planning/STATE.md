@@ -517,6 +517,10 @@ Recent decisions affecting current work:
 - [Phase 06]: 06-26: tenant connections page org-name paging deferred to Phase 7 (needs org name on the connection view)
 - [Phase 07]: 07-04: api_flows serves a JSON 404 catch-all below /api/flows/v1 (outside ui Fetch-Metadata); users import/export run(cfg,args) fail with TRANSITIONAL(07-14/07-15)
 
+### Roadmap Evolution
+
+- Phase 07.1 inserted after Phase 7 (2026-11-28): Operability and UX (rc.4) — hands-on UX review fixes, console user management, guided defaults, Specianic design system, YAML logos/orgs, e2e for every fix. Owner approved scope and rc.4-before-1.0; Terraform provider and admin MCP deferred to a later version.
+
 ### Pending Todos
 
 None yet.
