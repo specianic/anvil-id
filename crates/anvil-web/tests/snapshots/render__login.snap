@@ -22,14 +22,11 @@ expression: html
 <input type="hidden" name="csrf_token" value="csrf-sample-token">
 
 
-
 <div class="anvil-field">
 <label for="identifier">Email</label>
-<input id="identifier" name="identifier" type="email" value="ada@example.test" required>
+<input id="identifier" name="identifier" type="email" value="ada@example.test" required autofocus>
 
 </div>
-
-
 
 
 <div class="anvil-field">
@@ -39,7 +36,6 @@ expression: html
 </div>
 
 
-
 <div class="anvil-form-messages">
 
 <p class="anvil-message anvil-message-error" id="login-msg-1" data-message-key="login.invalid_credentials" role="alert">The email or password is incorrect.</p>
@@ -47,7 +43,9 @@ expression: html
 </div>
 
 <button type="submit" id="login-submit">Sign in</button>
+
 </form>
+
 
 
 

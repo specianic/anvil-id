@@ -623,6 +623,10 @@ pub struct LinkChoices {
     /// The code is requested without an address field and the page shows no address
     /// (unrevealed matching account).
     pub address_hidden: bool,
+    /// The revealed candidate's email ([`PendingLink::candidate_email`]): the page prefills the
+    /// sign-in field with it, consistent with its copy that an account with this address exists.
+    /// Never set for an unrevealed matching account.
+    pub candidate_email: Option<String>,
 }
 
 /// The [`LinkChoices`] of login flow `flow` (empty unless it holds a pending link). Read only,
@@ -660,10 +664,15 @@ pub async fn link_choices(
             connections,
             email_code: tenant.settings.email_otp,
             address_hidden: true,
+            candidate_email: None,
         });
     }
+    let candidate_email = link.candidate_email.clone();
     let Some(confirm) = link.confirm else {
-        return Ok(LinkChoices::default());
+        return Ok(LinkChoices {
+            candidate_email,
+            ..LinkChoices::default()
+        });
     };
     let mut connections = Vec::with_capacity(confirm.connections.len());
     for id in &confirm.connections {
@@ -677,6 +686,7 @@ pub async fn link_choices(
         connections,
         email_code: confirm.email_code && tenant.settings.email_otp,
         address_hidden: false,
+        candidate_email,
     })
 }
 

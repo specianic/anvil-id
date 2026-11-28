@@ -1,7 +1,7 @@
 # MFA policy enforcement at sign-in: in-flow enrolment and its recovery codes (AUTH-08), German.
 title-mfa_enroll = Bestätigung in zwei Schritten einrichten
 title-mfa_codes = Speichern Sie Ihre Wiederherstellungscodes
-mfa_enroll-required = Ihre Organisation verlangt eine Bestätigung in zwei Schritten. Fügen Sie einen Passkey oder eine Authenticator-App hinzu, um fortzufahren.
+mfa_enroll-required = Dieser Dienst verlangt eine Bestätigung in zwei Schritten. Fügen Sie einen Passkey oder eine Authenticator-App hinzu, um fortzufahren.
 mfa_enroll-instructions = Scannen Sie diesen QR-Code mit Ihrer Authenticator-App und geben Sie dann den 6-stelligen Code ein, den sie anzeigt.
 mfa_enroll-manual = Sie können den Code nicht scannen? Geben Sie stattdessen diesen Schlüssel in der App ein:
 mfa_enroll-code_label = Code aus der App

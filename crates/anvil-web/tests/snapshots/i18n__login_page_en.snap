@@ -24,14 +24,11 @@ expression: html
 <input type="hidden" name="csrf_token" value="csrf-sample-token">
 
 
-
 <div class="anvil-field">
 <label for="identifier">Email</label>
-<input id="identifier" name="identifier" type="email" required>
+<input id="identifier" name="identifier" type="email" required autofocus>
 
 </div>
-
-
 
 
 <div class="anvil-field">
@@ -39,7 +36,6 @@ expression: html
 <input id="password" name="password" type="password" required>
 
 </div>
-
 
 
 <div class="anvil-form-messages">
@@ -51,7 +47,9 @@ expression: html
 </div>
 
 <button type="submit" id="login-submit">Sign in</button>
+
 </form>
+
 
 
 <form id="login-passkey" class="anvil-passkey" method="post" action="&#x2f;t&#x2f;acme&#x2f;ui&#x2f;login&#x2f;passkey?flow=f1" data-webauthn="authenticate" data-options-url="&#x2f;t&#x2f;acme&#x2f;ui&#x2f;login&#x2f;passkey&#x2f;options?flow=f1" data-webauthn-msg-cancelled="The passkey request was cancelled or timed out. Try again, or sign in with your password." data-webauthn-msg-failed="Your passkey could not be used. Try again, or sign in with your password.">

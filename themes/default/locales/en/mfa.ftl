@@ -1,7 +1,7 @@
 # MFA policy enforcement at sign-in: in-flow enrolment and its recovery codes (AUTH-08).
 title-mfa_enroll = Set up two-step verification
 title-mfa_codes = Save your recovery codes
-mfa_enroll-required = Your organisation requires two-step verification. Add a passkey or an authenticator app to continue.
+mfa_enroll-required = This service requires two-step verification. Add a passkey or an authenticator app to continue.
 mfa_enroll-instructions = Scan this QR code with your authenticator app, then enter the 6-digit code it shows.
 mfa_enroll-manual = Can't scan the code? Enter this key in the app instead:
 mfa_enroll-code_label = Code from the app

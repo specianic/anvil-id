@@ -288,8 +288,15 @@ async fn without_auto_link_the_user_confirms_by_signing_in() {
             ],
         )
         .await;
+    // Post/Redirect/Get (07.1-13): 303 to the confirmation page of the same flow, which shows
+    // the error, the same copy and the prefilled address.
+    assert!(support::is_prg(&wrong), "{} {}", wrong.status, wrong.text());
+    let wrong = follow_prg(&u.app, wrong).await;
     assert_eq!(wrong.status, 400);
     assert_eq!(form_id(&wrong.html()), "upstream-link");
+    assert!(wrong.html().contains("Sign in to it to connect Acme ID"));
+    assert!(wrong.html().contains(&format!("value=\"{MOCK_EMAIL}\"")));
+    assert!(wrong.html().contains("id=\"link-cancel\""));
     assert!(links(&u.app, &alice).await.is_empty());
 
     let ok = u

@@ -290,7 +290,7 @@ async fn required_without_a_factor_enrols_then_signs_in_with_mfa() {
         "id=\"totp-secret\"",
         "id=\"code\"",
         "id=\"mfa-enroll-submit\"",
-        "Your organisation requires two-step verification",
+        "This service requires two-step verification",
     ] {
         assert!(html.contains(needle), "{needle} in {html}");
     }

@@ -134,7 +134,17 @@ async fn confirmation_page_does_not_tell_whether_an_untrusted_email_has_an_accou
         .unwrap_or_default()
         .to_owned();
     assert!(!identifier_value.contains("value="), "{identifier_value}");
-    assert!(html.contains("Sign in to it to connect Acme ID"), "{html}");
+    // U-M9: the copy agrees with the empty field: it does not say that an account with this
+    // address exists.
+    assert!(
+        message_keys(&html).contains(&"upstream.link_explain_hidden".to_owned()),
+        "{html}"
+    );
+    assert!(!html.contains("already exists"), "{html}");
+    assert!(
+        html.contains("sign in to the account you already have here"),
+        "{html}"
+    );
 }
 
 #[tokio::test]
@@ -1140,9 +1150,9 @@ async fn emailed_code_confirms_the_link_of_a_social_only_account() {
     .await;
     let alice = social_only_alice(&u).await;
     let page = link_page(&u).await;
-    assert!(page.contains("id=\"email-code-request\""), "{page}");
+    assert!(page.contains("id=\"email-code-request-submit\""), "{page}");
     assert!(!message_keys(&page).contains(&"upstream.link_no_method".to_owned()));
-    let action = email_code_support::action_of(&u.app, &page, "email-code-request");
+    let action = email_code_support::email_code_action(&u.app, &page);
     let sent = u
         .app
         .post_form(
@@ -1175,7 +1185,7 @@ async fn emailed_code_for_another_address_cannot_confirm_the_link() {
     take_emails(&u.app).await;
     u.app.clear_cookies();
     let page = link_page(&u).await;
-    let action = email_code_support::action_of(&u.app, &page, "email-code-request");
+    let action = email_code_support::email_code_action(&u.app, &page);
     let resp = u
         .app
         .post_form(
@@ -1186,6 +1196,9 @@ async fn emailed_code_for_another_address_cannot_confirm_the_link() {
             ],
         )
         .await;
+    // The refusal answers Post/Redirect/Get (07.1-13): the GET shows the confirmation again.
+    assert!(support::is_prg(&resp), "{} {}", resp.status, resp.text());
+    let resp = follow_prg(&u.app, resp).await;
     assert_eq!(resp.status, 400, "{}", resp.text());
     assert!(email_code_support::login_codes(&u.app).await.is_empty());
     assert!(links(&u.app, &alice).await.is_empty());
@@ -1196,7 +1209,7 @@ async fn emailed_code_for_another_address_cannot_confirm_the_link() {
     tenant_settings(&u.app, |s| s.email_otp = true).await;
     register(&u.app, "", MOCK_EMAIL, PASSWORD).await;
     let page = link_page(&u).await;
-    assert!(!page.contains("id=\"email-code-request\""), "{page}");
+    assert!(!page.contains("id=\"email-code-request-submit\""), "{page}");
 }
 
 #[tokio::test]
@@ -1421,7 +1434,7 @@ async fn unrevealed_page(case: Matched) -> String {
     assert!(page.contains("id=\"upstream-acme-id-form\""), "{page}");
     assert!(page.contains("id=\"email-code-link-request\""), "{page}");
     // No address input: the code goes to the matching account's own address, if any.
-    assert!(!page.contains("id=\"email-code-request\""), "{page}");
+    assert!(!page.contains("id=\"email-code-request-submit\""), "{page}");
     assert!(
         !message_keys(&page).contains(&"upstream.link_no_method".to_owned()),
         "{page}"
@@ -1465,6 +1478,8 @@ async fn unrevealed_emailed_code_confirms_only_the_matching_account() {
             ],
         )
         .await;
+    assert!(support::is_prg(&typed), "{} {}", typed.status, typed.text());
+    let typed = follow_prg(&u.app, typed).await;
     assert_eq!(typed.status, 400, "{}", typed.text());
     assert!(email_code_support::login_codes(&u.app).await.is_empty());
 

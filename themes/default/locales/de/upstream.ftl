@@ -17,3 +17,4 @@ upstream-link_other_way = Bestätigung hier nicht möglich? Melden Sie sich auf 
 upstream-link_account_page = Zu den verknüpften Konten
 upstream-link_email_code = Code per E-Mail senden
 upstream-link_email_code_hint = Gehört diese E-Mail-Adresse zu einem Konto, senden wir einen Anmeldecode an sie.
+upstream-link_explain_hidden = Um { $provider } zu verbinden, melden Sie sich bei Ihrem bestehenden Konto hier an. Wenn Sie keines haben, brechen Sie ab und kehren Sie zur Anmeldung zurück.

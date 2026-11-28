@@ -162,8 +162,17 @@ async fn required_mfa_policy_applies_after_the_code_and_after_the_link() {
         session(&app).await.is_none(),
         "no session before the second factor"
     );
+    // The confirming code signs in and redirects to the recovery-codes page (plan 07.1-13).
     let done = confirm_enrolment(&app, &enroll).await;
-    assert_eq!(done.status, 200, "{}", done.text());
+    assert_eq!(done.status, 303, "{}", done.text());
+    let codes_path = to_path(&app, &support::location(&done));
+    assert!(
+        codes_path.starts_with("/ui/login/recovery-codes?flow="),
+        "{codes_path}"
+    );
+    let codes = app.get(&codes_path).await;
+    assert_eq!(codes.status, 200, "{}", codes.text());
+    assert_eq!(codes.html().matches("<li><code>").count(), 10);
     let s = session(&app).await.expect("signed in");
     assert_eq!(s.amr, strs(&["otp", "mfa"]));
     assert_eq!(s.acr, ACR_MFA);
@@ -192,7 +201,7 @@ async fn required_mfa_policy_applies_after_the_code_and_after_the_link() {
 async fn disabled_tenant_offers_nothing_and_refuses_the_routes() {
     let app = setup().await;
     let page = app.get("/ui/login").await;
-    assert!(page.html().contains("id=\"email-code-request\""));
+    assert!(page.html().contains("id=\"email-code-request-submit\""));
     enable(&app, false).await;
     let page = app.get("/ui/login").await;
     let html = page.html();
@@ -252,12 +261,16 @@ async fn login_hint_prefills_the_address_and_the_request_continues() {
     let login = to_path(&app, &location(&resp));
     let page = app.get(&login).await;
     let html = page.html();
-    let form_start = html.find("id=\"email-code-request\"").expect("email form");
+    // One address field (U-M7): the sign-in field is prefilled and the email-code button
+    // posts it.
     assert!(
-        html[form_start..].contains("value=\"alice@example.com\""),
+        html.contains(
+            "id=\"identifier\" name=\"identifier\" type=\"email\" value=\"alice@example.com\""
+        ),
         "{html}"
     );
-    assert!(html.contains("id=\"email-code-toggle\" open"), "{html}");
+    assert_eq!(html.matches("type=\"email\"").count(), 1, "{html}");
+    assert!(html.contains("id=\"email-code-request-submit\""), "{html}");
 
     let page = request_code_at(&app, &login, ALICE).await;
     let mail = one_code(&app).await;

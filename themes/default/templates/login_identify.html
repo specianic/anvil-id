@@ -2,7 +2,8 @@
 {% import "form.html" as forms %}
 {#- Identifier-first sign-in (home-realm discovery, ORG-04). Rendered for two forms:
     - `login-identify` (the email page, tenants with a routed domain only): form
-      `login-identify-form` with the `identifier` input and button `login-identify-submit`, followed
+      `login-identify-form` with the `identifier` input (`autofocus`) and button
+      `login-identify-submit`, followed
       by the upstream buttons and the passkey form exactly as on login.html.
     - `login-sso-choice` (the email's domain uses single sign-on and its organization still allows
       passwords): button `login-sso-continue` (posts `choice=sso`) and button `login-use-password`
@@ -50,6 +51,7 @@
 {%- if field.value is not none %} value="{{ field.value }}"{% endif %}
 {%- if field.required %} required{% endif %}
 {%- if field.autocomplete %} autocomplete="{{ field.autocomplete }}"{% endif %}
+{%- if loop.first %} autofocus{% endif %}
 {%- if field.messages %} aria-describedby="{% for m in field.messages %}{{ field.name }}-msg-{{ loop.index }}{% if not loop.last %} {% endif %}{% endfor %}"{% endif %}
 {%- if invalid %} aria-invalid="true"{% endif %}>
 {{ forms.messages(field.messages, field.name) }}

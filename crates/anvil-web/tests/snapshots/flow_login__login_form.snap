@@ -6,14 +6,11 @@ expression: form_fragment(&html)
 <input type="hidden" name="csrf_token" value="CSRF">
 
 
-
 <div class="anvil-field">
 <label for="identifier">Email</label>
-<input id="identifier" name="identifier" type="email" required autocomplete="username">
+<input id="identifier" name="identifier" type="email" required autocomplete="username" autofocus>
 
 </div>
-
-
 
 
 <div class="anvil-field">
@@ -23,6 +20,6 @@ expression: form_fragment(&html)
 </div>
 
 
-
 <button type="submit" id="login-submit">Sign in</button>
+
 </form>

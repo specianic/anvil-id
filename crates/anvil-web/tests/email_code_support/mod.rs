@@ -110,6 +110,20 @@ pub fn action_of(app: &TestApp, html: &str, id: &str) -> String {
     form_action(app, &html[start..])
 }
 
+/// The `formaction` of the "Email me a sign-in code" button (`email-code-request-submit`): the
+/// sign-in page has one address field (`identifier`) and the button posts the sign-in form to
+/// the email-code route (U-M7).
+pub fn email_code_action(app: &TestApp, html: &str) -> String {
+    let start = html
+        .find("id=\"email-code-request-submit\"")
+        .unwrap_or_else(|| panic!("email-code button in {html}"));
+    let tag = &html[start..start + html[start..].find('>').expect("tag end")];
+    let marker = "formaction=\"";
+    let a = tag.find(marker).expect("formaction") + marker.len();
+    let b = tag[a..].find('"').expect("quoted") + a;
+    to_path(app, &tag[a..b].replace("&amp;", "&"))
+}
+
 /// The value of the hidden input `name` (with an id) in a page.
 pub fn hidden(html: &str, name: &str) -> Option<String> {
     hidden_inputs(html)
@@ -130,12 +144,18 @@ pub async fn request_code_at(app: &TestApp, login_path: &str, email: &str) -> Te
     let page = app.get(login_path).await;
     assert_eq!(page.status, 200, "{}", page.text());
     let html = page.html();
-    let action = action_of(app, &html, "email-code-request");
+    // Like the browser: the sign-in form (its one address field `identifier`) posted to the
+    // button's `formaction`.
+    let action = email_code_action(app, &html);
     let csrf = csrf_from(&html);
     post_form_follow(
         app,
         &action,
-        &[("csrf_token", csrf.as_str()), ("email", email)],
+        &[
+            ("csrf_token", csrf.as_str()),
+            ("identifier", email),
+            ("password", ""),
+        ],
     )
     .await
 }

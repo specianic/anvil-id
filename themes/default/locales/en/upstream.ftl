@@ -17,3 +17,4 @@ upstream-link_other_way = Can't confirm here? Sign in another way, then connect 
 upstream-link_account_page = Go to linked accounts
 upstream-link_email_code = Email me a code
 upstream-link_email_code_hint = If this email address belongs to an account, we send a sign-in code to it.
+upstream-link_explain_hidden = To connect { $provider }, sign in to the account you already have here. If you don't have one, cancel and go back to sign in.

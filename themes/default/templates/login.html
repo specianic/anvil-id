@@ -9,21 +9,23 @@
     - `upstream` (list of {slug, name, action}): one button per enabled upstream connection, each
       in its own form posting the CSRF token to the upstream start route (no JavaScript needed).
       Selectors: form `upstream-{slug}-form`, button `upstream-{slug}` (`data-connection` = slug).
-    - `email_code` ({action, value} or none): the tenant enables email sign-in (AUTH-06); the
-      "Email me a sign-in code" form, open and prefilled when an address is known (`login_hint`).
-      Selectors: disclosure `email-code-toggle`, form `email-code-request`, input
-      `email-code-email`, button `email-code-request-submit`.
+    - `email_code` ({action, value} or none): the tenant enables email sign-in (AUTH-06). There is
+      one address field (`identifier`, U-M7): the "Email me a sign-in code" button
+      `email-code-request-submit` sits in the sign-in form and posts it to `email_code.action`
+      (`formaction`, `formnovalidate`; the email-code route reads the address from `identifier`
+      when no `email` is posted), with the hint `email-code-request-hint`.
     - `change_email` ({action, email} or none): identifier-first sign-in (a tenant with a routed
       domain): the email entered on the email page travels in a hidden `identifier` field and is
       shown read-only (`login-email-locked`), with the form `login-change-email-form` / button
       `login-change-email` (posts `choice=change`) back to the email page. None on the combined
       form, which then renders exactly as before.
-    The password form is written out here (instead of forms.render) so the CAPTCHA widget can sit
-    inside it; its markup matches form.html. -#}
+    The password form is written out here (instead of forms.render) so the CAPTCHA widget and the
+    email-code button can sit inside it; its markup matches form.html, and its first visible
+    field has `autofocus` (U-L2). -#}
 {% block heading %}{{ t("title.login") }}{% endblock %}
 {% block content %}{% if change_email %}
 <p class="anvil-muted" id="login-email-locked">{{ t("hrd.signing_in_as", email=change_email.email) }}</p>{% endif %}
-{% if captcha %}
+{% set ns = namespace(focused=false) %}
 <form id="{{ form.id }}" method="post" action="{{ form.action }}" novalidate>
 <input type="hidden" name="csrf_token" value="{{ form.csrf_token }}">
 {% for field in form.fields %}
@@ -34,40 +36,32 @@
 {%- if field.value is not none and field.kind != "password" %} value="{{ field.value }}"{% endif %}
 {%- if field.required %} required{% endif %}
 {%- if field.autocomplete %} autocomplete="{{ field.autocomplete }}"{% endif %}
+{%- if not ns.focused %} autofocus{% set ns.focused = true %}{% endif %}
 {%- if field.messages %} aria-describedby="{% for m in field.messages %}{{ field.name }}-msg-{{ loop.index }}{% if not loop.last %} {% endif %}{% endfor %}"{% endif %}
 {%- if invalid %} aria-invalid="true"{% endif %}>
 {{ forms.messages(field.messages, field.name) }}
 </div>{% endif %}
 {% endfor %}
-{% include "captcha.html" %}
-{% if form.messages %}
+{% if captcha %}{% include "captcha.html" %}
+{% endif %}
+{%- if form.messages %}
 <div class="anvil-form-messages">
 {{ forms.messages(form.messages, form.id) }}
 </div>
 {% endif %}
 <button type="submit" id="{{ form.id }}-submit">{{ t("login.submit") }}</button>
+{% if email_code %}
+<p class="anvil-muted" id="email-code-request-hint">{{ t("signin.email_code_hint") }}</p>
+<button type="submit" id="email-code-request-submit" class="anvil-secondary" formaction="{{ email_code.action }}" formnovalidate>{{ t("email_code.request") }}</button>
+{% endif %}
 </form>
-{% else %}
-{{ forms.render(form, t("login.submit")) }}
-{% endif %}{% if change_email %}
+{% if change_email %}
 <form id="login-change-email-form" method="post" action="{{ change_email.action }}">
 <input type="hidden" name="csrf_token" value="{{ form.csrf_token }}">
 <input type="hidden" name="choice" value="change">
 <button type="submit" id="login-change-email" class="anvil-secondary">{{ t("hrd.change_email") }}</button>
-</form>{% endif %}{% if email_code %}
-<details class="anvil-disclosure" id="email-code-toggle"{% if email_code.value %} open{% endif %}>
-<summary>{{ t("email_code.request_toggle") }}</summary>
-<form id="email-code-request" method="post" action="{{ email_code.action }}" novalidate>
-<input type="hidden" name="csrf_token" value="{{ form.csrf_token }}">
-<div class="anvil-field">
-<label for="email-code-email">{{ t("field.email") }}</label>
-<input id="email-code-email" name="email" type="email" required autocomplete="username" aria-describedby="email-code-request-hint"{% if email_code.value %} value="{{ email_code.value }}"{% endif %}>
-<p class="anvil-muted" id="email-code-request-hint">{{ t("email_code.request_hint") }}</p>
-</div>
-<button type="submit" id="email-code-request-submit" class="anvil-secondary">{{ t("email_code.request") }}</button>
-</form>
-</details>
-{% endif %}{% if upstream %}
+</form>{% endif %}
+{% if upstream %}
 <div class="anvil-upstream" role="group" aria-label="{{ t("upstream.group_label") }}">
 <p class="anvil-muted">{{ t("upstream.or") }}</p>
 {% for c in upstream %}

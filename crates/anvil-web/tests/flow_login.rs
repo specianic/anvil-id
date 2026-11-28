@@ -366,3 +366,149 @@ async fn malformed_request_parameter_is_the_flow_expired_page() {
     assert_eq!(error_key(&html).as_deref(), Some("flow_expired"));
     assert!(!html.contains("name=\"password\""), "{html}");
 }
+
+// ---------------------------------------------------------------------------------------------
+// Sign-in form fixes (plan 07.1-13: U-M7, U-L1, U-L2)
+// ---------------------------------------------------------------------------------------------
+
+/// Turns on email sign-in (`email_otp`) for the default tenant.
+async fn enable_email_sign_in(app: &TestApp) {
+    let t = default_tenant(app);
+    set_settings(
+        app,
+        t.id,
+        TenantSettings {
+            email_otp: true,
+            ..t.settings.clone()
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn email_sign_in_shows_one_address_field_shared_by_both_actions() {
+    let app = app_with_user().await;
+    enable_email_sign_in(&app).await;
+    let resp = app.get("/ui/login").await;
+    assert_eq!(resp.status, 200);
+    let html = resp.html();
+    // One address input; the email-code button sits in the sign-in form and posts it.
+    assert_eq!(html.matches("type=\"email\"").count(), 1, "{html}");
+    assert!(!html.contains("id=\"email-code-email\""), "{html}");
+    let form_end = html.find("</form>").expect("form end");
+    let button = html
+        .find("id=\"email-code-request-submit\"")
+        .expect("email-code button");
+    assert!(button < form_end, "the button is part of the sign-in form");
+    assert!(html.contains("formaction=\""), "{html}");
+    assert!(html.contains("formnovalidate"), "{html}");
+
+    // The email-code button: the sign-in form's `identifier` reaches the email-code route.
+    let tag = &html[button..button + html[button..].find('>').expect("tag")];
+    let a = tag.find("formaction=\"").expect("formaction") + "formaction=\"".len();
+    let action = to_path(&app, &tag[a..a + tag[a..].find('"').expect("quoted")]);
+    let resp = post_form_follow(
+        &app,
+        &action.replace("&amp;", "&"),
+        &[
+            ("csrf_token", csrf_from(&html).as_str()),
+            ("identifier", EMAIL),
+            ("password", ""),
+        ],
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert!(resp.html().contains("id=\"email-code\""), "{}", resp.text());
+
+    // The password button still signs in with the same field.
+    app.clear_cookies();
+    let resp = login(&app, "", EMAIL, PASSWORD).await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_eq!(
+        message_keys(&resp.html()),
+        vec!["login.signed_in".to_owned()]
+    );
+}
+
+#[tokio::test]
+async fn first_sign_in_field_has_initial_focus() {
+    let app = TestApp::new().await;
+    let html = app.get("/ui/login").await.html();
+    assert_eq!(html.matches(" autofocus").count(), 1, "{html}");
+    let input = html
+        .split("<input id=\"identifier\"")
+        .nth(1)
+        .and_then(|r| r.split('>').next())
+        .expect("identifier input");
+    assert!(input.contains("autofocus"), "{input}");
+}
+
+#[tokio::test]
+async fn empty_submit_asks_for_the_address_not_incorrect() {
+    let app = app_with_user().await;
+    let raw = submit_form_raw(&app, "/ui/login", &[("identifier", ""), ("password", "")]).await;
+    assert!(support::is_prg(&raw), "{} {}", raw.status, raw.text());
+    let resp = follow_prg(&app, raw).await;
+    assert_eq!(resp.status, 400, "{}", resp.text());
+    let html = resp.html();
+    assert_eq!(
+        message_keys(&html),
+        vec!["signin.identifier_required".to_owned()]
+    );
+    assert!(html.contains("id=\"identifier-msg-1\""), "{html}");
+    assert!(html.contains("Enter your email address."), "{html}");
+    assert!(!html.contains("incorrect"), "{html}");
+
+    // An address without a password: "Enter your password", the address kept.
+    app.clear_cookies();
+    let resp = submit_form(
+        &app,
+        "/ui/login",
+        &[("identifier", EMAIL), ("password", "")],
+    )
+    .await;
+    assert_eq!(resp.status, 400, "{}", resp.text());
+    let html = resp.html();
+    assert_eq!(
+        message_keys(&html),
+        vec!["signin.password_required".to_owned()]
+    );
+    assert!(html.contains(&format!("value=\"{EMAIL}\"")), "{html}");
+    assert!(session_cookie(&app).is_none());
+}
+
+#[tokio::test]
+async fn empty_password_answer_is_the_same_for_known_and_unknown_addresses() {
+    let app = app_with_user().await;
+    let page = |email: &'static str| {
+        let app = &app;
+        async move {
+            app.clear_cookies();
+            let resp =
+                submit_form(app, "/ui/login", &[("identifier", email), ("password", "")]).await;
+            (resp.status, message_keys(&resp.html()))
+        }
+    };
+    let known = page(EMAIL).await;
+    let unknown = page("nobody@example.com").await;
+    assert_eq!(known, unknown);
+    assert_eq!(known.0, 400);
+}
+
+#[tokio::test]
+async fn empty_submit_without_the_csrf_token_is_forbidden() {
+    let app = TestApp::new().await;
+    let html = app.get("/ui/login").await.html();
+    let action = form_action(&app, &html);
+    let resp = app
+        .post_form(
+            &action,
+            &[
+                ("csrf_token", "forged"),
+                ("identifier", ""),
+                ("password", ""),
+            ],
+        )
+        .await;
+    assert_eq!(resp.status, 403, "{}", resp.text());
+}

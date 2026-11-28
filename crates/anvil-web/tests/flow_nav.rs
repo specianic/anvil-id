@@ -656,7 +656,7 @@ async fn upstream_link_cancel_keeps_the_request() {
     let csrf = csrf_from(&html);
     let wrong = u
         .app
-        .post_form(
+        .post_form_follow(
             &action,
             &[
                 ("csrf_token", &csrf),

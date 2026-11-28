@@ -4,16 +4,18 @@
     automatically. The user proves the existing account to connect the provider; any required
     second factor follows as usual, and the link is made right before the session. Variables
     besides `page` and `form` (form id `upstream-link`, fields `identifier` and `password`; the
-    first message, `upstream.link_explain`, names the provider; the identifier is prefilled only
-    when the matching account may be revealed):
+    first message names the provider: `upstream.link_explain` ("an account with this email
+    address already exists") with the identifier prefilled when the matching account may be
+    revealed, `upstream.link_explain_hidden` (no such claim) and an empty identifier when it may
+    not; a failed confirmation answers Post/Redirect/Get like the sign-in form):
     - `passkey` (as on the sign-in page);
     - `upstream` (list of {slug, name, action}): when the account may be revealed, the providers
       it is already linked to; when it may not, the tenant's other providers (the same list
       whatever account matched). Signing in with one already linked to the account confirms.
       Selectors: form `upstream-{slug}-form`, button `upstream-{slug}` (`data-connection` = slug);
     - `email_code` ({action, value, hidden} or none): an emailed sign-in code. Revealed account:
-      to its verified address, with the address field (selectors as on the sign-in page:
-      `email-code-request`, ...). `hidden` (the account may not be revealed): a plain button
+      the button `email-code-request-submit` (hint `email-code-request-hint`) in the confirmation
+      form posts its one address field (`formaction`). `hidden` (the account may not be revealed): a plain button
       without any address, form `email-code-link-request` with button
       `email-code-link-request-submit` and hint `email-code-link-hint`; the code goes to the
       matching account's verified address, if any, and the next page is the same either way;
@@ -27,7 +29,32 @@
 {% block heading %}{{ t("title.upstream_link") }}{% endblock %}
 {% block content %}
 {% if form.fields %}
-{{ forms.render(form, t("upstream.link_submit")) }}
+<form id="{{ form.id }}" method="post" action="{{ form.action }}" novalidate>
+<input type="hidden" name="csrf_token" value="{{ form.csrf_token }}">
+{% for field in form.fields %}
+{% if field.kind == "hidden" %}<input type="hidden" id="{{ field.name }}" name="{{ field.name }}"{% if field.value is not none %} value="{{ field.value }}"{% endif %}>{% else %}{% set invalid = "error" in field.messages|map(attribute="level")|list %}
+<div class="anvil-field{% if invalid %} anvil-field-invalid{% endif %}">
+<label for="{{ field.name }}">{{ field.label }}{% if not field.required %} <span class="anvil-optional">{{ t("form.optional") }}</span>{% endif %}</label>
+<input id="{{ field.name }}" name="{{ field.name }}" type="{{ field.kind }}"
+{%- if field.value is not none and field.kind != "password" %} value="{{ field.value }}"{% endif %}
+{%- if field.required %} required{% endif %}
+{%- if field.autocomplete %} autocomplete="{{ field.autocomplete }}"{% endif %}
+{%- if field.messages %} aria-describedby="{% for m in field.messages %}{{ field.name }}-msg-{{ loop.index }}{% if not loop.last %} {% endif %}{% endfor %}"{% endif %}
+{%- if invalid %} aria-invalid="true"{% endif %}>
+{{ forms.messages(field.messages, field.name) }}
+</div>{% endif %}
+{% endfor %}
+{% if form.messages %}
+<div class="anvil-form-messages">
+{{ forms.messages(form.messages, form.id) }}
+</div>
+{% endif %}
+<button type="submit" id="{{ form.id }}-submit">{{ t("upstream.link_submit") }}</button>
+{% if email_code and not email_code.hidden %}
+<p class="anvil-muted" id="email-code-request-hint">{{ t("signin.email_code_hint") }}</p>
+<button type="submit" id="email-code-request-submit" class="anvil-secondary" formaction="{{ email_code.action }}" formnovalidate>{{ t("email_code.request") }}</button>
+{% endif %}
+</form>
 {% else %}
 <div id="{{ form.id }}" class="anvil-form-messages">
 {{ forms.messages(form.messages, form.id) }}
@@ -39,19 +66,6 @@
 <p class="anvil-muted" id="email-code-link-hint">{{ t("upstream.link_email_code_hint") }}</p>
 <button type="submit" id="email-code-link-request-submit" class="anvil-secondary">{{ t("upstream.link_email_code") }}</button>
 </form>
-{% elif email_code %}
-<details class="anvil-disclosure" id="email-code-toggle">
-<summary>{{ t("email_code.request_toggle") }}</summary>
-<form id="email-code-request" method="post" action="{{ email_code.action }}" novalidate>
-<input type="hidden" name="csrf_token" value="{{ form.csrf_token }}">
-<div class="anvil-field">
-<label for="email-code-email">{{ t("field.email") }}</label>
-<input id="email-code-email" name="email" type="email" required autocomplete="username" aria-describedby="email-code-request-hint"{% if email_code.value %} value="{{ email_code.value }}"{% endif %}>
-<p class="anvil-muted" id="email-code-request-hint">{{ t("email_code.request_hint") }}</p>
-</div>
-<button type="submit" id="email-code-request-submit" class="anvil-secondary">{{ t("email_code.request") }}</button>
-</form>
-</details>
 {% endif %}{% if upstream %}
 <div class="anvil-upstream" role="group" aria-label="{{ t("upstream.confirm_group_label") }}">
 {% for c in upstream %}

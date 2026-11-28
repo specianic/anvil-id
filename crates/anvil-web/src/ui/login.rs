@@ -400,6 +400,21 @@ async fn submit(
         return csrf_page(&state, Some(&tenant), &loc);
     };
     let identifier = form.identifier.clone().unwrap_or_default();
+    let password = form.password.clone().unwrap_or_default();
+    if let Some(resp) = empty_sign_in(
+        &state,
+        &tenant,
+        &loc,
+        &jar,
+        flow_id,
+        csrf,
+        &identifier,
+        &password,
+    )
+    .await
+    {
+        return resp;
+    }
     let throttle = Throttle::Password {
         identifier: &identifier,
         ip,
@@ -410,7 +425,7 @@ async fn submit(
     };
     let input = FlowInput::Login {
         identifier: identifier.clone(),
-        password: form.password.clone().unwrap_or_default(),
+        password,
     };
     let nav = NavContext::from_flow(&state, &tenant, flow_id).await;
     let binding = FlowBinding::Cookie { jar: &jar, csrf };
@@ -436,6 +451,62 @@ async fn submit(
         }
         other => sign_in_gate_page(&state, &tenant, &loc, &nav, other).await,
     }
+}
+
+/// Field message of a sign-in submitted without an address (U-L1).
+pub(super) const IDENTIFIER_REQUIRED: &str = "signin.identifier_required";
+/// Field message of a sign-in submitted with an address but without a password (U-L1).
+pub(super) const PASSWORD_REQUIRED: &str = "signin.password_required";
+
+/// A sign-in form posted with an empty address or password (U-L1): the form again with "Enter
+/// your email address" (or "Enter your password") on that field instead of "incorrect", through
+/// Post/Redirect/Get. Nothing is looked up and no attempt is recorded: the answer depends only
+/// on what was typed, never on any account. The submission must still carry the flow's cookie
+/// and CSRF token (else 403). `None` (the caller runs the sign-in as usual) when both fields are
+/// filled, or when the flow cannot show its sign-in form any more (unknown, expired, another
+/// step: the flow service answers that).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "threads the request's locale and binding"
+)]
+async fn empty_sign_in(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    loc: &Locale,
+    jar: &CookieJar,
+    flow_id: FlowId,
+    csrf: &str,
+    identifier: &str,
+    password: &str,
+) -> Option<Response> {
+    let (field, key) = if identifier.trim().is_empty() {
+        ("identifier", IDENTIFIER_REQUIRED)
+    } else if password.is_empty() {
+        ("password", PASSWORD_REQUIRED)
+    } else {
+        return None;
+    };
+    let binding = FlowBinding::Cookie { jar, csrf };
+    let mut form = match flow_driver::shown_step(state, tenant, flow_id, &binding).await {
+        Ok(Some((form, _, _))) if form.id == "login" => form,
+        Ok(_) => return None,
+        Err(DriveRejection::Binding) => return Some(csrf_page(state, Some(tenant), loc)),
+        Err(DriveRejection::Failed(e)) => {
+            return Some(core_error_page_in(state, Some(tenant), loc, &e));
+        }
+    };
+    form.fields.iter().find(|f| f.name == field)?;
+    let typed = identifier.trim();
+    for f in &mut form.fields {
+        if f.name == field {
+            f.messages = vec![FormMessage::error(key)];
+        }
+        // The address shown again is the one just typed (none when it was left empty).
+        if f.name == "identifier" && f.kind != FieldKind::Hidden {
+            f.value = (!typed.is_empty()).then(|| typed.to_owned());
+        }
+    }
+    prg_redirect(state, tenant, loc, &form, false, CookieJar::new())
 }
 
 /// The page of a sign-in submission the brute-force gate answered (lock, CAPTCHA demand) or the
@@ -1026,10 +1097,10 @@ async fn flow_passkey_finish(
 // ---------------------------------------------------------------------------------------------
 
 /// The page (path under `{issuer}/ui/`) that shows `form_id` again after a failed POST, or
-/// `None` for a form that is answered directly (the upstream link confirmation, setup).
+/// `None` for a form that is answered directly (setup).
 pub(super) fn prg_path(form_id: &str) -> Option<&'static str> {
     match form_id {
-        "login" | IDENTIFY_FORM_ID | SSO_CHOICE_FORM_ID => Some("login"),
+        "login" | IDENTIFY_FORM_ID | SSO_CHOICE_FORM_ID | UPSTREAM_LINK_FORM_ID => Some("login"),
         SECOND_FACTOR_FORM_ID | ENROLL_FORM_ID => Some("login/second-factor"),
         EMAIL_CODE_FORM_ID => Some("login/email-code"),
         "registration" => Some("registration"),
@@ -1240,7 +1311,13 @@ impl UiQuery {
 }
 
 /// Every field any self-service form posts. Missing fields are empty input for the engine.
+///
+/// `email` falls back to `identifier` when it is not posted: the sign-in page has one address
+/// field (`identifier`, U-M7) and its "Email me a sign-in code" button posts the sign-in form to
+/// the email-code route, which reads `email`. No other form posts `identifier` without `email`
+/// for a different purpose (registration and recovery post only `email`).
 #[derive(Default, Deserialize)]
+#[serde(from = "PostedForm")]
 pub(super) struct UiForm {
     pub(super) csrf_token: Option<String>,
     pub(super) identifier: Option<String>,
@@ -1264,6 +1341,54 @@ pub(super) struct UiForm {
     /// hCaptcha widget response.
     #[serde(rename = "h-captcha-response")]
     pub(super) hcaptcha_response: Option<String>,
+}
+
+/// [`UiForm`] as posted, before the `email` fallback.
+#[derive(Deserialize)]
+struct PostedForm {
+    csrf_token: Option<String>,
+    identifier: Option<String>,
+    password: Option<String>,
+    email: Option<String>,
+    name: Option<String>,
+    token: Option<String>,
+    /// TOTP code (second-factor form).
+    code: Option<String>,
+    /// Recovery code (second-factor form).
+    recovery_code: Option<String>,
+    /// Second-factor binding token (second-factor form, [`super::mfa`]).
+    factor_token: Option<String>,
+    /// Passkey assertion JSON (webauthn.js).
+    response: Option<String>,
+    /// The single-sign-on choice of the email-first sign-in (`sso`, `password`, `change`).
+    choice: Option<String>,
+    /// Turnstile widget response.
+    #[serde(rename = "cf-turnstile-response")]
+    turnstile_response: Option<String>,
+    /// hCaptcha widget response.
+    #[serde(rename = "h-captcha-response")]
+    hcaptcha_response: Option<String>,
+}
+
+impl From<PostedForm> for UiForm {
+    fn from(p: PostedForm) -> Self {
+        let email = p.email.or_else(|| p.identifier.clone());
+        Self {
+            csrf_token: p.csrf_token,
+            identifier: p.identifier,
+            password: p.password,
+            email,
+            name: p.name,
+            token: p.token,
+            code: p.code,
+            recovery_code: p.recovery_code,
+            factor_token: p.factor_token,
+            response: p.response,
+            choice: p.choice,
+            turnstile_response: p.turnstile_response,
+            hcaptcha_response: p.hcaptcha_response,
+        }
+    }
 }
 
 /// An invalid form submission or page request (400).
@@ -1462,6 +1587,35 @@ struct CaptchaView {
     site_key: String,
 }
 
+/// Message key of the link confirmation's introduction when the matching account may not be
+/// revealed (U-M9): it asks to sign in to an existing account without saying that one with this
+/// address exists.
+pub(super) const LINK_EXPLAIN_HIDDEN: &str = "upstream.link_explain_hidden";
+
+/// Makes the link confirmation's copy and its address field agree (U-M9, the reveal rule of
+/// `anvil_core::service::upstream::link_choices`): when the matching account may be revealed the
+/// sign-in field is prefilled with its address (unless the user typed one) and the copy says an
+/// account with this address exists; when it may not, the field stays empty and the copy
+/// ([`LINK_EXPLAIN_HIDDEN`]) does not say so.
+fn link_confirmation_copy(form: &mut FormDescription, choices: &super::upstream::SignInChoices) {
+    if choices.link_email_hidden {
+        for m in &mut form.messages {
+            if m.key == "upstream.link_explain" {
+                m.key = LINK_EXPLAIN_HIDDEN.to_owned();
+            }
+        }
+        return;
+    }
+    if let Some(email) = &choices.link_email
+        && let Some(field) = form
+            .fields
+            .iter_mut()
+            .find(|f| f.name == "identifier" && f.value.as_deref().unwrap_or("").is_empty())
+    {
+        field.value = Some(email.clone());
+    }
+}
+
 /// The flow id of a bound form (`…?flow={id}` action, possibly followed by more parameters).
 pub(super) fn flow_of(form: &FormDescription) -> Option<FlowId> {
     let (_, rest) = form.action.rsplit_once("?flow=")?;
@@ -1511,6 +1665,9 @@ pub(super) fn render_tenant_form_with(
         })
         .collect();
     let mut form = form.clone();
+    if form.id == UPSTREAM_LINK_FORM_ID {
+        link_confirmation_copy(&mut form, &extras.upstream);
+    }
     state.renderer().localize_form(loc, &mut form);
     let mut passkey = None;
     let mut passkey_enroll = None;

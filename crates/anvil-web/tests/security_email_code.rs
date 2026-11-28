@@ -418,7 +418,7 @@ async fn sends_per_address_escalate_across_peers() {
         app.clear_cookies();
         let page = get_from(&app, peer, "/ui/login").await;
         let html = page.html();
-        let action = action_of(&app, &html, "email-code-request");
+        let action = email_code_action(&app, &html);
         let csrf = csrf_from(&html);
         let resp = post_from(
             &app,

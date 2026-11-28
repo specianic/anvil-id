@@ -122,6 +122,21 @@ async fn post_page(app: &TestApp, page: &TestResponse, pairs: &[(&str, &str)]) -
     post_form_in(app, &html, &form_action(app, &html), pairs).await
 }
 
+/// Posts the sign-in form of `page` with `identifier` = `email` to the "Email me a sign-in code"
+/// button's `formaction` (the page has one address field, U-M7).
+async fn post_email_code(app: &TestApp, page: &TestResponse, email: &str) -> TestResponse {
+    let html = page.html();
+    let start = html
+        .find("id=\"email-code-request-submit\"")
+        .unwrap_or_else(|| panic!("email-code button in {html}"));
+    let tag = &html[start..start + html[start..].find('>').expect("tag end")];
+    let marker = "formaction=\"";
+    let a = tag.find(marker).expect("formaction") + marker.len();
+    let b = tag[a..].find('"').expect("quoted") + a;
+    let action = to_path(app, &tag[a..b].replace("&amp;", "&"));
+    post_form_in(app, &html, &action, &[("identifier", email)]).await
+}
+
 /// Posts the form with id `form` of `page`.
 async fn post_form_id(
     app: &TestApp,
@@ -523,7 +538,7 @@ async fn email_code_refused_for_routed_domain_without_local_password() {
 
     // A code requested while passwords were allowed, used after they were turned off.
     let page = login_page(app).await;
-    let sent = post_form_id(app, &page, "email-code-request", &[("email", ALICE)]).await;
+    let sent = post_email_code(app, &page, ALICE).await;
     assert_eq!(sent.status, 200, "{}", sent.text());
     let mail = one_code(app).await;
     route(app, &h.claim, &h.conn, false).await;
@@ -543,7 +558,7 @@ async fn email_code_refused_for_routed_domain_without_local_password() {
     // A new request for the address is refused before anything is sent.
     app.clear_cookies();
     let step = identify(app, BOB).await;
-    let resp = post_form_id(app, &step, "email-code-request", &[("email", ALICE)]).await;
+    let resp = post_email_code(app, &step, ALICE).await;
     assert_eq!(resp.status, 400, "{}", resp.text());
     assert!(message_keys(&resp.html()).contains(&"hrd.use_sso".to_owned()));
     assert!(login_codes(app).await.is_empty(), "no email sent");

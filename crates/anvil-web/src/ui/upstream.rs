@@ -91,6 +91,9 @@ pub(super) struct SignInChoices {
     /// ... without an address field: the matching account may not be revealed
     /// (`anvil_core::service::upstream::LinkChoices::address_hidden`).
     pub(super) link_email_hidden: bool,
+    /// The revealed candidate's email the link confirmation prefills
+    /// (`anvil_core::service::upstream::LinkChoices::candidate_email`; never when hidden).
+    pub(super) link_email: Option<String>,
 }
 
 /// The upstream choices of a bound sign-in form:
@@ -131,6 +134,7 @@ pub(super) async fn upstream_buttons(
                 buttons: c.connections.into_iter().map(button).collect(),
                 link_email_code: c.email_code,
                 link_email_hidden: c.address_hidden,
+                link_email: c.candidate_email.filter(|_| !c.address_hidden),
             },
             Err(e) => {
                 tracing::warn!(error = %e, "listing link confirmation choices failed");
@@ -150,6 +154,7 @@ pub(super) async fn upstream_buttons(
             buttons: list.into_iter().map(button).collect(),
             link_email_code: false,
             link_email_hidden: false,
+            link_email: None,
         },
         Err(e) => {
             tracing::warn!(error = %e, "listing connections for the sign-in page failed");
