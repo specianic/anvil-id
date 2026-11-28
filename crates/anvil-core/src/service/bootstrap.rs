@@ -198,7 +198,8 @@ pub fn console_redirect_uri(public_url: &PublicUrl) -> String {
 
 /// The built-in console client (system tenant): public, auth method `none`, PKCE required,
 /// redirect `{public_url}/console/callback`, grants `authorization_code` + `refresh_token`,
-/// scopes `openid admin:read admin:write`, consent skipped (first party), JWT access tokens.
+/// scopes `openid profile email admin:read admin:write` (`profile` and `email` so the console
+/// can show who is signed in), consent skipped (first party), JWT access tokens.
 pub fn build_console_client(now: OffsetDateTime, public_url: &PublicUrl) -> NewClient {
     let mut grant_types = vec![GrantType::AuthorizationCode, GrantType::RefreshToken];
     grant_types.sort();
@@ -215,6 +216,8 @@ pub fn build_console_client(now: OffsetDateTime, public_url: &PublicUrl) -> NewC
         grant_types,
         scopes: vec![
             "openid".to_owned(),
+            "profile".to_owned(),
+            "email".to_owned(),
             ADMIN_READ.to_owned(),
             ADMIN_WRITE.to_owned(),
         ],
@@ -682,7 +685,10 @@ mod tests {
             c.grant_types,
             vec![GrantType::AuthorizationCode, GrantType::RefreshToken]
         );
-        assert_eq!(c.scopes, vec!["openid", "admin:read", "admin:write"]);
+        assert_eq!(
+            c.scopes,
+            vec!["openid", "profile", "email", "admin:read", "admin:write"]
+        );
         assert_eq!(c.consent_mode, ConsentMode::SkipFirstParty);
         assert_eq!(c.token_format, TokenFormat::Jwt);
         assert!(!c.can_introspect);
@@ -710,6 +716,16 @@ mod tests {
         let mut confidential = stored(&a);
         confidential.client_type = ClientType::Confidential;
         assert!(console_client_drift(&confidential, &a).is_err());
+    }
+
+    #[test]
+    fn console_drift_adds_profile_and_email_to_an_rc3_scope_list() {
+        let desired = build_console_client(NOW, &PublicUrl::parse("https://a.example").unwrap());
+        let mut rc3 = stored(&desired);
+        rc3.scopes = vec!["openid".into(), "admin:read".into(), "admin:write".into()];
+        let (update, fields) = console_client_drift(&rc3, &desired).unwrap().unwrap();
+        assert_eq!(fields, vec!["scopes"]);
+        assert_eq!(update.scopes, Some(desired.scopes.clone()));
     }
 
     #[test]
