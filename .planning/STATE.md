@@ -6,8 +6,8 @@ current_phase: 05
 current_phase_name: release 0 4 operate it
 current_plan: 33
 status: verifying
-stopped_at: Completed 07.1-20-PLAN.md
-last_updated: "2026-11-28T05:49:40.118Z"
+stopped_at: Completed 07.1-14-PLAN.md
+last_updated: "2026-11-28T05:49:52.633Z"
 last_activity: 2026-11-28
 progress:
   total_phases: 8
@@ -236,6 +236,7 @@ done before 05-29 tags v0.4.0.
 | Phase 07.1 P15 | 65min | 3 tasks | 12 files |
 | Phase 07.1 P12 | 60min | 2 tasks | 21 files |
 | Phase 07.1 P20 | 80min | 2 tasks | 11 files |
+| Phase 07.1 P14 | 100min | 3 tasks | 39 files |
 
 ## Accumulated Context
 
@@ -565,6 +566,9 @@ Recent decisions affecting current work:
 - [Phase 07.1]: Account ?client_id= is carried between pages only when it resolved to a static client's home; never echoed otherwise
 - [Phase 07.1]: 07.1-20: without an active session a logout that would ask is answered like a logout (validated post_logout_redirect_uri with state, else the signed-out page); refusals unchanged; conformance plans always carry a session
 - [Phase 07.1]: 07.1-20: 'Stay signed in' links to the static client's home (initiate_login_uri, else client_uri), else /ui/account/sessions; /ui/signed-out?client_id= shows Back to <app> for static clients only
+- [Phase 07.1]: 07.1-14: one 'Use another account' path (AuthorizeService::sign_in_as_other) for chooser, consent and org non-member page
+- [Phase 07.1]: 07.1-14: org non-member page only for interactive requests; Return to app = same access_denied (deny_not_member); prompt=none and native completion answer directly
+- [Phase 07.1]: 07.1-14: magic-link GET guidance from flow cookie + Sec-Fetch-Site (Strict cookie withheld on webmail clicks); POST still decides
 
 ### Roadmap Evolution
 
@@ -582,6 +586,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-28T05:49:40.114Z
-Stopped at: Completed 07.1-20-PLAN.md
+Last session: 2026-11-28T05:49:52.630Z
+Stopped at: Completed 07.1-14-PLAN.md
 Resume file: None
