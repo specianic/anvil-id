@@ -1294,6 +1294,16 @@ release 1.0 rc.4 connections: never enabled while incomplete or unverified, SSRF
 release 1.0 rc.4 connections: never enabled while incomplete or unverified, SSRF-guarded check|$W/security_connection_enable.rs|organization_connection_follows_the_same_rule
 release 1.0 rc.4 connections: never enabled while incomplete or unverified, SSRF-guarded check|$W/security_connection_enable.rs|connection_check_refuses_private_address
 release 1.0 rc.4 connections: never enabled while incomplete or unverified, SSRF-guarded check|$W/security_connection_enable.rs|incomplete_connection_not_offered_on_sign_in
+release 1.0 rc.4 connections: never enabled while incomplete or unverified, SSRF-guarded check|$W/account_linked.rs|page_lists_links_and_only_unlinked_offerable_connections
+release 1.0 rc.4 account confirmations: a destructive POST without confirm=yes or a valid binding changes nothing|$W/account_security.rs|destructive_post_without_confirm_changes_nothing
+release 1.0 rc.4 account confirmations: a destructive POST without confirm=yes or a valid binding changes nothing|$W/account_apps.rs|destructive_post_without_confirm_changes_nothing
+release 1.0 rc.4 account confirmations: a destructive POST without confirm=yes or a valid binding changes nothing|$W/account_linked.rs|destructive_post_without_confirm_changes_nothing
+release 1.0 rc.4 account confirmations: a destructive POST without confirm=yes or a valid binding changes nothing|$W/sessions.rs|destructive_post_without_confirm_changes_nothing
+release 1.0 rc.4 account confirmations: a destructive POST without confirm=yes or a valid binding changes nothing|crates/anvil-web/src/ui/account_confirm.rs|only_yes_confirms
+release 1.0 rc.4 account PRG: refused account forms redirect with a sealed flash, never the password, client_id only when resolved|$W/account_profile.rs|failed_account_forms_follow_post_redirect_get
+release 1.0 rc.4 account PRG: refused account forms redirect with a sealed flash, never the password, client_id only when resolved|$W/account_profile.rs|failed_account_form_keeps_only_a_resolved_client
+release 1.0 rc.4 account TOTP: otpauth link escaped and only on no-store enrolment pages|$W/account_security.rs|otpauth_link_only_on_no_store_enrolment_pages
+release 1.0 rc.4 sessions: the raw user agent is never shown|$W/sessions.rs|unknown_or_hostile_user_agents_are_never_shown
 EOF
 )
 
