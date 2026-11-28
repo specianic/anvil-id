@@ -35,6 +35,11 @@ const ACCOUNT_NAV = [
   'account-nav-linked',
 ];
 
+/** What every signed-in account page starts with, in DOM order: the account header's sign-out
+ * button (#account-header, 07.1-12; no back-to-app link without a client_id), then the account
+ * navigation. */
+const ACCOUNT_CHROME = ['sign-out-submit', ...ACCOUNT_NAV];
+
 test.beforeAll(async ({ browser }) => {
   // Make sure the instance is installed (setup completed once for the whole run).
   await sharedManagementCredential(browser);
@@ -63,8 +68,21 @@ async function expectVisibleFocus(page: Page): Promise<void> {
       outlineStyle: style.outlineStyle,
       outlineWidth: Number.parseFloat(style.outlineWidth),
       boxShadow: style.boxShadow,
+      // A multi-line text field is the exception: on focus the browser scrolls its caret into
+      // view, not the whole box, so a tall textarea near the bottom edge may extend past it. Its
+      // top edge and first line (where the caret lands) must then be in view.
       inViewport:
-        rect.top >= 0 && rect.left >= 0 && rect.bottom <= innerHeight && rect.right <= innerWidth,
+        rect.top >= 0 &&
+        rect.left >= 0 &&
+        rect.right <= innerWidth &&
+        (rect.bottom <= innerHeight ||
+          (el instanceof HTMLTextAreaElement &&
+            rect.top +
+              Number.parseFloat(style.borderTopWidth) +
+              Number.parseFloat(style.paddingTop) +
+              (Number.parseFloat(style.lineHeight) || 1.2 * Number.parseFloat(style.fontSize)) <=
+              innerHeight)),
+      geometry: `rect ${JSON.stringify(rect)}, viewport ${innerWidth}x${innerHeight}, scrollY ${scrollY}, page height ${document.documentElement.scrollHeight}`,
       unobscured: top !== null && (top === el || el.contains(top)),
     };
   });
@@ -72,11 +90,17 @@ async function expectVisibleFocus(page: Page): Promise<void> {
   const indicator =
     (info!.outlineStyle !== 'none' && info!.outlineWidth > 0) || info!.boxShadow !== 'none';
   expect(indicator, `focus indicator on #${info!.id}`).toBe(true);
-  expect(info!.inViewport, `#${info!.id} scrolled into view`).toBe(true);
+  expect(info!.inViewport, `#${info!.id} scrolled into view (${info!.geometry})`).toBe(true);
   expect(info!.unobscured, `#${info!.id} not obscured`).toBe(true);
 }
 
-/** Tabs from the top of the page and returns the ids of the first `n` focused elements. */
+/** The page loads with initial focus (autofocus) on `id`, shown with a visible indicator. */
+async function expectInitialFocus(page: Page, id: string): Promise<void> {
+  await expect.poll(() => focusedId(page), `initial focus on #${id}`).toBe(id);
+  await expectVisibleFocus(page);
+}
+
+/** Tabs from the current focus and returns the ids of the next `n` focused elements. */
 async function tabSequence(page: Page, n: number): Promise<string[]> {
   const ids: string[] = [];
   for (let i = 0; i < n; i += 1) {
@@ -135,8 +159,10 @@ for (const vp of [
       const passkey = (await page.locator('#login-passkey-submit').isVisible())
         ? ['login-passkey-submit']
         : [];
-      const order = await tabSequence(page, 3 + passkey.length + links.length);
-      expect(order).toEqual(['identifier', 'password', 'login-submit', ...passkey, ...links]);
+      // The first field has initial focus (U-L2); Tab then walks the rest in DOM order.
+      await expectInitialFocus(page, 'identifier');
+      const order = await tabSequence(page, 2 + passkey.length + links.length);
+      expect(order).toEqual(['password', 'login-submit', ...passkey, ...links]);
 
       await expect(page.locator('#identifier')).toHaveAttribute('autocomplete', 'username');
       await expect(page.locator('#password')).toHaveAttribute('autocomplete', 'current-password');
@@ -156,9 +182,10 @@ for (const vp of [
       await expect(error).toBeVisible();
       await expect(error).toHaveAttribute('role', 'alert');
 
-      // After the round trip the form is still operable by keyboard from the top.
-      const again = await tabSequence(page, 3);
-      expect(again).toEqual(['identifier', 'password', 'login-submit']);
+      // After the round trip the form again starts focused and is operable by keyboard.
+      await expectInitialFocus(page, 'identifier');
+      const again = await tabSequence(page, 2);
+      expect(again).toEqual(['password', 'login-submit']);
     });
 
     test('registration: tab order, autocomplete, paste, field errors linked and announced', async ({
@@ -412,7 +439,7 @@ for (const vp of PHASE3_VIEWPORTS) {
 
       await page.goto(`${anvilUrl()}/ui/account/security`);
       const overview = await expectDomTabOrder(page);
-      expect(overview.slice(0, ACCOUNT_NAV.length)).toEqual(ACCOUNT_NAV);
+      expect(overview.slice(0, ACCOUNT_CHROME.length)).toEqual(ACCOUNT_CHROME);
       expect(overview).toContain('totp-begin-submit');
       await expectTargetSizes(page);
 
@@ -421,7 +448,7 @@ for (const vp of PHASE3_VIEWPORTS) {
       await page.keyboard.press('Enter');
       await expect(page.locator('#totp-qr')).toBeVisible();
       const enrol = await expectDomTabOrder(page);
-      expect(enrol.slice(ACCOUNT_NAV.length)).toEqual(['code', 'totp-confirm-submit', 'link-account-security']);
+      expect(enrol.slice(ACCOUNT_CHROME.length)).toEqual(['code', 'totp-confirm-submit', 'link-account-security']);
       await expect(page.locator('#code')).toHaveAttribute('autocomplete', 'one-time-code');
       await expectPasteAllowed(page, '#code');
       await expectTargetSizes(page);
@@ -432,7 +459,7 @@ for (const vp of PHASE3_VIEWPORTS) {
       await page.keyboard.press('Enter');
       await expect(page.locator('#recovery-codes li')).toHaveCount(10);
       const codes = await expectDomTabOrder(page);
-      expect(codes.slice(ACCOUNT_NAV.length)).toEqual(['recovery-codes-text', 'link-account-security']);
+      expect(codes.slice(ACCOUNT_CHROME.length)).toEqual(['recovery-codes-text', 'link-account-security']);
       await expectTargetSizes(page);
 
       await page.locator('#link-account-security').focus();
@@ -455,7 +482,7 @@ for (const vp of PHASE3_VIEWPORTS) {
         await page.goto(`${anvilUrl()}/ui/account/sessions`);
         await expect(page.locator('#session-list tbody tr')).toHaveCount(2);
         const order = await expectDomTabOrder(page);
-        expect(order.slice(0, ACCOUNT_NAV.length)).toEqual(ACCOUNT_NAV);
+        expect(order.slice(0, ACCOUNT_CHROME.length)).toEqual(ACCOUNT_CHROME);
         expect(order.at(-1)).toBe('sessions-revoke-others-submit');
         expect(order.filter((id) => /^session-revoke-.+-submit$/.test(id))).toHaveLength(2);
         await expectTargetSizes(page);
