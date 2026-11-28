@@ -1,129 +1,29 @@
+// Audit log of a tenant: filters kept in the URL, readable action labels and groups
+// (lib/audit-labels.ts), and actors/targets resolved to emails and client names (C-M8). Each
+// unique id is fetched once per page through react-query; ids that do not resolve (deleted users,
+// sessions, keys) are shown shortened, with the full value and a copy button in the details.
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { createColumnHelper } from "@tanstack/react-table";
-import { type FormEvent, useMemo, useState } from "react";
+import { type FormEvent, useId, useMemo, useState } from "react";
 import { api, unwrap } from "@/api/client";
-import { useTenant } from "@/lib/tenant";
+import { SYSTEM_TENANT, useTenant } from "@/lib/tenant";
 import type { components } from "@/api/schema";
 import { Modal } from "@/components/ConfirmDialog";
+import { CopyField } from "@/components/CopyField";
 import { DataTable, type DataTableFeatures, useCursorPager } from "@/components/DataTable";
-import { SelectField, TextField } from "@/components/form";
+import { SelectField, TextField, controlClass } from "@/components/form";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { AUDIT_ACTIONS, type AuditAction, auditActionGroups, auditTargetKind, isAuditAction } from "@/lib/audit-labels";
 import { formatDateTime } from "@/lib/format";
 
 type AuditEventView = components["schemas"]["AuditEventView"];
-type AuditAction = components["schemas"]["AuditAction"];
+type AuditActorView = components["schemas"]["AuditActorView"];
 type AuditOutcome = components["schemas"]["AuditOutcome"];
 
-// Every AuditAction of the generated schema; the Record type makes the compiler flag a missing or
-// unknown name when the API enum changes.
-const ACTION_SET: Record<AuditAction, true> = {
-  login_succeeded: true,
-  login_failed: true,
-  second_factor_failed: true,
-  passkey_registered: true,
-  passkey_removed: true,
-  passkey_clone_suspected: true,
-  totp_enrolled: true,
-  totp_removed: true,
-  recovery_code_used: true,
-  recovery_codes_regenerated: true,
-  password_changed: true,
-  user_registered: true,
-  email_verified: true,
-  consent_granted: true,
-  consent_revoked: true,
-  session_revoked: true,
-  sessions_revoked_all: true,
-  token_revoked: true,
-  refresh_reuse_detected: true,
-  code_reuse_detected: true,
-  key_generated: true,
-  key_activated: true,
-  key_retired: true,
-  key_rotation_requested: true,
-  rate_limit_lockout: true,
-  captcha_failed: true,
-  user_created: true,
-  user_updated: true,
-  user_deleted: true,
-  client_created: true,
-  client_updated: true,
-  client_deleted: true,
-  client_secret_rotated: true,
-  tenant_created: true,
-  tenant_updated: true,
-  tenant_deleted: true,
-  email_template_updated: true,
-  email_template_reset: true,
-  smtp_settings_updated: true,
-  smtp_test_sent: true,
-  admin_setup_completed: true,
-  identity_linked: true,
-  identity_unlinked: true,
-  upstream_login_failed: true,
-  connection_created: true,
-  connection_updated: true,
-  connection_deleted: true,
-  connection_secret_rotated: true,
-  branding_updated: true,
-  logout: true,
-  backchannel_logout_failed: true,
-  email_change_requested: true,
-  email_changed: true,
-  profile_updated: true,
-  step_up_completed: true,
-  email_code_sent: true,
-  admin_recovery_issued: true,
-  attribute_defined: true,
-  attribute_deleted: true,
-  cimd_client_refreshed: true,
-  client_registered: true,
-  client_registration_deleted: true,
-  client_registration_updated: true,
-  initial_access_token_created: true,
-  initial_access_token_revoked: true,
-  role_assigned: true,
-  role_created: true,
-  role_deleted: true,
-  role_unassigned: true,
-  role_updated: true,
-  tenant_config_applied: true,
-  user_attributes_updated: true,
-  webhook_delivery_failed: true,
-  webhook_endpoint_created: true,
-  webhook_endpoint_deleted: true,
-  webhook_endpoint_disabled: true,
-  webhook_endpoint_updated: true,
-  webhook_redelivered: true,
-  webhook_secret_rotated: true,
-  webhook_test_sent: true,
-  organization_created: true,
-  organization_updated: true,
-  organization_deleted: true,
-  org_member_added: true,
-  org_member_removed: true,
-  org_role_assigned: true,
-  org_role_unassigned: true,
-  org_invitation_created: true,
-  org_invitation_revoked: true,
-  org_invitation_accepted: true,
-  org_domain_created: true,
-  org_domain_verified: true,
-  org_domain_verification_failed: true,
-  org_domain_unverified: true,
-  org_domain_updated: true,
-  org_domain_deleted: true,
-  saml_login_succeeded: true,
-  saml_login_failed: true,
-  users_imported: true,
-  user_exported: true,
-  password_profile_created: true,
-  password_profile_deleted: true,
-  user_recovery_sent: true,
-};
-const ACTIONS = Object.keys(ACTION_SET).sort() as AuditAction[];
+const ACTION_GROUPS = auditActionGroups();
+
 const OUTCOMES: readonly AuditOutcome[] = ["success", "failure"];
 
 /** Filters as kept in the URL (`from`/`to` are datetime-local values in the browser's time zone). */
@@ -146,7 +46,7 @@ function validateSearch(search: Record<string, unknown>): AuditSearch {
   return {
     from: str(search.from),
     to: str(search.to),
-    action: action && action in ACTION_SET ? (action as AuditAction) : undefined,
+    action: action && isAuditAction(action) ? action : undefined,
     outcome: outcome && (OUTCOMES as readonly string[]).includes(outcome) ? (outcome as AuditOutcome) : undefined,
     actor: str(search.actor),
     target: str(search.target),
@@ -162,6 +62,133 @@ function toRfc3339(value: string | undefined): string | undefined {
 
 const PAGE_SIZE = 50;
 const col = createColumnHelper<DataTableFeatures, AuditEventView>();
+
+/** The action filter: labelled actions grouped by area (optgroups); the value is the API name. */
+function ActionSelect({ value, onChange }: { value: string; onChange: (e: { target: { value: string } }) => void }) {
+  const id = useId();
+  return (
+    <div className="space-y-1.5">
+      <label htmlFor={id} className="block text-sm font-medium">
+        Action
+      </label>
+      <select id={id} name="action" value={value} onChange={onChange} className={controlClass} data-testid="audit-action-filter">
+        <option value="">Any action</option>
+        {ACTION_GROUPS.map(({ group, actions }) => (
+          <optgroup key={group} label={group}>
+            {actions.map((a) => (
+              <option key={a.value} value={a.value}>
+                {a.label}
+              </option>
+            ))}
+          </optgroup>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** First characters of a long id, for table cells (the details show the full value). */
+function shortId(id: string): string {
+  return id.length > 12 ? `${id.slice(0, 8)}…` : id;
+}
+
+type RefKind = "user" | "client";
+
+/** A user or client the console can look up: which tenant it lives in and its id. */
+interface Ref {
+  kind: RefKind;
+  tenant: string;
+  id: string;
+}
+
+/**
+ * The record an actor names. Admin actors are console administrators (users of the system tenant,
+ * by id) or management API clients (client ids of the system tenant); user and client actors
+ * belong to this tenant.
+ */
+function actorRef(actor: AuditActorView, tenant: string): Ref | null {
+  if (!actor.id) return null;
+  if (actor.kind === "admin") return { kind: UUID.test(actor.id) ? "user" : "client", tenant: SYSTEM_TENANT, id: actor.id };
+  if (actor.kind === "user") return { kind: "user", tenant, id: actor.id };
+  if (actor.kind === "client") return { kind: "client", tenant, id: actor.id };
+  return null;
+}
+
+function targetRef(event: AuditEventView, tenant: string): Ref | null {
+  if (!event.target) return null;
+  const kind = auditTargetKind(event.action);
+  if (kind === "user" && !UUID.test(event.target)) return null;
+  return kind ? { kind, tenant, id: event.target } : null;
+}
+
+/** Email or client name of a ref; cached for the session, one request per unique id. */
+function useResolved(ref: Ref | null): string | null {
+  const query = useQuery({
+    queryKey: ["audit-ref", ref?.kind, ref?.tenant, ref?.id],
+    enabled: ref !== null,
+    staleTime: Number.POSITIVE_INFINITY,
+    retry: false,
+    queryFn: async ({ signal }) => {
+      if (!ref) return null;
+      if (ref.kind === "user") {
+        return unwrap(
+          await api.GET("/api/admin/v1/tenants/{slug}/users/{user_id}", {
+            params: { path: { slug: ref.tenant, user_id: ref.id } },
+            signal,
+          }),
+        ).email;
+      }
+      return unwrap(
+        await api.GET("/api/admin/v1/tenants/{slug}/clients/{client_id}", {
+          params: { path: { slug: ref.tenant, client_id: ref.id } },
+          signal,
+        }),
+      ).name;
+    },
+  });
+  return query.data ?? null;
+}
+
+/** An actor or target cell: the resolved name linked to its page, or the shortened raw id. */
+function RefCell({ target, raw, prefix }: { target: Ref | null; raw: string | null | undefined; prefix?: string }) {
+  const name = useResolved(target);
+  if (target && name) {
+    const className = "text-link underline-offset-4 hover:underline";
+    return (
+      <span className="text-xs break-all" data-testid="audit-ref" data-resolved="true">
+        {prefix ? <span className="text-muted-foreground">{prefix} </span> : null}
+        {target.kind === "user" ? (
+          <Link to="/t/$tenant/users/$userId" params={{ tenant: target.tenant, userId: target.id }} className={className}>
+            {name}
+          </Link>
+        ) : (
+          <Link to="/t/$tenant/clients/$clientId" params={{ tenant: target.tenant, clientId: target.id }} className={className}>
+            {name}
+          </Link>
+        )}
+      </span>
+    );
+  }
+  if (!raw) return <span className="text-xs">{prefix ?? "—"}</span>;
+  return (
+    <span className="text-xs" data-testid="audit-ref" data-resolved="false">
+      {prefix ? <span className="text-muted-foreground">{prefix} </span> : null}
+      <span className="font-mono" title={raw}>
+        {shortId(raw)}
+      </span>
+      {raw.length > 12 && <span className="sr-only"> (shortened; the full id is in the details)</span>}
+    </span>
+  );
+}
+
+const ACTOR_KIND_LABELS: Record<AuditActorView["kind"], string> = {
+  user: "User",
+  client: "Client",
+  admin: "Admin",
+  system: "System",
+};
 
 function AuditFilters({ search }: { search: AuditSearch }) {
   const navigate = useNavigate({ from: Route.fullPath });
@@ -185,13 +212,7 @@ function AuditFilters({ search }: { search: AuditSearch }) {
         onChange={set("from")}
       />
       <TextField label="To" name="to" type="datetime-local" optional value={draft.to ?? ""} onChange={set("to")} />
-      <SelectField
-        label="Action"
-        name="action"
-        value={draft.action ?? ""}
-        onChange={set("action")}
-        options={[{ value: "", label: "Any action" }, ...ACTIONS.map((a) => ({ value: a, label: a }))]}
-      />
+      <ActionSelect value={draft.action ?? ""} onChange={set("action")} />
       <SelectField
         label="Outcome"
         name="outcome"
@@ -265,7 +286,15 @@ function AuditTable({ search }: { search: AuditSearch }) {
     () =>
       col.columns([
         col.accessor("at", { header: "Time", cell: (info) => formatDateTime(info.getValue()) }),
-        col.accessor("action", { header: "Action", cell: (info) => <code className="text-xs">{info.getValue()}</code> }),
+        col.accessor("action", {
+          header: "Action",
+          cell: (info) => (
+            <span className="flex flex-col">
+              <span>{AUDIT_ACTIONS[info.getValue()].label}</span>
+              <span className="text-muted-foreground font-mono text-xs">{info.getValue()}</span>
+            </span>
+          ),
+        }),
         col.accessor("outcome", {
           header: "Outcome",
           cell: (info) => (
@@ -275,15 +304,16 @@ function AuditTable({ search }: { search: AuditSearch }) {
         col.accessor("actor", {
           header: "Actor",
           cell: (info) => (
-            <span className="text-xs break-all">
-              {info.getValue().kind}
-              {info.getValue().id ? `: ${info.getValue().id}` : ""}
-            </span>
+            <RefCell
+              target={actorRef(info.getValue(), tenant)}
+              raw={info.getValue().id}
+              prefix={`${ACTOR_KIND_LABELS[info.getValue().kind]}${info.getValue().id ? ":" : ""}`}
+            />
           ),
         }),
         col.accessor("target", {
           header: "Target",
-          cell: (info) => <span className="font-mono text-xs break-all">{info.getValue() ?? "—"}</span>,
+          cell: (info) => <RefCell target={targetRef(info.row.original, tenant)} raw={info.getValue()} />,
         }),
         col.accessor("ip", { header: "IP address", cell: (info) => info.getValue() ?? "—" }),
         col.display({
@@ -294,14 +324,14 @@ function AuditTable({ search }: { search: AuditSearch }) {
               variant="outline"
               size="sm"
               onClick={() => setSelected(info.row.original)}
-              aria-label={`Details of ${info.row.original.action} at ${formatDateTime(info.row.original.at)}`}
+              aria-label={`Details of ${AUDIT_ACTIONS[info.row.original.action].label} at ${formatDateTime(info.row.original.at)}`}
             >
               Details
             </Button>
           ),
         }),
       ]),
-    [],
+    [tenant],
   );
 
   return (
@@ -326,10 +356,9 @@ function AuditTable({ search }: { search: AuditSearch }) {
                 [
                   ["ID", selected.id],
                   ["Time", formatDateTime(selected.at)],
-                  ["Action", selected.action],
+                  ["Action", `${AUDIT_ACTIONS[selected.action].label} (${selected.action})`],
                   ["Outcome", selected.outcome],
-                  ["Actor", `${selected.actor.kind}${selected.actor.id ? `: ${selected.actor.id}` : ""}`],
-                  ["Target", selected.target ?? "—"],
+                  ["Actor", ACTOR_KIND_LABELS[selected.actor.kind]],
                   ["IP address", selected.ip ?? "—"],
                   ["User agent", selected.user_agent ?? "—"],
                   ["Trace ID", selected.trace_id ?? "—"],
@@ -341,6 +370,10 @@ function AuditTable({ search }: { search: AuditSearch }) {
                 </div>
               ))}
             </dl>
+            <div className="space-y-2">
+              {selected.actor.id ? <CopyField label="Actor id" value={selected.actor.id} mono /> : null}
+              {selected.target ? <CopyField label="Target id" value={selected.target} mono /> : null}
+            </div>
             <div className="space-y-1">
               <h3 className="text-sm font-medium">Details</h3>
               <pre
