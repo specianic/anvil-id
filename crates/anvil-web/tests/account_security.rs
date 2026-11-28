@@ -250,6 +250,7 @@ async fn page_lists_credentials_and_loads_webauthn_js_without_inline_script() {
     assert_no_store(&resp);
     let csp = resp.header("content-security-policy").expect("csp");
     assert!(csp.contains("script-src 'self'") && csp.contains("default-src 'none'"));
+    assert!(csp.contains("font-src 'self';"), "{csp}");
     assert!(!csp.contains("unsafe"), "{csp}");
     assert!(flow_cookie(&app).is_some(), "a settings flow is started");
     let html = resp.html();

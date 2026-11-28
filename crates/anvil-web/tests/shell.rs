@@ -4,8 +4,7 @@ mod support;
 
 use support::{TestApp, csrf_from};
 
-const CSP: &str =
-    "default-src 'none'; style-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'";
+const CSP: &str = "default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'";
 
 fn assert_security_headers(resp: &support::TestResponse, hsts: bool) {
     assert_eq!(resp.header("content-security-policy"), Some(CSP));

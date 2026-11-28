@@ -25,8 +25,7 @@ use crate::state::AppState;
 use crate::tenant::ResolvedTenant;
 
 /// CSP of the preview page: the page CSP, framable by the same origin.
-pub(crate) const PREVIEW_CSP: &str =
-    "default-src 'none'; style-src 'self'; img-src 'self'; frame-ancestors 'self'; base-uri 'none'";
+pub(crate) const PREVIEW_CSP: &str = "default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; frame-ancestors 'self'; base-uri 'none'";
 
 /// Theme preview routes, behind the Fetch-Metadata layer.
 pub(super) fn routes() -> Router<AppState> {

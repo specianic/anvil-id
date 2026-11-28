@@ -13,11 +13,11 @@
 //!   warning the console shows).
 //!
 //! CSS is served per tenant only, so one tenant's CSS can never reach another tenant's pages. The strict
-//! page CSP (`default-src 'none'; style-src 'self'; img-src 'self'`) stays the real control: even a
-//! validator bypass cannot load an external resource or run script. The custom CSS validator is an
-//! allow-list for at-rules and functions, plus a deny-list of known-dangerous substrings that is
-//! matched case-insensitively both in the raw text (including comments and strings) and in a view with
-//! comments and whitespace removed.
+//! page CSP (`default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'`) stays the real
+//! control: even a validator bypass cannot load an external resource or run script. The custom CSS
+//! validator is an allow-list for at-rules and functions, plus a deny-list of known-dangerous
+//! substrings that is matched case-insensitively both in the raw text (including comments and strings)
+//! and in a view with comments and whitespace removed.
 //!
 //! SVG logos are refused: navigating to an SVG served from our origin would execute its script.
 
@@ -200,43 +200,77 @@ pub fn contrast_ratio(a: Rgb, b: Rgb) -> f64 {
 // ---------------------------------------------------------------------------------------------
 // Defaults (mirrors themes/default/static/anvil.css; a test keeps them in sync)
 
-/// Light palette of the default theme, in output order.
+/// Light palette of the default theme (Specianic), in output order.
 const LIGHT_DEFAULTS: &[(&str, &str)] = &[
-    ("--anvil-bg", "#f6f7f9"),
+    ("--anvil-bg", "#fafaf9"),
     ("--anvil-surface", "#ffffff"),
-    ("--anvil-text", "#1c1f24"),
-    ("--anvil-muted", "#5b6270"),
-    ("--anvil-border", "#d6dae1"),
-    ("--anvil-input-border", "#6b7280"),
-    ("--anvil-primary", "#2f5bd3"),
-    ("--anvil-primary-text", "#ffffff"),
+    ("--anvil-text", "#0f0f10"),
+    ("--anvil-muted", "#5c5a56"),
+    ("--anvil-border", "#e5e3df"),
+    ("--anvil-input-border", "#8f8c86"),
+    ("--anvil-primary", "#ff5a1f"),
+    ("--anvil-primary-text", "#0f0f10"),
     ("--anvil-danger", "#b42318"),
-    ("--anvil-focus", "#1d4ed8"),
+    ("--anvil-focus", "#c2410c"),
+    ("--anvil-link", "#c2410c"),
+    ("--anvil-success", "#1a7f4b"),
     ("--anvil-danger-bg", "#fef3f2"),
     ("--anvil-warning-bg", "#fffaeb"),
     ("--anvil-warning-border", "#b54708"),
     ("--anvil-warning-text", "#7a2e0e"),
-    ("--anvil-code-bg", "#eef0f4"),
+    ("--anvil-code-bg", "#f3f2f0"),
 ];
 
-/// Dark palette of the default theme.
+/// Dark palette of the default theme (Specianic).
 const DARK_DEFAULTS: &[(&str, &str)] = &[
-    ("--anvil-bg", "#14161a"),
-    ("--anvil-surface", "#1d2026"),
-    ("--anvil-text", "#e7e9ee"),
-    ("--anvil-muted", "#a0a7b4"),
-    ("--anvil-border", "#343944"),
-    ("--anvil-input-border", "#8a92a1"),
-    ("--anvil-primary", "#6d8ef0"),
-    ("--anvil-primary-text", "#0d1020"),
-    ("--anvil-danger", "#f97066"),
-    ("--anvil-focus", "#a9c0ff"),
+    ("--anvil-bg", "#0f0f10"),
+    ("--anvil-surface", "#18181a"),
+    ("--anvil-text", "#f4f3f1"),
+    ("--anvil-muted", "#a3a19c"),
+    ("--anvil-border", "#2a2a2d"),
+    ("--anvil-input-border", "#6a6a70"),
+    ("--anvil-primary", "#ff5a1f"),
+    ("--anvil-primary-text", "#0f0f10"),
+    ("--anvil-danger", "#f0695e"),
+    ("--anvil-focus", "#ff7a45"),
+    ("--anvil-link", "#ff7a45"),
+    ("--anvil-success", "#3ccf86"),
     ("--anvil-danger-bg", "#2a1614"),
     ("--anvil-warning-bg", "#2a2010"),
     ("--anvil-warning-border", "#f79009"),
     ("--anvil-warning-text", "#fedf89"),
-    ("--anvil-code-bg", "#262a32"),
+    ("--anvil-code-bg", "#0a0a0b"),
 ];
+
+/// The button pair of the default theme before the Specianic palette (0.x to 1.0-rc.3), per scheme:
+/// `(primary, primary_text)`. A theme that customises only one side of the pair gets the other side
+/// from here, both when it is validated and in the generated stylesheet. The Specianic button (ink on
+/// orange) is a pair too: pairing a customer's colour with half of it would change existing themes'
+/// buttons (white text turning dark) and could newly refuse stored themes.
+const LEGACY_BUTTON_LIGHT: (&str, &str) = ("#2f5bd3", "#ffffff");
+const LEGACY_BUTTON_DARK: (&str, &str) = ("#6d8ef0", "#0d1020");
+
+fn legacy_button(scheme: ColorScheme) -> (&'static str, &'static str) {
+    match scheme {
+        ColorScheme::Light => LEGACY_BUTTON_LIGHT,
+        ColorScheme::Dark => LEGACY_BUTTON_DARK,
+    }
+}
+
+/// The partner the stylesheet must add when only one side of the button pair is customised:
+/// `(variable, value)`, or `None` when both or neither are set.
+fn button_partner(
+    scheme: ColorScheme,
+    primary_set: bool,
+    primary_text_set: bool,
+) -> Option<(&'static str, &'static str)> {
+    let (primary, primary_text) = legacy_button(scheme);
+    match (primary_set, primary_text_set) {
+        (true, false) => Some(("--anvil-primary-text", primary_text)),
+        (false, true) => Some(("--anvil-primary", primary)),
+        _ => None,
+    }
+}
 
 fn default_of(table: &[(&str, &'static str)], var: &str) -> &'static str {
     table
@@ -340,9 +374,16 @@ fn check_contrast(
         ColorScheme::Light => LIGHT_DEFAULTS,
         ColorScheme::Dark => DARK_DEFAULTS,
     };
+    // A lone customised button colour is paired with the legacy partner (see LEGACY_BUTTON_LIGHT).
+    let partner = button_partner(scheme, c.primary.is_some(), c.primary_text.is_some());
     // (custom value, CSS variable) -> effective colour.
     let eff = |v: Option<&String>, var: &str| -> Rgb {
         v.and_then(|s| Rgb::parse(s))
+            .or_else(|| {
+                partner
+                    .filter(|(pv, _)| *pv == var)
+                    .and_then(|(_, value)| Rgb::parse(value))
+            })
             .or_else(|| Rgb::parse(default_of(defaults, var)))
             .unwrap_or(Rgb { r: 0, g: 0, b: 0 })
     };
@@ -389,7 +430,9 @@ fn check_contrast(
 /// Validates theme tokens: colour syntax, radius 0 to 32 px, font family charset, and WCAG contrast
 /// for text/bg, text/surface and primary_text/primary in the light set and (when present) the dark
 /// set. A pair is checked when either of its colours is customised; the other comes from the default
-/// palette of that scheme. Below 3:1 is an error, below 4.5:1 a warning.
+/// palette of that scheme, except that a lone `primary` or `primary_text` is paired with the legacy
+/// button colour the stylesheet emits for it ([`LEGACY_BUTTON_LIGHT`]). Below 3:1 is an error, below
+/// 4.5:1 a warning.
 pub fn validate_tokens(t: &ThemeTokens) -> Result<Vec<ThemeWarning>, ThemeError> {
     check_syntax(t)?;
     let mut warnings = Vec::new();
@@ -710,6 +753,31 @@ fn color_decls(c: &ThemeColors) -> Vec<(String, String)> {
         .collect()
 }
 
+/// The colour declarations of one scheme block: the customised colours, the legacy partner of a lone
+/// button colour, and `--anvil-link` / `--anvil-focus` derived from a customised `primary`. The `*_set`
+/// flags say whether the effective value in this scheme is customer-provided (in the dark scheme that
+/// includes light values, which apply there too).
+fn scheme_color_decls(
+    c: &ThemeColors,
+    scheme: ColorScheme,
+    primary_set: bool,
+    primary_text_set: bool,
+    focus_set: bool,
+) -> Vec<(String, String)> {
+    let mut decls = color_decls(c);
+    if let Some((var, value)) = button_partner(scheme, primary_set, primary_text_set) {
+        decls.push((var.to_owned(), value.to_owned()));
+    }
+    if let Some(primary) = &c.primary {
+        let primary = primary.to_ascii_lowercase();
+        decls.push(("--anvil-link".to_owned(), primary.clone()));
+        if !focus_set {
+            decls.push(("--anvil-focus".to_owned(), primary));
+        }
+    }
+    decls
+}
+
 fn hex(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut s = String::with_capacity(bytes.len() * 2);
@@ -729,6 +797,12 @@ fn hex(bytes: &[u8]) -> String {
 ///    whole light palette, so the default theme's dark block cannot override the brand;
 /// 3. the custom CSS verbatim.
 ///
+/// Derived variables keep a customer's look on the default theme, whose links, focus ring and cards
+/// use their own variables: a customised `primary` also sets `--anvil-link` and (unless `focus` is
+/// customised) `--anvil-focus`; `radius_px` also sets `--anvil-card-radius`; a lone `primary` or
+/// `primary_text` gets the legacy partner colour ([`LEGACY_BUTTON_LIGHT`], dark
+/// [`LEGACY_BUTTON_DARK`]) so the button pair stays the one that was validated.
+///
 /// The input is re-checked (syntax and custom CSS, not contrast) so stored data can never break out of
 /// its declaration. Same input, same bytes, same hash.
 pub fn theme_stylesheet(
@@ -740,13 +814,22 @@ pub fn theme_stylesheet(
         validate_custom_css(css).map_err(ThemeError::Css)?;
     }
 
+    let light = &tokens.colors;
     let mut out = String::new();
-    let mut decls = color_decls(&tokens.colors);
+    let light_colors = scheme_color_decls(
+        light,
+        ColorScheme::Light,
+        light.primary.is_some(),
+        light.primary_text.is_some(),
+        light.focus.is_some(),
+    );
+    let mut decls = light_colors.clone();
     if let Some(font) = &tokens.font_family {
         decls.push(("--anvil-font".to_owned(), font.clone()));
     }
     if let Some(radius) = tokens.radius_px {
         decls.push(("--anvil-radius".to_owned(), format!("{radius}px")));
+        decls.push(("--anvil-card-radius".to_owned(), format!("{radius}px")));
     }
     if !decls.is_empty() {
         push_block(&mut out, &decls);
@@ -754,12 +837,21 @@ pub fn theme_stylesheet(
     }
 
     if let Some(dark) = dark_set(tokens) {
+        // Light values without a dark counterpart apply in the dark scheme too (the :root block above
+        // is not scheme-scoped), so the button pair and the focus fallback look at both sets.
+        let dark_decls = scheme_color_decls(
+            dark,
+            ColorScheme::Dark,
+            dark.primary.is_some() || light.primary.is_some(),
+            dark.primary_text.is_some() || light.primary_text.is_some(),
+            dark.focus.is_some() || light.focus.is_some(),
+        );
         out.push_str("@media (prefers-color-scheme: dark){");
-        push_block(&mut out, &color_decls(dark));
+        push_block(&mut out, &dark_decls);
         out.push_str("}\n");
-    } else if has_any_color(&tokens.colors) {
+    } else if has_any_color(light) {
         out.push_str(":root{color-scheme: light}\n");
-        let custom = color_decls(&tokens.colors);
+        let custom = light_colors;
         let pinned: Vec<(String, String)> = LIGHT_DEFAULTS
             .iter()
             .map(|(var, default)| {
@@ -1323,8 +1415,10 @@ mod tests {
         assert_eq!(
             c.css,
             ":root{--anvil-primary:#2f5bd3;--anvil-primary-text:#fff;\
-             --anvil-font:Inter, sans-serif;--anvil-radius:8px}\n\
-             @media (prefers-color-scheme: dark){:root{--anvil-primary:#6d8ef0}}\n\
+             --anvil-link:#2f5bd3;--anvil-focus:#2f5bd3;\
+             --anvil-font:Inter, sans-serif;--anvil-radius:8px;--anvil-card-radius:8px}\n\
+             @media (prefers-color-scheme: dark){:root{--anvil-primary:#6d8ef0;\
+             --anvil-link:#6d8ef0;--anvil-focus:#6d8ef0}}\n\
              a{color:red}"
         );
         assert_eq!(c.hash.len(), 64);
@@ -1357,10 +1451,19 @@ mod tests {
             .split("@media (prefers-color-scheme: dark){:root{")
             .nth(1)
             .expect("dark block pins the light palette");
-        // The brand colour and every default light colour override the theme's dark block.
-        assert!(dark.contains("--anvil-primary:#123456"));
+        // The brand colour, its derived variables and every default light colour override the
+        // theme's dark block.
+        let derived = [
+            ("--anvil-primary", "#123456"),
+            ("--anvil-primary-text", LEGACY_BUTTON_LIGHT.1),
+            ("--anvil-link", "#123456"),
+            ("--anvil-focus", "#123456"),
+        ];
+        for (var, value) in derived {
+            assert!(dark.contains(&format!("{var}:{value}")), "{var}");
+        }
         for (var, value) in LIGHT_DEFAULTS {
-            if *var != "--anvil-primary" {
+            if !derived.iter().any(|(v, _)| v == var) {
                 assert!(dark.contains(&format!("{var}:{value}")), "{var}");
             }
         }
@@ -1417,6 +1520,207 @@ mod tests {
                 assert!(part.contains(&format!("{var}: {value};")), "{var}: {value}");
             }
         }
+    }
+
+    #[test]
+    fn stylesheet_derives_link_focus_and_card_radius() {
+        let c = theme_stylesheet(&light(|c| c.primary = s("#123456")), None).unwrap();
+        let root = c.css.lines().next().unwrap();
+        assert!(root.contains("--anvil-link:#123456"), "{root}");
+        assert!(root.contains("--anvil-focus:#123456"), "{root}");
+
+        // A customised focus colour is kept.
+        let t = light(|c| {
+            c.primary = s("#123456");
+            c.focus = s("#00AA00");
+        });
+        let css = theme_stylesheet(&t, None).unwrap().css;
+        assert!(css.contains("--anvil-focus:#00aa00"), "{css}");
+        assert!(!css.contains("--anvil-focus:#123456"), "{css}");
+
+        let t = ThemeTokens {
+            radius_px: Some(8),
+            ..ThemeTokens::default()
+        };
+        assert_eq!(
+            theme_stylesheet(&t, None).unwrap().css,
+            ":root{--anvil-radius:8px;--anvil-card-radius:8px}\n"
+        );
+
+        // Nothing customised: nothing derived.
+        assert_eq!(
+            theme_stylesheet(&ThemeTokens::default(), None).unwrap().css,
+            ""
+        );
+        // Colours other than primary derive nothing.
+        let css = theme_stylesheet(&light(|c| c.danger = s("#aa0000")), None)
+            .unwrap()
+            .css;
+        let root = css.lines().next().unwrap();
+        assert_eq!(root, ":root{--anvil-danger:#aa0000}");
+    }
+
+    #[test]
+    fn lone_button_colour_keeps_its_legacy_partner() {
+        // A dark blue primary: fine with the legacy white text, refused next to ink.
+        assert!(contrast_ratio(rgb("#1d4ed8"), rgb(LEGACY_BUTTON_LIGHT.1)) >= AA_CONTRAST);
+        assert!(
+            contrast_ratio(
+                rgb("#1d4ed8"),
+                rgb(default_of(LIGHT_DEFAULTS, "--anvil-primary-text"))
+            ) < MIN_CONTRAST
+        );
+        let t = light(|c| c.primary = s("#1d4ed8"));
+        assert_eq!(validate_tokens(&t), Ok(vec![]));
+        let css = theme_stylesheet(&t, None).unwrap().css;
+        assert!(
+            css.starts_with(":root{--anvil-primary:#1d4ed8;--anvil-primary-text:#ffffff;"),
+            "{css}"
+        );
+
+        // A light primary_text alone is checked (and rendered) against the legacy primary.
+        let t = light(|c| c.primary_text = s("#eeeeee"));
+        assert!(
+            contrast_ratio(
+                rgb("#eeeeee"),
+                rgb(default_of(LIGHT_DEFAULTS, "--anvil-primary"))
+            ) < MIN_CONTRAST
+        );
+        assert_eq!(validate_tokens(&t), Ok(vec![]));
+        let css = theme_stylesheet(&t, None).unwrap().css;
+        assert!(css.contains("--anvil-primary:#2f5bd3"), "{css}");
+
+        // The check still refuses a bad pair built from the legacy partner.
+        assert!(matches!(
+            validate_tokens(&light(|c| c.primary = s("#eeeeee"))),
+            Err(ThemeError::Contrast {
+                pair: ContrastPair::PrimaryText,
+                ..
+            })
+        ));
+
+        // Light primary without a dark counterpart: the dark block restores the legacy dark text so
+        // the light partner (white) does not leak into the dark scheme.
+        let t = ThemeTokens {
+            colors: colors(|c| c.primary = s("#1d4ed8")),
+            colors_dark: Some(colors(|c| c.bg = s("#000000"))),
+            ..ThemeTokens::default()
+        };
+        let css = theme_stylesheet(&t, None).unwrap().css;
+        let dark = css
+            .split("@media (prefers-color-scheme: dark)")
+            .nth(1)
+            .unwrap();
+        assert!(dark.contains("--anvil-primary-text:#0d1020"), "{css}");
+        assert!(!dark.contains("--anvil-focus"), "{css}");
+
+        // Both sides customised: no partner.
+        let t = light(|c| {
+            c.primary = s("#1d4ed8");
+            c.primary_text = s("#fafafa");
+        });
+        let css = theme_stylesheet(&t, None).unwrap().css;
+        assert_eq!(css.matches("--anvil-primary-text:").count(), 2, "{css}");
+        assert!(!css.contains("#ffffff;--anvil-link"), "{css}");
+    }
+
+    #[test]
+    fn default_palette_meets_contrast() {
+        for (scheme, table) in [
+            (ColorScheme::Light, LIGHT_DEFAULTS),
+            (ColorScheme::Dark, DARK_DEFAULTS),
+        ] {
+            let c = |var: &str| rgb(default_of(table, var));
+            let ratio = |fg: &str, bg: &str| contrast_ratio(c(fg), c(bg));
+            // Ink on orange buttons (6.1:1) in both schemes.
+            assert!(
+                ratio("--anvil-primary-text", "--anvil-primary") > 6.0,
+                "{scheme}"
+            );
+            for bg in ["--anvil-bg", "--anvil-surface", "--anvil-code-bg"] {
+                for fg in ["--anvil-text", "--anvil-link", "--anvil-danger"] {
+                    assert!(ratio(fg, bg) >= AA_CONTRAST, "{scheme} {fg} on {bg}");
+                }
+            }
+            for bg in ["--anvil-bg", "--anvil-surface"] {
+                for fg in ["--anvil-muted", "--anvil-success"] {
+                    assert!(ratio(fg, bg) >= AA_CONTRAST, "{scheme} {fg} on {bg}");
+                }
+                for fg in ["--anvil-focus", "--anvil-input-border"] {
+                    assert!(ratio(fg, bg) >= MIN_CONTRAST, "{scheme} {fg} on {bg}");
+                }
+            }
+            assert!(ratio("--anvil-danger", "--anvil-danger-bg") >= AA_CONTRAST);
+            assert!(ratio("--anvil-warning-text", "--anvil-warning-bg") >= AA_CONTRAST);
+        }
+        // Orange is never a text colour: on the light background it is only 3:1.
+        assert!(
+            contrast_ratio(
+                rgb("#ff5a1f"),
+                rgb(default_of(LIGHT_DEFAULTS, "--anvil-bg"))
+            ) < AA_CONTRAST
+        );
+    }
+
+    #[test]
+    fn anvil_css_keeps_orange_a_fill_and_has_no_shadows() {
+        let css = include_str!("../../../../themes/default/static/anvil.css");
+        let squashed: String = css.split_whitespace().collect();
+        assert!(!squashed.contains("color:var(--anvil-primary)"));
+        assert!(!squashed.contains("border-color:var(--anvil-primary)"));
+        assert!(!squashed.contains("outline:3pxsolidvar(--anvil-primary)"));
+        assert!(!css.contains("box-shadow"));
+        for font in [
+            "fonts/HankenGrotesk-wght.ttf",
+            "fonts/IBMPlexMono-Regular.woff2",
+            "fonts/IBMPlexMono-Medium.woff2",
+        ] {
+            assert!(css.contains(&format!("url(\"{font}\")")), "{font}");
+        }
+        // Only relative, same-origin font URLs.
+        assert!(!css.contains("http:") && !css.contains("https:") && !css.contains("//fonts"));
+        for var in ["--anvil-link", "--anvil-card-radius", "--anvil-font-mono"] {
+            assert!(css.contains(&format!("var({var})")), "{var} is used");
+        }
+    }
+
+    /// Pre-Specianic defaults of the pairs the contrast check covers.
+    const OLD_LIGHT: &[(&str, &str)] = &[
+        ("--anvil-bg", "#f6f7f9"),
+        ("--anvil-surface", "#ffffff"),
+        ("--anvil-text", "#1c1f24"),
+        ("--anvil-primary", "#2f5bd3"),
+        ("--anvil-primary-text", "#ffffff"),
+    ];
+    const OLD_DARK: &[(&str, &str)] = &[
+        ("--anvil-bg", "#14161a"),
+        ("--anvil-surface", "#1d2026"),
+        ("--anvil-text", "#e7e9ee"),
+        ("--anvil-primary", "#6d8ef0"),
+        ("--anvil-primary-text", "#0d1020"),
+    ];
+
+    /// Whether a theme customising only `field` passed the pre-Specianic contrast check.
+    fn old_single_field_ok(old: &[(&str, &'static str)], field: &str, value: Rgb) -> bool {
+        let pairs: &[(&str, &str)] = &[
+            ("text", "bg"),
+            ("text", "surface"),
+            ("primary_text", "primary"),
+        ];
+        let var = |f: &str| format!("--anvil-{}", f.replace('_', "-"));
+        pairs
+            .iter()
+            .filter_map(|(a, b)| {
+                let other = if *a == field {
+                    b
+                } else if *b == field {
+                    a
+                } else {
+                    return None;
+                };
+                Some(contrast_ratio(value, rgb(default_of(old, &var(other)))))
+            })
+            .all(|r| r >= MIN_CONTRAST)
     }
 
     // ---------------------------------------------------------------- logo
@@ -1545,6 +1849,26 @@ mod tests {
     }
 
     proptest! {
+        /// Stored themes are never newly refused by the new default palette: a theme customising
+        /// one checked colour that passed against the old defaults still passes.
+        #[test]
+        fn single_colour_themes_valid_before_stay_valid(
+            field in prop::sample::select(vec!["text", "bg", "surface", "primary", "primary_text"]),
+            dark in any::<bool>(),
+            r in any::<u8>(), g in any::<u8>(), b in any::<u8>(),
+        ) {
+            let value = format!("#{r:02x}{g:02x}{b:02x}");
+            let old = if dark { OLD_DARK } else { OLD_LIGHT };
+            prop_assume!(old_single_field_ok(old, field, Rgb { r, g, b }));
+            let c = colors(|c| *field_mut(c, field) = Some(value.clone()));
+            let t = if dark {
+                ThemeTokens { colors_dark: Some(c), ..ThemeTokens::default() }
+            } else {
+                ThemeTokens { colors: c, ..ThemeTokens::default() }
+            };
+            prop_assert!(validate_tokens(&t).is_ok(), "{field}={value} dark={dark}");
+        }
+
         #[test]
         fn url_in_any_casing_is_rejected(
             prefix in ".{0,64}",

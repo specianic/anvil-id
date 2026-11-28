@@ -233,7 +233,7 @@ async fn only_the_preview_page_may_be_framed_by_self() {
     assert_eq!(
         resp.header("content-security-policy"),
         Some(
-            "default-src 'none'; style-src 'self'; img-src 'self'; frame-ancestors 'self'; base-uri 'none'"
+            "default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; frame-ancestors 'self'; base-uri 'none'"
         )
     );
     assert_eq!(resp.header("x-frame-options"), Some("SAMEORIGIN"));

@@ -96,6 +96,7 @@ fn assert_form_post(resp: &TestResponse, origin: &str) -> FormPost {
     assert!(csp.contains("script-src 'self'"), "{csp}");
     assert!(csp.contains("frame-ancestors 'none'"), "{csp}");
     assert!(csp.contains("default-src 'none'"), "{csp}");
+    assert!(csp.contains("font-src 'self';"), "{csp}");
     assert!(!csp.contains("unsafe-inline"), "{csp}");
     assert_eq!(resp.header("cache-control"), Some("no-store"));
     assert_eq!(resp.header("referrer-policy"), Some("no-referrer"));

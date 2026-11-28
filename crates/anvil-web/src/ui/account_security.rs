@@ -52,7 +52,7 @@ use crate::tenant::ResolvedTenant;
 
 /// CSP of the account security pages: the default policy plus webauthn.js and its fetch.
 pub const ACCOUNT_CSP: &str = "default-src 'none'; script-src 'self'; connect-src 'self'; \
-     style-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'";
+     style-src 'self'; font-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'";
 
 const PAGE: &str = "/ui/account/security";
 

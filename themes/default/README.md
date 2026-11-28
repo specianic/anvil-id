@@ -23,7 +23,9 @@ themes/default/
   loads the provider's script (Turnstile or hCaptcha), and only the page that shows the widget gets
   a CSP allowing that provider. This is the operator's choice; a CAPTCHA can conflict with WCAG 2.2
   SC 3.3.8 (accessible authentication).
-- No web fonts, `@import` or `url()` pointing at external hosts in CSS.
+- No external fonts; the default theme self-hosts Hanken Grotesk and IBM Plex Mono (OFL, see
+  `static/fonts/SOURCES.md`), served from the asset base under `font-src 'self'`. No `@import` or
+  `url()` pointing at external hosts in CSS.
 - No favicon link: some browsers fetch it from outside the asset base.
 - Every flow works without JavaScript. Forms are plain `POST` forms. Script-driven controls (the
   passkey buttons) are rendered `hidden` and shown by the script only when WebAuthn is available;
@@ -461,13 +463,27 @@ names the organization (`organization=`). These are served as the generated styl
 `page.theme_css` (same origin, under the same CSP), and custom CSS is checked by an allow-list
 validator (no `url()`, `@import` or external resources).
 
+Custom CSS cannot add fonts: `@font-face` is refused. The font family setting takes a font stack of
+fonts the page already has, which means the bundled Hanken Grotesk and IBM Plex Mono or fonts
+installed on the visitor's system. A different web font has to be shipped in a theme directory
+(`static/`, loaded by an `@font-face` rule in `static/anvil.css`).
+
+The default theme draws links, the focus ring and cards from their own variables (`--anvil-link`,
+`--anvil-focus`, `--anvil-card-radius`). So that branded pages keep their look, a customised primary
+colour also sets the link colour and, unless the focus colour is customised too, the focus colour; a
+customised corner radius also applies to cards. When only one of primary and primary text is
+customised, the other keeps the pre-1.0 default (`#2f5bd3` blue / `#ffffff` white in light,
+`#6d8ef0` / `#0d1020` in dark), so a branded button never pairs with half of the orange default.
+
 Operators can change the UI further without recompiling. Configure a theme directory with the same
 layout as this one (`templates/`, `emails/`, `static/`, `locales/`). At runtime the template loader looks in the operator's
 directory first and falls back to these embedded defaults for any file it does not find
 (ARCHITECTURE section 10.4), so a theme only needs the files it changes. Typical overrides:
 
 - `static/anvil.css` to change colours and layout. The CSS custom properties at the top of the file
-  (`--anvil-primary`, `--anvil-bg`, ...) are the easiest place to start.
+  (`--anvil-primary`, `--anvil-bg`, `--anvil-link`, ...) are the easiest place to start. The default
+  palette is orange buttons with dark text; orange is never used as a text colour (links and focus
+  use `--anvil-link` and `--anvil-focus`).
 - `templates/base.html` to change the page frame.
 - Individual email templates to change wording.
 - `locales/{lang}/*.ftl` to change single page sentences or add a language (see Translations).

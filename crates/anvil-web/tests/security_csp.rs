@@ -28,6 +28,17 @@ fn check(name: &str, resp: &TestResponse) {
     );
     assert!(csp.contains("default-src 'none'"), "{name}: {csp}");
     assert!(csp.contains("frame-ancestors 'none'"), "{name}: {csp}");
+    // The self-hosted theme fonts may load, from our origin only; no external source at all.
+    let font_src: Vec<&str> = csp
+        .split(';')
+        .map(str::trim)
+        .filter(|d| d.starts_with("font-src"))
+        .collect();
+    assert_eq!(font_src, ["font-src 'self'"], "{name}: {csp}");
+    assert!(
+        !csp.contains("http:") && !csp.contains("https:") && !csp.contains('*'),
+        "{name}: {csp}"
+    );
     assert_eq!(
         resp.header("referrer-policy"),
         Some("no-referrer"),

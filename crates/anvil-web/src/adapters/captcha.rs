@@ -265,7 +265,7 @@ impl CaptchaCsp {
             v.join(" ")
         };
         format!(
-            "default-src 'none'; script-src {}; style-src {}; img-src 'self'; frame-src {}; \
+            "default-src 'none'; script-src {}; style-src {}; font-src 'self'; img-src 'self'; frame-src {}; \
              connect-src {}; frame-ancestors 'none'; base-uri 'none'",
             join("'self'", self.script_src),
             join("'self'", self.style_src),
@@ -327,6 +327,8 @@ mod tests {
             assert!(csp.contains("frame-ancestors 'none'"));
             assert!(csp.contains("base-uri 'none'"));
             assert!(csp.starts_with("default-src 'none';"));
+            // Fonts stay self-hosted; the provider gets no font origin.
+            assert!(csp.contains("font-src 'self';"), "{csp}");
             assert!(!csp.contains("unsafe-inline"));
             assert!(!csp.contains("unsafe-eval"));
         }

@@ -1,46 +1,96 @@
-/* AnvilID default theme. Self-contained: no external fonts, images or URLs.
+/* AnvilID default theme. Self-contained: no external fonts, images or URLs. The fonts are
+   self-hosted official upstream files (static/fonts, SIL OFL 1.1, see fonts/SOURCES.md).
    Layout uses logical properties (inline-start/end) so right-to-left pages (<html dir="rtl">)
-   mirror without extra rules. */
+   mirror without extra rules.
+
+   Colours follow the Specianic design system: structure comes from hairlines, never shadows;
+   orange (--anvil-primary) is a fill only, with ink text on it; orange as text, links and focus
+   use --anvil-link / --anvil-focus. Customer branding (theme stylesheet) overrides any variable. */
+
+@font-face {
+  font-family: "Hanken Grotesk";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("fonts/HankenGrotesk-wght.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/IBMPlexMono-Regular.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("fonts/IBMPlexMono-Medium.woff2") format("woff2");
+}
 
 :root {
-  --anvil-bg: #f6f7f9;
+  --anvil-bg: #fafaf9;
   --anvil-surface: #ffffff;
-  --anvil-text: #1c1f24;
-  --anvil-muted: #5b6270;
-  --anvil-border: #d6dae1;
+  --anvil-text: #0f0f10;
+  --anvil-muted: #5c5a56;
+  --anvil-border: #e5e3df;
   /* Input boundaries need 3:1 against the surface (WCAG 1.4.11). */
-  --anvil-input-border: #6b7280;
-  --anvil-primary: #2f5bd3;
-  --anvil-primary-text: #ffffff;
+  --anvil-input-border: #8f8c86;
+  /* Button fill; text on it is ink in both schemes (6.1:1), never white. */
+  --anvil-primary: #ff5a1f;
+  --anvil-primary-text: #0f0f10;
   --anvil-danger: #b42318;
   /* Focus ring: at least 3:1 against both the surface and the page background. */
-  --anvil-focus: #1d4ed8;
+  --anvil-focus: #c2410c;
+  /* Links and other orange text (4.5:1 on the background, surface and code background). */
+  --anvil-link: #c2410c;
+  --anvil-success: #1a7f4b;
   --anvil-danger-bg: #fef3f2;
   --anvil-warning-bg: #fffaeb;
   --anvil-warning-border: #b54708;
   --anvil-warning-text: #7a2e0e;
-  --anvil-code-bg: #eef0f4;
-  --anvil-radius: 6px;
-  --anvil-font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --anvil-code-bg: #f3f2f0;
+  /* Controls (buttons, inputs) are just rounded enough to read as interactive; cards are square. */
+  --anvil-radius: 2px;
+  --anvil-card-radius: 0;
+  --anvil-font: "Hanken Grotesk", "Helvetica Neue", Arial, sans-serif;
+  --anvil-font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* Type scale (rem, so the user's font size setting scales it): body 15/24 px, small 13/20 px. */
+  --anvil-text-body: 0.9375rem;
+  --anvil-text-small: 0.8125rem;
+  /* Spacing scale: 4, 8, 12, 16, 24, 32, 48, 64 px at the default font size. */
+  --anvil-space-1: 0.25rem;
+  --anvil-space-2: 0.5rem;
+  --anvil-space-3: 0.75rem;
+  --anvil-space-4: 1rem;
+  --anvil-space-6: 1.5rem;
+  --anvil-space-8: 2rem;
+  --anvil-space-12: 3rem;
+  --anvil-space-16: 4rem;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --anvil-bg: #14161a;
-    --anvil-surface: #1d2026;
-    --anvil-text: #e7e9ee;
-    --anvil-muted: #a0a7b4;
-    --anvil-border: #343944;
-    --anvil-input-border: #8a92a1;
-    --anvil-primary: #6d8ef0;
-    --anvil-primary-text: #0d1020;
-    --anvil-danger: #f97066;
-    --anvil-focus: #a9c0ff;
+    --anvil-bg: #0f0f10;
+    --anvil-surface: #18181a;
+    --anvil-text: #f4f3f1;
+    --anvil-muted: #a3a19c;
+    --anvil-border: #2a2a2d;
+    --anvil-input-border: #6a6a70;
+    --anvil-primary: #ff5a1f;
+    --anvil-primary-text: #0f0f10;
+    --anvil-danger: #f0695e;
+    --anvil-focus: #ff7a45;
+    --anvil-link: #ff7a45;
+    --anvil-success: #3ccf86;
     --anvil-danger-bg: #2a1614;
     --anvil-warning-bg: #2a2010;
     --anvil-warning-border: #f79009;
     --anvil-warning-text: #fedf89;
-    --anvil-code-bg: #262a32;
+    --anvil-code-bg: #0a0a0b;
   }
 }
 
@@ -57,52 +107,59 @@ body {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 1rem;
-  padding: 1rem;
+  gap: var(--anvil-space-4);
+  padding: var(--anvil-space-4);
   background: var(--anvil-bg);
   color: var(--anvil-text);
   font-family: var(--anvil-font);
-  font-size: 16px;
-  line-height: 1.5;
+  font-size: var(--anvil-text-body);
+  line-height: 1.6;
 }
 
 main {
   width: 100%;
   max-width: 26rem;
-  padding: 2rem;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  padding: var(--anvil-space-8);
   background: var(--anvil-surface);
   border: 1px solid var(--anvil-border);
-  border-radius: var(--anvil-radius);
+  border-radius: var(--anvil-card-radius);
 }
 
+/* Page title. The sign-in card is narrow, so the title uses the 24/30 px section size of the type
+   scale rather than the 40 px page-title size meant for wide pages. */
 h1 {
-  margin: 0 0 1.5rem;
-  font-size: 1.375rem;
-  font-weight: 600;
+  margin: 0 0 var(--anvil-space-6);
+  font-size: 1.5rem;
+  line-height: 1.875rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
 }
 
 form {
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: var(--anvil-space-4);
 }
 
 label {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: var(--anvil-space-1);
   color: var(--anvil-muted);
-  font-size: 0.875rem;
+  font-size: var(--anvil-text-small);
+  font-weight: 500;
+  line-height: 1.25rem;
 }
 
+/* Inputs keep 16 px text so mobile browsers do not zoom the page on focus. */
 input,
 textarea {
   width: 100%;
   min-width: 0;
   min-height: 2.75rem;
-  padding: 0.5rem 0.75rem;
+  padding: var(--anvil-space-2) var(--anvil-space-3);
   font: inherit;
+  font-size: 1rem;
   color: var(--anvil-text);
   background: var(--anvil-surface);
   border: 1px solid var(--anvil-input-border);
@@ -120,7 +177,7 @@ summary:focus-visible {
 
 button {
   min-height: 2.75rem;
-  padding: 0.625rem 1rem;
+  padding: 0.625rem var(--anvil-space-4);
   font: inherit;
   font-weight: 600;
   color: var(--anvil-primary-text);
@@ -132,7 +189,7 @@ button {
 
 .anvil-error {
   color: var(--anvil-danger);
-  font-size: 0.875rem;
+  font-size: var(--anvil-text-small);
 }
 
 /* Layout helpers used by the default templates. */
@@ -140,35 +197,35 @@ button {
 .anvil-dev-banner {
   width: 100%;
   max-width: 26rem;
-  padding: 0.5rem 0.75rem;
+  padding: var(--anvil-space-2) var(--anvil-space-3);
   color: var(--anvil-warning-text);
   background: var(--anvil-warning-bg);
   border: 1px solid var(--anvil-warning-border);
-  border-radius: var(--anvil-radius);
-  font-size: 0.875rem;
+  border-radius: var(--anvil-card-radius);
+  font-size: var(--anvil-text-small);
   font-weight: 600;
   text-align: center;
 }
 
 .anvil-tenant {
-  margin: 0 0 0.25rem;
+  margin: 0 0 var(--anvil-space-1);
   color: var(--anvil-muted);
-  font-size: 0.875rem;
+  font-size: var(--anvil-text-small);
 }
 
 .anvil-lead {
-  margin: 0 0 1rem;
+  margin: 0 0 var(--anvil-space-4);
 }
 
 .anvil-muted {
   color: var(--anvil-muted);
-  font-size: 0.875rem;
+  font-size: var(--anvil-text-small);
 }
 
 .anvil-field {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: var(--anvil-space-1);
 }
 
 .anvil-field-invalid input,
@@ -178,11 +235,11 @@ input[aria-invalid="true"] {
 
 input:focus-visible,
 textarea:focus-visible {
-  border-color: var(--anvil-primary);
+  border-color: var(--anvil-focus);
 }
 
 a {
-  color: var(--anvil-primary);
+  color: var(--anvil-link);
   text-underline-offset: 2px;
 }
 
@@ -202,7 +259,7 @@ button:hover {
 
 .anvil-message {
   margin: 0;
-  font-size: 0.875rem;
+  font-size: var(--anvil-text-small);
 }
 
 .anvil-message-info {
@@ -215,21 +272,21 @@ button:hover {
 
 .anvil-form-messages .anvil-message-error,
 .anvil-error-text {
-  margin: 0 0 1rem;
-  padding: 0.5rem 0.75rem;
+  margin: 0 0 var(--anvil-space-4);
+  padding: var(--anvil-space-2) var(--anvil-space-3);
   color: var(--anvil-danger);
   background: var(--anvil-danger-bg);
   border: 1px solid var(--anvil-danger);
-  border-radius: var(--anvil-radius);
+  border-radius: var(--anvil-card-radius);
 }
 
 .anvil-links {
   display: flex;
   flex-wrap: wrap;
   justify-content: space-between;
-  gap: 0.5rem 1rem;
+  gap: var(--anvil-space-2) var(--anvil-space-4);
   margin-top: 1.25rem;
-  font-size: 0.875rem;
+  font-size: var(--anvil-text-small);
 }
 
 /* Links between pages are targets of at least 24x24 CSS px (WCAG 2.5.8). */
@@ -240,9 +297,9 @@ button:hover {
 }
 
 .anvil-callout {
-  margin: 0 0 1rem;
-  padding: 0.75rem;
-  border-radius: var(--anvil-radius);
+  margin: 0 0 var(--anvil-space-4);
+  padding: var(--anvil-space-3);
+  border-radius: var(--anvil-card-radius);
 }
 
 .anvil-callout p {
@@ -256,17 +313,17 @@ button:hover {
 }
 
 .anvil-credentials {
-  margin: 0 0 1rem;
+  margin: 0 0 var(--anvil-space-4);
 }
 
 .anvil-credentials dt {
-  margin-top: 0.75rem;
+  margin-top: var(--anvil-space-3);
   color: var(--anvil-muted);
-  font-size: 0.875rem;
+  font-size: var(--anvil-text-small);
 }
 
 .anvil-credentials dd {
-  margin: 0.25rem 0 0;
+  margin: var(--anvil-space-1) 0 0;
 }
 
 code {
@@ -274,10 +331,10 @@ code {
   max-width: 100%;
   padding: 0.125rem 0.375rem;
   overflow-wrap: anywhere;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.875rem;
+  font-family: var(--anvil-font-mono);
+  font-size: var(--anvil-text-small);
   background: var(--anvil-code-bg);
-  border-radius: 4px;
+  border-radius: var(--anvil-radius);
 }
 
 /* The `hidden` attribute always wins over the display rules below (e.g. the passkey button stays
@@ -287,29 +344,29 @@ code {
 }
 
 textarea {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.875rem;
+  font-family: var(--anvil-font-mono);
   resize: vertical;
 }
 
 h2 {
-  margin: 0 0 0.75rem;
+  margin: 0 0 var(--anvil-space-3);
   font-size: 1.125rem;
+  line-height: 1.5rem;
   font-weight: 600;
 }
 
 /* Secondary actions (passkey sign-in, Deny, per-row actions): outlined, same 44 px height. */
 button.anvil-secondary,
 .anvil-table button {
-  color: var(--anvil-primary);
+  color: var(--anvil-link);
   background: transparent;
-  border: 1px solid var(--anvil-primary);
+  border: 1px solid var(--anvil-link);
 }
 
 .anvil-table button {
   min-height: 2.25rem;
-  padding: 0.375rem 0.75rem;
-  font-size: 0.875rem;
+  padding: 0.375rem var(--anvil-space-3);
+  font-size: var(--anvil-text-small);
   white-space: nowrap;
 }
 
@@ -321,9 +378,9 @@ button.anvil-secondary:hover,
 
 /* Sign-in page: the passkey form sits below the password form. */
 .anvil-passkey {
-  gap: 0.5rem;
-  margin-top: 1rem;
-  padding-top: 1rem;
+  gap: var(--anvil-space-2);
+  margin-top: var(--anvil-space-4);
+  padding-top: var(--anvil-space-4);
   border-top: 1px solid var(--anvil-border);
 }
 
@@ -348,15 +405,15 @@ form > p {
 /* <details> disclosure (second factor: "Use a recovery code instead"). */
 .anvil-disclosure {
   border: 1px solid var(--anvil-border);
-  border-radius: var(--anvil-radius);
+  border-radius: var(--anvil-card-radius);
 }
 
 .anvil-disclosure > summary {
   display: flex;
   align-items: center;
   min-height: 2.75rem;
-  padding: 0.5rem 0.75rem;
-  color: var(--anvil-primary);
+  padding: var(--anvil-space-2) var(--anvil-space-3);
+  color: var(--anvil-link);
   font-weight: 600;
   cursor: pointer;
   list-style: none;
@@ -369,7 +426,7 @@ form > p {
 /* Open/closed state shown by a triangle (decorative; the summary exposes the state itself). */
 .anvil-disclosure > summary::before {
   content: "\25B8" / "";
-  margin-inline-end: 0.5rem;
+  margin-inline-end: var(--anvil-space-2);
 }
 
 [dir="rtl"] .anvil-disclosure > summary::before {
@@ -381,7 +438,7 @@ form > p {
 }
 
 .anvil-disclosure > .anvil-field {
-  padding: 0 0.75rem 0.75rem;
+  padding: 0 var(--anvil-space-3) var(--anvil-space-3);
 }
 
 .anvil-disclosure p {
@@ -397,7 +454,7 @@ form > p {
 }
 
 .anvil-consent-scopes legend {
-  margin-bottom: 0.5rem;
+  margin-bottom: var(--anvil-space-2);
   padding: 0;
 }
 
@@ -407,11 +464,11 @@ form > p {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.5rem 0.75rem;
-  margin: 0 0 1rem;
-  padding: 0.75rem;
+  gap: var(--anvil-space-2) var(--anvil-space-3);
+  margin: 0 0 var(--anvil-space-4);
+  padding: var(--anvil-space-3);
   border: 1px solid var(--anvil-border);
-  border-radius: var(--anvil-radius);
+  border-radius: var(--anvil-card-radius);
 }
 
 .anvil-consent-cimd p {
@@ -441,18 +498,18 @@ form > p {
 }
 
 .anvil-scope-list {
-  margin: 0 0 1rem;
+  margin: 0 0 var(--anvil-space-4);
   padding-inline-start: 1.25rem;
 }
 
 .anvil-scope-list li + li {
-  margin-top: 0.25rem;
+  margin-top: var(--anvil-space-1);
 }
 
 .anvil-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.75rem;
+  gap: var(--anvil-space-3);
 }
 
 .anvil-actions button {
@@ -465,7 +522,7 @@ main:has(> .anvil-account-nav) {
 }
 
 .anvil-account-nav {
-  margin: 0 0 1.5rem;
+  margin: 0 0 var(--anvil-space-6);
   border-bottom: 1px solid var(--anvil-border);
 }
 
@@ -494,23 +551,23 @@ main:has(> .anvil-account-nav) {
 .anvil-account-nav a[aria-current="page"] {
   color: var(--anvil-text);
   font-weight: 600;
-  border-bottom-color: var(--anvil-primary);
+  border-bottom-color: var(--anvil-link);
 }
 
 .anvil-account .anvil-message {
-  margin-bottom: 1rem;
+  margin-bottom: var(--anvil-space-4);
 }
 
 .anvil-account-section + .anvil-account-section {
-  margin-top: 2rem;
+  margin-top: var(--anvil-space-8);
 }
 
 .anvil-account-section p {
-  margin: 0 0 1rem;
+  margin: 0 0 var(--anvil-space-4);
 }
 
 .anvil-account-section form + form {
-  margin-top: 0.75rem;
+  margin-top: var(--anvil-space-3);
 }
 
 .anvil-app-list {
@@ -520,7 +577,7 @@ main:has(> .anvil-account-nav) {
 }
 
 .anvil-app-list > li {
-  padding: 1rem 0;
+  padding: var(--anvil-space-4) 0;
   border-top: 1px solid var(--anvil-border);
 }
 
@@ -536,21 +593,21 @@ main:has(> .anvil-account-nav) {
 /* Data tables (sessions, passkeys). */
 .anvil-table {
   width: 100%;
-  margin: 0 0 1rem;
+  margin: 0 0 var(--anvil-space-4);
   border-collapse: collapse;
-  font-size: 0.875rem;
+  font-size: var(--anvil-text-small);
 }
 
 .anvil-table caption {
-  margin-bottom: 0.5rem;
+  margin-bottom: var(--anvil-space-2);
   color: var(--anvil-muted);
   text-align: start;
 }
 
 .anvil-table th,
 .anvil-table td {
-  padding-block: 0.5rem;
-  padding-inline: 0 0.75rem;
+  padding-block: var(--anvil-space-2);
+  padding-inline: 0 var(--anvil-space-3);
   text-align: start;
   vertical-align: top;
   border-bottom: 1px solid var(--anvil-border);
@@ -577,12 +634,12 @@ main:has(> .anvil-account-nav) {
    scheme (scanners expect it); the SVG carries its own 4-module quiet zone. */
 .anvil-qr {
   width: min(13rem, 100%);
-  margin: 0 auto 1rem;
-  padding: 0.5rem;
+  margin: 0 auto var(--anvil-space-4);
+  padding: var(--anvil-space-2);
   color: #000000;
   background: #ffffff;
   border: 1px solid var(--anvil-border);
-  border-radius: var(--anvil-radius);
+  border-radius: var(--anvil-card-radius);
   forced-color-adjust: none;
 }
 
@@ -593,7 +650,7 @@ main:has(> .anvil-account-nav) {
 }
 
 .anvil-secret {
-  padding: 0.25rem 0.5rem;
+  padding: var(--anvil-space-1) var(--anvil-space-2);
   font-size: 1rem;
   letter-spacing: 0.05em;
   word-spacing: 0.25em;
@@ -604,8 +661,8 @@ main:has(> .anvil-account-nav) {
 .anvil-recovery-codes {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.5rem 1.5rem;
-  margin: 0 0 1rem;
+  gap: var(--anvil-space-2) var(--anvil-space-6);
+  margin: 0 0 var(--anvil-space-4);
   padding-inline-start: 1.75rem;
 }
 
@@ -622,7 +679,7 @@ main:has(> .anvil-account-nav) {
 @media (max-width: 30rem) {
   body {
     justify-content: flex-start;
-    padding: 0.5rem;
+    padding: var(--anvil-space-2);
   }
 
   main {
@@ -650,14 +707,14 @@ main:has(> .anvil-account-nav) {
 
   .anvil-table tr {
     display: block;
-    padding: 0.5rem 0;
+    padding: var(--anvil-space-2) 0;
     border-bottom: 1px solid var(--anvil-border);
   }
 
   .anvil-table td {
     display: flex;
     flex-wrap: wrap;
-    gap: 0 0.5rem;
+    gap: 0 var(--anvil-space-2);
     padding: 0.125rem 0;
     border-bottom: 0;
   }
@@ -670,7 +727,7 @@ main:has(> .anvil-account-nav) {
   }
 
   .anvil-table td:last-child {
-    padding-top: 0.5rem;
+    padding-top: var(--anvil-space-2);
     text-align: start;
   }
 }

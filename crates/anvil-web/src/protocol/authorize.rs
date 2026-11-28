@@ -118,7 +118,7 @@ fn form_action_source(redirect_uri: &str) -> Option<String> {
 /// only be submitted to the redirect URI's origin.
 fn form_post_csp(form_action: &str) -> String {
     format!(
-        "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; \
+        "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self'; \
          form-action {form_action}; frame-ancestors 'none'; base-uri 'none'"
     )
 }

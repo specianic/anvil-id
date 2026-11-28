@@ -8,9 +8,9 @@ use axum::extract::State;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, header};
 use axum::response::Response;
 
-/// The Content-Security-Policy of every response. No `unsafe-inline`, no external sources.
-pub const CSP: &str =
-    "default-src 'none'; style-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'";
+/// The Content-Security-Policy of every response. No `unsafe-inline`, no external sources; fonts only
+/// from our origin (the default theme self-hosts its fonts under `/assets/fonts/`).
+pub const CSP: &str = "default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'";
 
 /// HSTS value sent when the public URL is https.
 pub const HSTS: &str = "max-age=31536000";
@@ -53,12 +53,15 @@ mod tests {
     fn csp_is_strict() {
         assert_eq!(
             CSP,
-            "default-src 'none'; style-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'"
+            "default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'"
         );
         assert!(!CSP.contains("unsafe-inline"));
         assert!(!CSP.contains("unsafe-eval"));
         assert!(!CSP.contains("form-action"));
         assert!(CSP.contains("frame-ancestors 'none'"));
+        // The self-hosted theme fonts load from our origin only.
+        assert!(CSP.contains("font-src 'self';"));
+        assert!(!CSP.contains("http:") && !CSP.contains("https:") && !CSP.contains('*'));
     }
 
     #[test]
