@@ -50,6 +50,23 @@ Every page receives `page`:
 | `page.links.login` | string or null | Link to the sign-in page; omitted when null |
 | `page.links.registration` | string or null | Link to self-registration; omitted when null |
 | `page.links.recovery` | string or null | Link to password recovery; omitted when null |
+| `page.links.account` (rc.4) | string, absent when unset | The account page (`#link-account`) |
+| `page.links.sign_out` (rc.4) | string, absent when unset | Action of the sign-out form (`#form-sign-out`, `method="post"`): the end-session endpoint, which asks for confirmation. Never a `GET` that signs out |
+| `page.links.continue_to` (rc.4) | `{ href, name }`, absent when unset | "Continue to {app}" of a live authorization request (`#link-continue`) |
+| `page.links.console` (rc.4) | string, absent when unset | The admin console (`#link-console`, system tenant only) |
+| `page.links.app_home` (rc.4) | `{ href, name }`, absent when unset | "Back to {app}" (`#link-back-to-app`): the stored `initiate_login_uri` or `client_uri` of a static (administrator-registered) client. Never a request value, never a dynamic or CIMD client |
+| `page.links.home` (rc.4) | string, absent when unset | The installation's start page (`#link-home`), on pages without a tenant |
+
+Since rc.4 flow pages build every link from the flow's navigation context: a live authorization
+request travels as `?request=` on `link-login`, `link-registration`, `link-recovery`, `link-cancel`
+and `link-continue`, so a detour returns to the application. An unknown, expired, malformed or
+foreign `request=` on `GET /ui/login`, `/ui/registration` or `/ui/recovery` answers the 400
+`flow_expired` page (no form, the id is not echoed).
+
+Since rc.4 a refused form `POST` on a flow page answers `303` to the same page with `?flow=`
+(post/redirect/get); the error travels in a sealed one-shot flash cookie, and the `GET` answers 400
+with the form and its messages. Themes and scripts that read the body of a refused `POST` must
+follow the redirect. Locks (429) and CAPTCHA demands are still direct answers.
 
 Form pages (`login.html`, `second_factor.html`, `registration.html`, `verification.html`,
 `recovery.html`, `recovery_reset.html`, `setup.html`; since 0.3 also `mfa_enroll.html`,
@@ -89,17 +106,22 @@ Other pages receive extra keys:
 
 | Template | Extra keys |
 |---|---|
-| `message.html` | `heading`, `body_key`, `body` |
-| `error.html` | `status`, `error_key`, `heading`, `detail` (or null) |
-| `setup_done.html` | `admin_email`, `mgmt_client_id`, `mgmt_client_secret`, `token_endpoint`, `admin_api_base` |
+| `message.html` | `heading`, `body_key`, `body`; since rc.4 `sent_to` (or null, the address of the check-email page, `#message-sent-to`) and the way-forward links of `page.links` |
+| `error.html` | `status`, `error_key`, `heading`, `detail` (or null; since rc.4 rendered only when `page.dev_mode`); since rc.4 a friendly heading and explanation per key and the way-forward links of `page.links` |
+| `setup_done.html` | `admin_email`, `mgmt_client_id`, `mgmt_client_secret`, `token_endpoint`, `admin_api_base`; since rc.4 the primary action is `#link-console` and the credentials sit under "For automation" (`#setup-automation`) |
+| `root.html` (rc.4) | `signed_in`, `administration` (default tenant: show the discreet `#link-administration`), plus `page.links` (`login`, `account`, `sign_out`, `console`). Served at `/` and `/ui` of every tenant, `no-store` |
+| `console_setup_pending.html` (rc.4) | none besides `page`; shown by `/console/` and the root page before setup, names `anvilid admin setup-url` (`#setup-command`) |
+| `org_not_member.html` (rc.4) | `user_email`, `requested_org` (bool), `messages`, `csrf_token`, `action`; served at `/ui/select-organization/not-member?request=` when the signed-in user is not a member of the requested organization |
+| `account_confirm.html` (rc.4) | `action_id`, `post_url`, `csrf_token`, `cancel_url`: the server-rendered confirmation of a destructive account action (no JavaScript dialog); the confirming `POST` carries `confirm=yes` |
+| `recovery_codes_flow.html` (rc.4) | `codes`, `codes_text`, `app_name` (or null), `csrf_token`, `action`: the recovery codes shown once after MFA enrolment during sign-in, `no-store`, bound to the flow cookie |
 | `login.html` | `passkey` (or null): `{ action, options_url }` for the passkey form; `captcha` (or null): `{ provider: "turnstile" \| "hcaptcha", site_key }`, rendered through `captcha.html`; since 0.3 `upstream` (list of `{ slug, name, action }`, one sign-in button per enabled connection) and `email_code` (`{ action, value }` or null, the "Email me a sign-in code" form; `value` is the address prefilled from `login_hint`); since 1.0 `change_email` (`{ action, email }` or null): set on the password step that follows the email-first page of a tenant with a routed domain. The entered address then travels in a hidden `identifier` field (hidden fields render without a label, also in the CAPTCHA variant) and is shown read-only, with a form that posts `choice=change` back to the email page. Null on the combined form, which then renders exactly as before |
 | `second_factor.html` | `factor_token` (sealed value naming the user for throttling; posted back as a hidden field), `has_error`; since 0.4 `passkey_second_factor` (or null): `{ action, options_url }` for the passkey assertion form, set when the user has a passkey (the form then carries the hidden marker field `passkey`, never rendered; a passkey-only user's form has no `code`/`recovery_code` field and the authenticator-app form is not rendered) |
 | `captcha.html` (partial) | `captcha` as above |
 | `consent.html` | `action`, `csrf_token`, `client_name`, `client_id`, `scopes` (`[{ name, description (or null) }]`), `resources` (0.3: requested RFC 8707 resources, list of strings, may be empty), `messages` |
 | `form_post.html` | `action` (the redirect URI), `fields` (name/value pairs: `code` or `error`, `state`, `iss`, …) |
-| `account_base.html` | `account_base` (tenant base path prefixed to the navigation links), `account_nav` (`profile` \| `email` \| `password` \| `security` \| `sessions` \| `apps` \| `linked`, sets `aria-current`); the account pages extend it and fill `{% block account %}` |
+| `account_base.html` | `account_base` (tenant base path prefixed to the navigation links), `account_nav` (`profile` \| `email` \| `password` \| `security` \| `sessions` \| `apps` \| `linked`, sets `aria-current`); the account pages extend it and fill `{% block account %}`. Since rc.4 `header` (`{ email, sign_out_url, back_to_app }`, `back_to_app` is `{ href, name }` of a static client or null) |
 | `account_security.html` | `csrf_token`, `messages`, `recent_auth`, `login_url`, `passkeys` (`[{ id, label, created, created_iso, last_used, last_used_iso, delete_url }]`), `passkey_url`, `passkey_options_url`, `totp` (or null, same timestamps + `delete_url`), `totp_url`, `recovery_codes_remaining`, `recovery_codes_url` |
-| `totp_enroll.html` | `qr_svg` (trusted inline SVG), `secret_groups`, `confirm_url`, `csrf_token`, `code_error` (or null), `security_url` |
+| `totp_enroll.html` | `qr_svg` (trusted inline SVG), `secret_groups`, `confirm_url`, `csrf_token`, `code_error` (or null), `security_url`; since rc.4 `otpauth_uri` (the escaped `otpauth://` link, `#link-otpauth`, only on this `no-store` page) |
 | `recovery_codes.html` | `codes`, `codes_text`, `message`, `security_url` (shown once) |
 | `account_sessions.html` | `csrf_token`, `messages`, `sessions` (`[{ id, current, device, ip, created, created_iso, last_seen, last_seen_iso, revoke_url }]`), `other_count`, `revoke_others_url` |
 | `account_apps.html` | `csrf_token`, `messages`, `apps` (`[{ client_id, client_name, scopes, granted, granted_iso, revoke_url }]`) |
@@ -107,13 +129,13 @@ Other pages receive extra keys:
 | `account_email.html` (0.3) | `messages`, `mode`: `change` (`csrf_token`, `action`, `email`, `email_verified`, `recent_auth`, `login_url`), `confirm` (`confirm_action`, `token`), or `done` |
 | `account_password.html` (0.3) | `csrf_token`, `messages`, `action`, `has_password`, `recent_auth`, `login_url`, `revoke_others` |
 | `account_linked.html` (0.3) | `csrf_token`, `messages`, `recent_auth`, `login_url`, `linked` (`[{ id, provider, email, created, created_iso, last_used, last_used_iso, unlink_url }]`), `available` (`[{ slug, name, connect_url }]`) |
-| `mfa_enroll.html` (0.3) | Enrolment mode: `form` (id `mfa-enroll`, field `code`), `qr_svg`, `secret_groups`, `factor_token`; since 0.4 `passkey_enroll` (`{ options_url, action }` of the webauthn.js registration form, or null). Done mode: `codes`, `codes_text`, `continue_url` (recovery codes, shown once) |
+| `mfa_enroll.html` (0.3) | Enrolment mode: `form` (id `mfa-enroll`, field `code`), `qr_svg`, `secret_groups`, `factor_token`; since 0.4 `passkey_enroll` (`{ options_url, action }` of the webauthn.js registration form, or null); since rc.4 `otpauth` (the escaped `otpauth://` link, `#link-otpauth`). Since rc.4 the recovery codes after enrolment are on `recovery_codes_flow.html` |
 | `email_code.html` (0.3) | `form` (id `email-code`, field `code`), `factor_token` (or null), `resend_action` (or null) |
 | `magic_link.html` (0.3) | `action`, `csrf_token`, `token` (posted back by the button) |
 | `upstream_link.html` (0.3) | `form` (id `upstream-link`, fields `identifier`, `password`; the first message names the provider; no fields, with the message `upstream.link_no_method`, when the revealed account has no way to confirm), `passkey` (as on the sign-in page); since 1.0 `upstream` (`{ slug, name, action }`: the revealed account's linked providers, or, when the account may not be revealed, the tenant's other providers, the same list whatever account matched), `email_code` (`{ action, value, hidden }` or null; `hidden`: the account may not be revealed, render a plain "Email me a code" button without any address field) and `account_linked` (URL of `/ui/account/linked`) |
 | `select_account.html` (0.3) | `client_name`, `user_name` (or null), `user_email`, `messages`, `csrf_token`, `action` |
-| `logout_confirm.html` (0.3) | `client_name` (or null), `csrf_token`, `action`, `cancel_url` |
-| `logged_out.html` (0.3) | `heading_key`, `message_key`, `message`, `error` (bool); signed-out page and sign-out error page |
+| `logout_confirm.html` (0.3) | `client_name` (or null), `csrf_token`, `action`, `cancel_url` (since rc.4 the static client's home when there is one, otherwise the account sessions page) |
+| `logged_out.html` (0.3) | `heading_key`, `message_key`, `message`, `error` (bool); signed-out page and sign-out error page. Since rc.4 the way-forward links of `page.links` (`link-back-to-app`, `link-login` "Sign in again" or "Go to sign in" on errors, `link-account`, `link-console`, `form-sign-out`); `/ui/signed-out?client_id=` adds "Back to {app}" for a static client only |
 | `preview.html` (0.3) | none besides `page` (whose `theme_css` is the draft stylesheet); static sample markup, nothing can be submitted |
 | `login_identify.html` (1.0) | Identifier-first sign-in (home-realm discovery), rendered only for tenants with a verified, routed domain. `form` with id `login-identify` (the email page: one `identifier` field of kind `email`, `autocomplete="username"`) or `login-sso-choice` (the address uses single sign-on and its organization still allows passwords: no fields, the template writes two buttons posting `choice=sso` and `choice=password` to `form.action`); `change_email` (`{ action, email }` or null, as on `login.html`); `upstream` and `passkey` as on `login.html` (email page only) |
 | `select_organization.html` (1.0) | Organization switcher for clients whose organization policy is `required`: `client_name`, `organizations` (`[{ id, slug, display_name }]`, the signed-in user's own memberships only, sorted by display name), `messages` (`[{ level, key, text }]`), `csrf_token`, `action`. The form posts `organization` = the chosen org id |
@@ -246,8 +268,10 @@ Release 0.3 pages:
 - Sign-in page, upstream buttons: one form per enabled connection, `upstream-{slug}-form`, with the
   button `upstream-{slug}` (`data-connection="{slug}"`, text "Continue with {provider}"), inside a
   group with class `anvil-upstream`.
-- Sign-in page, email sign-in: disclosure `email-code-toggle` (open when an address is prefilled),
-  form `email-code-request`, input `email-code-email`, button `email-code-request-submit`.
+- Sign-in page, email sign-in: button `email-code-request-submit` with hint `email-code-request-hint`.
+  Since rc.4 the button sits inside form `login` and posts the `identifier` field to its
+  `formaction`; the disclosure `email-code-toggle`, form `email-code-request` and input
+  `email-code-email` are gone (also on the revealed link-confirmation page).
 - "Check your email" page: form `email-code`, input `code` (`inputmode="numeric"`,
   `autocomplete="one-time-code"`), button `email-code-submit`, messages `email-code-msg-{n}`;
   resend form `email-code-resend` with `email-code-resend-submit`; link `link-login`.
@@ -262,8 +286,10 @@ Release 0.3 pages:
   `link-cancel` (back to sign-in, nothing is linked).
 - MFA enrolment during sign-in (`mfa_enroll.html`): notice `mfa-enroll-required`, `totp-qr`,
   `totp-manual`, `totp-secret`, `totp-instructions`, form `mfa-enroll` with input `code` and
-  `mfa-enroll-submit`, messages `mfa-enroll-msg-{n}`; after confirmation `recovery-codes`,
-  `recovery-codes-text`, `recovery-codes-help` and the link `link-continue`.
+  `mfa-enroll-submit`, messages `mfa-enroll-msg-{n}`; since rc.4 `link-otpauth`. After
+  confirmation (since rc.4 on `recovery_codes_flow.html`): `recovery-codes`, `recovery-codes-text`,
+  `recovery-codes-help` and form `recovery-codes-confirm` with button
+  `recovery-codes-confirm-submit` (replaces the former `link-continue`).
 - Account chooser (`select_account.html`, `prompt=select_account`): form `select-account-form`,
   `select-account-client`, `select-account-current` (with `select-account-name`,
   `select-account-email`), buttons `select-account-continue` and `select-account-other` (both
@@ -273,10 +299,13 @@ Release 0.3 pages:
   `consent-resources` with one `consent-resource-{n}` (`data-resource="{value}"`) per resource.
 - Sign-out confirmation (`logout_confirm.html`, always served under `/ui/logout`): form
   `logout-confirm-form`, button `logout-confirm-submit` (text "Sign out"), `logout-confirm-text`,
-  `logout-client` (when a client asked), link `logout-cancel` ("Stay signed in", to the sessions
-  page).
+  `logout-client` (when a client asked), link `logout-cancel` ("Stay signed in"; since rc.4 to the
+  static client's home when there is one, otherwise to the sessions page).
 - Signed-out and sign-out error page (`logged_out.html`, never served under `/ui/logout`): the
   sentence is in `logout-message` with `data-message-key="{key}"` (`role="alert"` for errors).
+  Since rc.4 also `link-back-to-app`, `link-login`, `link-account`, `link-console` and
+  `form-sign-out` (see `page.links`). Without an active session the end-session endpoint no longer
+  asks for confirmation and shows this page directly.
 - Account profile: form `profile-form` with inputs `name`, `given_name`, `family_name`, `locale`,
   button `profile-form-submit`.
 - Account email: `current-email` (`email-verified` or `email-unverified` badge), form
@@ -339,6 +368,44 @@ Release 1.0 pages:
 - SAML sign-in failure (experimental): `error.html` with `error_key` `saml_login_failed`; the
   sentence is `saml.login_failed`. It never shows the NameID, attributes or XML.
 
+Release 1.0 rc.4 pages and ids:
+
+- Way-forward links (from `page.links`, on the message, error, signed-out and root pages):
+  `link-continue` ("Continue to {app}"), `link-back-to-app` ("Back to {app}", static clients only),
+  `link-login`, `link-account`, `link-console`, `link-home`, and the sign-out form `form-sign-out`
+  with button `sign-out-submit` (a `POST` to the end-session endpoint, which asks for confirmation).
+- Check-email page (`message.html`): `message-sent-to` holds the address.
+- Error page (`error.html`): `error-label` (text label next to the icon), `error-explanation`
+  (friendly explanation per key); `error-message` keeps the contract sentence below byte for byte;
+  `error-detail` appears only in development mode.
+- Root page (`root.html`): `root-lead`, `link-login`, `link-account`, `form-sign-out` /
+  `sign-out-submit`, `link-console` (system tenant), `link-administration` (default tenant).
+- Setup: `setup-command` (`console_setup_pending.html`, the `anvilid admin setup-url` command),
+  `setup-automation` / `setup-automation-heading` (`setup_done.html`), `link-console`.
+- Account header (`account_base.html`, every account page): `account-header`, `account-identity`
+  (the signed-in address), `form-sign-out` / `sign-out-submit`, `link-back-to-app`; the navigation
+  gains `account-nav-attributes`. Navigation links carry `?client_id=` only for a resolved static
+  client. Signing out from the account pages is two steps: the header button, then
+  `logout-confirm-submit` on `/ui/logout`.
+- Account confirmation (`account_confirm.html`): `account-confirm`, `confirm-heading`,
+  `confirm-explain`, form `form-confirm` (`data-action` names the action) with
+  `form-confirm-submit`, link `link-confirm-cancel`.
+- TOTP enrolment (account and in-flow): `link-otpauth` (opens an authenticator app on the same
+  device).
+- Consent: `consent-account` / `consent-account-email` (who is signing in), form
+  `consent-switch-form` with button `consent-other` ("Use another account", `choice=other`),
+  `consent-agent-explain`, `consent-offline-note`. Keyboard order of the buttons: `consent-other`,
+  `consent-allow`, `consent-deny`.
+- Organization non-member page (`org_not_member.html`): `org-not-member-lead`,
+  `org-not-member-account` / `org-not-member-email`, `org-not-member-help`, messages
+  `org-not-member-messages` / `org-not-member-msg-{n}`, form `org-not-member-form` with the buttons
+  `link-return-to-app` (a `POST` button: returns `access_denied` to the application) and
+  `org-not-member-other` ("Use another account").
+- Magic link page: `magic-link-explain`, `magic-link-other-browser` (the link was opened in a
+  browser without the sign-in), `magic-link-code-hint` (when the tenant emails codes), `link-login`
+  ("Start signing in again here", keeps `request=`).
+- The first field of a sign-in form has `autofocus`.
+
 Contract sentences of the logout pages (`locales/en/logout.ftl`). The conformance browser
 configuration (`tests/conformance/config.template.json`) waits for these exact English texts:
 
@@ -379,6 +446,12 @@ In-page sentence on the login and second-factor forms when an attempt is locked 
 `Retry-After`), message key `login.too_many_attempts`: "Too many attempts. Try again in N second(s)."
 
 ## Stylesheet classes
+
+Since rc.4 `anvil.css` declares `--anvil-link` (links, outlined buttons, the disclosure summary,
+the active navigation bar), `--anvil-card-radius` (cards, panels, callouts, the QR frame) and
+`--anvil-font-mono` (codes, secrets) next to `--anvil-success`, `--anvil-text-body`,
+`--anvil-text-small` and the spacing scale `--anvil-space-{1,2,3,4,6,8,12,16}`. Orange
+(`--anvil-primary`) is a fill only and never a text colour.
 
 Besides the 0.1 classes (`anvil-field`, `anvil-field-invalid`, `anvil-form-messages`, `anvil-links`,
 `anvil-muted`, `anvil-optional`, …), `anvil.css` styles these 0.2 classes. Overriding themes that
