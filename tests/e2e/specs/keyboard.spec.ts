@@ -393,7 +393,7 @@ for (const vp of PHASE3_VIEWPORTS) {
       await expect(page.locator('form#consent-form')).toBeVisible();
 
       const order = await expectDomTabOrder(page);
-      expect(order).toEqual(['consent-allow', 'consent-deny']);
+      expect(order).toEqual(['consent-other', 'consent-allow', 'consent-deny']);
       await expectTargetSizes(page);
 
       // Deny with the keyboard: the browser is sent to the redirect URI with access_denied.

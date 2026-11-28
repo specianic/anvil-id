@@ -775,3 +775,9 @@ main:has(> .anvil-account-nav) {
 #admin-email {
   unicode-bidi: isolate;
 }
+
+/* The account header names the signed-in user; long addresses wrap instead of overflowing narrow
+   screens. */
+.anvil-account-header strong {
+  overflow-wrap: anywhere;
+}
