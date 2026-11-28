@@ -121,7 +121,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum_extra::extract::cookie::CookieJar;
 use minijinja::value::{Serde, Value};
-use secrecy::{ExposeSecret as _, SecretString};
+use secrecy::ExposeSecret as _;
 use serde::{Deserialize, Serialize};
 
 use super::account_security::{ACCOUNT_CSP, grouped};
@@ -175,6 +175,10 @@ pub(super) fn routes() -> Router<AppState> {
     Router::new()
         .route("/ui/login", get(show).post(submit))
         .route("/ui/login/identify", post(identify))
+        .route(
+            "/ui/login/recovery-codes",
+            get(recovery_codes_show).post(recovery_codes_confirm),
+        )
         .route("/ui/login/passkey/options", post(passkey_options))
         .route("/ui/login/passkey", post(passkey_submit))
         .route(
@@ -1006,11 +1010,15 @@ async fn flow_passkey_finish(
             Ok(r) => r,
             Err(r) => return rejection_page(state, tenant, loc, r),
         };
+    let mut outcome = result.outcome;
+    if let Some(resp) = recovery_codes_redirect(state, tenant, loc, &mut outcome).await {
+        return resp;
+    }
     let extras = Extras {
         factor_token: form.factor_token.clone().filter(|t| !t.is_empty()),
         ..Extras::default()
     };
-    outcome_response_with(state, tenant, loc, &nav, result.outcome, &extras)
+    outcome_response_with(state, tenant, loc, &nav, outcome, &extras)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1510,6 +1518,7 @@ pub(super) fn render_tenant_form_with(
     let mut captcha = None;
     let mut factor_token = None;
     let mut qr_svg = None;
+    let mut otpauth = None;
     let mut secret_groups = None;
     let mut email_code = None;
     let mut resend_action = None;
@@ -1566,6 +1575,7 @@ pub(super) fn render_tenant_form_with(
                     Ok(svg) => qr_svg = Some(Value::from_safe_string(svg)),
                     Err(e) => return core_error_page_in(state, Some(tenant), loc, &e),
                 }
+                otpauth = Some(totp.otpauth_uri.expose_secret().to_owned());
                 secret_groups = Some(grouped(totp.secret_base32.expose_secret()));
             }
         }
@@ -1619,6 +1629,7 @@ pub(super) fn render_tenant_form_with(
         factor_token => factor_token,
         enroll => qr_svg.is_some(),
         qr_svg => qr_svg,
+        otpauth => otpauth,
         secret_groups => secret_groups,
         upstream => Value::from(Serde(&upstream)),
         email_code => Value::from(Serde(&email_code)),
@@ -1639,6 +1650,10 @@ pub(super) fn render_tenant_form_with(
         resp.headers_mut()
             .insert(header::CONTENT_SECURITY_POLICY, csp);
     }
+    // The enrolment page carries the pending secret (QR code, key, otpauth link): never cached.
+    if form.id == ENROLL_FORM_ID {
+        resp = no_store(resp);
+    }
     resp
 }
 
@@ -1651,6 +1666,7 @@ fn message_heading(key: &str) -> &'static str {
         "registration.disabled" => "heading.registration_unavailable",
         OTHER_BROWSER | LINK_INVALID => "title.magic_link",
         SIGNED_IN => "heading.signed_in",
+        CODES_GONE => "heading.recovery_codes_gone",
         _ => "heading.done",
     }
 }
@@ -1690,7 +1706,7 @@ fn message_page_with(
 ) -> Response {
     let mut page = PageContext::for_tenant(state, tenant, loc, message_heading(key));
     page.links = nav
-        .way_forward(state, tenant, loc, key == SIGNED_IN)
+        .way_forward(state, tenant, loc, key == SIGNED_IN || key == CODES_GONE)
         .into_links();
     let heading = page.title.clone();
     let ctx = minijinja::context! {
@@ -1889,16 +1905,6 @@ pub(super) fn expired_verification_link_page(
     ))
 }
 
-/// [`restart_login_in`] without a flow context, for callers that have no flow to read the
-/// request from.
-pub(super) async fn restart_login(
-    state: &AppState,
-    tenant: &ResolvedTenant,
-    loc: &Locale,
-) -> Response {
-    restart_login_in(state, tenant, loc, &NavContext::none()).await
-}
-
 /// The caller's active session (from the session cookie), if any.
 pub(super) async fn current_browser_session(
     state: &AppState,
@@ -1997,63 +2003,247 @@ pub(super) fn drive_response(
     }
 }
 
+/// Where a finished sign-in continues ([`Continue`]): the authorization request
+/// (`{issuer}/authorize/continue?request=`) or the login's allowlisted return target on the
+/// tenant's own UI origin.
+fn continue_url(tenant: &ResolvedTenant, loc: &Locale, next: Continue) -> String {
+    match next {
+        Continue::Authorize(request) => {
+            format!("{}/authorize/continue?request={request}", tenant.issuer)
+        }
+        // The tenant's own origin and the allowlisted path: nothing from the request.
+        Continue::Return(target) => carry_ui_locales(&tenant.ui_url(target.as_path()), loc),
+    }
+}
+
 /// After a sign-in or step-up: continue the authorization request (303), return to the login's
 /// allowlisted return target on the tenant's own UI origin (303), or show the signed-in page.
-/// Recovery codes of a second factor enrolled in the flow are shown once first, with a link that
-/// continues.
+/// Recovery codes of a second factor enrolled in the flow are never part of this answer: they
+/// go through [`recovery_codes_redirect`] first.
 pub(super) fn signed_in_response(
     state: &AppState,
     tenant: &ResolvedTenant,
     loc: &Locale,
     continue_to: Option<Continue>,
-    recovery_codes: &[SecretString],
     jar: CookieJar,
 ) -> Response {
     // Every sign-in can switch away from another user's session in this browser (the flow
     // revokes it and enqueues its back-channel logouts). Waking on each sign-in is cheaper than
     // threading a "revoked" flag out of the flow engine.
     state.wake_logout_worker();
-    let continue_url = continue_to.map(|next| match next {
-        Continue::Authorize(request) => {
-            format!("{}/authorize/continue?request={request}", tenant.issuer)
-        }
-        // The tenant's own origin and the allowlisted path: nothing from the request.
-        Continue::Return(target) => carry_ui_locales(&tenant.ui_url(target.as_path()), loc),
-    });
-    if !recovery_codes.is_empty() {
-        let codes: Vec<String> = recovery_codes
-            .iter()
-            .map(|c| c.expose_secret().to_owned())
-            .collect();
-        let codes_text = codes.join("\n");
-        let page = PageContext::for_tenant(state, tenant, loc, "title.mfa_codes");
-        let ctx = minijinja::context! {
-            page => page.into_value(),
-            codes => codes,
-            codes_text => codes_text,
-            continue_url => continue_url.unwrap_or_else(|| {
-                NavContext::none().url(tenant, loc, UiPage::Account(AccountSection::Security))
-            }),
-        };
-        let mut resp = render_page(
-            state,
-            Some(tenant),
-            loc,
-            "mfa_enroll.html",
-            ctx,
-            StatusCode::OK,
-            jar,
-        );
-        resp.headers_mut()
-            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-        return resp;
-    }
-    match continue_url {
+    match continue_to.map(|next| continue_url(tenant, loc, next)) {
         Some(location) => {
             (StatusCode::SEE_OTHER, jar, [(header::LOCATION, location)]).into_response()
         }
         // Without a continuation there is no live request: the way forward is the account.
         None => message_page(state, tenant, loc, SIGNED_IN, &NavContext::none(), jar),
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Recovery codes of a second factor enrolled at sign-in (U-H7)
+// ---------------------------------------------------------------------------------------------
+
+/// Path (under `{issuer}/ui/`) of the recovery-codes page of a finished sign-in.
+const RECOVERY_CODES_PATH: &str = "login/recovery-codes";
+
+/// Message key of the recovery-codes page when it has no codes to show (no flow cookie, another
+/// flow's cookie, expired or already confirmed).
+const CODES_GONE: &str = "recovery_codes_flow.gone";
+
+/// A sign-in or step-up that enrolled a second factor (`outcome` carries recovery codes): holds
+/// the codes sealed in a new flow (`FlowService::hold_recovery_codes`) and answers 303 to
+/// `GET /ui/login/recovery-codes?flow=` with that flow's cookie (and the new session cookie),
+/// `no-store`. The page survives a reload until the user confirms. `None` (nothing taken) for
+/// any other outcome.
+pub(super) async fn recovery_codes_redirect(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    loc: &Locale,
+    outcome: &mut FlowOutcome,
+) -> Option<Response> {
+    let cookies = state.cookies();
+    let (codes, continue_to, jar) = match outcome {
+        FlowOutcome::SignedIn {
+            cookie,
+            continue_to,
+            recovery_codes,
+        } if !recovery_codes.is_empty() => (
+            std::mem::take(recovery_codes),
+            continue_to.clone(),
+            CookieJar::new()
+                .add(cookies.session_cookie(&tenant.tenant, cookie.token.expose_secret())),
+        ),
+        FlowOutcome::SteppedUp {
+            continue_to,
+            recovery_codes,
+        } if !recovery_codes.is_empty() => (
+            std::mem::take(recovery_codes),
+            continue_to.clone(),
+            // The session was upgraded in place: its cookie stays.
+            CookieJar::new(),
+        ),
+        _ => return None,
+    };
+    state.wake_logout_worker();
+    let held = match state
+        .ui_flow_service()
+        .hold_recovery_codes(tenant.tenant.id, &codes, continue_to.as_ref())
+        .await
+    {
+        Ok(held) => held,
+        Err(e) => return Some(core_error_page_in(state, Some(tenant), loc, &e)),
+    };
+    let jar = jar.add(cookies.flow_cookie(&tenant.tenant, held.cookie_token.expose_secret()));
+    let location = carry_ui_locales(
+        &format!(
+            "{}/{RECOVERY_CODES_PATH}?flow={}",
+            ui_base(tenant),
+            held.flow_id
+        ),
+        loc,
+    );
+    Some(see_other_no_store(jar, &location))
+}
+
+/// 303 to `location` with `jar`, `no-store`.
+fn see_other_no_store(jar: CookieJar, location: &str) -> Response {
+    let mut resp = (StatusCode::SEE_OTHER, jar).into_response();
+    if let Ok(v) = HeaderValue::from_str(location) {
+        resp.headers_mut().insert(header::LOCATION, v);
+    }
+    no_store(resp)
+}
+
+/// `GET /ui/login/recovery-codes?flow=`: the recovery codes held in the flow, for the browser
+/// holding its flow cookie, with the "I have saved them, continue" form (CSRF derived from the
+/// cookie). The same codes on every reload until confirmed; `no-store`. Without the cookie, with
+/// another flow's cookie, or for an expired or confirmed flow: no codes, a page with a way
+/// forward (the codes are saved in the account either way; new ones can be generated there).
+async fn recovery_codes_show(
+    State(state): State<AppState>,
+    tenant: ResolvedTenant,
+    locale: RequestLocale,
+    headers: HeaderMap,
+    jar: CookieJar,
+    Query(q): Query<UiQuery>,
+) -> Response {
+    let cookie = jar
+        .get(&state.cookies().flow_name(&tenant.tenant))
+        .map(|c| c.value().to_owned());
+    let held = match q.flow_id() {
+        Some(flow) => state
+            .ui_flow_service()
+            .held_recovery_codes(tenant.tenant.id, flow, cookie.as_deref())
+            .await
+            .map(|h| h.map(|h| (flow, h))),
+        None => Ok(None),
+    };
+    let (flow, held) = match held {
+        Ok(Some(found)) => found,
+        Ok(None) => {
+            let loc = page_locale(&state, &tenant, locale, &headers, None).await;
+            return no_store(message_page(
+                &state,
+                &tenant,
+                &loc,
+                CODES_GONE,
+                &NavContext::none(),
+                CookieJar::new(),
+            ));
+        }
+        Err(e) => return core_error_page_in(&state, Some(&tenant), &locale.0, &e),
+    };
+    let nav = NavContext::from_flow(&state, &tenant, flow).await;
+    let loc = page_locale(
+        &state,
+        &tenant,
+        locale,
+        &headers,
+        nav.request().map(|r| r.id),
+    )
+    .await;
+    let codes: Vec<String> = held
+        .codes
+        .iter()
+        .map(|c| c.expose_secret().to_owned())
+        .collect();
+    let codes_text = codes.join("\n");
+    let page = PageContext::for_tenant(&state, &tenant, &loc, "title.mfa_codes");
+    let action = carry_ui_locales(
+        &format!("{}/{RECOVERY_CODES_PATH}?flow={flow}", ui_base(&tenant)),
+        &loc,
+    );
+    let app_name = nav.request().map(|r| r.client_name.clone());
+    let ctx = minijinja::context! {
+        page => page.into_value(),
+        codes => codes,
+        codes_text => codes_text,
+        action => action,
+        csrf_token => held.csrf_token,
+        app_name => app_name,
+    };
+    no_store(render_page(
+        &state,
+        Some(&tenant),
+        &loc,
+        "recovery_codes_flow.html",
+        ctx,
+        StatusCode::OK,
+        CookieJar::new(),
+    ))
+}
+
+/// `POST /ui/login/recovery-codes?flow=`: the user saved the codes. The flow cookie and the CSRF
+/// token must match (else 403 and the codes stay); the codes and their flow are deleted, the flow
+/// cookie cleared, and the sign-in continues (303): to the app while its request is live, to the
+/// login's return target, or to the account's security page. A flow that is already gone answers
+/// 303 to the page (which then has no codes).
+async fn recovery_codes_confirm(
+    State(state): State<AppState>,
+    tenant: ResolvedTenant,
+    RequestLocale(loc, _): RequestLocale,
+    jar: CookieJar,
+    Query(q): Query<UiQuery>,
+    form: Result<Form<UiForm>, FormRejection>,
+) -> Response {
+    use anvil_core::service::flow::CodesConfirmed;
+
+    let form = match form {
+        Ok(Form(form)) => form,
+        Err(e) => return rejected_form(&state, Some(&tenant), &loc, &e),
+    };
+    let (Some(flow), Some(csrf)) = (q.flow_id(), form.csrf_token.as_deref()) else {
+        return csrf_page(&state, Some(&tenant), &loc);
+    };
+    let cookies = state.cookies();
+    let cookie = jar
+        .get(&cookies.flow_name(&tenant.tenant))
+        .map(|c| c.value().to_owned());
+    match state
+        .ui_flow_service()
+        .confirm_recovery_codes(tenant.tenant.id, flow, cookie.as_deref(), csrf)
+        .await
+    {
+        Ok(CodesConfirmed::Continue(next)) => {
+            let location = match next {
+                Some(next) => continue_url(&tenant, &loc, next),
+                None => {
+                    NavContext::none().url(&tenant, &loc, UiPage::Account(AccountSection::Security))
+                }
+            };
+            let jar = CookieJar::new().add(cookies.clear_flow(&tenant.tenant));
+            see_other_no_store(jar, &location)
+        }
+        Ok(CodesConfirmed::Gone) => {
+            let location = carry_ui_locales(
+                &format!("{}/{RECOVERY_CODES_PATH}?flow={flow}", ui_base(&tenant)),
+                &loc,
+            );
+            see_other_no_store(CookieJar::new(), &location)
+        }
+        Err(CoreError::Forbidden) => csrf_page(&state, Some(&tenant), &loc),
+        Err(e) => core_error_page_in(&state, Some(&tenant), &loc, &e),
     }
 }
 
@@ -2128,23 +2318,33 @@ pub(super) fn outcome_response_with(
             let jar = CookieJar::new().add(cookies.clear_flow(&tenant.tenant));
             message_page(state, tenant, loc, key, nav, jar)
         }
+        // Recovery codes are shown only by the recovery-codes page ([`recovery_codes_redirect`],
+        // run by the enrolment's handler before this): never dropped silently here.
+        FlowOutcome::SignedIn { recovery_codes, .. }
+        | FlowOutcome::SteppedUp { recovery_codes, .. }
+            if !recovery_codes.is_empty() =>
+        {
+            core_error_page_in(
+                state,
+                Some(tenant),
+                loc,
+                &CoreError::Internal("recovery codes outside the enrolment answer".into()),
+            )
+        }
         FlowOutcome::SignedIn {
             cookie,
             continue_to,
-            recovery_codes,
+            ..
         } => {
             let jar = CookieJar::new()
                 .add(cookies.clear_flow(&tenant.tenant))
                 .add(cookies.session_cookie(&tenant.tenant, cookie.token.expose_secret()));
-            signed_in_response(state, tenant, loc, continue_to, &recovery_codes, jar)
+            signed_in_response(state, tenant, loc, continue_to, jar)
         }
-        FlowOutcome::SteppedUp {
-            continue_to,
-            recovery_codes,
-        } => {
+        FlowOutcome::SteppedUp { continue_to, .. } => {
             // The session was upgraded in place: its cookie stays.
             let jar = CookieJar::new().add(cookies.clear_flow(&tenant.tenant));
-            signed_in_response(state, tenant, loc, continue_to, &recovery_codes, jar)
+            signed_in_response(state, tenant, loc, continue_to, jar)
         }
         FlowOutcome::SetupSubmitted { .. } => core_error_page_in(
             state,

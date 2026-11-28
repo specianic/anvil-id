@@ -59,6 +59,35 @@ async fn live_request(app: &TestApp) -> String {
     id.0.to_string()
 }
 
+/// A live authorization request of a first-party client that skips the consent screen.
+async fn first_party_request(app: &TestApp) -> String {
+    let tenant = default_tenant(app).id;
+    let rp = token_support::register_with(
+        app,
+        tenant,
+        token_support::web_input(anvil_core::model::ClientAuthMethod::ClientSecretBasic),
+        |c| c.consent_mode = anvil_core::model::ConsentMode::SkipFirstParty,
+    )
+    .await;
+    let id = anvil_core::model::AuthRequestId(uuid::Uuid::now_v7());
+    let now = app.clock().now();
+    app.storage()
+        .grants()
+        .create_authorization_request(
+            tenant,
+            &NewAuthorizationRequest {
+                id,
+                client_id: rp.id().to_owned(),
+                params: token_support::params("openid", Some(token_support::CHALLENGE)),
+                created_at: now,
+                expires_at: now + time::Duration::minutes(15),
+            },
+        )
+        .await
+        .expect("request stored");
+    id.0.to_string()
+}
+
 /// The flow id of a form action (`…?flow={id}[&…]`).
 fn flow_in(action: &str) -> String {
     action
@@ -793,4 +822,334 @@ async fn verification_link_is_checked_on_get_and_never_consumed_by_it() {
     let page = app.get(&bob).await;
     assert_eq!(page.status, 400);
     assert_eq!(message_keys(&page.html()), vec!["links.expired".to_owned()]);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Recovery codes of a required in-flow enrolment (U-H7, plan 07.1-13)
+// ---------------------------------------------------------------------------------------------
+
+/// RFC 6238 code (SHA-1, 6 digits, 30 s) of `seed` at `unix` (test implementation).
+fn totp_code(seed: &[u8], unix: i64) -> String {
+    use aws_lc_rs::hmac;
+    let key = hmac::Key::new(hmac::HMAC_SHA1_FOR_LEGACY_USE_ONLY, seed);
+    let counter = u64::try_from(unix / 30).expect("positive time");
+    let tag = hmac::sign(&key, &counter.to_be_bytes());
+    let h = tag.as_ref();
+    let off = usize::from(h[h.len() - 1] & 0x0f);
+    let bin = (u32::from(h[off]) & 0x7f) << 24
+        | u32::from(h[off + 1]) << 16
+        | u32::from(h[off + 2]) << 8
+        | u32::from(h[off + 3]);
+    format!("{:06}", bin % 1_000_000)
+}
+
+/// RFC 4648 base32 (no padding, spaces ignored) decoder for the key shown on the page.
+fn base32_decode(s: &str) -> Vec<u8> {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+    let mut bits = 0u32;
+    let mut n = 0;
+    let mut out = Vec::new();
+    for c in s.bytes().filter(|c| !c.is_ascii_whitespace() && *c != b'=') {
+        let v = ALPHABET
+            .iter()
+            .position(|a| *a == c.to_ascii_uppercase())
+            .expect("base32 character");
+        bits = (bits << 5) | u32::try_from(v).expect("small");
+        n += 5;
+        if n >= 8 {
+            n -= 8;
+            out.push(u8::try_from((bits >> n) & 0xff).expect("byte"));
+        }
+    }
+    out
+}
+
+/// The `<li><code>` recovery codes of a page.
+fn shown_codes(html: &str) -> Vec<String> {
+    html.split("<li><code>")
+        .skip(1)
+        .filter_map(|rest| rest.split_once("</code>").map(|(c, _)| c.to_owned()))
+        .collect()
+}
+
+/// Requires MFA, signs in at `path` (the enrolment page), confirms the authenticator app with
+/// the right code and returns the 303 answer of that POST and the enrolment page it came from.
+async fn enrol_in_flow(app: &TestApp, path: &str) -> (TestResponse, TestResponse) {
+    let t = default_tenant(app);
+    set_settings(
+        app,
+        t.id,
+        TenantSettings {
+            mfa_policy: MfaPolicy::Required,
+            ..t.settings.clone()
+        },
+    )
+    .await;
+    let page = submit_form(app, path, &[("identifier", EMAIL), ("password", PASSWORD)]).await;
+    assert_eq!(page.status, 200, "{}", page.text());
+    let html = page.html();
+    assert!(html.contains("id=\"mfa-enroll\""), "{html}");
+    let seed = base32_decode(&element_text(&html, "totp-secret"));
+    let code = totp_code(&seed, app.clock().now().unix_timestamp());
+    let factor = hidden_inputs(&html)
+        .into_iter()
+        .find(|(n, _)| n == "factor_token")
+        .map(|(_, v)| v)
+        .expect("factor token");
+    let resp = app
+        .post_form(
+            &form_action(app, &html),
+            &[
+                ("csrf_token", csrf_from(&html).as_str()),
+                ("factor_token", factor.as_str()),
+                ("code", code.as_str()),
+            ],
+        )
+        .await;
+    (resp, page)
+}
+
+/// The recovery-codes page path of the 303 answering the confirming code.
+fn codes_path(app: &TestApp, resp: &TestResponse) -> String {
+    assert_eq!(resp.status, 303, "{}", resp.text());
+    assert_eq!(resp.header("cache-control"), Some("no-store"));
+    let path = to_path(app, &location(resp));
+    assert!(path.starts_with("/ui/login/recovery-codes?flow="), "{path}");
+    path
+}
+
+/// `GET path` with exactly this `Cookie` header (no jar cookies).
+async fn get_with_cookie(app: &TestApp, path: &str, cookie: &str) -> TestResponse {
+    let mut req = Request::get(path).body(Body::empty()).expect("request");
+    req.headers_mut()
+        .insert(header::COOKIE, cookie.parse().expect("cookie header"));
+    app.send(req).await
+}
+
+fn cookie_header(cookies: &[(String, String)]) -> String {
+    cookies
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+#[tokio::test]
+async fn recovery_codes_page_is_no_store() {
+    let app = app().await;
+    let (resp, enrol_page) = enrol_in_flow(&app, "/ui/login").await;
+    // The enrolment page: an otpauth link next to the QR code, escaped, never cached.
+    let enrol_html = enrol_page.html();
+    let otpauth = enrol_html
+        .split("id=\"link-otpauth\" href=\"")
+        .nth(1)
+        .and_then(|r| r.split('"').next())
+        .expect("otpauth link");
+    assert!(otpauth.starts_with("otpauth://totp/"), "{otpauth}");
+    assert!(
+        !otpauth.contains('&') || otpauth.contains("&amp;"),
+        "{otpauth}"
+    );
+    assert!(!otpauth.contains('<') && !otpauth.contains('>'));
+    assert_eq!(enrol_page.header("cache-control"), Some("no-store"));
+
+    // The POST signed in and redirected; it did not show the codes itself.
+    assert!(session_cookie(&app).is_some(), "signed in");
+    assert!(shown_codes(&resp.text()).is_empty());
+    let path = codes_path(&app, &resp);
+    let page = app.get(&path).await;
+    assert_eq!(page.status, 200, "{}", page.text());
+    assert_eq!(page.header("cache-control"), Some("no-store"));
+    let codes = shown_codes(&page.html());
+    assert_eq!(codes.len(), 10, "{}", page.text());
+    assert!(page.html().contains("id=\"recovery-codes-confirm\""));
+    // A reload shows the same codes.
+    let again = app.get(&path).await;
+    assert_eq!(again.status, 200);
+    assert_eq!(again.header("cache-control"), Some("no-store"));
+    assert_eq!(shown_codes(&again.html()), codes);
+}
+
+#[tokio::test]
+async fn recovery_codes_page_requires_flow_cookie() {
+    let app = app().await;
+    let (resp, _) = enrol_in_flow(&app, "/ui/login").await;
+    let path = codes_path(&app, &resp);
+    let mine = app.cookies();
+    let session: Vec<(String, String)> = mine
+        .iter()
+        .filter(|(k, _)| k.contains("anvil_session_"))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let (flow_name, _) = flow_cookie(&app).expect("flow cookie of the codes");
+
+    // No flow cookie (the session alone): no codes, a way forward.
+    let page = get_with_cookie(&app, &path, &cookie_header(&session)).await;
+    assert_eq!(page.status, 200, "{}", page.text());
+    assert_eq!(page.header("cache-control"), Some("no-store"));
+    assert!(shown_codes(&page.html()).is_empty(), "{}", page.text());
+    assert_eq!(
+        message_keys(&page.html()),
+        vec!["recovery_codes_flow.gone".to_owned()]
+    );
+    assert!(
+        page.html().contains("id=\"link-account\""),
+        "{}",
+        page.text()
+    );
+
+    // Another flow's cookie: a new sign-in flow in a fresh browser.
+    app.clear_cookies();
+    let other = app.get("/ui/login").await;
+    assert_eq!(other.status, 200);
+    let (_, other_value) = flow_cookie(&app).expect("another flow cookie");
+    let mut forged = session.clone();
+    forged.push((flow_name.clone(), other_value));
+    let page = get_with_cookie(&app, &path, &cookie_header(&forged)).await;
+    assert!(shown_codes(&page.html()).is_empty(), "{}", page.text());
+    assert!(!page.html().contains("id=\"recovery-codes-confirm\""));
+
+    // A made-up flow id with the right cookie: nothing either.
+    let original: Vec<(String, String)> = mine.into_iter().collect();
+    let page = get_with_cookie(
+        &app,
+        &format!("/ui/login/recovery-codes?flow={}", uuid::Uuid::now_v7()),
+        &cookie_header(&original),
+    )
+    .await;
+    assert!(shown_codes(&page.html()).is_empty(), "{}", page.text());
+
+    // Nothing was consumed: the browser holding the cookie still sees its codes.
+    let page = get_with_cookie(&app, &path, &cookie_header(&original)).await;
+    assert_eq!(shown_codes(&page.html()).len(), 10, "{}", page.text());
+}
+
+#[tokio::test]
+async fn recovery_codes_gone_after_confirm() {
+    let app = app().await;
+    let request = first_party_request(&app).await;
+    let (resp, _) = enrol_in_flow(&app, &format!("/ui/login?request={request}")).await;
+    let path = codes_path(&app, &resp);
+    let page = app.get(&path).await;
+    let codes = shown_codes(&page.html());
+    assert_eq!(codes.len(), 10);
+    let html = page.html();
+    let action = form_action(&app, &html);
+    let csrf = csrf_from(&html);
+
+    // Without the CSRF token, or with a wrong one: 403 and the codes are still there.
+    let refused = app.post_form(&action, &[]).await;
+    assert_eq!(refused.status, 403, "{}", refused.text());
+    let refused = app.post_form(&action, &[("csrf_token", "forged")]).await;
+    assert_eq!(refused.status, 403, "{}", refused.text());
+    // The right token from another browser (no flow cookie): 403 too.
+    let session = session_cookie(&app).expect("session");
+    let mut req = Request::post(action.as_str())
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header("sec-fetch-site", "same-origin")
+        .body(Body::from(format!("csrf_token={csrf}")))
+        .expect("request");
+    req.headers_mut().insert(
+        header::COOKIE,
+        format!("{}={}", session.0, session.1)
+            .parse()
+            .expect("cookie"),
+    );
+    let refused = app.send(req).await;
+    assert_eq!(refused.status, 403, "{}", refused.text());
+    assert_eq!(shown_codes(&app.get(&path).await.html()), codes);
+
+    // Confirmed: on to the authorization continuation, the flow cookie cleared.
+    let done = app
+        .post_form(&action, &[("csrf_token", csrf.as_str())])
+        .await;
+    assert_eq!(done.status, 303, "{}", done.text());
+    assert_eq!(done.header("cache-control"), Some("no-store"));
+    let cont = to_path(&app, &location(&done));
+    assert_eq!(cont, format!("/authorize/continue?request={request}"));
+    assert!(flow_cookie(&app).is_none(), "flow cookie cleared");
+    let at_rp = app.get(&cont).await;
+    assert_eq!(at_rp.status, 303, "{}", at_rp.text());
+    assert!(location(&at_rp).contains("code="), "{}", location(&at_rp));
+
+    // The codes are gone: the page has none, a second confirm changes nothing.
+    let gone = app.get(&path).await;
+    assert!(shown_codes(&gone.html()).is_empty(), "{}", gone.text());
+    let flow = flow_id(&flow_in(&path));
+    assert!(
+        app.storage()
+            .flows()
+            .get(default_tenant(&app).id, flow, app.clock().now())
+            .await
+            .expect("lookup")
+            .is_none()
+    );
+    let again = app
+        .post_form(&action, &[("csrf_token", csrf.as_str())])
+        .await;
+    assert_eq!(again.status, 303);
+    assert_eq!(to_path(&app, &location(&again)), path);
+}
+
+#[tokio::test]
+async fn recovery_codes_flow_takes_no_sign_in_step() {
+    let app = app().await;
+    let (resp, enrol_page) = enrol_in_flow(&app, "/ui/login").await;
+    let path = codes_path(&app, &resp);
+    let flow = flow_in(&path);
+    let tenant = default_tenant(&app).id;
+    let held = || async {
+        app.storage()
+            .flows()
+            .get(tenant, flow_id(&flow), app.clock().now())
+            .await
+            .expect("lookup")
+            .is_some_and(|f| anvil_core::service::flow::holds_recovery_codes(&f))
+    };
+    let codes_html = app.get(&path).await.html();
+    assert_eq!(shown_codes(&codes_html).len(), 10);
+    let csrf = csrf_from(&codes_html);
+    // Replaying the confirming code against the old (deleted) enrolment flow signs nobody in
+    // again and leaves the held codes alone.
+    let html = enrol_page.html();
+    let replay = app
+        .post_form(
+            &form_action(&app, &html),
+            &[
+                ("csrf_token", csrf_from(&html).as_str()),
+                ("code", "000000"),
+            ],
+        )
+        .await;
+    assert_ne!(replay.status, 200, "{}", replay.text());
+    assert!(held().await);
+    // A password POST bound to the held flow (its cookie and CSRF token) does not run a
+    // sign-in step on it: the sign-in starts over in a new flow.
+    let resp = app
+        .post_form(
+            &format!("/ui/login?flow={flow}"),
+            &[
+                ("csrf_token", csrf.as_str()),
+                ("identifier", EMAIL),
+                ("password", PASSWORD),
+            ],
+        )
+        .await;
+    assert_eq!(resp.status, 303, "{}", resp.text());
+    assert!(
+        !location(&resp).contains(&flow),
+        "a new flow: {}",
+        location(&resp)
+    );
+    assert!(held().await);
+    // The held flow is no sign-in: a PRG GET of a sign-in page shows no step of it (a fresh
+    // flow instead), and the codes stay held.
+    let page = app.get(&format!("/ui/login?flow={flow}")).await;
+    assert_eq!(page.status, 200);
+    assert!(
+        !page.html().contains(&format!("flow={flow}")),
+        "{}",
+        page.text()
+    );
+    assert!(held().await);
 }

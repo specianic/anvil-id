@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{#- Recovery codes of a second factor enrolled at sign-in (U-H7): GET /ui/login/recovery-codes?flow=
+    for the browser holding the flow cookie. The codes are held sealed in the flow until the user
+    confirms, so a reload shows the same codes; the page is sent with Cache-Control: no-store.
+    Variables besides `page`: codes (list), codes_text (one per line), action (confirm form
+    action), csrf_token, app_name (the app the sign-in continues to, or none). Works without
+    JavaScript.
+    Selectors: recovery-codes-help, recovery-codes (list), recovery-codes-text (copyable textarea),
+    form recovery-codes-confirm with button recovery-codes-confirm-submit. -#}
+{% block heading %}{{ t("title.mfa_codes") }}{% endblock %}
+{% block content %}
+<p id="recovery-codes-help">{{ t("mfa_codes.help") }}</p>
+<ol class="anvil-recovery-codes" id="recovery-codes" aria-labelledby="page-heading">
+{% for c in codes %}
+<li><code>{{ c }}</code></li>
+{% endfor %}
+</ol>
+<div class="anvil-field">
+<label for="recovery-codes-text">{{ t("mfa_codes.copy_label") }}</label>
+<textarea id="recovery-codes-text" readonly autocomplete="off" spellcheck="false" rows="5" cols="24">{{ codes_text }}</textarea>
+</div>
+<form id="recovery-codes-confirm" method="post" action="{{ action }}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+<button type="submit" id="recovery-codes-confirm-submit">{% if app_name %}{{ t("recovery_codes_flow.continue_to", app=app_name) }}{% else %}{{ t("mfa_codes.continue") }}{% endif %}</button>
+</form>
+{% endblock %}

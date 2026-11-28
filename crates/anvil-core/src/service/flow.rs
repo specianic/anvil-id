@@ -398,6 +398,119 @@ fn continuation_of(kek: &Kek, tenant: TenantId, flow: &Flow) -> Option<Continue>
     return_target_of(kek, tenant, flow).map(Continue::Return)
 }
 
+/// KEK purpose of the recovery codes held in a finished login's flow until the user confirms
+/// they saved them ([`FlowService::hold_recovery_codes`]; AAD: the tenant and flow ids, as for
+/// the other values sealed into flow state).
+pub const RECOVERY_CODES_PURPOSE: &str = "anvilid/flow-recovery-codes/v1";
+
+/// The state of a flow that holds the recovery codes of a second factor enrolled during a
+/// sign-in (`{"kind":"recovery_codes","sealed":…}`). It is deliberately not a [`FlowState`]: the
+/// flow engine never runs it, so no sign-in step can be submitted to it. `sealed` is the
+/// base64url KEK seal ([`RECOVERY_CODES_PURPOSE`]) of [`HeldPayload`].
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename = "recovery_codes")]
+struct HeldCodesState {
+    sealed: String,
+}
+
+/// The sealed content of a held-codes flow: the plaintext codes and the login's allowlisted
+/// return target (it can carry an invitation token, so it is sealed too).
+#[derive(serde::Serialize, serde::Deserialize)]
+struct HeldPayload {
+    codes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    return_to: Option<String>,
+}
+
+/// The flow state holding `codes` (and the return target of `continue_to`, if any) for the flow
+/// `flow` of `tenant`: only the KEK seal under [`RECOVERY_CODES_PURPOSE`] with AAD tenant ‖ flow
+/// is stored; the plaintext codes never reach storage.
+pub fn held_recovery_codes_state(
+    kek: &Kek,
+    tenant: TenantId,
+    flow: FlowId,
+    codes: &[&str],
+    continue_to: Option<&Continue>,
+) -> Result<String, CoreError> {
+    let payload = HeldPayload {
+        codes: codes.iter().map(|c| (*c).to_owned()).collect(),
+        return_to: match continue_to {
+            Some(Continue::Return(target)) => Some(target.as_path().to_owned()),
+            _ => None,
+        },
+    };
+    let plain = secrecy::zeroize::Zeroizing::new(
+        serde_json::to_vec(&payload)
+            .map_err(|e| CoreError::Internal(format!("encoding recovery codes failed: {e}")))?,
+    );
+    let sealed = kek
+        .seal(RECOVERY_CODES_PURPOSE, &upstream_aad(tenant, flow), &plain)
+        .map_err(|_| CoreError::Internal("sealing the recovery codes failed".into()))?;
+    serde_json::to_string(&HeldCodesState {
+        sealed: b64url(&sealed),
+    })
+    .map_err(|e| CoreError::Internal(format!("flow state encoding failed: {e}")))
+}
+
+/// Whether the stored flow holds recovery codes ([`HeldCodesState`]) rather than an engine state.
+pub fn holds_recovery_codes(flow: &Flow) -> bool {
+    flow.kind == FlowKind::Login && serde_json::from_str::<HeldCodesState>(&flow.state).is_ok()
+}
+
+/// Opens the codes and return target held in the stored flow `flow` of `tenant`. `None` if the
+/// flow holds none or the seal does not open (another flow or tenant, tampered).
+fn open_held(kek: &Kek, tenant: TenantId, flow: &Flow) -> Option<HeldPayload> {
+    if flow.kind != FlowKind::Login {
+        return None;
+    }
+    let held = serde_json::from_str::<HeldCodesState>(&flow.state).ok()?;
+    let raw = b64url_decode(&held.sealed).ok()?;
+    let plain = secrecy::zeroize::Zeroizing::new(
+        kek.open(RECOVERY_CODES_PURPOSE, &upstream_aad(tenant, flow.id), &raw)
+            .ok()?,
+    );
+    serde_json::from_slice(&plain).ok()
+}
+
+/// The recovery codes held in the stored flow `flow` of `tenant` (see [`open_held`]).
+pub fn open_held_recovery_codes(
+    kek: &Kek,
+    tenant: TenantId,
+    flow: &Flow,
+) -> Option<Vec<secrecy::zeroize::Zeroizing<String>>> {
+    open_held(kek, tenant, flow).map(|p| {
+        p.codes
+            .into_iter()
+            .map(secrecy::zeroize::Zeroizing::new)
+            .collect()
+    })
+}
+
+/// A flow created to hold recovery codes ([`FlowService::hold_recovery_codes`]): its id and the
+/// flow cookie that opens it.
+#[derive(Debug)]
+pub struct HeldCodesFlow {
+    pub flow_id: FlowId,
+    pub cookie_token: SecretString,
+}
+
+/// What the recovery-codes page shows ([`FlowService::held_recovery_codes`]).
+#[derive(Debug)]
+pub struct HeldCodes {
+    pub codes: Vec<SecretString>,
+    /// The CSRF token of the confirm form ([`flow_csrf`] for the presented cookie).
+    pub csrf_token: String,
+}
+
+/// Result of [`FlowService::confirm_recovery_codes`].
+#[derive(Debug, PartialEq, Eq)]
+pub enum CodesConfirmed {
+    /// The codes and their flow are deleted; continue here (as after a sign-in).
+    Continue(Option<Continue>),
+    /// No such flow (unknown, expired, already confirmed, or not a held-codes flow).
+    Gone,
+}
+
 /// Result of [`FlowService::upstream_primary`].
 #[derive(Debug)]
 pub(crate) enum UpstreamPrimary {
@@ -1219,8 +1332,9 @@ impl FlowService {
             return Ok(Loaded::Restarted(self.restart(cx, kind, None).await?));
         };
         // A flow this engine does not run (settings, consent: another service owns their
-        // state) is treated like an unknown flow, never decoded.
-        if !engine_kind(flow.kind) {
+        // state; a finished login holding recovery codes) is treated like an unknown flow,
+        // never decoded.
+        if !engine_kind(flow.kind) || holds_recovery_codes(&flow) {
             if native {
                 return Err(CoreError::NotFound);
             }
@@ -1908,6 +2022,115 @@ impl FlowService {
         flow_csrf(&self.kek, tenant, flow, cookie_token)
     }
 
+    /// Holds the recovery codes of a second factor enrolled during a finished sign-in until the
+    /// user confirms they saved them (the browser recovery-codes page survives a reload). The
+    /// login's own flow is already deleted (the sign-in finished); this creates a new
+    /// cookie-bound flow of kind login with the same authorization request, valid for
+    /// [`FLOW_LIFETIME`], whose state holds only the KEK seal of the codes and the return target
+    /// ([`held_recovery_codes_state`]). The engine never runs it ([`holds_recovery_codes`]).
+    pub async fn hold_recovery_codes(
+        &self,
+        tenant: TenantId,
+        codes: &[SecretString],
+        continue_to: Option<&Continue>,
+    ) -> Result<HeldCodesFlow, CoreError> {
+        let id = FlowId::new_v7();
+        let now = self.clock.now();
+        let cookie = random_token();
+        let csrf = flow_csrf(&self.kek, tenant, id, &cookie);
+        let new = NewFlow {
+            id,
+            kind: FlowKind::Login,
+            state: held_recovery_codes_state(
+                &self.kek,
+                tenant,
+                id,
+                &codes.iter().map(|c| c.expose_secret()).collect::<Vec<_>>(),
+                continue_to,
+            )?,
+            csrf_hash: SecretHash(secret_hash(&csrf)),
+            cookie_hash: SecretHash(secret_hash(&cookie)),
+            auth_request_id: match continue_to {
+                Some(Continue::Authorize(request)) => Some(*request),
+                _ => None,
+            },
+            created_at: now,
+            expires_at: now + FLOW_LIFETIME,
+        };
+        self.storage.flows().create(tenant, &new).await?;
+        Ok(HeldCodesFlow {
+            flow_id: id,
+            cookie_token: SecretString::from(cookie),
+        })
+    }
+
+    /// The recovery codes held in `flow` for the browser presenting the flow cookie
+    /// `cookie_token` (compared in constant time), with the CSRF token of the confirm form.
+    /// Read only. `None` without the cookie, with another flow's cookie, or when the flow is
+    /// unknown, expired, confirmed or holds no codes.
+    pub async fn held_recovery_codes(
+        &self,
+        tenant: TenantId,
+        flow: FlowId,
+        cookie_token: Option<&str>,
+    ) -> Result<Option<HeldCodes>, CoreError> {
+        let Some(cookie) = cookie_token else {
+            return Ok(None);
+        };
+        let Some(stored) = self
+            .storage
+            .flows()
+            .get(tenant, flow, self.clock.now())
+            .await?
+        else {
+            return Ok(None);
+        };
+        if binding_kind(&stored) != FlowBindingKind::Cookie
+            || !ct_eq(&secret_hash(cookie), stored.cookie_hash.as_bytes())
+        {
+            return Ok(None);
+        }
+        Ok(open_held(&self.kek, tenant, &stored).map(|p| HeldCodes {
+            codes: p.codes.into_iter().map(SecretString::from).collect(),
+            csrf_token: flow_csrf(&self.kek, tenant, flow, cookie),
+        }))
+    }
+
+    /// The user confirmed they saved the codes held in `flow`: checks the binding (flow cookie
+    /// and CSRF token, [`check_binding`]), deletes the flow and returns where the sign-in
+    /// continues (its authorization request, else its return target). Errors: `Forbidden` (a
+    /// wrong cookie or CSRF token; nothing is deleted).
+    pub async fn confirm_recovery_codes(
+        &self,
+        tenant: TenantId,
+        flow: FlowId,
+        cookie_token: Option<&str>,
+        csrf_token: &str,
+    ) -> Result<CodesConfirmed, CoreError> {
+        let now = self.clock.now();
+        let Some(stored) = self.storage.flows().get(tenant, flow, now).await? else {
+            return Ok(CodesConfirmed::Gone);
+        };
+        if !holds_recovery_codes(&stored) {
+            return Ok(CodesConfirmed::Gone);
+        }
+        match check_binding(&stored, cookie_token, csrf_token, now) {
+            Ok(()) => {}
+            Err(BindingError::Expired) => return Ok(CodesConfirmed::Gone),
+            Err(BindingError::Forbidden) => return Err(CoreError::Forbidden),
+        }
+        let return_to = open_held(&self.kek, tenant, &stored)
+            .and_then(|p| p.return_to)
+            .and_then(|p| parse_return_target(&p));
+        if !self.storage.flows().delete(tenant, flow).await? {
+            return Ok(CodesConfirmed::Gone);
+        }
+        Ok(CodesConfirmed::Continue(match stored.auth_request_id {
+            Some(request) => Some(Continue::Authorize(request)),
+            None => return_to.map(Continue::Return),
+        }))
+    }
+
     /// Whether the emailed self-service link token `raw_token` of `kind` can still be used in
     /// `tenant` (unconsumed, unexpired), hashed exactly as its consumption hashes it. Read only
     /// (`UserRepo::peek_self_service_token`): opening a link never consumes it (mail scanners
@@ -2414,7 +2637,7 @@ impl FlowService {
             let outcome = self.restart(cx, FlowKind::Login, None).await?;
             return Ok(EmailLinkOutcome::Done(outcome));
         };
-        if flow.kind != FlowKind::Login {
+        if flow.kind != FlowKind::Login || holds_recovery_codes(&flow) {
             return Ok(EmailLinkOutcome::Rejected(email_code::LINK_INVALID));
         }
         if flow.expires_at <= now {
@@ -4615,5 +4838,78 @@ mod tests {
             let decodable = FlowState::initial(*kind, None, &FlowEnv::default()).is_ok();
             assert_eq!(engine_kind(*kind), decodable, "{kind:?}");
         }
+    }
+
+    fn codes() -> Vec<&'static str> {
+        vec!["aaaa-bbbb-cccc", "dddd-eeee-ffff"]
+    }
+
+    /// A login flow holding `codes()` (and the invitation target) sealed for itself.
+    fn held_flow(kek: &Kek, tenant: TenantId) -> Flow {
+        let mut f = login_flow(tenant, &LoginState::default());
+        f.state = held_recovery_codes_state(
+            kek,
+            tenant,
+            f.id,
+            &codes(),
+            Some(&Continue::Return(target())),
+        )
+        .unwrap();
+        f
+    }
+
+    #[test]
+    fn held_recovery_codes_are_sealed_never_plaintext() {
+        let kek = Kek::generate();
+        let tenant = TenantId::new_v7();
+        let f = held_flow(&kek, tenant);
+        for c in codes() {
+            assert!(!f.state.contains(c), "{}", f.state);
+        }
+        assert!(!f.state.contains(TOKEN), "{}", f.state);
+        assert!(holds_recovery_codes(&f));
+        let opened = open_held_recovery_codes(&kek, tenant, &f).expect("opens");
+        let opened: Vec<&str> = opened.iter().map(|c| c.as_str()).collect();
+        assert_eq!(opened, vec!["aaaa-bbbb-cccc", "dddd-eeee-ffff"]);
+        assert_eq!(
+            open_held(&kek, tenant, &f).and_then(|p| p.return_to),
+            Some(target().as_path().to_owned())
+        );
+    }
+
+    #[test]
+    fn held_recovery_codes_open_only_for_their_flow_tenant_and_key() {
+        let kek = Kek::generate();
+        let tenant = TenantId::new_v7();
+        let f = held_flow(&kek, tenant);
+        // Another tenant, another flow id, another KEK: the seal does not open.
+        assert!(open_held_recovery_codes(&kek, TenantId::new_v7(), &f).is_none());
+        let moved = Flow {
+            id: FlowId::new_v7(),
+            ..f.clone()
+        };
+        assert!(open_held_recovery_codes(&kek, tenant, &moved).is_none());
+        assert!(open_held_recovery_codes(&Kek::generate(), tenant, &f).is_none());
+        // Tampered seal.
+        let mut tampered = f.clone();
+        tampered.state = tampered.state.replace("\"sealed\":\"", "\"sealed\":\"AA");
+        assert!(open_held_recovery_codes(&kek, tenant, &tampered).is_none());
+        // A held state is only recognised in a login flow, and an engine state holds no codes.
+        let mut other_kind = f.clone();
+        other_kind.kind = FlowKind::Registration;
+        assert!(!holds_recovery_codes(&other_kind));
+        assert!(open_held_recovery_codes(&kek, tenant, &other_kind).is_none());
+        let plain = login_flow(tenant, &LoginState::default());
+        assert!(!holds_recovery_codes(&plain));
+        assert!(open_held_recovery_codes(&kek, tenant, &plain).is_none());
+    }
+
+    #[test]
+    fn a_held_codes_state_is_never_an_engine_state() {
+        let kek = Kek::generate();
+        let f = held_flow(&kek, TenantId::new_v7());
+        assert!(serde_json::from_str::<FlowState>(&f.state).is_err());
+        // Its binding is the cookie (the default), so check_binding applies.
+        assert_eq!(binding_kind(&f), FlowBindingKind::Cookie);
     }
 }

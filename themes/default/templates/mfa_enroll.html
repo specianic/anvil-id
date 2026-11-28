@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 {% import "form.html" as forms %}
 {#- In-flow second-factor enrolment at sign-in (AUTH-08), when the MFA policy is `required` and
-    the user has no second factor. Two modes:
-    - Enrolment, a choice of two factors (authenticator app first, then passkey):
+    the user has no second factor: a choice of two factors (authenticator app first, then
+    passkey):
       - passkey (`passkey_enroll` = {options_url, action}, or none when the issuer cannot be a
         WebAuthn relying party): a webauthn.js registration form; its button is hidden until the
         script finds WebAuthn support, and a noscript note explains that it needs JavaScript. A
@@ -11,33 +11,18 @@
       - authenticator app (`form`, form id `mfa-enroll`, field `code`): `qr_svg` (trusted inline
         SVG of the otpauth URI), `secret_groups` (the key for manual entry), `factor_token`
         (hidden binding token). Works without JavaScript.
-    - Done (`codes` set): the new recovery codes, shown once; `codes_text` (one per line) and
-      `continue_url` (continues the authorization request).
+    The recovery codes that follow a confirmed enrolment are shown by recovery_codes_flow.html
+    (GET /ui/login/recovery-codes?flow=), not here. `otpauth` is the otpauth:// URI of the QR
+    code (auto-escaped), offered as a link for authenticator apps on the same device.
     The authenticator-app section comes first (its form is the page's first form), the passkey
     section after it.
     Selectors: mfa-enroll-required; section mfa-enroll-totp with totp-qr, totp-secret, form
     mfa-enroll with input code, button mfa-enroll-submit, messages mfa-enroll-msg-N; section
     mfa-enroll-passkey with form mfa-enroll-passkey-form, button mfa-enroll-passkey-submit, status
     mfa-enroll-passkey-status, messages mfa-enroll-passkey-msg-N, noscript note
-    mfa-enroll-passkey-nojs; link link-login; recovery-codes, recovery-codes-text,
-    link-continue. -#}
-{% block heading %}{% if codes %}{{ t("title.mfa_codes") }}{% else %}{{ t("title.mfa_enroll") }}{% endif %}{% endblock %}
+    mfa-enroll-passkey-nojs; link link-otpauth; link link-login. -#}
+{% block heading %}{{ t("title.mfa_enroll") }}{% endblock %}
 {% block content %}
-{% if codes %}
-<p id="recovery-codes-help">{{ t("mfa_codes.help") }}</p>
-<ol class="anvil-recovery-codes" id="recovery-codes" aria-labelledby="page-heading">
-{% for c in codes %}
-<li><code>{{ c }}</code></li>
-{% endfor %}
-</ol>
-<div class="anvil-field">
-<label for="recovery-codes-text">{{ t("mfa_codes.copy_label") }}</label>
-<textarea id="recovery-codes-text" readonly autocomplete="off" spellcheck="false" rows="5" cols="24">{{ codes_text }}</textarea>
-</div>
-<nav class="anvil-links" aria-label="{{ t("nav.next_steps") }}">
-<a id="link-continue" href="{{ continue_url }}">{{ t("mfa_codes.continue") }}</a>
-</nav>
-{% else %}
 {% set passkey_failed = "mfa_enroll.passkey_failed" in form.messages|map(attribute="key")|list %}
 {% set has_error = not passkey_failed and "error" in form.messages|map(attribute="level")|list %}
 <p id="mfa-enroll-required">{{ t("mfa_enroll.required") }}</p>
@@ -45,6 +30,7 @@
 <h2 id="mfa-enroll-totp-heading">{{ t("mfa_enroll.totp_heading") }}</h2>
 <p id="totp-instructions">{{ t("mfa_enroll.instructions") }}</p>
 {% if qr_svg %}<div class="anvil-qr" id="totp-qr">{{ qr_svg }}</div>{% endif %}
+{% if otpauth %}<p><a id="link-otpauth" href="{{ otpauth }}">{{ t("mfa_enroll.otpauth_link") }}</a></p>{% endif %}
 {% if secret_groups %}
 <p id="totp-manual">{{ t("mfa_enroll.manual") }}</p>
 <p><code class="anvil-secret" id="totp-secret">{{ secret_groups }}</code></p>
@@ -88,6 +74,5 @@
 <nav class="anvil-links" aria-label="{{ t("nav.other_options") }}">
 <a id="link-login" href="{{ page.links.login }}">{{ t("second_factor.start_over") }}</a>
 </nav>
-{% endif %}
 {% endif %}
 {% endblock %}

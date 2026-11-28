@@ -1359,3 +1359,121 @@ async fn release_1_0_final_secrets_never_stored_plaintext() {
     .expect("find flow token hash");
     assert_eq!(found, 1, "flow.cookie_hash holds the flow token hash");
 }
+
+/// Release 1.0 rc.4 (07.1-13): the recovery codes of a second factor enrolled during a sign-in
+/// are held in a login flow until the user confirms they saved them. The flow state holds only
+/// their KEK seal (`RECOVERY_CODES_PURPOSE`, AAD tenant ‖ flow) together with the sealed return
+/// target. No code (as shown, normalised or concatenated) and not the invitation token may appear
+/// in the database file, its WAL (before and after a checkpoint) or any column; the seal opens
+/// only under its own flow.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn held_recovery_codes_never_stored_plaintext() {
+    use anvil_core::policy::return_to::parse_return_target;
+    use anvil_core::service::flow::{
+        Continue, held_recovery_codes_state, holds_recovery_codes, open_held_recovery_codes,
+    };
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("anvil.db");
+    let storage = SqliteStorage::connect(&format!("sqlite://{}", path.display()))
+        .await
+        .expect("connect");
+    storage.migrate().await.expect("migrate");
+    let kek = Kek::generate();
+    let t = storage
+        .tenants()
+        .create(&new_tenant())
+        .await
+        .expect("tenant")
+        .id;
+
+    let generated = generate_recovery_codes(10).expect("recovery codes");
+    let codes: Vec<&str> = generated.iter().map(|c| c.as_str()).collect();
+    let invitation = marker("held-codes-invitation");
+    let target =
+        parse_return_target(&format!("/ui/invitation?token={invitation}")).expect("target");
+    let mut flow = new_flow(None, Duration::minutes(10));
+    flow.state =
+        held_recovery_codes_state(&kek, t, flow.id, &codes, Some(&Continue::Return(target)))
+            .expect("seal codes");
+    storage.flows().create(t, &flow).await.expect("create flow");
+    let stored = storage
+        .flows()
+        .get(t, flow.id, now_ms())
+        .await
+        .expect("get flow")
+        .expect("the flow exists");
+    assert!(holds_recovery_codes(&stored));
+    let opened = open_held_recovery_codes(&kek, t, &stored).expect("opens under its flow");
+    assert_eq!(opened.iter().map(|c| c.as_str()).collect::<Vec<_>>(), codes);
+    let moved = anvil_core::model::Flow {
+        id: anvil_core::model::FlowId::new_v7(),
+        ..stored.clone()
+    };
+    assert!(
+        open_held_recovery_codes(&kek, t, &moved).is_none(),
+        "the sealed codes must not open under another flow"
+    );
+
+    let mut plaintexts: Vec<(String, Vec<u8>)> = vec![(
+        "invitation token".to_owned(),
+        invitation.as_bytes().to_vec(),
+    )];
+    for (i, c) in codes.iter().enumerate() {
+        plaintexts.push((format!("recovery code {i}"), c.as_bytes().to_vec()));
+        let norm = normalize_recovery_code(c).expect("normalize");
+        plaintexts.push((
+            format!("recovery code {i} (normalised)"),
+            norm.as_bytes().to_vec(),
+        ));
+    }
+    let joined = codes.join("\n");
+    plaintexts.push(("recovery codes (joined)".to_owned(), joined.into_bytes()));
+
+    // Raw scan while the storage is open (database file + WAL).
+    let raw = raw_database_bytes(&path);
+    for (what, secret) in &plaintexts {
+        for (file, bytes) in &raw {
+            assert!(!contains(bytes, secret), "{what} in plaintext in {file}");
+        }
+    }
+    drop(storage);
+
+    // Checkpoint the WAL and scan the main file again.
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(SqliteConnectOptions::new().filename(&path))
+        .await
+        .expect("plain connection");
+    sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+        .execute(&pool)
+        .await
+        .expect("checkpoint");
+    pool.close().await;
+    let main = std::fs::read(&path).expect("read database file");
+    assert!(
+        contains(&main, stored.state.as_bytes()),
+        "positive control: the checkpointed file holds the sealed flow state"
+    );
+    for (what, secret) in &plaintexts {
+        assert!(
+            !contains(&main, secret),
+            "{what} in plaintext in the checkpointed database file"
+        );
+    }
+
+    // Column scan.
+    let pool = inspect(&path).await;
+    let columns = all_columns(&pool).await;
+    assert!(
+        columns.iter().any(|(t, c)| t == "flow" && c == "state"),
+        "the scan must cover flow.state"
+    );
+    for (what, secret) in &plaintexts {
+        assert_eq!(
+            hits_anywhere(&pool, &columns, secret).await,
+            0,
+            "{what} is stored in plaintext in some column"
+        );
+    }
+}

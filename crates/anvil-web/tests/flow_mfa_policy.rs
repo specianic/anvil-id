@@ -165,6 +165,14 @@ async fn post_code(app: &TestApp, page: &TestResponse, code: &str) -> TestRespon
     .await
 }
 
+/// Follows the 303 that answers a confirming enrolment code to the recovery-codes page.
+async fn codes_page(app: &TestApp, resp: &TestResponse) -> TestResponse {
+    assert_eq!(resp.status, 303, "{}", resp.text());
+    let path = to_path(app, &location(resp));
+    assert!(path.starts_with("/ui/login/recovery-codes?flow="), "{path}");
+    app.get(&path).await
+}
+
 async fn password(app: &TestApp, path: &str, email: &str) -> TestResponse {
     submit_form(app, path, &[("identifier", email), ("password", PASSWORD)]).await
 }
@@ -319,8 +327,9 @@ async fn required_without_a_factor_enrols_then_signs_in_with_mfa() {
             .is_none()
     );
 
-    // The right code: recovery codes shown once, signed in with MFA.
-    let done = post_code(&app, &resp, &code).await;
+    // The right code: signed in with MFA, then the recovery codes on their own page (held in a
+    // new flow until confirmed, plan 07.1-13).
+    let done = codes_page(&app, &post_code(&app, &resp, &code).await).await;
     assert_eq!(done.status, 200, "{}", done.text());
     let done_html = done.html();
     assert!(done_html.contains("id=\"recovery-codes\""), "{done_html}");
@@ -329,7 +338,16 @@ async fn required_without_a_factor_enrols_then_signs_in_with_mfa() {
     let s = session(&app).await;
     assert_eq!(s.amr, amr(&[AMR_PWD, AMR_OTP, AMR_MFA]));
     assert_eq!(s.acr, ACR_MFA);
-    assert!(flow_cookie(&app).is_none(), "flow finished");
+    let enrol_flow = flow_of_page(&app, &resp.html());
+    assert!(
+        app.storage()
+            .flows()
+            .get(tenant, enrol_flow, app.clock().now())
+            .await
+            .expect("flow lookup")
+            .is_none(),
+        "the enrolment flow finished"
+    );
     assert!(
         app.storage()
             .users()
@@ -381,10 +399,17 @@ async fn enrolment_continues_the_authorization_request_after_the_codes() {
     let page = password(&app, &path, BOB).await;
     assert!(is_enrolment(&page), "{}", page.text());
     let code = code_for_page(&app, &page.html());
-    let done = post_code(&app, &page, &code).await;
+    let done = codes_page(&app, &post_code(&app, &page, &code).await).await;
     assert_eq!(done.status, 200, "{}", done.text());
     let html = done.html();
-    let href = attribute_of(&html, "link-continue", "href");
+    let confirmed = app
+        .post_form(
+            &form_action(&app, &html),
+            &[("csrf_token", csrf_from(&html).as_str())],
+        )
+        .await;
+    assert_eq!(confirmed.status, 303, "{}", confirmed.text());
+    let href = location(&confirmed);
     assert!(href.contains("/authorize/continue?request="), "{href}");
     let resp = app.get(&to_path(&app, &href)).await;
     assert_eq!(resp.status, 303, "{}", resp.text());
@@ -812,7 +837,7 @@ async fn a_replayed_passkey_enrolment_challenge_is_refused() {
 
     // The user stays at the enrolment step: the authenticator app still works.
     let code = code_for_page(&app, &resp.html());
-    let done = post_code(&app, &resp, &code).await;
+    let done = codes_page(&app, &post_code(&app, &resp, &code).await).await;
     assert_eq!(done.status, 200, "{}", done.text());
     assert!(done.html().contains("id=\"recovery-codes\""));
     assert_eq!(session(&app).await.amr, amr(&[AMR_PWD, AMR_OTP, AMR_MFA]));
@@ -952,7 +977,7 @@ async fn a_passkey_finish_without_a_pending_challenge_is_refused() {
     assert_eq!(passkey_count(&app, BOB).await, 0);
     // The authenticator-app choice still works afterwards.
     let code = code_for_page(&app, &resp.html());
-    let done = post_code(&app, &resp, &code).await;
+    let done = codes_page(&app, &post_code(&app, &resp, &code).await).await;
     assert_eq!(done.status, 200, "{}", done.text());
 }
 

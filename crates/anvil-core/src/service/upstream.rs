@@ -255,6 +255,8 @@ struct Opened {
 fn open_pending(flow: &Flow) -> Result<Option<Opened>, CoreError> {
     let corrupt = |e: String| CoreError::Internal(format!("corrupt flow state: {e}"));
     match flow.kind {
+        // A finished sign-in holding its recovery codes: no sign-in step, nothing pending.
+        FlowKind::Login if crate::service::flow::holds_recovery_codes(flow) => Ok(None),
         FlowKind::Login => {
             let FlowState::Login(mut s) =
                 serde_json::from_str(&flow.state).map_err(|e| corrupt(e.to_string()))?
@@ -865,7 +867,10 @@ impl UpstreamService<'_> {
                     ..
                 }) = open_pending(&flow)?
                 else {
-                    return Err(CoreError::Internal("login flow without login state".into()));
+                    // The flow only holds the recovery codes of a finished sign-in.
+                    return Err(CoreError::InvalidRequest(
+                        "the sign-in has already finished".into(),
+                    ));
                 };
                 // Any primary step: the combined form, the email-first page or the
                 // single-sign-on choice (home-realm discovery starts org connections here).

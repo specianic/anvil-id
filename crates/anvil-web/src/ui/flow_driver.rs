@@ -1088,7 +1088,9 @@ async fn load_step(
     if !matches!(
         stored.kind,
         FlowKind::Login | FlowKind::Registration | FlowKind::Recovery | FlowKind::Verification
-    ) {
+    ) || anvil_core::service::flow::holds_recovery_codes(&stored)
+    {
+        // A finished sign-in holding its recovery codes has no step to show.
         return Ok(None);
     }
     let token = binding.flow_token(state, tenant);

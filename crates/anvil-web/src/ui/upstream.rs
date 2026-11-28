@@ -421,7 +421,7 @@ pub(super) async fn outcome_page(
             let jar = jar
                 .add(cookies.clear_flow(&tenant.tenant))
                 .add(cookies.session_cookie(&tenant.tenant, cookie.token.expose_secret()));
-            signed_in_response(state, tenant, loc, continue_to, &[], jar)
+            signed_in_response(state, tenant, loc, continue_to, jar)
         }
         UpstreamOutcome::Continue { started, request } => {
             let extras = Extras {

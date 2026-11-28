@@ -41,8 +41,8 @@ use axum_extra::extract::cookie::CookieJar;
 
 use super::flow_driver::{self, DriveOutcome, FlowBinding, Throttle};
 use super::login::{
-    Extras, UiForm, UiQuery, csrf_page, drive_response, locked_page, rejected_form,
-    restart_login_in, show_step,
+    Extras, UiForm, UiQuery, csrf_page, drive_response, locked_page, recovery_codes_redirect,
+    rejected_form, restart_login_in, show_step,
 };
 use super::nav::{NavContext, UiPage};
 use crate::i18n::{Locale, RequestLocale};
@@ -187,7 +187,17 @@ async fn submit(
             user,
             retry_after,
         ),
-        outcome => {
+        mut outcome => {
+            // The enrolment's confirming code: the recovery codes go to their own page.
+            if let DriveOutcome::Flow {
+                outcome: flow_outcome,
+                ..
+            } = &mut outcome
+                && let Some(resp) =
+                    recovery_codes_redirect(&state, &tenant, &loc, flow_outcome).await
+            {
+                return resp;
+            }
             let token = seal_factor_token(state.kek(), tenant_id, flow_id, user).ok();
             let extras = Extras {
                 factor_token: token.clone(),

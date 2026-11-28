@@ -1345,3 +1345,116 @@ async fn release_1_0_final_secrets_never_stored_plaintext() {
     );
     conn.close().await.expect("close inspection connection");
 }
+
+/// Release 1.0 rc.4 (07.1-13): the recovery codes of a second factor enrolled during a sign-in
+/// are held in a login flow until the user confirms they saved them. The flow state holds only
+/// their KEK seal (`RECOVERY_CODES_PURPOSE`, AAD tenant ‖ flow) together with the sealed return
+/// target. No code (as shown, normalised or concatenated) and not the invitation token may appear
+/// in any column; the seal opens only under its own flow.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn held_recovery_codes_never_stored_plaintext() {
+    use anvil_core::policy::return_to::parse_return_target;
+    use anvil_core::service::flow::{
+        Continue, held_recovery_codes_state, holds_recovery_codes, open_held_recovery_codes,
+    };
+    use anvil_jose::normalize_recovery_code;
+
+    let s = support::postgres().await;
+    let url = s
+        ._guard
+        .downcast_ref::<String>()
+        .expect("the Postgres test guard holds the database URL")
+        .clone();
+    let t = seed_tenant(&s).await;
+    let kek = Kek::generate();
+
+    let generated = generate_recovery_codes(10).expect("recovery codes");
+    let codes: Vec<&str> = generated.iter().map(|c| c.as_str()).collect();
+    let invitation = marker("held-codes-invitation").plain;
+    let target =
+        parse_return_target(&format!("/ui/invitation?token={invitation}")).expect("target");
+    let mut flow = new_flow(None, Duration::minutes(10));
+    flow.state =
+        held_recovery_codes_state(&kek, t, flow.id, &codes, Some(&Continue::Return(target)))
+            .expect("seal codes");
+    s.storage
+        .flows()
+        .create(t, &flow)
+        .await
+        .expect("create flow");
+    let stored = s
+        .storage
+        .flows()
+        .get(t, flow.id, now_ms())
+        .await
+        .expect("get flow")
+        .expect("the flow exists");
+    assert!(holds_recovery_codes(&stored));
+    let opened = open_held_recovery_codes(&kek, t, &stored).expect("opens under its flow");
+    assert_eq!(opened.iter().map(|c| c.as_str()).collect::<Vec<_>>(), codes);
+    let moved = anvil_core::model::Flow {
+        id: anvil_core::model::FlowId::new_v7(),
+        ..stored.clone()
+    };
+    assert!(
+        open_held_recovery_codes(&kek, t, &moved).is_none(),
+        "the sealed codes must not open under another flow"
+    );
+
+    let mut plaintexts: Vec<(String, String)> =
+        vec![("invitation token".to_owned(), invitation.clone())];
+    for (i, c) in codes.iter().enumerate() {
+        plaintexts.push((format!("recovery code {i}"), (*c).to_owned()));
+        let norm = normalize_recovery_code(c).expect("normalize");
+        plaintexts.push((format!("recovery code {i} (normalised)"), norm.to_string()));
+    }
+    plaintexts.push(("recovery codes (joined)".to_owned(), codes.join("\n")));
+
+    // --- inspect every column with a plain connection ---------------------------------------
+    let mut conn = PgConnection::connect(&url)
+        .await
+        .expect("inspection connection");
+    let columns = sqlx::query(
+        "SELECT table_name::text, column_name::text, data_type::text, udt_name::text
+           FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND data_type IN ('text', 'bytea', 'jsonb', 'ARRAY')
+          ORDER BY table_name, ordinal_position",
+    )
+    .fetch_all(&mut conn)
+    .await
+    .expect("listing columns");
+    let columns: Vec<(String, String, String, String)> = columns
+        .iter()
+        .map(|r| (r.get(0), r.get(1), r.get(2), r.get(3)))
+        .collect();
+    assert!(
+        columns
+            .iter()
+            .any(|(t, c, _, _)| t == "flow" && c == "state"),
+        "the scan must cover flow.state"
+    );
+    for (what, plain) in &plaintexts {
+        let found = locations(&mut conn, &columns, plain).await;
+        assert!(found.is_empty(), "{what} stored in plaintext in {found:?}");
+        let raw = raw_bytes_locations(&mut conn, &columns, plain.as_bytes()).await;
+        assert!(
+            raw.is_empty(),
+            "{what} bytes stored in plaintext in {raw:?}"
+        );
+    }
+    // Positive control: the sealed state is stored in flow.state.
+    let sealed_marker = stored
+        .state
+        .split("\"sealed\":\"")
+        .nth(1)
+        .and_then(|r| r.split('"').next())
+        .expect("sealed value")
+        .to_owned();
+    assert_eq!(
+        locations(&mut conn, &columns, &sealed_marker).await,
+        ["flow.state"],
+        "the codes are stored sealed in flow.state"
+    );
+    conn.close().await.expect("close inspection connection");
+}

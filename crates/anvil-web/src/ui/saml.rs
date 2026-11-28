@@ -43,9 +43,10 @@ use secrecy::ExposeSecret as _;
 use serde::Deserialize;
 
 use super::login::{
-    UiQuery, csrf_page, current_browser_session, rejected_form, restart_login,
+    UiQuery, csrf_page, current_browser_session, rejected_form, restart_login_in,
     tenant_relying_party, ui_base,
 };
+use super::nav::NavContext;
 use super::upstream::outcome_page;
 use crate::errors::{core_error_page_in, error_page_in};
 use crate::i18n::{Locale, RequestLocale};
@@ -210,7 +211,10 @@ async fn start(
         Err(CoreError::NotFound | CoreError::FeatureDisabled(_)) => {
             not_found(&state, &tenant, &loc)
         }
-        Err(CoreError::InvalidRequest(_)) => restart_login(&state, &tenant, &loc).await,
+        Err(CoreError::InvalidRequest(_)) => {
+            let nav = NavContext::from_flow(&state, &tenant, flow_id).await;
+            restart_login_in(&state, &tenant, &loc, &nav).await
+        }
         Err(e) => core_error_page_in(&state, Some(&tenant), &loc, &e),
     }
 }
