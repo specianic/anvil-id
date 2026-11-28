@@ -82,6 +82,20 @@
 # self-tests, export scope semantics, the PAR-consume and password compare-and-swap contract
 # concurrency cases, the new rate-limit classes and the 1.0 secrets at rest.
 #
+# Release 1.0 rc.4 adds the Phase 7.1 controls: flow navigation (unknown, foreign or malformed
+# request ids never carried or echoed, link hosts never from the request), post/redirect/get (the
+# derived flow CSRF, the sealed one-shot flash, no form state without the flow cookie), emailed
+# links checked on GET without consuming, the held recovery codes page (flow cookie and CSRF
+# binding, no-store, sealed and never stored in plaintext), the empty sign-in submit, the account
+# return_to allowlist, the account header (confirmed sign-out, back link only to static apps), the
+# no-JavaScript destructive confirmation per account action, account PRG, the otpauth link, the
+# consent account switch and the org non-member page bindings, the magic link opened in another
+# browser, the logout pages without a session, the console client delete guard, the admin recovery
+# endpoint, client home URL validation (admin API, DCR, CIMD, tenant YAML), connection enablement
+# with its SSRF-guarded check and the sign-in filter, tenant YAML organizations and logos (domain
+# verification never declarable, absent keys, system tenant, write-only secrets), the error page
+# app link and dev-only detail, the setup token after setup and CSP font-src 'self'.
+#
 # Controls deliberately not mapped here:
 #   - "Test code" (SEC-06): enforced by scripts/check-release-graph.sh, not by a unit test.
 #   - Released-migration immutability: enforced by scripts/check-migrations.sh (and its
@@ -1304,6 +1318,57 @@ release 1.0 rc.4 account PRG: refused account forms redirect with a sealed flash
 release 1.0 rc.4 account PRG: refused account forms redirect with a sealed flash, never the password, client_id only when resolved|$W/account_profile.rs|failed_account_form_keeps_only_a_resolved_client
 release 1.0 rc.4 account TOTP: otpauth link escaped and only on no-store enrolment pages|$W/account_security.rs|otpauth_link_only_on_no_store_enrolment_pages
 release 1.0 rc.4 sessions: the raw user agent is never shown|$W/sessions.rs|unknown_or_hostile_user_agents_are_never_shown
+release 1.0 rc.4 flow navigation: unknown, foreign or malformed request ids are never carried or echoed|$W/flow_nav.rs|unknown_or_foreign_request_on_link_is_ignored
+release 1.0 rc.4 flow navigation: unknown, foreign or malformed request ids are never carried or echoed|$W/flow_nav.rs|emailed_link_with_foreign_unknown_or_malformed_request_works_without_continue
+release 1.0 rc.4 flow navigation: unknown, foreign or malformed request ids are never carried or echoed|$W/flow_nav.rs|second_factor_get_bounce_keeps_the_request_only_for_the_flow_browser
+release 1.0 rc.4 flow navigation: unknown, foreign or malformed request ids are never carried or echoed|$W/flow_nav.rs|invitation_and_upstream_jit_emails_carry_no_request
+release 1.0 rc.4 flow navigation: unknown, foreign or malformed request ids are never carried or echoed|$W/flow_login.rs|malformed_request_parameter_is_the_flow_expired_page
+release 1.0 rc.4 flow navigation: links never take their host from the request|$W/flow_nav.rs|continue_link_never_takes_host_from_request
+release 1.0 rc.4 CSP: fonts only from our origin (font-src 'self'), no external source|$W/security_csp.rs|every_ui_page_has_the_strict_headers_and_no_external_references
+release 1.0 rc.4 CSP: fonts only from our origin (font-src 'self'), no external source|crates/anvil-web/src/layers/security_headers.rs|csp_is_strict
+release 1.0 rc.4 client home URLs: unsafe values refused (admin API, DCR, CIMD)|crates/anvil-core/src/service/client.rs|home_uris_refuse_unsafe_values
+release 1.0 rc.4 client home URLs: unsafe values refused (admin API, DCR, CIMD)|crates/anvil-core/src/oauth/cimd.rs|cimd_home_uris_are_kept_and_validated
+release 1.0 rc.4 redirect URI: clearer refusal messages never change the decision|crates/anvil-core/src/oauth/redirect.rs|messages_do_not_change_decisions
+release 1.0 rc.4 redirect URI: clearer refusal messages never change the decision|crates/anvil-core/src/oauth/redirect.rs|missing_scheme_is_named
+release 1.0 rc.4 connections: never enabled while incomplete or unverified, SSRF-guarded check|crates/anvil-core/src/service/connection.rs|enabling_needs_every_field_before_discovery_runs
+release 1.0 rc.4 connections: never enabled while incomplete or unverified, SSRF-guarded check|crates/anvil-core/src/service/connection.rs|failed_discovery_refuses_with_the_issuer_field_and_no_fetched_content
+release 1.0 rc.4 connections: never enabled while incomplete or unverified, SSRF-guarded check|crates/anvil-core/src/model/connection.rs|missing_for_enable_names_each_absent_field
+release 1.0 rc.4 connections: never enabled while incomplete or unverified, SSRF-guarded check|crates/anvil-core/src/model/connection.rs|only_enabled_complete_connections_are_offerable
+release 1.0 rc.4 return_to: only the exact account paths, own origin and tenant, no open redirect|crates/anvil-core/src/policy/return_to.rs|rejects_everything_else
+release 1.0 rc.4 return_to: only the exact account paths, own origin and tenant, no open redirect|crates/anvil-core/src/policy/return_to.rs|accepts_exactly_the_account_paths
+release 1.0 rc.4 return_to: only the exact account paths, own origin and tenant, no open redirect|crates/anvil-web/src/ui/nav.rs|account_sign_in_returns_to_that_page
+release 1.0 rc.4 return_to: only the exact account paths, own origin and tenant, no open redirect|$W/account_return_to.rs|return_to_account_targets_only_on_own_origin
+release 1.0 rc.4 return_to: only the exact account paths, own origin and tenant, no open redirect|$W/account_return_to.rs|return_to_account_path_stays_on_the_own_tenant
+release 1.0 rc.4 return_to: only the exact account paths, own origin and tenant, no open redirect|$W/account_return_to.rs|every_signed_out_account_page_links_sign_in_returning_to_it
+release 1.0 rc.4 account header: sign-out is a confirmed CSRF-bound POST, back link only to static apps|$W/account_return_to.rs|account_sign_out_is_a_post_that_needs_the_confirmation
+release 1.0 rc.4 account header: sign-out is a confirmed CSRF-bound POST, back link only to static apps|$W/account_return_to.rs|account_header_never_links_dynamic_or_cimd_client
+release 1.0 rc.4 account header: sign-out is a confirmed CSRF-bound POST, back link only to static apps|$W/account_return_to.rs|account_header_links_back_to_a_static_app
+release 1.0 rc.4 account header: sign-out is a confirmed CSRF-bound POST, back link only to static apps|$W/account_return_to.rs|every_account_page_shows_identity_and_sign_out
+release 1.0 rc.4 recovery codes page: bound to the flow cookie and CSRF, no-store, shown once, no sign-in step|$W/flow_prg.rs|recovery_codes_page_requires_flow_cookie
+release 1.0 rc.4 recovery codes page: bound to the flow cookie and CSRF, no-store, shown once, no sign-in step|$W/flow_prg.rs|recovery_codes_gone_after_confirm
+release 1.0 rc.4 recovery codes page: bound to the flow cookie and CSRF, no-store, shown once, no sign-in step|$W/flow_prg.rs|recovery_codes_page_is_no_store
+release 1.0 rc.4 recovery codes page: bound to the flow cookie and CSRF, no-store, shown once, no sign-in step|$W/flow_prg.rs|recovery_codes_flow_takes_no_sign_in_step
+release 1.0 rc.4 recovery codes page: bound to the flow cookie and CSRF, no-store, shown once, no sign-in step|crates/anvil-core/src/service/flow.rs|held_recovery_codes_open_only_for_their_flow_tenant_and_key
+release 1.0 rc.4 recovery codes page: bound to the flow cookie and CSRF, no-store, shown once, no sign-in step|crates/anvil-core/src/service/flow.rs|a_held_codes_state_is_never_an_engine_state
+release 1.0 rc.4 held recovery codes sealed, never stored in plaintext|crates/anvil-core/src/service/flow.rs|held_recovery_codes_are_sealed_never_plaintext
+release 1.0 rc.4 held recovery codes sealed, never stored in plaintext (SQLite)|crates/anvil-storage-sqlite/tests/plaintext.rs|held_recovery_codes_never_stored_plaintext
+release 1.0 rc.4 held recovery codes sealed, never stored in plaintext (Postgres)|crates/anvil-storage-postgres/tests/plaintext.rs|held_recovery_codes_never_stored_plaintext
+release 1.0 rc.4 sign-in: empty submit needs CSRF and answers the same for known and unknown addresses|$W/flow_login.rs|empty_submit_without_the_csrf_token_is_forbidden
+release 1.0 rc.4 sign-in: empty submit needs CSRF and answers the same for known and unknown addresses|$W/flow_login.rs|empty_password_answer_is_the_same_for_known_and_unknown_addresses
+release 1.0 rc.4 sign-in: empty submit needs CSRF and answers the same for known and unknown addresses|$W/flow_login.rs|empty_submit_asks_for_the_address_not_incorrect
+release 1.0 rc.4 consent: switching account is bound to the flow, CSRF and session; never reuses another user's grant|$W/consent.rs|consent_switch_account_requires_binding
+release 1.0 rc.4 consent: switching account is bound to the flow, CSRF and session; never reuses another user's grant|$W/consent.rs|use_another_account_on_consent_asks_the_next_user_for_their_own_consent
+release 1.0 rc.4 org non-member page: bound to flow, CSRF and session; same access_denied as the direct refusal|$W/org_switch.rs|non_member_page_requires_binding
+release 1.0 rc.4 org non-member page: bound to flow, CSRF and session; same access_denied as the direct refusal|$W/org_switch.rs|non_member_page_without_session_or_refusal
+release 1.0 rc.4 org non-member page: bound to flow, CSRF and session; same access_denied as the direct refusal|$W/org_switch.rs|non_member_sees_why_and_return_to_app_is_the_same_access_denied
+release 1.0 rc.4 org non-member page: bound to flow, CSRF and session; same access_denied as the direct refusal|$W/org_claims.rs|nonmember_organization_is_access_denied
+release 1.0 rc.4 magic link in another browser: explains first, GET consumes and signs in nothing|$W/flow_email_code.rs|magic_link_in_another_browser_explains_before_any_action
+release 1.0 rc.4 magic link in another browser: explains first, GET consumes and signs in nothing|crates/anvil-web/src/ui/email_code.rs|link_browser_needs_the_cookie_or_a_navigation_that_would_carry_it
+release 1.0 rc.4 logout: no dynamic client URL, bad requests refused without a session, no request value rendered|$W/logout.rs|logout_cancel_never_uses_dynamic_client_uri
+release 1.0 rc.4 logout: no dynamic client URL, bad requests refused without a session, no request value rendered|$W/logout.rs|without_a_session_bad_requests_are_still_refused
+release 1.0 rc.4 logout: no dynamic client URL, bad requests refused without a session, no request value rendered|$W/logout.rs|the_signed_out_page_ignores_unknown_repeated_or_url_client_ids
+release 1.0 rc.4 logout: no dynamic client URL, bad requests refused without a session, no request value rendered|$W/security_logout.rs|without_a_session_the_confirmation_creates_no_flow_and_posts_stay_forbidden
+release 1.0 rc.4 logout: no dynamic client URL, bad requests refused without a session, no request value rendered|$W/security_logout.rs|a_hand_made_signed_out_url_never_renders_a_request_value
 EOF
 )
 
