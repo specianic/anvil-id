@@ -1,6 +1,9 @@
 // OIDC-12 in a browser: RP-Initiated Logout 1.0 and Back-Channel Logout 1.0 through the sample
 // relying party (examples/node-rp), plus the confirmation page for a logout without a hint and the
 // error page for an unregistered post_logout_redirect_uri, with WCAG 2.2 AA checks on the new pages.
+// 07.1-20: no dead ends. Without a session nothing asks "Sign out?"; the signed-out page offers a
+// way forward ("Back to <app>" for a static client with a home, else sign in again); "Stay signed
+// in" goes back to the app and keeps the session.
 //
 // The RP's client is registered with post_logout_redirect_uris [{rp}/logged-out] and
 // backchannel_logout_uri {rp}/backchannel_logout. The RP verifies the logout token (signature
@@ -22,6 +25,8 @@ import {
   type ManagementCredential,
 } from '../lib/anvil';
 import { userSessions } from '../lib/admin';
+import { adminCall, tenantPath } from '../lib/admin-api';
+import { expectNoHorizontalOverflow } from '../lib/layout';
 import {
   backchannelReceived,
   endSessionUrl,
@@ -155,4 +160,70 @@ test('an unregistered post_logout_redirect_uri is refused and the user stays sig
   await page.goto(`${rp.base}/login`);
   await expect(page).toHaveURL(`${rp.base}/me`);
   await expect(page.locator('#email')).toHaveText(user.email);
+});
+
+test('without a session nothing asks "Sign out?" and the signed-out page offers sign-in', async ({ page }) => {
+  await page.context().clearCookies();
+
+  // The end-session endpoint answers with the signed-out page itself (no confirmation).
+  await page.goto(endSessionUrl(anvilUrl()));
+  await expect(page).toHaveURL((url) => url.pathname.endsWith('/logout') && !url.pathname.includes('/ui/'));
+  await expect(page.locator('#logout-confirm-submit')).toHaveCount(0);
+  await expect(page.locator('#logout-message')).toHaveText('You have been signed out.');
+  await expect(page.locator('#link-login')).toHaveText('Sign in again');
+
+  // The confirmation page sends the browser on to the signed-out page (outside /ui/logout).
+  await page.goto(`${anvilUrl()}/ui/logout`);
+  await expect(page).toHaveURL((url) => url.pathname.endsWith('/ui/signed-out'));
+  await expect(page.locator('#logout-confirm-submit')).toHaveCount(0);
+  await expect(page.locator('#logout-message')).toHaveAttribute('data-message-key', 'logout.signed_out');
+  await expectNoA11yViolations(page);
+  await expectNoHorizontalOverflow(page, 390);
+
+  // The way forward works: sign in again.
+  await page.locator('#link-login').click();
+  await expect(page.locator('form#login')).toBeVisible();
+});
+
+test('"Stay signed in" returns to the app; after signing out the app is one click away', async ({ page }) => {
+  // A static client with a home page (client_uri): the sample RP's own /me page.
+  const homeRp = await startLogoutRp(await adminToken(creds), 'e2e logout home RP');
+  try {
+    const home = `${homeRp.base}/me`;
+    await adminCall(
+      await adminToken(creds),
+      'PATCH',
+      tenantPath('default', `/clients/${encodeURIComponent(homeRp.clientId)}`),
+      { client_uri: home },
+    );
+    const user = await newUser('logout-stay');
+    await page.context().clearCookies();
+    await page.goto(`${homeRp.base}/login`);
+    await login(page, user.email, user.password);
+    await expect(page).toHaveURL(home);
+
+    // RP logout without a hint asks; "Stay signed in" goes back to the app, nothing ends.
+    await page.goto(endSessionUrl(anvilUrl(), { clientId: homeRp.clientId }));
+    await expect(page).toHaveURL((url) => url.pathname.endsWith('/ui/logout'));
+    await expect(page.locator('#logout-cancel')).toHaveAttribute('href', home);
+    await expectNoHorizontalOverflow(page, 390);
+    await page.locator('#logout-cancel').click();
+    await expect(page).toHaveURL(home);
+    await expect(page.locator('#email')).toHaveText(user.email);
+    expect(await userSessions(await adminToken(creds), user.id)).toHaveLength(1);
+
+    // Confirming signs out; the signed-out page offers "Back to <app>" first.
+    await page.goto(endSessionUrl(anvilUrl(), { clientId: homeRp.clientId }));
+    await page.locator('#logout-confirm-submit').click();
+    await expect(page).toHaveURL((url) => url.pathname.endsWith('/ui/signed-out'));
+    const back = page.locator('#link-back-to-app');
+    await expect(back).toHaveAttribute('href', home);
+    await expect(back).toHaveText('Back to e2e logout home RP');
+    await expect(page.locator('#link-login')).toBeVisible();
+    await expectNoA11yViolations(page);
+    await expectNoHorizontalOverflow(page, 390);
+    expect(await userSessions(await adminToken(creds), user.id)).toHaveLength(0);
+  } finally {
+    await homeRp.stop();
+  }
 });

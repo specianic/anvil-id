@@ -1,5 +1,6 @@
 // UI-01 for the 0.3 pages: the logout confirmation and the prompt=select_account chooser work with
-// JavaScript disabled.
+// JavaScript disabled. 07.1-20: the signed-out page's way forward and the no-session behaviour (no
+// "Sign out?" prompt) without JavaScript.
 //
 // Runs in the Playwright `nojs` project (JavaScript disabled); each test asserts that it really is off.
 //
@@ -67,6 +68,7 @@ test('logout confirmation without JavaScript', async ({ page }) => {
   await page.locator('#logout-confirm-submit').click();
   await expect(page).toHaveURL((url) => url.pathname.endsWith('/ui/signed-out'));
   await expect(page.locator('#logout-message')).toHaveAttribute('data-message-key', 'logout.signed_out');
+  await expect(page.locator('#link-login')).toBeVisible();
   expect(await userSessions(await adminToken(creds), user.id)).toHaveLength(0);
 
   // Signed out: the account pages send the browser to the sign-in form.
@@ -107,4 +109,21 @@ test('account chooser without JavaScript: continue, then use another account', a
   // (every sign-in wakes the delivery worker, so this takes no longer than a logout).
   expect(await userSessions(await adminToken(creds), alice.id)).toHaveLength(0);
   expect(await waitForBackchannel(rp.base, aliceSub, 15_000)).not.toHaveLength(0);
+});
+
+test('without a session and without JavaScript: no prompt, the signed-out page leads to sign-in', async ({
+  page,
+}) => {
+  await expectJavaScriptOff(page);
+  await page.context().clearCookies();
+  await page.goto(endSessionUrl(anvilUrl()));
+  await expect(page.locator('#logout-confirm-submit')).toHaveCount(0);
+  await expect(page.locator('#logout-message')).toHaveAttribute('data-message-key', 'logout.signed_out');
+
+  await page.goto(`${anvilUrl()}/ui/logout`);
+  await expect(page).toHaveURL((url) => url.pathname.endsWith('/ui/signed-out'));
+  await expect(page.locator('#logout-confirm-submit')).toHaveCount(0);
+  await page.locator('#link-login').click();
+  await expect(page).toHaveURL((url) => url.pathname.endsWith('/ui/login'));
+  await expect(page.locator('form#login')).toBeVisible();
 });
