@@ -501,3 +501,138 @@ Everything in [New in the final 1.0](#new-in-the-final-10). In short:
   ([COMPATIBILITY.md](COMPATIBILITY.md)): from 1.0 on, changes within 1.x are additive only.
 
 The [Limitations in 1.0](#limitations-in-10) apply.
+
+## 1.0.0-rc.3 to 1.0.0-rc.4
+
+This section is for installations that ran 1.0.0-rc.3. rc.4 is an operability and user-experience
+release: the sign-in, account and console screens were reworked, and the management API gained a
+few additive fields and one operation. **Back up first**, as for every upgrade, and stop every
+rc.3 node before you start an rc.4 node.
+
+### Migrations
+
+The upgrade is automatic, additive and keeps all data. No `--allow-destructive-migrations` flag is
+needed, and no table is rebuilt.
+
+- **SQLite:** `0011_release_1_0_rc4` (one transaction).
+- **Postgres:** `0009_release_1_0_rc4` (one transaction, metadata only, no table rewrite).
+
+Both add two nullable columns to `client`: `client_uri` (the application's home page) and
+`initiate_login_uri` (a URL that starts a sign-in at the application). Every existing client reads
+`NULL`, which keeps rc.3 behaviour. The CI upgrade tests build a populated rc.3 database on each
+backend (static, public, DCR and CIMD clients), upgrade it, compare every rc.3 value, restart to
+prove the upgrade is idempotent and run the full storage contract suite on the result.
+
+On start-up the built-in console client (`anvil-console`) gains the scopes `profile` and `email`
+(the drift check writes one `client_updated` audit event with `fields: ["scopes"]`; later starts
+change nothing).
+
+### Management API
+
+All changes are additive under the compatibility policy ([COMPATIBILITY.md](COMPATIBILITY.md)):
+
+- Clients have the optional fields `client_uri` and `initiate_login_uri`. They must be absolute
+  `https` URLs with a host, no user info, no fragment and at most 2048 bytes (`http` only for
+  loopback hosts); a refusal is a 422 naming the field. Dynamic client registration stores and
+  returns both; a Client ID Metadata Document may carry them. Only static (administrator-registered)
+  clients ever get a "Back to {app}" link on the sign-in, error, signed-out and account pages.
+- New operation `POST /api/admin/v1/tenants/{slug}/users/{user_id}/recovery`
+  (`sendUserRecovery`, scope `admin:users:write`): sends the user the normal password-reset email.
+  The response never contains the token; blocked users are refused. Audit action
+  `user_recovery_sent`.
+- `GET /api/admin/v1/system/info` adds `smtp_configured` (whether the installation-wide SMTP is configured).
+- Deleting the built-in console client of a tenant now answers 409.
+- **Enabling an incomplete upstream connection now answers 422** with the missing field
+  (`config.client_id`, `config.issuer`, `secret`, ...). Such a connection never worked at sign-in.
+  Every OAuth 2.0 / OIDC kind (the social presets, generic OIDC and generic OAuth2) needs a client
+  secret before it can be enabled; SAML needs none. For generic OIDC the issuer must also pass
+  discovery through the SSRF-guarded outbound client. Creating a connection with `enabled: true`
+  and an incomplete configuration is refused the same way and stores nothing. The API default of
+  `enabled` is unchanged (`true`); send `enabled: false` to save a draft. The same rule applies to
+  organization connections and to tenant YAML.
+- rc.3 connections that are enabled but incomplete stay stored and enabled, but are **hidden from
+  sign-in** (no button, not offered on the link confirmation page or the account's "add a link"
+  list) until they are completed. The console lists them with an "Incomplete" badge.
+- The redirect URI refusal messages are clearer (for example a missing scheme is named). The
+  decisions are unchanged.
+
+The OpenAPI breaking-change check (`crates/anvil-web/tests/api_compat.rs`) now treats the required
+path parameters and body of a **new** operation as additive; a new required input on an existing
+operation is still reported as breaking.
+
+### Tenant YAML
+
+New optional keys, all absent by default (an absent key changes nothing):
+
+- `clients[].client_uri` and `clients[].initiate_login_uri` (same rule as the API).
+- `branding.logo`: inline image data, the SHA-256 of the stored logo, `null` to remove it, or (CLI
+  only) `{file: path}`, which the CLI inlines. An absent `logo` keeps the stored logo.
+- `organizations[]`: organizations with their roles, connections (write-only secrets, like tenant
+  connections), domains, default roles and branding. Domain verification can never be declared;
+  a new domain is claimed pending and only routes after DNS verification. The system tenant refuses
+  `organizations`. Without the key, `--prune` never touches organization objects.
+
+See [CONFIG-YAML.md](CONFIG-YAML.md).
+
+### Behaviour changes in the browser UI
+
+- **Post/redirect/get.** A refused form `POST` on a sign-in, registration, recovery or verification
+  page now answers **303** to the same page with `?flow=`, and the `GET` answers 400 with the
+  messages (carried in a sealed one-shot cookie, never containing the password or a code). Custom
+  themes or scripts that read the body of a refused `POST` (a 400 in rc.3) must follow the
+  redirect. Rate-limit locks (429) and CAPTCHA demands are still direct answers.
+- **Detours keep the application.** Create account, forgot password, start over and "use another
+  way" links carry the authorization request (`request=`), and emailed recovery and verification
+  links started from an application continue to it. An unknown, expired or foreign `request=` shows
+  the "sign-in link has expired" page instead of an empty form.
+- **Emailed links fail early.** A used or expired reset or verification link fails when it is
+  opened (before any input), without consuming anything. A reset link offers "Send a new link".
+- **Recovery codes after MFA enrolment during sign-in** are shown on their own page, bound to the
+  browser, and must be confirmed before the sign-in continues.
+- **Account pages** show who is signed in and a sign-out button. Signing out from there is two
+  steps: the button, then "Sign out" on the confirmation page. Destructive account actions (remove a
+  passkey or TOTP, new recovery codes, remove an app's access, disconnect a linked account, sign out
+  other devices) ask for confirmation on a server-rendered page, also without JavaScript.
+- **Session times** on the account pages are shown in UTC with an explicit label; the account pages
+  run no script, so local-time rendering is not available.
+- **Logout:** without an active session the end-session endpoint no longer asks for confirmation.
+  "Stay signed in" returns to the static client's home when there is one. The contract sentences
+  and URL layout of the logout pages are unchanged.
+- **Error pages** show a friendly explanation and a way forward. The technical detail line appears
+  only in development mode. The `error-message` sentences are unchanged.
+- **Setup:** reopening a setup link after setup answers 200 "Setup is already complete" with a
+  link to the console (it was a 403). Before setup an unknown token is still refused.
+- **Root page:** `/` and `/ui` show sign-in, the account and (system tenant) the console.
+- **Look:** the default theme uses the new palette and self-hosts its fonts (`font-src 'self'`).
+  Stored themes keep their colours; see [the theme README](../themes/default/README.md) for the
+  selector contract, the new CSS variables and the new templates. Themes that override templates
+  should compare them with the new defaults.
+
+### Postgres in containers
+
+The rc.4 test suites open many concurrent connections. Postgres in Docker defaults to a 64 MB
+`/dev/shm`, which can make parallel queries fail with `could not resize shared memory segment`
+(SQLSTATE 53100) under load. Give the container more shared memory (`--shm-size=256m`, or
+`shm_size` in Compose) if you see it.
+
+### Known limitations in rc.4
+
+- There is no end-user "send a new verification email" action. An invalid or used verification
+  link fails on open and offers "Go to sign in". Adding it needs a new rate-limited,
+  enumeration-safe route.
+
+### Deferred to after rc.4
+
+These four Low findings of the rc.4 review are deliberately not fixed in rc.4:
+
+- **U-L9**: registration reveals that an account with the address exists. Fixing it needs a new
+  "someone tried to register with your address" email kind and template, part of the
+  tenant-overridable email contract.
+- **C-L4**: the console has no email template preview, test send or language choice. It needs a
+  server-side preview render.
+- **C-L6**: the "Setup URL" line on stdout is mixed with the JSON audit output. The log format is an
+  operator contract; the root page and `/console/` before setup name `anvilid admin setup-url`
+  instead.
+- **C-L7 grace period**: rotating a client secret has no grace period, because that needs
+  dual-secret support on the server. The console warns that the old secret stops working
+  immediately.
