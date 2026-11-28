@@ -4,7 +4,9 @@
 //! link sign in single-factor (`amr` `[otp]`, pwd `acr`), the MFA policy applies afterwards
 //! (`[otp, mfa]` after enrolment), the authorization request continues, and `login_hint`
 //! prefills the address. `email_otp` and `magic_link` each put their own method in the email
-//! (code only, link only, both). The negative controls are in `security_email_code.rs`.
+//! (code only, link only, both). The email and the link page say that the link works only in
+//! the browser where the sign-in started (07.1-14). The negative controls are in
+//! `security_email_code.rs`.
 
 mod email_code_support;
 mod support;
@@ -348,4 +350,155 @@ async fn both_methods_email_the_code_and_the_link() {
     let mail = one_code(&app).await;
     assert_eq!(mail.code.len(), 6);
     assert!(mail.link.starts_with("/ui/login/email-link?flow="));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Another browser (07.1-14, U-M8): the email and the link page say where the link works
+// ---------------------------------------------------------------------------------------------
+
+/// GETs `link` as another browser would: only `cookie`, and `Sec-Fetch-Site: site` (or none).
+async fn get_link_as(
+    app: &support::TestApp,
+    link: &str,
+    cookie: &str,
+    site: Option<&str>,
+) -> support::TestResponse {
+    use axum::body::Body;
+    use axum::http::{Request, header};
+    let mut req = Request::get(link).header(header::COOKIE, cookie);
+    if let Some(site) = site {
+        req = req.header("sec-fetch-site", site);
+    }
+    app.send(req.body(Body::empty()).expect("request")).await
+}
+
+#[tokio::test]
+async fn the_email_says_where_the_link_works_and_that_the_code_works_anywhere() {
+    let app = setup().await;
+    set_email_methods(&app, true, true).await;
+    request_code(&app, ALICE).await;
+    let mail = one_code(&app).await;
+    let (_, text, html) = anvil_mail::EmailRenderer::embedded()
+        .render("login_code", &mail.payload)
+        .expect("renders");
+    for body in [&text, &html] {
+        assert!(
+            body.contains("works only in the browser where you started signing in"),
+            "{body}"
+        );
+        assert!(
+            body.contains("The code works whichever device you read this email on"),
+            "{body}"
+        );
+    }
+    // Specianic defaults: an orange fill with ink text, never the old blue or white-on-orange.
+    assert!(html.contains("bgcolor=\"#ff5a1f\""), "{html}");
+    assert!(!html.contains("#2f5bd3"), "{html}");
+
+    // A link-only email still says where the link works, and promises no code.
+    set_email_methods(&app, false, true).await;
+    app.clear_cookies();
+    request_code(&app, ALICE).await;
+    let mail = one_code(&app).await;
+    let (_, text, _) = anvil_mail::EmailRenderer::embedded()
+        .render("login_code", &mail.payload)
+        .expect("renders");
+    assert!(text.contains("works only in the browser"), "{text}");
+    assert!(!text.contains("The code works"), "{text}");
+}
+
+#[tokio::test]
+async fn magic_link_in_another_browser_explains_before_any_action() {
+    let app = setup().await;
+    set_email_methods(&app, true, true).await;
+    request_code(&app, ALICE).await;
+    let mail = one_code(&app).await;
+
+    // A pasted address or a desktop mail app in another browser (the Strict flow cookie would
+    // have come along): guidance only, no button, nothing consumed.
+    let page = get_link_as(&app, &mail.link, "unrelated=1", Some("none")).await;
+    assert_eq!(page.status, 200, "{}", page.text());
+    assert_eq!(page.header("cache-control"), Some("no-store"));
+    assert_eq!(page.header("referrer-policy"), Some("no-referrer"));
+    let html = page.html();
+    assert!(html.contains("id=\"magic-link-other-browser\""), "{html}");
+    assert!(html.contains("cannot sign you in here"), "{html}");
+    assert!(html.contains("id=\"magic-link-code-hint\""), "{html}");
+    assert!(!html.contains("id=\"magic-link-submit\""), "{html}");
+    assert!(
+        html.contains("Start signing in again here</a>"),
+        "start again: {html}"
+    );
+
+    // Webmail (cross-site: the Strict cookie is withheld even in the right browser): the page
+    // says where the link works and keeps the button.
+    let page = get_link_as(&app, &mail.link, "unrelated=1", Some("cross-site")).await;
+    let html = page.html();
+    assert!(html.contains("id=\"magic-link-other-browser\""), "{html}");
+    assert!(html.contains("If that is this browser"), "{html}");
+    assert!(html.contains("id=\"magic-link-submit\""), "{html}");
+    assert_eq!(session(&app).await, None, "nothing signed in");
+
+    // The browser that started still signs in with the same link, without the notice.
+    let (page, resp) = open_link(&app, &mail.link).await;
+    assert!(!page.html().contains("magic-link-other-browser"));
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_eq!(message_keys(&resp.html()), vec!["login.signed_in"]);
+}
+
+#[tokio::test]
+async fn magic_link_guidance_starts_again_for_the_same_request() {
+    let app = setup().await;
+    let t = default_tenant(&app);
+    let rp =
+        token_support::register(&app, t.id, web_input(ClientAuthMethod::ClientSecretBasic)).await;
+    let q = url::form_urlencoded::Serializer::new(String::new())
+        .extend_pairs([
+            ("response_type", "code"),
+            ("client_id", rp.id()),
+            ("redirect_uri", REDIRECT),
+            ("scope", "openid"),
+            ("state", "st-1"),
+            ("code_challenge", CHALLENGE),
+            ("code_challenge_method", "S256"),
+        ])
+        .finish();
+    let resp = app.get(&format!("/authorize?{q}")).await;
+    let login = to_path(&app, &location(&resp));
+    let request = login
+        .split("request=")
+        .nth(1)
+        .expect("request id")
+        .to_owned();
+    let page = request_code_at(&app, &login, ALICE).await;
+    // "Use another way" on the email page keeps the request (NavContext).
+    let html = page.html();
+    let other_way = element_attr(&html, "link-login", "href");
+    assert!(
+        other_way.contains(&format!("request={request}")),
+        "{other_way}"
+    );
+
+    let mail = one_code(&app).await;
+    let page = get_link_as(&app, &mail.link, "unrelated=1", Some("none")).await;
+    let html = page.html();
+    let again = element_attr(&html, "link-login", "href");
+    assert!(again.contains(&format!("request={request}")), "{again}");
+}
+
+/// The value of `attr` on the element with `id`.
+fn element_attr(html: &str, id: &str, attr: &str) -> String {
+    let start = html
+        .find(&format!("id=\"{id}\""))
+        .unwrap_or_else(|| panic!("#{id} in {html}"));
+    let tag_start = html[..start].rfind('<').expect("tag");
+    let tag_end = html[start..].find('>').expect("tag end") + start;
+    let tag = &html[tag_start..tag_end];
+    let marker = format!("{attr}=\"");
+    let a = tag.find(&marker).expect("attribute") + marker.len();
+    let b = tag[a..].find('"').expect("quoted") + a;
+    tag[a..b]
+        .replace("&amp;", "&")
+        .replace("&#x2f;", "/")
+        .replace("&#x3d;", "=")
 }

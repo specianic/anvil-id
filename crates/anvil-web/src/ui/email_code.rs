@@ -41,6 +41,15 @@
 //! (`flow::email_code::link_csrf`); the flow cookie (SameSite=Strict, not sent when the email
 //! client opens the link, sent with the page's own POST) proves the browser. Without it the answer
 //! is "open the link in the browser where you started, or type the code" and nothing is consumed.
+//!
+//! The link page explains this before any action (U-M8). Its `GET` checks for the flow cookie:
+//! present, the plain button. Absent while `Sec-Fetch-Site` says the browser would have sent a
+//! SameSite=Strict cookie (`none`, `same-origin`, `same-site`: a pasted address or a desktop mail
+//! app), the link cannot work in this browser: the page says so, with no button, and offers to
+//! type the code where the sign-in started (when the email carried one) or to start again here.
+//! Absent on a cross-site navigation (webmail; the Strict cookie is withheld even in the right
+//! browser) or without the header, the page says where the link works and keeps the button. The
+//! check only chooses what the page shows; the POST still decides.
 
 use anvil_core::error::CoreError;
 use anvil_core::flow::email_code::{EMAIL_CODE_FORM_ID, OTHER_BROWSER, link_csrf};
@@ -337,6 +346,8 @@ async fn link_page(
     State(state): State<AppState>,
     tenant: ResolvedTenant,
     RequestLocale(loc, _): RequestLocale,
+    headers: HeaderMap,
+    jar: CookieJar,
     Query(q): Query<UiQuery>,
 ) -> Response {
     if !tenant.tenant.settings.magic_link {
@@ -349,6 +360,7 @@ async fn link_page(
         return link_headers(bad_form(&state, &tenant, &loc));
     }
     let csrf = link_csrf(state.kek(), flow_id, &token);
+    let browser = link_browser(&headers, &jar, &state.cookies().flow_name(&tenant.tenant));
     let mut page = PageContext::for_tenant(&state, &tenant, &loc, "title.magic_link");
     // "Use another way": the sign-in of the flow's own request (none once it expired).
     let nav = NavContext::from_flow(&state, &tenant, flow_id).await;
@@ -362,6 +374,9 @@ async fn link_page(
         action => action,
         csrf_token => csrf,
         token => token,
+        other_browser => browser != LinkBrowser::Same,
+        show_button => browser != LinkBrowser::Other,
+        code_enabled => tenant.tenant.settings.email_otp,
     };
     let resp = match state.renderer().page("magic_link.html", ctx) {
         Ok(html) => axum::response::IntoResponse::into_response((StatusCode::OK, html)),
@@ -376,6 +391,33 @@ async fn link_page(
         }
     };
     link_headers(resp)
+}
+
+/// Whether the browser opening a sign-in link is the one that started the sign-in, as far as a
+/// `GET` can tell (module docs). Chooses the page's wording only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LinkBrowser {
+    /// The flow cookie came along.
+    Same,
+    /// No flow cookie, on a navigation that would have carried a SameSite=Strict cookie.
+    Other,
+    /// No flow cookie on a cross-site navigation (or no `Sec-Fetch-Site`): cannot tell.
+    Unknown,
+}
+
+fn link_browser(headers: &HeaderMap, jar: &CookieJar, flow_cookie: &str) -> LinkBrowser {
+    if jar.get(flow_cookie).is_some_and(|c| !c.value().is_empty()) {
+        return LinkBrowser::Same;
+    }
+    match headers
+        .get("sec-fetch-site")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("none" | "same-origin" | "same-site") => LinkBrowser::Other,
+        _ => LinkBrowser::Unknown,
+    }
 }
 
 /// `POST /ui/login/email-link?flow=`: consume the link in the browser that started the sign-in.
@@ -471,6 +513,37 @@ mod tests {
         // The second-factor token does not open as an email token.
         let other = super::super::mfa::seal_factor_token(&kek, t, f, u).expect("seal");
         assert_eq!(open_email_token(&kek, t, f, &other), None);
+    }
+
+    #[test]
+    fn link_browser_needs_the_cookie_or_a_navigation_that_would_carry_it() {
+        let name = "anvil_flow_x";
+        let with = CookieJar::new().add(axum_extra::extract::cookie::Cookie::new(name, "v"));
+        let without = CookieJar::new();
+        let site = |v: &str| {
+            let mut h = HeaderMap::new();
+            h.insert("sec-fetch-site", HeaderValue::from_str(v).expect("header"));
+            h
+        };
+        assert_eq!(
+            link_browser(&site("cross-site"), &with, name),
+            LinkBrowser::Same
+        );
+        for v in ["none", "same-origin", "same-site", "None"] {
+            assert_eq!(
+                link_browser(&site(v), &without, name),
+                LinkBrowser::Other,
+                "{v}"
+            );
+        }
+        assert_eq!(
+            link_browser(&site("cross-site"), &without, name),
+            LinkBrowser::Unknown
+        );
+        assert_eq!(
+            link_browser(&HeaderMap::new(), &without, name),
+            LinkBrowser::Unknown
+        );
     }
 
     #[test]

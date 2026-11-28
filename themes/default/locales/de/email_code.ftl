@@ -18,3 +18,8 @@ email_code-link_explain = Klicken Sie auf die Schaltfläche, um die Anmeldung ab
 email_code-link_continue = Anmeldung fortsetzen
 email_code-link_invalid = Dieser Anmeldelink kann nicht mehr verwendet werden. Fordern Sie auf der Anmeldeseite eine neue Anmelde-E-Mail an.
 email_code-other_browser = Öffnen Sie den Link in dem Browser, in dem Sie die Anmeldung begonnen haben, oder geben Sie dort den Code aus der E-Mail ein.
+# The magic-link page opened without the sign-in's browser cookie (plan 07.1-14, U-M8).
+email_code-link_check_browser = Dieser Link funktioniert nur in dem Browser, in dem Sie die Anmeldung begonnen haben. Wenn das dieser Browser ist, fahren Sie unten fort.
+email_code-link_wrong_browser = Dieser Link wurde in einem anderen Browser geöffnet als dem, in dem Sie die Anmeldung begonnen haben, und kann Sie hier nicht anmelden. Öffnen Sie ihn stattdessen in jenem Browser.
+email_code-link_code_anywhere = Sie können auch den Code aus derselben E-Mail auf der Anmeldeseite eingeben, auf der Sie begonnen haben. Der Code funktioniert unabhängig davon, auf welchem Gerät Sie die E-Mail lesen.
+email_code-start_again = Hier erneut mit der Anmeldung beginnen

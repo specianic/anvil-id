@@ -128,9 +128,15 @@ async function stepUpJourney(page: Page, browser: Browser): Promise<void> {
   await login(page, user.email, user.password);
   await expect(page).toHaveURL((url) => url.href.startsWith(`${anvilUrl()}/ui/consent`));
   await expect(page.locator('#consent-client')).toHaveText(AGENT_NAME);
-  await expect(page.locator('#consent-agent')).toHaveText('AI agent / automated client');
+  await expect(page.locator('#consent-agent strong')).toHaveText('AI agent / automated client');
+  // The badge says what an agent is (07.1-14, U-L4).
+  await expect(page.locator('#consent-agent-explain')).toHaveText(
+    'It acts on its own, for example as an AI assistant, and can use this access while you are not there.',
+  );
   await expect(page.locator('#consent-provenance')).toHaveAttribute('data-provenance', 'static');
-  await expect(page.locator('#consent-provenance')).toHaveText('Registered by your administrator.');
+  await expect(page.locator('#consent-provenance')).toHaveText(
+    'Set up by the administrators of this sign-in service.',
+  );
   expect(await listed(page, '#consent-new-scopes [data-scope]', 'data-scope')).toEqual(['openid', 'profile']);
   await expect(page.locator('#consent-granted-scopes')).toHaveCount(0);
   const first = await redirectParams(page, () => page.locator('#consent-allow').click());

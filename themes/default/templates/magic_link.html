@@ -2,19 +2,31 @@
 {#- Magic link landing page (AUTH-06). Opening the emailed link only shows this button; nothing is
     used until the button is pressed (link scanners cannot sign in), and it signs in only in the
     browser where the sign-in started. Variables besides `page`: `action` (POST target),
-    `csrf_token`, `token` (the link token, posted back). Selectors: form `magic-link`, button
-    `magic-link-submit`, link `link-login`. Works without JavaScript. -#}
+    `csrf_token`, `token` (the link token, posted back), `other_browser` (no flow cookie came
+    along: explain where the link works), `show_button` (false when the link certainly cannot
+    work in this browser), `code_enabled` (the email also carried a code). Selectors: form
+    `magic-link`, button `magic-link-submit`, notice `magic-link-other-browser` (with
+    `magic-link-code-hint` when the email had a code), link `link-login` ("Use another way", or
+    "Start signing in again here" with the notice). Works without JavaScript. -#}
 {% block heading %}{{ t("title.magic_link") }}{% endblock %}
 {% block content %}
+{% if other_browser %}
+<div class="anvil-message anvil-message-info" id="magic-link-other-browser" role="note">
+<p>{% if show_button %}{{ t("email_code.link_check_browser") }}{% else %}{{ t("email_code.link_wrong_browser") }}{% endif %}</p>
+{% if code_enabled %}<p id="magic-link-code-hint">{{ t("email_code.link_code_anywhere") }}</p>{% endif %}
+</div>
+{% endif %}
+{% if show_button %}
 <p class="anvil-lead" id="magic-link-explain">{{ t("email_code.link_explain") }}</p>
 <form id="magic-link" method="post" action="{{ action }}">
 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 <input type="hidden" id="token" name="token" value="{{ token }}">
 <button type="submit" id="magic-link-submit">{{ t("email_code.link_continue") }}</button>
 </form>
+{% endif %}
 {% if page.links.login %}
 <nav class="anvil-links" aria-label="{{ t("nav.other_options") }}">
-<a id="link-login" href="{{ page.links.login }}">{{ t("email_code.other_way") }}</a>
+<a id="link-login" href="{{ page.links.login }}">{% if other_browser %}{{ t("email_code.start_again") }}{% else %}{{ t("email_code.other_way") }}{% endif %}</a>
 </nav>
 {% endif %}
 {% endblock %}

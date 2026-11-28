@@ -9,6 +9,8 @@ Use this code to finish signing in to {{ tenant_name }}:
 {% if code is defined %}Or open this link to sign in directly:{% else %}Open this link to finish signing in to {{ tenant_name }}:{% endif %}
 
 {{ link }}
+
+The link works only in the browser where you started signing in.{% if code is defined %} The code works whichever device you read this email on: type it on the sign-in page where you started.{% endif %}
 {% endif %}
 {% if code is defined and link is defined %}The code and the link expire{% elif code is defined %}The code expires{% else %}The link expires{% endif %} in {{ expires_minutes }} minutes and can be used only once. {% if code is defined %}Never share this code with anyone.{% else %}Never forward this email to anyone.{% endif %}
 

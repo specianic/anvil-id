@@ -1,5 +1,6 @@
 // AUTH-06 / UI-01: email sign-in works without JavaScript. The "Email me a sign-in code" disclosure
-// is a native <details>, the code and magic link pages are plain forms.
+// is a native <details>, the code and magic link pages are plain forms. The magic link opened in
+// another browser explains itself without JavaScript too (07.1-14).
 //
 // JavaScript is switched off in this file itself (test.use below): the nojs project of
 // playwright.config.ts matches only `nojs.*.spec.ts` / `nojs.spec.ts`, which this name does not, so
@@ -67,6 +68,28 @@ test('sign in with the magic link without JavaScript', async ({ page }) => {
   await requestEmailCode(page, email);
   await page.goto(magicLinkFrom(await signInEmail(email), tenant));
   await page.locator('#magic-link-submit').click();
+  await expect(page.locator('#message-body')).toHaveAttribute('data-message-key', 'login.signed_in');
+  await expectSession(page, tenant);
+});
+
+test('the magic link in another browser explains itself without JavaScript', async ({ page, browser }) => {
+  const email = await verifiedUser('nojs-magic-other');
+  await page.goto(`${tenant.base}/ui/login`);
+  await requestEmailCode(page, email);
+  const message = await signInEmail(email);
+  const other = await browser.newContext({ javaScriptEnabled: false });
+  try {
+    const otherPage = await other.newPage();
+    await otherPage.goto(magicLinkFrom(message, tenant));
+    await expect(otherPage.locator('#magic-link-other-browser')).toBeVisible();
+    await expect(otherPage.locator('form#magic-link')).toHaveCount(0);
+    await otherPage.locator('#link-login').click();
+    await expect(otherPage.locator('form#login')).toBeVisible();
+  } finally {
+    await other.close();
+  }
+  // The browser that started still signs in with the code.
+  await submitEmailCode(page, codeFrom(message));
   await expect(page.locator('#message-body')).toHaveAttribute('data-message-key', 'login.signed_in');
   await expectSession(page, tenant);
 });

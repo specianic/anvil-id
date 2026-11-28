@@ -3,9 +3,12 @@
 // - At a relying party: "Email me a sign-in code", the code from the email, back at the client
 //   with an ID token whose amr is [otp].
 // - The magic link opened in the same browser: "Continue signing in" signs in.
-// - The magic link opened in another browser (a second context, without the flow cookie): the
-//   answer is "open the link in the browser where you started, or type the code", that context is
-//   not signed in, and nothing was used up (the original browser still signs in with the code).
+// - The email says the link works only in the browser where the sign-in started and that the code
+//   works anywhere (07.1-14, U-M8).
+// - The magic link opened in another browser (a second context, without the flow cookie): the page
+//   says so on opening, before any button (open it in the browser where you started, or type the
+//   code there, or start again here), that context is not signed in, and nothing was used up (the
+//   original browser still signs in with the code).
 // - An unknown address and an unverified one get exactly the same confirmation and no email.
 // - The sign-in page with the email form, the "Check your email" page and the magic link page
 //   pass axe.
@@ -155,18 +158,26 @@ test('magic link opened in another browser does not sign that browser in', async
   const message = await signInEmail(user.email);
   const link = magicLinkFrom(message, tenant);
 
+  // The email says where the link works, and that the code works on any device.
+  expect(message.Text).toContain('The link works only in the browser where you started signing in.');
+  expect(message.Text).toContain('The code works whichever device you read this email on');
+
   const other = await browser.newContext();
   try {
     const otherPage = await other.newPage();
+    // A typed or pasted address would carry the flow cookie in the right browser: the page
+    // explains on opening, with no button that could only fail.
     await otherPage.goto(link);
-    await expect(otherPage.locator('form#magic-link')).toBeVisible();
-    await otherPage.locator('#magic-link-submit').click();
-    const body = otherPage.locator('#message-body');
-    await expect(body).toHaveAttribute('data-message-key', 'email_code.other_browser');
-    await expect(body).toContainText('browser where you started');
-    await expect(body).toContainText('type the code');
+    const notice = otherPage.locator('#magic-link-other-browser');
+    await expect(notice).toContainText('cannot sign you in here');
+    await expect(otherPage.locator('#magic-link-code-hint')).toContainText('type the code');
+    await expect(otherPage.locator('form#magic-link')).toHaveCount(0);
+    await expect(otherPage.locator('#link-login')).toHaveText('Start signing in again here');
     await expectNoA11yViolations(otherPage);
     await expectNoSession(otherPage, tenant);
+    // Start again leads to this tenant's sign-in page.
+    await otherPage.locator('#link-login').click();
+    await expect(otherPage.locator('form#login')).toBeVisible();
   } finally {
     await other.close();
   }

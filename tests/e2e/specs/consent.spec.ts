@@ -7,6 +7,8 @@
 // - Deny returns `access_denied` to the RP.
 // - response_mode=form_post: the hosted page auto-submits the authorization response to the
 //   redirect URI as a POST (captured with a Playwright route handler).
+// - The screen names the signed-in account; "Use another account" signs someone else in, who is
+//   asked for their own consent (07.1-14, U-M15).
 //
 // The spec starts its own examples/node-rp on a free loopback port with a client it creates through
 // the admin API with consent_mode `required` (createClient defaults to skip_first_party).
@@ -191,6 +193,31 @@ test('consent is asked once, remembered, revocable at Connected apps, and Deny r
   // Denying stored nothing: Connected apps is empty for this user.
   await page.goto(`${anvilUrl()}/ui/account/apps`);
   await expect(page.locator('#apps-empty')).toBeVisible();
+});
+
+test('consent names the account and Use another account asks the next user for their own consent', async ({
+  page,
+}) => {
+  const alice = await newUser(page);
+  const bob = await newUser(page);
+
+  await page.goto(`${rpBase}/login`);
+  await login(page, alice.email, alice.password);
+  await expect(page).toHaveURL((url) => url.href.startsWith(`${anvilUrl()}/ui/consent`));
+  await expect(page.locator('#consent-account-email')).toHaveText(alice.email);
+  await expect(page.locator('#consent-other')).toBeVisible();
+
+  // Use another account: the sign-in page for the same request.
+  await page.locator('#consent-other').click();
+  await expect(page).toHaveURL((url) => url.href.startsWith(`${anvilUrl()}/ui/login?request=`));
+  await login(page, bob.email, bob.password);
+
+  // Bob is asked himself: Alice's screen is not reused.
+  await expect(page).toHaveURL((url) => url.href.startsWith(`${anvilUrl()}/ui/consent`));
+  await expect(page.locator('#consent-account-email')).toHaveText(bob.email);
+  await page.locator('#consent-allow').click();
+  await expect(page).toHaveURL(`${rpBase}/me`);
+  await expect(page.locator('#email')).toHaveText(bob.email);
 });
 
 test('response_mode=form_post posts the code to the redirect URI', async ({ page, browser }) => {
