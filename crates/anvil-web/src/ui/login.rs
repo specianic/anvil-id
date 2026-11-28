@@ -1194,11 +1194,13 @@ pub(super) fn links_for(
             registration: (tenant.tenant.settings.registration == RegistrationMode::Open)
                 .then(|| with_request("/ui/registration")),
             recovery: Some(carry_ui_locales(&tenant.ui_url("/ui/recovery"), loc)),
+            ..PageLinks::default()
         },
         _ => PageLinks {
             login: Some(with_request("/ui/login")),
             registration: None,
             recovery: None,
+            ..PageLinks::default()
         },
     }
 }

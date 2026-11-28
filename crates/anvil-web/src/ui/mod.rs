@@ -18,6 +18,7 @@ mod format;
 mod login;
 mod logout;
 mod mfa;
+pub(crate) mod nav;
 mod preview;
 mod recovery;
 mod registration;

@@ -153,12 +153,34 @@ fn with_flow_theme(ctx: Value) -> Value {
     minijinja::context! { page => page, ..ctx }
 }
 
-/// Links between self-service pages; `None` hides the link.
+/// Links between self-service pages; `None` hides the link. Built by `ui::nav::NavContext`
+/// (themes/default/README.md lists the element ids).
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct PageLinks {
     pub login: Option<String>,
     pub registration: Option<String>,
     pub recovery: Option<String>,
+    /// The account page (`#link-account`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
+    /// The action of the sign-out form (`#form-sign-out`, `method="post"`). The end-session
+    /// endpoint, which only asks for confirmation without an `id_token_hint`; never a `GET`
+    /// that signs out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sign_out: Option<String>,
+    /// "Continue to <app>" of a live authorization request (`#link-continue`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub continue_to: Option<ContinueLink>,
+    /// The admin console (`#link-console`, system tenant only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub console: Option<String>,
+}
+
+/// The "Continue to <app>" link of a page.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ContinueLink {
+    pub href: String,
+    pub app_name: String,
 }
 
 /// The `page` object every template receives (themes/default/README.md).
