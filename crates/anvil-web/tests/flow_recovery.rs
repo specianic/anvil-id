@@ -5,9 +5,11 @@ mod support;
 mod ui_helpers;
 
 use anvil_core::model::{
-    ActorKind, AuditAction, AuditOutcome, AuditQuery, SecretHash, SmtpSettings, TenantId,
+    ActorKind, AuditAction, AuditOutcome, AuditQuery, SecretHash, SmtpSettings, Tenant, TenantId,
+    User,
 };
 use anvil_core::ports::Clock as _;
+use anvil_core::service::user::{INVITATION_TEMPLATE, build_invitation};
 use anvil_mail::worker::TransportFactory;
 use anvil_mail::{
     EmailRenderer, MailError, MailTransport, OutboxWorker, OutgoingMail, StorageOutbox,
@@ -274,4 +276,67 @@ async fn reset_with_a_short_password_keeps_the_token() {
     // The token was handed back unconsumed: a valid reset still works.
     let resp = submit_form(&app, &link, &[("password", NEW)]).await;
     assert_eq!(message_keys(&resp.html()), vec!["recovery.done".to_owned()]);
+}
+
+/// Issues an invitation token for `user` and enqueues its email, as an administrator's invite does
+/// (`UserService::create` with `invite`).
+async fn issue_invitation(app: &TestApp, tenant: &Tenant, user: &User) {
+    let inv = build_invitation(
+        app.kek(),
+        app.clock().now(),
+        tenant,
+        &app.issuer(None),
+        user.id,
+        &user.email,
+    )
+    .expect("invitation");
+    app.storage()
+        .users()
+        .issue_self_service_token(tenant.id, &inv.token, Some(&inv.email))
+        .await
+        .expect("issue invitation token");
+}
+
+/// An invitation link (an administrator's invite, e.g. the console's "Add administrator") opens
+/// the same reset page: `GET` shows the form for a usable `Invitation` token (not "link expired"),
+/// the form sets the first password, and a used or expired invitation link says so on `GET`.
+#[tokio::test]
+async fn invitation_link_opens_the_reset_form_once() {
+    let app = TestApp::new().await;
+    register(&app, "", EMAIL, OLD).await;
+    take_emails(&app).await;
+    let tenant = default_tenant(&app);
+    let user = app
+        .storage()
+        .users()
+        .get_by_email(tenant.id, EMAIL)
+        .await
+        .expect("user lookup")
+        .expect("registered user");
+    issue_invitation(&app, &tenant, &user).await;
+    let link = link_of(&app, &take_emails(&app).await, INVITATION_TEMPLATE);
+    assert!(link.starts_with("/ui/recovery?token="), "{link}");
+    let page = app.get(&link).await;
+    assert_eq!(page.status, 200, "{}", page.text());
+    assert!(page.html().contains("id=\"recovery-reset-submit\""));
+    assert!(!message_keys(&page.html()).contains(&"links.expired".to_owned()));
+
+    let resp = submit_form(&app, &link, &[("password", NEW)]).await;
+    assert_eq!(message_keys(&resp.html()), vec!["recovery.done".to_owned()]);
+
+    // Used: the link says so on GET.
+    app.clock().advance(Duration::from_secs(60));
+    app.clear_cookies();
+    let page = app.get(&link).await;
+    assert_eq!(page.status, 400, "{}", page.text());
+    assert!(message_keys(&page.html()).contains(&"links.expired".to_owned()));
+
+    // Expired (an invitation lives 7 days): refused on GET as well.
+    issue_invitation(&app, &tenant, &user).await;
+    let link = link_of(&app, &take_emails(&app).await, INVITATION_TEMPLATE);
+    app.clock().advance(Duration::from_secs(8 * 24 * 3600));
+    app.clear_cookies();
+    let page = app.get(&link).await;
+    assert_eq!(page.status, 400, "{}", page.text());
+    assert!(message_keys(&page.html()).contains(&"links.expired".to_owned()));
 }

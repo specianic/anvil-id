@@ -2131,6 +2131,26 @@ impl FlowService {
         }))
     }
 
+    /// Whether a password-reset link (`/ui/recovery?token=`) can still be used: its form consumes
+    /// a `Recovery` or an `Invitation` token (`UserRepo::reset_password`; an invited user sets the
+    /// first password there), so either kind counts. Read only, like
+    /// [`Self::self_service_link_usable`].
+    pub async fn reset_link_usable(
+        &self,
+        tenant: TenantId,
+        raw_token: &str,
+    ) -> Result<bool, CoreError> {
+        for kind in [SelfServiceKind::Recovery, SelfServiceKind::Invitation] {
+            if self
+                .self_service_link_usable(tenant, kind, raw_token)
+                .await?
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// Whether the emailed self-service link token `raw_token` of `kind` can still be used in
     /// `tenant` (unconsumed, unexpired), hashed exactly as its consumption hashes it. Read only
     /// (`UserRepo::peek_self_service_token`): opening a link never consumes it (mail scanners

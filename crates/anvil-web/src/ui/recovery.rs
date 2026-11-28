@@ -12,13 +12,15 @@
 //!
 //! A reset link that was used, expired or never existed answers on `GET`, before any input:
 //! the request form with "This link has expired or was already used" above it (400), so a new
-//! link is one click away. The check only reads (`FlowService::self_service_link_usable`); a
+//! link is one click away. Invitation links use this page too (the invited user sets the first
+//! password), so a usable `Recovery` or `Invitation` token passes. The check only reads
+//! (`FlowService::reset_link_usable`); a
 //! `GET` never consumes a token. A failed POST answers 303 to `GET /ui/recovery?flow=`
 //! (Post/Redirect/Get); a failed reset keeps the token in the sealed flash, never in the flow
 //! state or in plaintext.
 
 use anvil_core::flow::engine::FlowInput;
-use anvil_core::model::{FlowKind, SelfServiceKind};
+use anvil_core::model::FlowKind;
 use axum::Router;
 use axum::extract::rejection::FormRejection;
 use axum::extract::{Form, Query, State};
@@ -28,8 +30,8 @@ use axum::routing::get;
 use axum_extra::extract::cookie::CookieJar;
 
 use super::login::{
-    UiForm, UiQuery, expired_reset_link_page, link_usable, rejected_form, show_step,
-    stale_request_page, start_page, submit_page,
+    UiForm, UiQuery, expired_reset_link_page, rejected_form, show_step, stale_request_page,
+    start_page, submit_page,
 };
 use super::nav::NavContext;
 use crate::errors::core_error_page_in;
@@ -75,7 +77,11 @@ async fn show(
     // A used, expired or unknown reset link fails here, before the user types a new password,
     // without consuming anything.
     if let Some(t) = token.as_deref() {
-        match link_usable(&state, &tenant, SelfServiceKind::Recovery, t).await {
+        match state
+            .ui_flow_service()
+            .reset_link_usable(tenant.tenant.id, t)
+            .await
+        {
             Ok(true) => {}
             Ok(false) => return expired_reset_link_page(&state, &tenant, &loc, &nav).await,
             Err(e) => return core_error_page_in(&state, Some(&tenant), &loc, &e),
