@@ -1500,7 +1500,7 @@ impl AuthorizeService {
     /// - [`OrgNotMemberChoice::ReturnToApp`]: `access_denied` to the client's redirect URI, the
     ///   same answer (error, description, `state`, `iss`, response mode) as a request refused
     ///   without the page; the request is used up.
-    /// - [`OrgNotMemberChoice::Other`]: [`Self::sign_in_as_other`].
+    /// - [`OrgNotMemberChoice::Other`]: sign in as someone else ([`Self::sign_in_as_other`]).
     pub async fn answer_org_not_member(
         &self,
         tenant: &Tenant,

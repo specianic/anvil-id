@@ -1,10 +1,12 @@
 {#- Organization switcher (plan 06-19, ORG-02). Variables (besides page): client_name,
-      organizations [{id, slug, display_name}] (the signed-in user's own memberships only),
+      organizations [{id, slug, display_name, ambiguous}] (the signed-in user's own memberships
+      only; the label shows the display name, plus the slug only when two share a name),
       messages [{level, key, text}], csrf_token, action
     Selectors: form select-organization-form, client name select-organization-client, list
     select-organization-list, one radio per org organization-{slug} (name="organization",
     value = org id) with its label organization-{slug}-label, submit
-    select-organization-form-submit. No JavaScript. -#}
+    select-organization-form-submit. No radio is pre-selected (plan 07.1-14): the browser asks
+    for a choice (required). No JavaScript. -#}
 {% extends "base.html" %}
 {% block heading %}{{ t("select_organization.heading") }}{% endblock %}
 {% block content %}
@@ -19,8 +21,8 @@
 <legend><strong><bdi id="select-organization-client">{{ client_name }}</bdi></strong> {{ t("select_organization.lead") }}</legend>
 {% for o in organizations %}
 <p class="anvil-field">
-<input type="radio" id="organization-{{ o.slug }}" name="organization" value="{{ o.id }}" required{% if loop.first %} checked{% endif %}>
-<label for="organization-{{ o.slug }}" id="organization-{{ o.slug }}-label"><bdi>{{ o.display_name }}</bdi> <span class="anvil-muted">(<bdi>{{ o.slug }}</bdi>)</span></label>
+<input type="radio" id="organization-{{ o.slug }}" name="organization" value="{{ o.id }}" required>
+<label for="organization-{{ o.slug }}" id="organization-{{ o.slug }}-label"><bdi>{{ o.display_name }}</bdi>{% if o.ambiguous %} <span class="anvil-muted">(<bdi>{{ o.slug }}</bdi>)</span>{% endif %}</label>
 </p>
 {% endfor %}
 </fieldset>

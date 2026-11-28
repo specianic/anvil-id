@@ -7,6 +7,11 @@
 //!
 //! Refusals: an org the user is not a member of (403, request unchanged), a bad or missing CSRF
 //! token, a replayed choice, another user's flow and a flow bound to another request.
+//!
+//! The non-member page (07.1-14, U-M14): an interactive request for an org the user is not a
+//! member of explains why; "Return to the app" gives the client exactly the `access_denied` a
+//! `prompt=none` request gets, "Use another account" signs a member in; both are flow-bound.
+//! The chooser pre-selects nothing and labels orgs by display name (U-L6).
 
 mod support;
 mod token_support;
@@ -346,6 +351,15 @@ async fn switcher_lists_only_own_memberships() {
         );
         assert!(html.contains(&o.display_name), "{html}");
     }
+    // Nothing is pre-selected, and the labels are display names, not slugs (U-L6).
+    assert!(!html.contains("checked"), "{html}");
+    assert!(
+        html.contains(&format!(
+            "id=\"organization-{}-label\"><bdi>{}</bdi></label>",
+            fx.acme.slug, fx.acme.display_name
+        )),
+        "{html}"
+    );
     // Another org of the same tenant is never revealed: no slug, name or id.
     assert!(!html.contains("gamma"), "{html}");
     assert!(!html.contains(&fx.gamma.id.to_string()), "{html}");
@@ -431,6 +445,219 @@ async fn prompt_none_with_organization_for_member_issues_code_without_ui() {
     assert!(location(&resp).starts_with(REDIRECT), "{}", location(&resp));
     assert_eq!(param(&resp, "error").as_deref(), Some("access_denied"));
     assert!(param(&resp, "code").is_none());
+}
+
+// ---------------------------------------------------------------------------------------------
+// Not a member (07.1-14)
+// ---------------------------------------------------------------------------------------------
+
+const NOT_MEMBER_PAGE: &str = "/ui/select-organization/not-member?request=";
+
+/// The redirect's query parameters, sorted.
+fn sorted_query(resp: &TestResponse) -> Vec<(String, String)> {
+    let loc = location(resp);
+    let (_, q) = loc.split_once('?').expect("query");
+    let mut out: Vec<(String, String)> = url::form_urlencoded::parse(q.as_bytes())
+        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+        .collect();
+    out.sort();
+    out
+}
+
+impl Fx {
+    /// The non-member page path for a fresh interactive request with `extra`.
+    async fn not_member(&self, extra: &[(&str, &str)]) -> String {
+        let resp = self.authorize(extra).await;
+        assert_eq!(resp.status, 303, "{}", resp.text());
+        assert!(param(&resp, "code").is_none(), "no code");
+        let path = to_path(&self.app, &location(&resp));
+        assert!(path.starts_with(NOT_MEMBER_PAGE), "{path}");
+        path
+    }
+}
+
+#[tokio::test]
+async fn non_member_sees_why_and_return_to_app_is_the_same_access_denied() {
+    let fx = fixture().await;
+    fx.sign_in(ALICE).await;
+    // What a request without a page gets.
+    let direct = fx
+        .authorize(&[("organization", "gamma"), ("prompt", "none")])
+        .await;
+    assert_eq!(param(&direct, "error").as_deref(), Some("access_denied"));
+
+    let path = fx.not_member(&[("organization", "gamma")]).await;
+    let page = fx.app.get(&path).await;
+    assert_eq!(page.status, 200, "{}", page.text());
+    assert_eq!(page.header("cache-control"), Some("no-store"));
+    assert!(flow_cookie(&fx.app).is_some(), "the page is flow-bound");
+    let html = page.html();
+    assert!(html.contains("You are not a member of gamma"), "{html}");
+    assert!(html.contains(">alice@example.com</bdi>"), "{html}");
+    assert!(
+        html.contains("id=\"link-return-to-app\" name=\"choice\" value=\"return\""),
+        "{html}"
+    );
+    assert!(
+        html.contains("id=\"org-not-member-other\" name=\"choice\" value=\"other\""),
+        "{html}"
+    );
+    assert!(!html.contains("<script"), "{html}");
+    // The org is named as requested, never looked up.
+    assert!(!html.contains(&fx.gamma.display_name), "{html}");
+
+    // Return to the app: the very same answer as without the page (error, description, state,
+    // iss), to the client's redirect URI.
+    let (action, csrf) = open_form(&fx.app, &path).await;
+    let resp = fx
+        .app
+        .post_form(&action, &[("csrf_token", &csrf), ("choice", "return")])
+        .await;
+    assert_eq!(resp.status, 303, "{}", resp.text());
+    assert!(location(&resp).starts_with(REDIRECT), "{}", location(&resp));
+    assert_eq!(resp.header("cache-control"), Some("no-store"));
+    assert_eq!(sorted_query(&resp), sorted_query(&direct));
+    assert_eq!(param(&resp, "state").as_deref(), Some("st-1"));
+    assert!(param(&resp, "iss").is_some());
+
+    // The request is used up: the page cannot answer twice.
+    let again = fx
+        .app
+        .post_form(&action, &[("csrf_token", &csrf), ("choice", "return")])
+        .await;
+    assert_eq!(again.status, 400, "{}", again.text());
+    assert!(again.header("location").is_none());
+}
+
+#[tokio::test]
+async fn non_member_page_requires_binding() {
+    let fx = fixture().await;
+    fx.sign_in(ALICE).await;
+    let path = fx.not_member(&[("organization", "gamma")]).await;
+    let (action, csrf) = open_form(&fx.app, &path).await;
+    let session = session_cookie(&fx.app).expect("session");
+    let flow = flow_cookie(&fx.app).expect("flow");
+
+    // Missing and forged CSRF tokens.
+    for pairs in [
+        vec![("choice", "return")],
+        vec![("csrf_token", "forged"), ("choice", "return")],
+    ] {
+        let resp = fx.app.post_form(&action, &pairs).await;
+        assert_eq!(resp.status, 403, "{}", resp.text());
+    }
+    // No flow cookie.
+    let resp = post_with_cookies(
+        &fx.app,
+        &action,
+        &cookie_header(&[&session]),
+        &[("csrf_token", &csrf), ("choice", "return")],
+    )
+    .await;
+    assert_eq!(resp.status, 403, "{}", resp.text());
+    // Another user's session with Alice's page.
+    fx.app.clear_cookies();
+    fx.sign_in(BOB).await;
+    let bob = session_cookie(&fx.app).expect("bob session");
+    let resp = post_with_cookies(
+        &fx.app,
+        &action,
+        &cookie_header(&[&bob, &flow]),
+        &[("csrf_token", &csrf), ("choice", "other")],
+    )
+    .await;
+    assert_eq!(resp.status, 403, "{}", resp.text());
+    // An unknown choice is a bad request.
+    let resp = post_with_cookies(
+        &fx.app,
+        &action,
+        &cookie_header(&[&session, &flow]),
+        &[("csrf_token", &csrf), ("choice", "allow")],
+    )
+    .await;
+    assert_eq!(resp.status, 400, "{}", resp.text());
+
+    // Nothing changed: the request is still stored and the bound page still answers.
+    let request = path.strip_prefix(NOT_MEMBER_PAGE).expect("request id");
+    let id = anvil_core::model::AuthRequestId(uuid::Uuid::parse_str(request).expect("id"));
+    assert!(
+        fx.app
+            .storage()
+            .grants()
+            .get_authorization_request(fx.tenant, id, fx.app.clock().now())
+            .await
+            .expect("lookup")
+            .is_some(),
+        "no refused submission answered the client"
+    );
+    let resp = post_with_cookies(
+        &fx.app,
+        &action,
+        &cookie_header(&[&session, &flow]),
+        &[("csrf_token", &csrf), ("choice", "return")],
+    )
+    .await;
+    assert_eq!(resp.status, 303, "{}", resp.text());
+    assert_eq!(param(&resp, "error").as_deref(), Some("access_denied"));
+}
+
+#[tokio::test]
+async fn non_member_use_another_account_signs_in_a_member() {
+    let fx = fixture().await;
+    fx.sign_in(BOB).await;
+    let bob_session = session_cookie(&fx.app).expect("bob session").1;
+    let path = fx.not_member(&[("organization", "acme")]).await;
+    let resp = submit_form(&fx.app, &path, &[("choice", "other")]).await;
+    assert_eq!(resp.status, 303, "{}", resp.text());
+    let login = to_path(&fx.app, &location(&resp));
+    assert!(login.starts_with("/ui/login?request="), "{login}");
+
+    let resp = submit_form(
+        &fx.app,
+        &login,
+        &[("identifier", ALICE), ("password", PASSWORD)],
+    )
+    .await;
+    assert_eq!(resp.status, 303, "{}", resp.text());
+    let resp = fx.app.follow(&resp).await;
+    assert!(location(&resp).starts_with(REDIRECT), "{}", location(&resp));
+    let body = fx.tokens(&resp).await;
+    let claims = id_claims(&body);
+    assert_eq!(claims["org_id"], fx.acme.id.to_string());
+    assert_eq!(claims["sub"], user_id(&fx.app, ALICE).await.to_string());
+    let old = fx
+        .app
+        .storage()
+        .sessions()
+        .get_active(
+            fx.tenant,
+            &SecretHash(anvil_jose::encoding::secret_hash(&bob_session)),
+            fx.app.clock().now(),
+        )
+        .await
+        .expect("lookup");
+    assert!(old.is_none(), "Bob's session is revoked");
+}
+
+#[tokio::test]
+async fn non_member_page_without_session_or_refusal() {
+    let fx = fixture().await;
+    fx.sign_in(ALICE).await;
+    let path = fx.not_member(&[("organization", "gamma")]).await;
+    // Without a session: sign in for the request.
+    fx.app.clear_cookies();
+    let resp = fx.app.get(&path).await;
+    assert_eq!(resp.status, 303, "{}", resp.text());
+    assert!(
+        to_path(&fx.app, &location(&resp)).starts_with("/ui/login?request="),
+        "{}",
+        location(&resp)
+    );
+    // Bob is a member of gamma: the page does not open for a user who is not refused.
+    fx.sign_in(BOB).await;
+    let resp = fx.app.get(&path).await;
+    assert_eq!(resp.status, 400, "{}", resp.text());
+    assert!(!resp.html().contains("link-return-to-app"));
 }
 
 // ---------------------------------------------------------------------------------------------

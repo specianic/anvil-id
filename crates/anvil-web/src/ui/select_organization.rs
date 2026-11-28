@@ -5,6 +5,8 @@
 //! |---|---|
 //! | `GET  /ui/select-organization?request=` | lists the signed-in user's own memberships (display name and slug, one radio each); starts a bound flow (flow cookie + CSRF token) |
 //! | `POST /ui/select-organization?flow=&request=` | `organization=<org id>` |
+//! | `GET  /ui/select-organization/not-member?request=` | explains that the signed-in user is not a member of the organization the client needs; starts a bound flow |
+//! | `POST /ui/select-organization/not-member?flow=&request=` | `choice=return` (Return to the app) or `choice=other` (Use another account) |
 //!
 //! `/authorize` sends the user here when the client's organization policy is `required`, the
 //! request names no `organization` and the user belongs to several orgs
@@ -21,11 +23,26 @@
 //! to this request; otherwise the `csrf` error page (403) and nothing changes. An expired or used
 //! switcher flow shows the switcher again with a message; a request that no longer waits for a
 //! choice is the `flow_expired` page. The page works without JavaScript and is
-//! `Cache-Control: no-store`.
+//! `Cache-Control: no-store`. The chooser pre-selects nothing (U-L6): the user picks an org by
+//! its display name.
+//!
+//! # Not a member (U-M14)
+//!
+//! When an interactive request names an org the user is not a member of, or the client requires
+//! an org and the user has none, `/authorize` sends the user to the non-member page
+//! (`AuthorizeOutcome::NotOrgMember`) instead of answering the client right away. The page says
+//! so (naming the org as the request named it, never looked up), shows the signed-in account and
+//! offers "Return to &lt;app&gt;" and "Use another account". Both are a POST bound to the page's
+//! flow (flow cookie, CSRF token, the flow's user and request; otherwise the `csrf` page and
+//! nothing changes). Return answers the client `access_denied` with the same parameters as a
+//! refusal without the page (decision 2 of 07.1); `prompt=none` still gets that answer directly.
+//! "Use another account" is the account chooser's path to the login page for the request.
 
 use anvil_core::error::CoreError;
 use anvil_core::model::{AuthRequestId, BrowserSession, OrgId};
-use anvil_core::service::authorize::{AccountChoiceBinding, OrgChoice, SelectOrganizationStart};
+use anvil_core::service::authorize::{
+    AccountChoiceBinding, OrgChoice, OrgNotMemberChoice, OrgNotMemberStart, SelectOrganizationStart,
+};
 use axum::Router;
 use axum::extract::rejection::FormRejection;
 use axum::extract::{Form, Query, State};
@@ -45,15 +62,29 @@ use crate::state::AppState;
 use crate::tenant::ResolvedTenant;
 
 const PAGE: &str = "/ui/select-organization";
+/// The non-member explanation page.
+const NOT_MEMBER_PAGE: &str = "/ui/select-organization/not-member";
 
 /// Message key shown when the switcher flow expired or was already used.
 const EXPIRED: &str = "select_organization.expired";
 /// Message key shown when the submitted org is not one of the user's memberships.
 const NOT_MEMBER: &str = "select_organization.not_member";
+/// Message key shown when the non-member page's flow expired or was already used.
+const NOT_MEMBER_EXPIRED: &str = "org_not_member.expired";
 
 /// Switcher routes, behind the Fetch-Metadata layer.
 pub(super) fn routes() -> Router<AppState> {
-    Router::new().route(PAGE, get(show).post(submit))
+    Router::new().route(PAGE, get(show).post(submit)).route(
+        NOT_MEMBER_PAGE,
+        get(show_not_member).post(submit_not_member),
+    )
+}
+
+/// The form the non-member page posts.
+#[derive(Default, Deserialize)]
+struct NotMemberForm {
+    csrf_token: Option<String>,
+    choice: Option<String>,
 }
 
 /// The form the switcher posts.
@@ -69,6 +100,8 @@ struct OrgEntry<'a> {
     id: String,
     slug: &'a str,
     display_name: &'a str,
+    /// Another of the user's orgs has the same display name: the label adds the slug.
+    ambiguous: bool,
 }
 
 /// The `request` parameter; absent or malformed → the invalid request page.
@@ -101,16 +134,7 @@ async fn switcher_page(
         .await
     {
         Ok(SelectOrganizationStart::Started { flow, page }) => (flow, page),
-        Ok(SelectOrganizationStart::RequestExpired) => {
-            return error_page_in(
-                state,
-                Some(tenant),
-                loc,
-                StatusCode::BAD_REQUEST,
-                "flow_expired",
-                "",
-            );
-        }
+        Ok(SelectOrganizationStart::RequestExpired) => return flow_expired(state, tenant, loc),
         Err(e) => return core_error_page_in(state, Some(tenant), loc, &e),
     };
     let jar = CookieJar::new().add(
@@ -126,6 +150,16 @@ async fn switcher_page(
             id: o.id.to_string(),
             slug: &o.slug,
             display_name: &o.display_name,
+            ambiguous: page
+                .organizations
+                .iter()
+                .filter(|p| {
+                    p.display_name
+                        .trim()
+                        .eq_ignore_ascii_case(o.display_name.trim())
+                })
+                .count()
+                > 1,
         })
         .collect();
     let ctx = minijinja::context! {
@@ -270,6 +304,169 @@ async fn submit(
     }
 }
 
+fn flow_expired(state: &AppState, tenant: &ResolvedTenant, loc: &Locale) -> Response {
+    error_page_in(
+        state,
+        Some(tenant),
+        loc,
+        StatusCode::BAD_REQUEST,
+        "flow_expired",
+        "",
+    )
+}
+
+/// Starts a non-member page flow for `request` (sets its cookie) and renders the page.
+async fn not_member_page(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    loc: &Locale,
+    session: &BrowserSession,
+    request: AuthRequestId,
+    messages: Vec<PageMessage>,
+    status: StatusCode,
+) -> Response {
+    let (flow, page) = match state
+        .authorize_service()
+        .start_org_not_member(&tenant.tenant, session, request)
+        .await
+    {
+        Ok(OrgNotMemberStart::Started { flow, page }) => (flow, page),
+        Ok(OrgNotMemberStart::RequestExpired) => return flow_expired(state, tenant, loc),
+        Err(e) => return core_error_page_in(state, Some(tenant), loc, &e),
+    };
+    let jar = CookieJar::new().add(
+        state
+            .cookies()
+            .flow_cookie(&tenant.tenant, flow.cookie_token.expose_secret()),
+    );
+    let messages = localized(state, loc, messages);
+    let ctx = minijinja::context! {
+        page => PageContext::for_tenant(state, tenant, loc, "title.org_not_member").into_value(),
+        client_name => &page.client_name,
+        requested_org => &page.requested_org,
+        user_email => &page.user_email,
+        messages => minijinja::Value::from(minijinja::value::Serde(&messages)),
+        csrf_token => flow.csrf_token.expose_secret(),
+        action => carry_ui_locales(
+            &tenant.ui_url(&format!("{NOT_MEMBER_PAGE}?flow={}&request={request}", flow.flow_id)),
+            loc,
+        ),
+    };
+    match state.renderer().page("org_not_member.html", ctx) {
+        Ok(html) => no_store((status, jar, html).into_response()),
+        Err(e) => {
+            tracing::error!(error = %e, "rendering the organization non-member page failed");
+            core_error_page_in(
+                state,
+                Some(tenant),
+                loc,
+                &CoreError::Internal("render".into()),
+            )
+        }
+    }
+}
+
+async fn show_not_member(
+    State(state): State<AppState>,
+    tenant: ResolvedTenant,
+    locale: RequestLocale,
+    headers: HeaderMap,
+    jar: CookieJar,
+    Query(q): Query<UiQuery>,
+) -> Response {
+    let request = match request_id(&state, &tenant, &locale.0, &q) {
+        Ok(r) => r,
+        Err(resp) => return *resp,
+    };
+    let loc = page_locale(&state, &tenant, locale, &headers, Some(request)).await;
+    match current_session(&state, &tenant, &jar).await {
+        Ok(Some(s)) => {
+            not_member_page(
+                &state,
+                &tenant,
+                &loc,
+                &s,
+                request,
+                Vec::new(),
+                StatusCode::OK,
+            )
+            .await
+        }
+        Ok(None) => to_login(&state, &tenant, &loc, request).await,
+        Err(e) => core_error_page_in(&state, Some(&tenant), &loc, &e),
+    }
+}
+
+async fn submit_not_member(
+    State(state): State<AppState>,
+    tenant: ResolvedTenant,
+    locale: RequestLocale,
+    headers: HeaderMap,
+    jar: CookieJar,
+    Query(q): Query<UiQuery>,
+    form: Result<Form<NotMemberForm>, FormRejection>,
+) -> Response {
+    let form = match form {
+        Ok(Form(form)) => form,
+        Err(e) => return rejected_form(&state, Some(&tenant), &locale.0, &e),
+    };
+    let choice = match form.choice.as_deref() {
+        Some("return") => OrgNotMemberChoice::ReturnToApp,
+        Some("other") => OrgNotMemberChoice::Other,
+        _ => return bad_form(&state, &tenant, &locale.0),
+    };
+    let request = match request_id(&state, &tenant, &locale.0, &q) {
+        Ok(r) => r,
+        Err(resp) => return *resp,
+    };
+    let loc = page_locale(&state, &tenant, locale, &headers, Some(request)).await;
+    let session = match current_session(&state, &tenant, &jar).await {
+        Ok(Some(s)) => s,
+        Ok(None) => return to_login(&state, &tenant, &loc, request).await,
+        Err(e) => return core_error_page_in(&state, Some(&tenant), &loc, &e),
+    };
+    let (Some(flow_id), Some(csrf)) = (q.flow_id(), form.csrf_token.filter(|c| !c.is_empty()))
+    else {
+        return csrf_page(&state, Some(&tenant), &loc);
+    };
+    let cookie = jar
+        .get(&state.cookies().flow_name(&tenant.tenant))
+        .map(|c| c.value().to_owned());
+    let binding = AccountChoiceBinding {
+        flow_id,
+        cookie_token: cookie.as_deref(),
+        csrf_token: &csrf,
+    };
+    match state
+        .authorize_service()
+        .answer_org_not_member(
+            &tenant.tenant,
+            &tenant.issuer,
+            request,
+            &session,
+            &binding,
+            choice,
+        )
+        .await
+    {
+        Ok(Some(outcome)) => no_store(state.authorize_response(&tenant, &loc, outcome)),
+        Ok(None) => {
+            not_member_page(
+                &state,
+                &tenant,
+                &loc,
+                &session,
+                request,
+                vec![PageMessage::error(NOT_MEMBER_EXPIRED)],
+                StatusCode::BAD_REQUEST,
+            )
+            .await
+        }
+        Err(CoreError::Forbidden) => csrf_page(&state, Some(&tenant), &loc),
+        Err(e) => core_error_page_in(&state, Some(&tenant), &loc, &e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::render::Renderer;
@@ -296,5 +493,10 @@ mod tests {
         assert!(html.contains("id=\"select-organization-form\""), "{html}");
         assert!(html.contains("id=\"organization-acme\""), "{html}");
         assert!(!html.contains("<script"), "{html}");
+        assert!(
+            !html.contains("checked"),
+            "no organization is pre-selected: {html}"
+        );
+        assert!(!html.contains("(acme)"), "display names, not slugs: {html}");
     }
 }

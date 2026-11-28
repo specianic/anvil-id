@@ -759,6 +759,26 @@ async fn organization_parameter_refused_for_off_client() {
     assert_no_org_claims(&jwt_claims(access_token(&body)));
 }
 
+/// The non-member page an interactive refusal is sent to (07.1-14): asserts the redirect, no
+/// code, and returns the page.
+async fn not_member_page(app: &TestApp, resp: &TestResponse, cookie: &str) -> String {
+    assert_eq!(resp.status, 303, "{}", resp.text());
+    let location = support::location(resp);
+    assert!(
+        location.contains("/ui/select-organization/not-member?request="),
+        "{location}"
+    );
+    assert!(authz::param(resp, "code").is_none(), "no code");
+    let path = location
+        .split_once("/ui/")
+        .map(|(_, p)| format!("/ui/{p}"))
+        .expect("ui path");
+    let page = authz::get(app, &path, Some(cookie)).await;
+    assert_eq!(page.status, 200, "{}", page.text());
+    assert_eq!(page.header("cache-control"), Some("no-store"));
+    page.html()
+}
+
 #[tokio::test]
 async fn nonmember_organization_is_access_denied() {
     let app = TestApp::new().await;
@@ -768,8 +788,19 @@ async fn nonmember_organization_is_access_denied() {
     let other = org(&app, c.tenant, "other").await;
     join(&app, c.tenant, &acme, &c.user, &[]).await;
 
-    // By slug and by id; an unknown org looks the same.
+    // By slug and by id; an unknown org looks the same. Without a browser to explain it to
+    // (prompt=none) the client gets access_denied directly; an interactive request first shows
+    // the non-member page, which names the org only as the request did (never looked up).
     for requested in [other.slug.clone(), other.id.to_string(), "nope".to_owned()] {
+        let resp = authorize(
+            &app,
+            &rp,
+            Some(&c.cookie),
+            SCOPE,
+            &[("organization", &requested), ("prompt", "none")],
+        )
+        .await;
+        assert_eq!(redirect_error(&resp), "access_denied", "{requested}");
         let resp = authorize(
             &app,
             &rp,
@@ -778,14 +809,30 @@ async fn nonmember_organization_is_access_denied() {
             &[("organization", &requested)],
         )
         .await;
-        assert_eq!(redirect_error(&resp), "access_denied", "{requested}");
+        let html = not_member_page(&app, &resp, &c.cookie).await;
+        assert!(html.contains("id=\"link-return-to-app\""), "{html}");
+        assert!(
+            html.contains(&format!("You are not a member of {requested}")),
+            "{html}"
+        );
+        assert!(!html.contains(&other.display_name), "{html}");
     }
-    // Required policy without any membership: access_denied.
+    // Required policy without any membership: access_denied, or the page when interactive.
     let required = org_client(&app, c.tenant, OrgClientPolicy::Required, TokenFormat::Jwt).await;
     let loner = seed_user(&app, c.tenant, "loner@example.test").await;
     let loner_cookie = authz::session(&app, &authz::default_tenant(&app), loner.id).await;
-    let resp = authorize(&app, &required, Some(&loner_cookie), SCOPE, &[]).await;
+    let resp = authorize(
+        &app,
+        &required,
+        Some(&loner_cookie),
+        SCOPE,
+        &[("prompt", "none")],
+    )
+    .await;
     assert_eq!(redirect_error(&resp), "access_denied");
+    let resp = authorize(&app, &required, Some(&loner_cookie), SCOPE, &[]).await;
+    let html = not_member_page(&app, &resp, &loner_cookie).await;
+    assert!(html.contains("needs an organization"), "{html}");
 
     // Positive control: the membership by id.
     let body = sign_in(

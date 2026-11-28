@@ -1,0 +1,27 @@
+{#- Organization non-member page (plan 07.1-14, U-M14): the signed-in user is not a member of the
+      organization the app needs. Variables (besides page): client_name, requested_org (the
+      organization as the request named it, or none when the app requires any organization),
+      user_email, messages [{level, key, text}], csrf_token, action
+    Selectors: form org-not-member-form, explanation org-not-member-lead, account
+    org-not-member-account (email org-not-member-email), buttons link-return-to-app
+    ("Return to <app>", name="choice" value="return": the app receives access_denied) and
+    org-not-member-other ("Use another account", value="other"). No JavaScript. -#}
+{% extends "base.html" %}
+{% block heading %}{% if requested_org %}{{ t("org_not_member.heading", org=requested_org) }}{% else %}{{ t("org_not_member.heading_any", app=client_name) }}{% endif %}{% endblock %}
+{% block content %}
+<div class="anvil-form-messages" id="org-not-member-messages" aria-live="polite">
+{% for m in messages %}
+<p class="anvil-message anvil-message-{{ m.level }}" id="org-not-member-msg-{{ loop.index }}" data-message-key="{{ m.key }}"{% if m.level == "error" %} role="alert"{% endif %}>{{ m.text }}</p>
+{% endfor %}
+</div>
+<form id="org-not-member-form" method="post" action="{{ action }}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+<p class="anvil-lead" id="org-not-member-lead">{% if requested_org %}{{ t("org_not_member.lead", app=client_name, org=requested_org) }}{% else %}{{ t("org_not_member.lead_any", app=client_name) }}{% endif %}</p>
+<p class="anvil-account" id="org-not-member-account">{{ t("org_not_member.signed_in_as") }} <strong><bdi id="org-not-member-email">{{ user_email }}</bdi></strong></p>
+<p class="anvil-muted" id="org-not-member-help">{{ t("org_not_member.help") }}</p>
+<div class="anvil-actions">
+<button type="submit" id="link-return-to-app" name="choice" value="return">{{ t("org_not_member.return", app=client_name) }}</button>
+<button type="submit" id="org-not-member-other" name="choice" value="other" class="anvil-secondary">{{ t("org_not_member.other") }}</button>
+</div>
+</form>
+{% endblock %}
