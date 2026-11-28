@@ -1,12 +1,14 @@
 // Audit log of a tenant: filters kept in the URL, readable action labels and groups
 // (lib/audit-labels.ts), and actors/targets resolved to emails and client names (C-M8). Each
-// unique id is fetched once per page through react-query; ids that do not resolve (deleted users,
-// sessions, keys) are shown shortened, with the full value and a copy button in the details.
+// unique id is fetched once per session through react-query (a record that does not exist is
+// remembered as such), and the lookups are paced (see `paced`) so a page of events never bursts past
+// the admin API rate limit; ids that do not resolve (deleted users, sessions, keys) are shown
+// shortened, with the full value and a copy button in the details.
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { createColumnHelper } from "@tanstack/react-table";
 import { type FormEvent, useId, useMemo, useState } from "react";
-import { api, unwrap } from "@/api/client";
+import { ApiError, api, unwrap } from "@/api/client";
 import { SYSTEM_TENANT, useTenant } from "@/lib/tenant";
 import type { components } from "@/api/schema";
 import { Modal } from "@/components/ConfirmDialog";
@@ -123,30 +125,74 @@ function targetRef(event: AuditEventView, tenant: string): Ref | null {
   return kind ? { kind, tenant, id: event.target } : null;
 }
 
-/** Email or client name of a ref; cached for the session, one request per unique id. */
+/**
+ * Lookups share the admin API's per-IP rate limit (default 20 requests per second, burst 20) with
+ * everything else the console loads, and one page of 50 events can name up to 100 different users
+ * and clients. Starting them all at once would exhaust the limit and make the console's own
+ * requests fail, so each lookup starts at least LOOKUP_INTERVAL_MS after the previous one (at most
+ * 10 per second, half of the default limit); names fill in as they arrive.
+ */
+const LOOKUP_INTERVAL_MS = 100;
+let nextLookupAt = 0;
+
+function paced<T>(signal: AbortSignal, run: () => Promise<T>): Promise<T> {
+  const now = Date.now();
+  const at = Math.max(now, nextLookupAt);
+  nextLookupAt = at + LOOKUP_INTERVAL_MS;
+  if (at === now) return run();
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(resolve, at - now);
+    signal.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        reject(signal.reason);
+      },
+      { once: true },
+    );
+  }).then(run);
+}
+
+const isNotFound = (error: unknown) => error instanceof ApiError && error.status === 404;
+const isTooManyRequests = (error: unknown) => error instanceof ApiError && error.status === 429;
+
+/**
+ * Email or client name of a ref, or null when the record does not exist (any more). Both answers
+ * are cached for the session, so every unique id costs one request; a refused lookup (429) is
+ * retried after a pause, other errors leave the id unresolved.
+ */
 function useResolved(ref: Ref | null): string | null {
   const query = useQuery({
     queryKey: ["audit-ref", ref?.kind, ref?.tenant, ref?.id],
     enabled: ref !== null,
     staleTime: Number.POSITIVE_INFINITY,
-    retry: false,
-    queryFn: async ({ signal }) => {
-      if (!ref) return null;
-      if (ref.kind === "user") {
-        return unwrap(
-          await api.GET("/api/admin/v1/tenants/{slug}/users/{user_id}", {
-            params: { path: { slug: ref.tenant, user_id: ref.id } },
-            signal,
-          }),
-        ).email;
-      }
-      return unwrap(
-        await api.GET("/api/admin/v1/tenants/{slug}/clients/{client_id}", {
-          params: { path: { slug: ref.tenant, client_id: ref.id } },
-          signal,
-        }),
-      ).name;
-    },
+    retry: (failureCount, error) => isTooManyRequests(error) && failureCount < 3,
+    retryDelay: (attempt) => 1000 * 2 ** attempt,
+    // A failed lookup is not repeated whenever the table mounts again (filter change, paging).
+    retryOnMount: false,
+    queryFn: ({ signal }) =>
+      paced(signal, async () => {
+        if (!ref) return null;
+        try {
+          if (ref.kind === "user") {
+            return unwrap(
+              await api.GET("/api/admin/v1/tenants/{slug}/users/{user_id}", {
+                params: { path: { slug: ref.tenant, user_id: ref.id } },
+                signal,
+              }),
+            ).email;
+          }
+          return unwrap(
+            await api.GET("/api/admin/v1/tenants/{slug}/clients/{client_id}", {
+              params: { path: { slug: ref.tenant, client_id: ref.id } },
+              signal,
+            }),
+          ).name;
+        } catch (error) {
+          if (isNotFound(error)) return null;
+          throw error;
+        }
+      }),
   });
   return query.data ?? null;
 }

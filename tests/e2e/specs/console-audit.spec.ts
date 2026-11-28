@@ -2,7 +2,8 @@
 // (optgroups from lib/audit-labels.ts); cells show the label with the raw action name; actors and
 // targets resolve to the administrator's email, the user's email or the client's name, each linked
 // to its page. Ids that do not resolve stay shortened, with the full id and a copy button in the
-// event details.
+// event details. The lookups are paced and each unique id is fetched once, so the page never runs
+// into the admin API rate limit: no console request is answered 429, and no lookup repeats.
 //
 // Runs in a tenant of its own, deleted afterwards. After consoleLogin the spec opens pages by URL
 // and never asserts the console's landing page.
@@ -27,6 +28,17 @@ test('console: audit log with grouped action labels and resolved actors and targ
   test.setTimeout(120_000);
   tenant = await setUpConsoleTenant(browser, page, 'caud');
   const { token, slug, admin } = tenant;
+  // Every admin API answer the console gets, and every actor/target lookup it starts.
+  const throttled: string[] = [];
+  const lookups: string[] = [];
+  page.on('response', (res) => {
+    if (res.url().includes('/api/admin/') && res.status() === 429) throttled.push(res.url());
+  });
+  page.on('request', (req) => {
+    if (/\/api\/admin\/v1\/tenants\/[^/]+\/(users|clients)\/[^/?]+$/.test(new URL(req.url()).pathname)) {
+      lookups.push(req.url());
+    }
+  });
   const consoleCreated = randomEmail('aud-console');
   const apiCreated = randomEmail('aud-api');
 
@@ -90,5 +102,11 @@ test('console: audit log with grouped action labels and resolved actors and targ
     await expect(details.getByRole('button', { name: 'Copy Target id' })).toBeVisible();
     await expectNoA11yViolations(page);
     await details.getByRole('button', { name: 'Close' }).click();
+  });
+
+  await test.step('the lookups stayed within the rate limit: no 429, each id fetched once', async () => {
+    expect(throttled).toEqual([]);
+    expect(lookups.length).toBeGreaterThan(0);
+    expect(new Set(lookups).size).toBe(lookups.length);
   });
 });
