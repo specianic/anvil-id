@@ -5,9 +5,13 @@
 //! from one instance applies to another. Secrets never appear in clear in an export:
 //! [`SecretInput`] serializes as `{configured: true|false}`; an inline value is accepted on input
 //! only. The JSON form here is the admin API wire form; the CLI converts it to and from YAML.
+//!
+//! Optional keys added within version 1 (rc.4; docs/COMPATIBILITY.md) keep today's meaning when
+//! they are absent, also under prune: an absent branding `logo` leaves the stored logo, and an
+//! absent `organizations` key touches no organization.
 
 use secrecy::{ExposeSecret, SecretString};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use super::attribute::AttributeDefinition;
 use super::branding::ThemeTokens;
@@ -44,7 +48,7 @@ pub struct TenantConfigDocument {
     /// Keyed by slug.
     #[serde(default)]
     pub connections: Vec<ConnectionSection>,
-    /// Tenant-wide branding and per-client overrides (logos are not part of version 1).
+    /// Tenant-wide branding and per-client overrides, each with an optional logo.
     #[serde(default)]
     pub branding: Vec<BrandingSection>,
     /// Keyed by name.
@@ -61,6 +65,13 @@ pub struct TenantConfigDocument {
     /// Keyed by name.
     #[serde(default)]
     pub webhooks: Vec<WebhookSection>,
+    /// Organizations, keyed by slug, with what they own (roles, connections, domain claims,
+    /// branding). `None` (key absent) = organizations are not managed by this document: nothing
+    /// of them is planned, changed or pruned. Organizations themselves are never deleted by a
+    /// document; runtime data (members, invitations, identity links, org role assignments) and
+    /// domain verification are never part of it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub organizations: Option<Vec<OrganizationSection>>,
 }
 
 impl TenantConfigDocument {
@@ -145,6 +156,14 @@ pub struct ClientSection {
     /// `false`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub headless_native: bool,
+    /// The client's home page (shown to administrators; to end users only for static
+    /// clients); omitted when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_uri: Option<String>,
+    /// Where a sign-in started at AnvilID continues at the client (OIDC third-party initiated
+    /// login); omitted when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initiate_login_uri: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -167,9 +186,10 @@ fn is_application(k: &ClientKind) -> bool {
     *k == ClientKind::Application
 }
 
-/// An upstream identity-provider connection, keyed by slug. Tenant connections only: an
-/// organization's connections are org-owned runtime state and never part of the document
-/// (export, plan and prune exclude them).
+/// An upstream identity-provider connection, keyed by slug. At the top level: tenant connections
+/// (an organization's connections never appear there). Under `organizations[].connections`: that
+/// organization's connections (OIDC, or SAML while `saml_experimental` is on). Both share the
+/// tenant's slug namespace.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConnectionSection {
@@ -195,9 +215,125 @@ pub struct BrandingSection {
     pub tokens: ThemeTokens,
     #[serde(default)]
     pub custom_css: Option<String>,
+    /// The logo: absent keeps the stored logo, `null` clears it, a value sets it.
+    #[serde(
+        default,
+        deserialize_with = "double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub logo: Option<Option<LogoInput>>,
 }
 
-/// A role, keyed by name. Tenant roles only: org-owned roles are never part of the document.
+/// Deserializes a present key (including `null`) as `Some`, so that an absent key (`None` by
+/// `#[serde(default)]`) and `null` (`Some(None)`) differ.
+fn double_option<'de, D, T>(d: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(d).map(Some)
+}
+
+/// A logo in a branding section.
+///
+/// - `{data: <base64>}` (input only): the image, checked like an upload (PNG, JPEG or WebP, at
+///   most 256 KiB, SVG refused).
+/// - `{sha256, content_type}`: a logo already stored in the tenant, by content hash (what an
+///   export writes). Unknown in the target tenant = a validation error.
+///
+/// `{file: path}` is a CLI reference (resolved into `{data}` by `anvilid tenant`); the server
+/// refuses it.
+#[derive(Clone, PartialEq, Eq)]
+pub enum LogoInput {
+    Data {
+        data: String,
+    },
+    Stored {
+        sha256: String,
+        content_type: String,
+    },
+}
+
+impl std::fmt::Debug for LogoInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Data { data } => f
+                .debug_struct("Data")
+                .field("data", &format_args!("<{} base64 characters>", data.len()))
+                .finish(),
+            Self::Stored {
+                sha256,
+                content_type,
+            } => f
+                .debug_struct("Stored")
+                .field("sha256", sha256)
+                .field("content_type", content_type)
+                .finish(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LogoInputWire {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    data: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    content_type: Option<String>,
+    /// Accepted by the parser only to refuse it with a clear message.
+    #[serde(default, skip_serializing)]
+    file: Option<serde_json::Value>,
+}
+
+impl Serialize for LogoInput {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let wire = match self {
+            Self::Data { data } => LogoInputWire {
+                data: Some(data.clone()),
+                sha256: None,
+                content_type: None,
+                file: None,
+            },
+            Self::Stored {
+                sha256,
+                content_type,
+            } => LogoInputWire {
+                data: None,
+                sha256: Some(sha256.clone()),
+                content_type: Some(content_type.clone()),
+                file: None,
+            },
+        };
+        wire.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for LogoInput {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = LogoInputWire::deserialize(deserializer)?;
+        if wire.file.is_some() {
+            return Err(serde::de::Error::custom(
+                "logo {file: path} is resolved by the anvilid CLI; send {data: <base64>} or \
+                 {sha256, content_type}",
+            ));
+        }
+        match (wire.data, wire.sha256, wire.content_type) {
+            (Some(data), None, None) => Ok(Self::Data { data }),
+            (None, Some(sha256), Some(content_type)) => Ok(Self::Stored {
+                sha256,
+                content_type,
+            }),
+            _ => Err(serde::de::Error::custom(
+                "a logo is null, {data: <base64>} or {sha256, content_type}",
+            )),
+        }
+    }
+}
+
+/// A role, keyed by name: a tenant role at the top level, an organization-owned role under
+/// `organizations[].roles`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RoleSection {
@@ -206,6 +342,83 @@ pub struct RoleSection {
     pub description: String,
     #[serde(default)]
     pub permissions: Vec<String>,
+}
+
+/// An organization, keyed by slug, with what it owns. Never carries memberships, invitations,
+/// identity links, org role assignments or domain verification state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OrganizationSection {
+    pub slug: String,
+    pub display_name: String,
+    /// The organization's MFA requirement; `null` = none.
+    #[serde(default)]
+    pub mfa_policy: Option<MfaPolicy>,
+    /// Free-form JSON object for the integrator.
+    #[serde(default = "empty_object")]
+    pub metadata: serde_json::Value,
+    #[serde(default)]
+    pub settings: OrgSettingsSection,
+    /// Organization-owned roles, keyed by name.
+    #[serde(default)]
+    pub roles: Vec<RoleSection>,
+    /// The organization's connections, keyed by slug.
+    #[serde(default)]
+    pub connections: Vec<ConnectionSection>,
+    /// Domain claims, keyed by domain.
+    #[serde(default)]
+    pub domains: Vec<OrgDomainSection>,
+    /// The organization's branding (`null` or absent: none; a stored one is removed only with
+    /// prune).
+    #[serde(default)]
+    pub branding: Option<OrgBrandingSection>,
+}
+
+fn empty_object() -> serde_json::Value {
+    serde_json::Value::Object(serde_json::Map::new())
+}
+
+/// Organization settings.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OrgSettingsSection {
+    /// Roles given to members created by just-in-time provisioning, by name: an organization
+    /// role of this entry, otherwise a tenant role.
+    #[serde(default)]
+    pub default_roles: Vec<String>,
+}
+
+/// A domain claim of an organization. A document never marks a domain verified: a new claim is
+/// pending with a fresh DNS token, and `routing` / `allow_local_password` take effect only once
+/// the domain was verified through DNS (apply the document again after verification).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OrgDomainSection {
+    pub domain: String,
+    /// Slug of the routing target, a connection of this organization.
+    #[serde(default)]
+    pub connection: Option<String>,
+    #[serde(default)]
+    pub routing: bool,
+    #[serde(default = "default_true")]
+    pub allow_local_password: bool,
+}
+
+/// An organization's branding.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OrgBrandingSection {
+    #[serde(default)]
+    pub tokens: ThemeTokens,
+    #[serde(default)]
+    pub custom_css: Option<String>,
+    /// Absent keeps the stored logo, `null` clears it, a value sets it.
+    #[serde(
+        default,
+        deserialize_with = "double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub logo: Option<Option<LogoInput>>,
 }
 
 /// A customized email template, keyed by kind (an `EmailKind` storage name).
@@ -349,6 +562,16 @@ pub enum ConfigObjectKind {
     EmailTemplate,
     Smtp,
     Webhook,
+    /// Key: org slug.
+    Organization,
+    /// Key: `{org slug}/{role name}`.
+    OrgRole,
+    /// Key: `{org slug}/{connection slug}`.
+    OrgConnection,
+    /// Key: `{org slug}/{domain}`.
+    OrgDomain,
+    /// Key: org slug.
+    OrgBranding,
 }
 
 /// One changed field. Secret fields carry no values (`before` and `after` are `None`); only the
@@ -509,6 +732,115 @@ mod tests {
         assert!(err.to_string().contains("missing field `version`"), "{err}");
         let negative = minimal().replace("\"version\":1", "\"version\":-1");
         assert!(serde_json::from_str::<TenantConfigDocument>(&negative).is_err());
+    }
+
+    #[test]
+    fn config_doc_rc3_document_parses_unchanged() {
+        let d: TenantConfigDocument = serde_json::from_str(minimal()).unwrap();
+        assert!(d.organizations.is_none());
+        // Nothing new is written for a document without the new keys.
+        let out = serde_json::to_value(&d).unwrap();
+        assert!(out.get("organizations").is_none());
+        let b: BrandingSection = serde_json::from_str(r#"{"tokens":{}}"#).unwrap();
+        assert_eq!(b.logo, None);
+        assert!(serde_json::to_value(&b).unwrap().get("logo").is_none());
+        let base = r#"{"client_id":"web","name":"Web","client_type":"public","application_type":"web","auth_method":"none"}"#;
+        let c: ClientSection = serde_json::from_str(base).unwrap();
+        assert!(c.client_uri.is_none() && c.initiate_login_uri.is_none());
+        let out = serde_json::to_value(&c).unwrap();
+        assert!(out.get("client_uri").is_none() && out.get("initiate_login_uri").is_none());
+    }
+
+    #[test]
+    fn config_doc_logo_variants() {
+        let b: BrandingSection = serde_json::from_str(r#"{"logo":null}"#).unwrap();
+        assert_eq!(b.logo, Some(None));
+        assert_eq!(serde_json::to_string(&b.logo).unwrap(), "null");
+        let b: BrandingSection = serde_json::from_str(r#"{"logo":{"data":"iVBO"}}"#).unwrap();
+        assert_eq!(
+            b.logo,
+            Some(Some(LogoInput::Data {
+                data: "iVBO".into()
+            }))
+        );
+        assert!(!format!("{b:?}").contains("iVBO"));
+        let sha = "a".repeat(64);
+        let b: BrandingSection = serde_json::from_str(&format!(
+            r#"{{"logo":{{"sha256":"{sha}","content_type":"image/png"}}}}"#
+        ))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&b).unwrap()["logo"],
+            serde_json::json!({"sha256": sha, "content_type": "image/png"})
+        );
+        for bad in [
+            r#"{"logo":{"file":"logo.png"}}"#,
+            r#"{"logo":{}}"#,
+            r#"{"logo":{"data":"x","sha256":"y","content_type":"image/png"}}"#,
+            r#"{"logo":{"sha256":"y"}}"#,
+            r#"{"logo":{"url":"https://x"}}"#,
+            r#"{"logo":"plain"}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<BrandingSection>(bad).is_err(),
+                "{bad}"
+            );
+        }
+        let err = serde_json::from_str::<BrandingSection>(r#"{"logo":{"file":"l.png"}}"#)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("anvilid CLI"), "{err}");
+    }
+
+    #[test]
+    fn config_doc_organizations_parse_and_refuse_unknown_keys() {
+        let org = r#"{"slug":"acme","display_name":"Acme","domains":[{"domain":"acme.example"}]}"#;
+        let full = format!(
+            r#"{{"version":1,"kind":"TenantConfig","tenant":{{"slug":"t1","display_name":"T"}},"organizations":[{org}]}}"#
+        );
+        let d: TenantConfigDocument = serde_json::from_str(&full).unwrap();
+        let o = &d.organizations.as_ref().unwrap()[0];
+        assert_eq!(o.metadata, serde_json::json!({}));
+        assert!(o.domains[0].allow_local_password && !o.domains[0].routing);
+        assert!(o.branding.is_none() && o.roles.is_empty());
+        // Verification state, runtime data and unknown keys are refused at every level.
+        for (from, to) in [
+            (
+                r#""domain":"acme.example""#,
+                r#""domain":"acme.example","verified":true"#,
+            ),
+            (
+                r#""domain":"acme.example""#,
+                r#""domain":"acme.example","status":"verified""#,
+            ),
+            (
+                r#""domain":"acme.example""#,
+                r#""domain":"acme.example","token":"x""#,
+            ),
+            (
+                r#""domain":"acme.example""#,
+                r#""domain":"acme.example","verified_at":"2026-01-01T00:00:00Z""#,
+            ),
+            (
+                r#""display_name":"Acme""#,
+                r#""display_name":"Acme","members":[]"#,
+            ),
+            (
+                r#""display_name":"Acme""#,
+                r#""display_name":"Acme","invitations":[]"#,
+            ),
+            (
+                r#""display_name":"Acme""#,
+                r#""display_name":"Acme","settings":{"default_role_ids":[]}"#,
+            ),
+        ] {
+            let bad = full.replace(from, to);
+            assert_ne!(bad, full);
+            assert!(
+                serde_json::from_str::<TenantConfigDocument>(&bad).is_err(),
+                "{to}"
+            );
+        }
     }
 
     #[test]

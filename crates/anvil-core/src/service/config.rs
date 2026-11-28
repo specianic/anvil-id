@@ -66,11 +66,11 @@ use crate::model::{
     ApplicationType, AttributeDefinition, AuditAction, AuditActor, AuditDetails, AuditOutcome,
     Branding, BrandingScope, BrandingSection, CimdPolicy, Client, ClientSection, ClientSource,
     ConfigChange, ConfigKind, ConfigObjectKind, ConfigPlan, Connection, ConnectionSection,
-    DcrPolicy, EmailKind, EmailTemplate, EmailTemplateSection, FieldDiff, OrgId, PageRequest,
-    RequestContext, Role, RoleId, RoleSection, RoleUpdate, SYSTEM_TENANT_SLUG, Scope, SecretInput,
-    SmtpSection, SmtpSettings, SmtpTls, TENANT_CONFIG_VERSION, Tenant, TenantConfigDocument,
-    TenantId, TenantSection, TenantSettings, WebhookEndpoint, WebhookEndpointUpdate,
-    WebhookSection, normalize_permissions, validate_role_name,
+    DcrPolicy, EmailKind, EmailTemplate, EmailTemplateSection, FieldDiff, LogoInput, OrgId,
+    PageRequest, RequestContext, Role, RoleId, RoleSection, RoleUpdate, SYSTEM_TENANT_SLUG, Scope,
+    SecretInput, SmtpSection, SmtpSettings, SmtpTls, TENANT_CONFIG_VERSION, Tenant,
+    TenantConfigDocument, TenantId, TenantSection, TenantSettings, WebhookEndpoint,
+    WebhookEndpointUpdate, WebhookSection, normalize_permissions, validate_role_name,
 };
 use crate::policy::claims_mapping::validate_mapping;
 use crate::ports::{AttributeSchemaCheck, EmailTemplateCheck, Storage};
@@ -84,8 +84,8 @@ use crate::service::branding::{
 use crate::service::client::{
     ClientInput, ClientOptions, ClientOptionsPatch, ClientPatch, ClientPolicyView, ClientService,
     RedirectValidator, check_admin_scopes, check_org_policy, uses_secret, validate_client,
-    validate_client_id, validate_client_options, validate_client_phase4, validate_client_policy,
-    validate_client_secret,
+    validate_client_home_uri, validate_client_id, validate_client_options, validate_client_phase4,
+    validate_client_policy, validate_client_secret,
 };
 use crate::service::connection::{
     ConnectionPatch, ConnectionService, NewConnectionInput, validate_config,
@@ -401,7 +401,13 @@ pub fn check_unique_keys(doc: &TenantConfigDocument) -> Result<(), CoreError> {
         K::Webhook,
     ] {
         let keys: Vec<String> = match kind {
-            ConfigObjectKind::Tenant | ConfigObjectKind::Smtp => continue,
+            ConfigObjectKind::Tenant
+            | ConfigObjectKind::Smtp
+            | ConfigObjectKind::Organization
+            | ConfigObjectKind::OrgRole
+            | ConfigObjectKind::OrgConnection
+            | ConfigObjectKind::OrgDomain
+            | ConfigObjectKind::OrgBranding => continue,
             ConfigObjectKind::Client => doc.clients.iter().map(|c| c.client_id.clone()).collect(),
             ConfigObjectKind::Connection => {
                 doc.connections.iter().map(|c| c.slug.clone()).collect()
@@ -446,6 +452,11 @@ fn kind_name(kind: ConfigObjectKind) -> &'static str {
         ConfigObjectKind::EmailTemplate => "email template",
         ConfigObjectKind::Smtp => "smtp",
         ConfigObjectKind::Webhook => "webhook",
+        ConfigObjectKind::Organization => "organization",
+        ConfigObjectKind::OrgRole => "organization role",
+        ConfigObjectKind::OrgConnection => "organization connection",
+        ConfigObjectKind::OrgDomain => "organization domain",
+        ConfigObjectKind::OrgBranding => "organization branding",
     }
 }
 
@@ -614,9 +625,8 @@ fn client_input(c: &ClientSection) -> (ClientInput, ClientOptions) {
             require_pushed_authorization_requests: c.require_pushed_authorization_requests,
             client_kind: c.client_kind,
             headless_native: c.headless_native,
-            // Not part of the tenant document yet (07.1-11 adds the YAML keys).
-            client_uri: None,
-            initiate_login_uri: None,
+            client_uri: c.client_uri.clone(),
+            initiate_login_uri: c.initiate_login_uri.clone(),
         },
     )
 }
@@ -722,6 +732,13 @@ fn validate_client_section(
             v.redirect,
             e,
         );
+    }
+    // Document clients are static: the administrator rule (loopback http allowed).
+    if let Some(uri) = &c.client_uri {
+        issues.check(p, validate_client_home_uri("client_uri", uri, true));
+    }
+    if let Some(uri) = &c.initiate_login_uri {
+        issues.check(p, validate_client_home_uri("initiate_login_uri", uri, true));
     }
     match (uses_secret(c.auth_method), &c.secret) {
         (true, Some(SecretInput::Configured { configured: false })) => issues.push(
@@ -1055,6 +1072,17 @@ fn is_exported_client(tenant: &Tenant, c: &Client) -> bool {
         && !(is_system(tenant) && c.client_id == CONSOLE_CLIENT_ID)
 }
 
+/// The exported logo of a branding record: `{sha256, content_type}`, or absent when none.
+fn exported_logo(b: &Branding) -> Option<Option<LogoInput>> {
+    match (&b.logo_sha256, &b.logo_type) {
+        (Some(sha256), Some(content_type)) => Some(Some(LogoInput::Stored {
+            sha256: sha256.clone(),
+            content_type: content_type.clone(),
+        })),
+        _ => None,
+    }
+}
+
 fn configured_secret(set: bool) -> Option<SecretInput> {
     Some(SecretInput::Configured { configured: set })
 }
@@ -1089,6 +1117,8 @@ fn client_section(c: &Client) -> ClientSection {
         require_pushed_authorization_requests: c.require_pushed_authorization_requests,
         client_kind: c.client_kind,
         headless_native: c.headless_native,
+        client_uri: c.client_uri.clone(),
+        initiate_login_uri: c.initiate_login_uri.clone(),
     }
 }
 
@@ -1136,6 +1166,7 @@ impl StoredConfig {
                 client_id: client_id.clone(),
                 tokens: b.tokens.clone(),
                 custom_css: b.custom_css.clone(),
+                logo: exported_logo(b),
             })
             .collect();
         branding.sort_by(|a, b| a.client_id.cmp(&b.client_id));
@@ -1198,6 +1229,7 @@ impl StoredConfig {
             email_templates,
             smtp,
             webhooks,
+            organizations: None,
         }
     }
 
@@ -1637,6 +1669,7 @@ impl ConfigService {
                     email_templates: Vec::new(),
                     smtp: None,
                     webhooks: Vec::new(),
+                    organizations: None,
                 };
                 let mut p = plan(&empty, desired, &|_, _| false);
                 p.creates.insert(
@@ -2025,9 +2058,8 @@ impl ConfigService {
                     .then_some(s.require_pushed_authorization_requests),
                 client_kind: has("client_kind").then_some(s.client_kind),
                 headless_native: has("headless_native").then_some(s.headless_native),
-                // Not part of the tenant document yet: never changed by an apply.
-                client_uri: None,
-                initiate_login_uri: None,
+                client_uri: has("client_uri").then(|| s.client_uri.clone()),
+                initiate_login_uri: has("initiate_login_uri").then(|| s.initiate_login_uri.clone()),
             };
             if patch != ClientPatch::default() || options != ClientOptionsPatch::default() {
                 self.clients

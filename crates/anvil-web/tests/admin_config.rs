@@ -626,6 +626,90 @@ async fn json_schema_matches_the_document_types() {
     }
 }
 
+/// A document using every key added within version 1 in rc.4 (logos, client home URLs,
+/// organizations).
+fn rc4_document() -> Value {
+    json!({
+        "version": 1,
+        "kind": "TenantConfig",
+        "tenant": {"slug": "acme", "display_name": "Acme"},
+        "clients": [{
+            "client_id": "web",
+            "name": "Web",
+            "client_type": "public",
+            "application_type": "web",
+            "auth_method": "none",
+            "redirect_uris": ["https://app.example.test/cb"],
+            "grant_types": ["authorization_code"],
+            "scopes": ["openid"],
+            "client_uri": "https://app.example.test/",
+            "initiate_login_uri": "https://app.example.test/login",
+        }],
+        "branding": [
+            {"tokens": {}, "logo": {"sha256": "a".repeat(64), "content_type": "image/png"}},
+            {"client_id": "web", "logo": null},
+        ],
+        "organizations": [{
+            "slug": "globex",
+            "display_name": "Globex",
+            "mfa_policy": "required",
+            "metadata": {"crm": "42"},
+            "settings": {"default_roles": ["member"]},
+            "roles": [{"name": "member", "permissions": ["docs:read"]}],
+            "connections": [{
+                "slug": "globex-sso",
+                "display_name": "Globex SSO",
+                "enabled": false,
+                "config": {"type": "oidc", "issuer": "https://idp.globex.example.test", "client_id": "anvil"},
+                "secret": {"value": "globex-upstream-secret"},
+            }],
+            "domains": [{"domain": "globex.example.test", "connection": "globex-sso", "routing": true}],
+            "branding": {"tokens": {"radius_px": 2}, "logo": {"data": "iVBORw0KGgo="}},
+        }],
+    })
+}
+
+#[tokio::test]
+async fn config_doc_new_keys_match_the_schema_and_the_model() {
+    let v = schema_validator();
+    let doc = rc4_document();
+    assert_eq!(errors(&v, &doc), Vec::<String>::new());
+    let parsed: anvil_core::model::TenantConfigDocument =
+        serde_json::from_value(doc.clone()).expect("model parses the document");
+    assert_eq!(parsed.organizations.as_ref().map(Vec::len), Some(1));
+    // CLI logo reference: valid for the schema, refused by the server model.
+    let mut with_file = doc.clone();
+    with_file["organizations"][0]["branding"]["logo"] = json!({"file": "logo.png"});
+    assert_eq!(errors(&v, &with_file), Vec::<String>::new());
+    assert!(serde_json::from_value::<anvil_core::model::TenantConfigDocument>(with_file).is_err());
+    // Schema and model refuse the same unknown or runtime keys.
+    for (pointer, bad) in [
+        ("/organizations/0/domains/0/verified", json!(true)),
+        ("/organizations/0/domains/0/status", json!("verified")),
+        (
+            "/organizations/0/domains/0/token",
+            json!("anvil-domain-verification=x"),
+        ),
+        ("/organizations/0/members", json!([])),
+        ("/organizations/0/invitations", json!([])),
+        ("/organizations/0/settings/default_role_ids", json!([])),
+        ("/organizations/0/branding/client_id", json!("web")),
+        (
+            "/branding/0/logo/url",
+            json!("https://x.example.test/logo.png"),
+        ),
+    ] {
+        let mut d = doc.clone();
+        let (parent, key) = pointer.rsplit_once('/').unwrap();
+        d.pointer_mut(parent).unwrap()[key] = bad;
+        assert!(!v.is_valid(&d), "{pointer} accepted by the schema");
+        assert!(
+            serde_json::from_value::<anvil_core::model::TenantConfigDocument>(d).is_err(),
+            "{pointer} accepted by the model"
+        );
+    }
+}
+
 #[tokio::test]
 async fn schema_encodes_registration_bounds() {
     let app = TestApp::new().await;
