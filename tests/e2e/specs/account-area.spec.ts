@@ -6,6 +6,9 @@
 // - An account link carrying the client_id of a static client with a home URL shows
 //   "Back to <app>" (#link-back-to-app) with the stored URL, and the account navigation keeps it.
 // - A signed-out deep link to an account page signs in and lands on that page.
+// - 07.1-21: destructive actions ask first (#form-confirm; Cancel changes nothing), the sessions
+//   page names devices ("Chrome on Windows"), the TOTP enrolment offers the otpauth:// link at
+//   390px, and a refused password change is a GET of the page (Post/Redirect/Get).
 //
 // Env: ANVIL_URL, SETUP_URL, E2E_STATE_FILE (see tests/e2e/run.sh).
 
@@ -22,7 +25,7 @@ import {
   sharedManagementCredential,
   type ManagementCredential,
 } from '../lib/anvil';
-import { signInDirect } from '../lib/account';
+import { enrolTotp, signInDirect } from '../lib/account';
 import { expectNoHorizontalOverflow } from '../lib/layout';
 
 const account = (path: string) => `${anvilUrl()}/ui/account/${path}`;
@@ -117,4 +120,78 @@ test('a signed-out deep link to an account page returns there after sign-in', as
   await expect(page).toHaveURL((url) => url.pathname.endsWith('/ui/account/security'));
   await expect(page.locator('#passkeys-heading')).toBeVisible();
   await expectHeader(page, user.email);
+});
+
+test('destructive account actions ask first; Cancel changes nothing', async ({ page }) => {
+  const user = await newUser('area-confirm');
+  await signInDirect(page, user.email, user.password);
+  const enrolment = await enrolTotp(page);
+  await page.goto(account('security'));
+  await expect(page.locator('#recovery-codes-count')).toHaveText('10');
+
+  // New recovery codes: the question first, Cancel goes back with the old set intact.
+  await page.locator('#recovery-codes-regenerate-submit').click();
+  await expect(page.locator('#account-confirm')).toHaveAttribute('data-action', 'regenerate-recovery-codes');
+  await expect(page.locator('#recovery-codes li')).toHaveCount(0);
+  await expectHeader(page, user.email);
+  await expectNoA11yViolations(page);
+  await expectNoHorizontalOverflow(page, 390);
+  await page.locator('#link-confirm-cancel').click();
+  await expect(page).toHaveURL((url) => url.pathname.endsWith('/ui/account/security'));
+  await expect(page.locator('#recovery-codes-count')).toHaveText('10');
+
+  // Confirmed: a new set.
+  await page.locator('#recovery-codes-regenerate-submit').click();
+  await page.locator('#form-confirm-submit').click();
+  await expect(page.locator('#account-msg-1')).toHaveAttribute('data-message-key', 'account.recovery_codes_regenerated');
+  const fresh = (await page.locator('#recovery-codes li code').allTextContents()).map((c) => c.trim());
+  expect(fresh).toHaveLength(10);
+  expect(fresh.some((c) => enrolment.recoveryCodes.includes(c))).toBe(false);
+
+  // Removing the authenticator app asks too.
+  await page.goto(account('security'));
+  await page.locator('#totp form[id^="credential-delete-"] button').click();
+  await expect(page.locator('#account-confirm')).toHaveAttribute('data-action', 'remove-totp');
+  await page.locator('#form-confirm-submit').click();
+  await expect(page.locator('[data-message-key="account.totp_removed"]')).toBeVisible();
+  await expect(page.locator('#totp-begin-submit')).toBeVisible();
+});
+
+test('sessions name the device; TOTP enrolment offers the otpauth link on a phone', async ({ page }) => {
+  const user = await newUser('area-device');
+  await signInDirect(page, user.email, user.password);
+  await page.goto(account('sessions'));
+  const device = page.locator('tr[data-current] .anvil-session-device bdi');
+  await expect(device).toHaveText(/^(Chrome|Edge|Firefox|Safari|Opera) on (Windows|macOS|Linux|Android|iOS)$/);
+  await expect(page.locator('#session-list')).not.toContainText('Mozilla/');
+  await expect(page.locator('tr[data-current] time').first()).toHaveAttribute('datetime', /Z$/);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(account('security'));
+  await page.locator('#totp-begin-submit').click();
+  const link = page.locator('#link-otpauth');
+  await expect(link).toBeVisible();
+  await expect(link).toHaveAttribute('href', /^otpauth:\/\/totp\//);
+  await expect(page.locator('#totp-qr svg')).toBeVisible();
+  await expectNoHorizontalOverflow(page, 390);
+  await expectNoA11yViolations(page);
+});
+
+test('a refused password change is a GET of the page (Post/Redirect/Get)', async ({ page }) => {
+  const user = await newUser('area-prg');
+  await signInDirect(page, user.email, user.password);
+  await page.goto(account('password'));
+  await page.locator('#new_password').fill('short');
+  await page.locator('#password-form-submit').click();
+  await expect(page.locator('#account-messages [data-message-key="account.password_too_short"]')).toBeVisible();
+  await expect(page).toHaveURL(
+    (url) => url.pathname.endsWith('/ui/account/password') && url.searchParams.has('flow'),
+  );
+  await expect(page.locator('#new_password')).toHaveValue('');
+  // Reload is a plain GET: no resubmission, the one-shot message is gone, nothing changed.
+  await page.reload();
+  await expect(page.locator('form#password-form')).toBeVisible();
+  await expect(page.locator('[data-message-key="account.password_too_short"]')).toHaveCount(0);
+  await page.context().clearCookies();
+  await signInDirect(page, user.email, user.password);
 });

@@ -448,7 +448,12 @@ for (const vp of PHASE3_VIEWPORTS) {
       await page.keyboard.press('Enter');
       await expect(page.locator('#totp-qr')).toBeVisible();
       const enrol = await expectDomTabOrder(page);
-      expect(enrol.slice(ACCOUNT_CHROME.length)).toEqual(['code', 'totp-confirm-submit', 'link-account-security']);
+      expect(enrol.slice(ACCOUNT_CHROME.length)).toEqual([
+        'link-otpauth',
+        'code',
+        'totp-confirm-submit',
+        'link-account-security',
+      ]);
       await expect(page.locator('#code')).toHaveAttribute('autocomplete', 'one-time-code');
       await expectPasteAllowed(page, '#code');
       await expectTargetSizes(page);

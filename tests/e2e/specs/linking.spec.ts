@@ -229,6 +229,9 @@ test('account page: connect and disconnect, last method refused', async ({ page,
 
   await test.step('Disconnect removes the link', async () => {
     await page.locator('#linked-list button[id^="linked-unlink-"]').click();
+    // The confirmation step (07.1-21): nothing is disconnected until it is confirmed.
+    await expect(page.locator('#account-confirm')).toHaveAttribute('data-action', 'unlink');
+    await page.locator('#form-confirm-submit').click();
     await expect(page.locator('[data-message-key="linked.unlinked"]')).toBeVisible();
     await expect(page.locator('#linked-none')).toBeVisible();
     await expect(page.locator('#linked-connect-apple-submit')).toBeVisible();
@@ -251,9 +254,11 @@ test('account page: connect and disconnect, last method refused', async ({ page,
       await expect(p.locator('#account-reauth')).toHaveCount(0);
       const rows = p.locator('#linked-list tbody tr');
       await expect(rows).toHaveCount(1);
+      await p.locator('#linked-list button[id^="linked-unlink-"]').click();
+      await expect(p.locator('#account-confirm')).toHaveAttribute('data-action', 'unlink');
       const [resp] = await Promise.all([
         p.waitForResponse((r) => r.request().method() === 'POST' && r.url().includes('/unlink')),
-        p.locator('#linked-list button[id^="linked-unlink-"]').click(),
+        p.locator('#form-confirm-submit').click(),
       ]);
       expect(resp.status()).toBe(409);
       const refusal = p.locator('[data-message-key="account.last_sign_in_method"]');

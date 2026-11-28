@@ -65,6 +65,9 @@ test('connect and disconnect on /ui/account/linked without JavaScript', async ({
 
   await test.step('Disconnect posts the form and removes the link', async () => {
     await page.locator('#linked-list button[id^="linked-unlink-"]').click();
+    // The confirmation step (07.1-21): nothing is disconnected until it is confirmed.
+    await expect(page.locator('#account-confirm')).toHaveAttribute('data-action', 'unlink');
+    await page.locator('#form-confirm-submit').click();
     await expect(page.locator('[data-message-key="linked.unlinked"]')).toBeVisible();
     await expect(page.locator('#linked-none')).toBeVisible();
     await expect(page.locator('form#linked-connect-github')).toBeVisible();

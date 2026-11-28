@@ -125,7 +125,13 @@ test('profile edits persist', async ({ page }) => {
   await page.locator('#name').fill('Ada Lovelace');
   await page.locator('#given_name').fill('Ada');
   await page.locator('#family_name').fill('Lovelace');
-  await page.locator('#locale').fill('en-GB');
+  // Language is a select of the supported languages, each named in its own language (U-L5).
+  const options = await page
+    .locator('#locale option')
+    .evaluateAll((els) => els.map((e) => (e as HTMLOptionElement).value));
+  expect(options).toEqual(expect.arrayContaining(['', 'de', 'en']));
+  await expect(page.locator('#locale option[value="de"]')).toHaveText('Deutsch');
+  await page.locator('#locale').selectOption('en');
   await page.locator('#profile-form-submit').click();
   await expect(accountMessage(page, 'account.profile_saved')).toBeVisible();
   await expectNoA11yViolations(page);
@@ -135,14 +141,26 @@ test('profile edits persist', async ({ page }) => {
   await expect(page.locator('#name')).toHaveValue('Ada Lovelace');
   await expect(page.locator('#given_name')).toHaveValue('Ada');
   await expect(page.locator('#family_name')).toHaveValue('Lovelace');
-  await expect(page.locator('#locale')).toHaveValue('en-GB');
+  await expect(page.locator('#locale')).toHaveValue('en');
+});
 
-  // An invalid locale is refused and nothing changes.
-  await page.locator('#locale').fill('not a locale');
-  await page.locator('#profile-form-submit').click();
-  await expect(accountMessage(page, 'account.invalid_locale')).toBeVisible();
-  await page.goto(account('profile'));
-  await expect(page.locator('#locale')).toHaveValue('en-GB');
+test('a refused email change follows Post/Redirect/Get', async ({ page }) => {
+  const user = await newUser('acct-prg');
+  await signInDirect(page, user.email, user.password);
+  await page.goto(account('email'));
+  await reauthIfPrompted(page, user.email, user.password);
+  // The current address again: refused, and the answer is a GET of the page.
+  await page.locator('#new_email').fill(user.email);
+  await page.locator('#email-change-submit').click();
+  await expect(accountMessage(page, 'account.email_unchanged')).toBeVisible();
+  await expect(page).toHaveURL(
+    (url) => url.pathname.endsWith('/ui/account/email') && url.searchParams.has('flow'),
+  );
+  // Reload repeats the GET (no form resubmission) and the one-shot message is gone.
+  await page.reload();
+  await expect(page.locator('form#email-change')).toBeVisible();
+  await expect(accountMessage(page, 'account.email_unchanged')).toHaveCount(0);
+  await expect(page.locator('#current-email')).toHaveText(user.email);
 });
 
 test('email change: link to the new address, notice to the old one, sign-in with the new address', async ({

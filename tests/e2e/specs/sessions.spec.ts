@@ -1,7 +1,8 @@
 // AUTH-10: the account sessions page in a browser. A user signed in from several browsers sees each
-// session at /ui/account/sessions; signing one out ends it (that browser is sent to the sign-in page
-// on its next visit), "Sign out all other sessions" keeps only the current one, and signing out this
-// browser clears its own session.
+// session at /ui/account/sessions with a readable device ("Chrome on Windows", never the raw user
+// agent, 07.1-21); signing one out ends it (that browser is sent to the sign-in page on its next
+// visit), "Sign out all other sessions" asks for confirmation and then keeps only the current one,
+// and signing out this browser clears its own session and shows the signed-out page.
 //
 // Env: ANVIL_URL, SETUP_URL, E2E_STATE_FILE (see tests/e2e/run.sh).
 
@@ -62,6 +63,12 @@ test('list, sign out another browser, sign out all others, sign out this browser
     );
     await expect(a.page.locator('#account-nav-sessions')).toHaveAttribute('aria-current', 'page');
     await expect(a.page.locator('#sessions-revoke-others-submit')).toBeVisible();
+    // Readable devices: "<browser> on <OS>", never the raw user agent.
+    for (const device of await a.page.locator('#session-list .anvil-session-device bdi').allTextContents()) {
+      expect(device).toMatch(/^(Chrome|Edge|Firefox|Safari|Opera|Unknown browser)( on (Windows|macOS|Linux|Android|iOS))?$/);
+    }
+    await expect(a.page.locator('#session-list')).not.toContainText('Mozilla/');
+    await expect(a.page.locator('#session-list time').first()).toContainText('UTC');
 
     // A signs out B.
     const other = a.page.locator('#session-list tbody tr:not([data-current])');
@@ -81,6 +88,9 @@ test('list, sign out another browser, sign out all others, sign out this browser
       await a.page.goto(SESSIONS());
       await expect(rows(a.page)).toHaveCount(3);
       await a.page.locator('#sessions-revoke-others-submit').click();
+      // The confirmation step: nothing happens until it is confirmed.
+      await expect(a.page.locator('#account-confirm')).toHaveAttribute('data-action', 'sign-out-others');
+      await a.page.locator('#form-confirm-submit').click();
       await expect(
         a.page.locator('#account-messages [data-message-key="sessions.revoked_others"]'),
       ).toBeVisible();
@@ -97,7 +107,10 @@ test('list, sign out another browser, sign out all others, sign out this browser
     await a.page.goto(SESSIONS());
     await expect(rows(a.page)).toHaveCount(1);
     await a.page.locator('tr[data-current] button[id$="-submit"]').click();
-    await expect(a.page).toHaveURL((url) => url.pathname.endsWith('/ui/login'));
+    // U-L8: a signed-out message with a way forward.
+    await expect(a.page).toHaveURL((url) => url.pathname.endsWith('/ui/signed-out'));
+    await expect(a.page.locator('#logout-message')).toHaveAttribute('data-message-key', 'logout.signed_out');
+    await expect(a.page.locator('#link-login')).toBeVisible();
     await expectSignedOut(a.page);
   } finally {
     await a.context.close();

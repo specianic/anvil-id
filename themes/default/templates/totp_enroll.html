@@ -8,7 +8,7 @@
 <h2 id="totp-enroll-heading">{{ t("totp_enroll.heading") }}</h2>
 <p id="totp-instructions">{{ t("totp_enroll.instructions") }}</p>
 <div class="anvil-qr" id="totp-qr">{{ qr_svg }}</div>
-{% if otpauth_uri %}<p><a id="link-otpauth" href="{{ otpauth_uri }}">{{ t("mfa_enroll.otpauth_link") }}</a></p>{% endif %}
+{% if otpauth_uri %}<p class="anvil-links"><a id="link-otpauth" href="{{ otpauth_uri }}">{{ t("mfa_enroll.otpauth_link") }}</a></p>{% endif %}
 <p id="totp-manual">{{ t("totp_enroll.manual") }}</p>
 <p><code class="anvil-secret" id="totp-secret">{{ secret_groups }}</code></p>
 <form id="totp-confirm" method="post" action="{{ confirm_url }}" novalidate>

@@ -173,6 +173,10 @@ test('consent is asked once, remembered, revocable at Connected apps, and Deny r
   await expect(app).toBeVisible();
   await expect(app.locator('h2')).toHaveText(CLIENT_NAME);
   await app.locator('button[id$="-submit"]').click();
+  // The confirmation step names the app (07.1-21); nothing is revoked until it is confirmed.
+  await expect(page.locator('#account-confirm')).toHaveAttribute('data-action', 'revoke-app');
+  await expect(page.locator('#confirm-heading')).toContainText(CLIENT_NAME);
+  await page.locator('#form-confirm-submit').click();
   await expect(page.locator('#account-messages [data-message-key="apps.revoked"]')).toBeVisible();
   await expect(page.locator(`li[data-client-id="${rpClientId}"]`)).toHaveCount(0);
 

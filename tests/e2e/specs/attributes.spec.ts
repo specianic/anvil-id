@@ -137,6 +137,13 @@ test('the user edits an editable attribute, invalid values are refused and the c
     await expect(page.locator('#attr-department-error')).toBeVisible();
     await expect(page.locator('#attr-department')).toHaveAttribute('aria-invalid', 'true');
     expect((await storedValues(token, t)).department).toBe('sales');
+    // Post/Redirect/Get (07.1-21): the refusal is a GET; reloading it shows the plain form.
+    await expect(page).toHaveURL(
+      (url) => url.pathname.endsWith('/ui/account/attributes') && url.searchParams.has('flow'),
+    );
+    await page.reload();
+    await expect(page.locator('#attr-department-error')).toHaveCount(0);
+    await expect(page.locator('#attr-department')).toHaveValue('sales');
 
     // The mapped claim is in the relying party's ID token (the session already exists).
     const redirectUri = 'https://attributes-rp.example.test/callback';
