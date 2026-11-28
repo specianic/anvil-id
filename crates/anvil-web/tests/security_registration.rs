@@ -632,3 +632,37 @@ async fn client_kind_agent_refused_via_dcr_metadata_injection() {
         anvil_core::model::ClientKind::Agent
     );
 }
+
+/// rc.4: `client_uri` / `initiate_login_uri` go through the one home URL validation
+/// (`service::client::validate_client_home_uri`, https only for DCR). Each refusal is a 400
+/// `invalid_client_metadata` and stores nothing.
+#[tokio::test]
+async fn dcr_client_home_uris_refuse_unsafe_values() {
+    let app = app().await;
+    set_policy(&app, DcrPolicy::Open).await;
+    for key in ["client_uri", "initiate_login_uri"] {
+        for bad in [
+            "javascript:alert(1)",
+            "http://rp.example/",
+            "http://localhost:5173/",
+            "https://user:pw@rp.example/",
+            "https://rp.example/#frag",
+            "/home",
+            "rp.example/home",
+        ] {
+            let mut req = web_request();
+            req[key] = json!(bad);
+            let resp = register(&app, &req, None).await;
+            assert_registration_error(&resp, "invalid_client_metadata");
+            assert!(
+                json(&resp)["error_description"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with(key),
+                "{key}={bad}: {}",
+                resp.text()
+            );
+        }
+    }
+    assert_eq!(dynamic_clients(&app).await, 0);
+}

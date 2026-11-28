@@ -24,12 +24,17 @@
 //!
 //! # Informational metadata
 //!
-//! `logo_uri`, `client_uri`, `policy_uri` and `tos_uri` are validated (absolute https, length
-//! cap) but neither stored nor echoed: the client model has no columns for them, and RFC 7591
-//! §3.2.1 requires the registration response to contain what was registered, which the RFC 7592
-//! read response must then repeat. Echoing values that a later `GET` would not return would
-//! misstate the registration, so the server ignores them (RFC 7591 §2 lets it ignore or
-//! substitute requested values). Consent shows the `client_name`.
+//! `logo_uri`, `policy_uri` and `tos_uri` are validated (absolute https, length cap) but neither
+//! stored nor echoed: the client model has no columns for them, and RFC 7591 §3.2.1 requires the
+//! registration response to contain what was registered, which the RFC 7592 read response must
+//! then repeat. Echoing values that a later `GET` would not return would misstate the
+//! registration, so the server ignores them (RFC 7591 §2 lets it ignore or substitute requested
+//! values). Consent shows the `client_name`.
+//!
+//! `client_uri` and `initiate_login_uri` (OIDC Dynamic Client Registration 1.0 §2) are validated
+//! by the shared [`crate::service::client::validate_client_home_uri`] (https only), stored, and
+//! returned in the registration and read responses. They are stored, not trusted: the end-user
+//! UI renders a client's home URL only for static clients.
 //!
 //! # Tokens
 //!
@@ -170,6 +175,14 @@ pub fn client_metadata(client: &Client) -> Map<String, Value> {
             "backchannel_logout_session_required".into(),
             client.backchannel_logout_session_required.into(),
         );
+    }
+    for (key, value) in [
+        ("client_uri", &client.client_uri),
+        ("initiate_login_uri", &client.initiate_login_uri),
+    ] {
+        if let Some(v) = value {
+            m.insert(key.into(), v.clone().into());
+        }
     }
     m
 }
@@ -498,6 +511,9 @@ impl RegistrationService {
             backchannel_logout_session_required: Some(o.backchannel_logout_session_required),
             allowed_resources: Some(o.allowed_resources),
             require_pushed_authorization_requests: Some(o.require_pushed_authorization_requests),
+            // RFC 7592 replaces every value: an omitted home URL is removed.
+            client_uri: Some(o.client_uri),
+            initiate_login_uri: Some(o.initiate_login_uri),
             // client_kind and headless_native are administrator-only: an RFC 7592 update keeps
             // the stored values (validate_client_policy still runs on the merged client).
             ..ClientOptionsPatch::default()
@@ -774,6 +790,12 @@ mod tests {
             }
             if let Some(v) = u.headless_native {
                 c.headless_native = v;
+            }
+            if let Some(v) = &u.client_uri {
+                c.client_uri = v.clone();
+            }
+            if let Some(v) = &u.initiate_login_uri {
+                c.initiate_login_uri = v.clone();
             }
             c.updated_at = now;
             Ok(Some(c.clone()))
@@ -1155,6 +1177,22 @@ mod tests {
         for key in ["logo_uri", "client_uri", "policy_uri", "tos_uri"] {
             assert!(!resp.contains_key(key), "{key} echoed");
         }
+        // client_uri / initiate_login_uri are stored and echoed (rc.4).
+        let mut home = web();
+        home["client_uri"] = json!("https://rp.example/");
+        home["initiate_login_uri"] = json!("https://rp.example/login");
+        let stored = h.register(&home, None).await.unwrap();
+        assert_eq!(
+            stored.client.client_uri.as_deref(),
+            Some("https://rp.example/")
+        );
+        assert_eq!(
+            stored.client.initiate_login_uri.as_deref(),
+            Some("https://rp.example/login")
+        );
+        let resp = stored.response("https://op.test");
+        assert_eq!(resp["client_uri"], "https://rp.example/");
+        assert_eq!(resp["initiate_login_uri"], "https://rp.example/login");
         // Read returns the same metadata as the registration response.
         let read = h
             .svc

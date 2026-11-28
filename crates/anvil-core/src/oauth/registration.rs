@@ -40,8 +40,11 @@
 //!   member they are ignored, never mapped, and the result always carries `application` and
 //!   `false`. [`crate::service::client::validate_client_policy`] runs with source `dynamic` as
 //!   for every client write;
-//! - `client_name` and the informational `logo_uri`, `client_uri`, `policy_uri`, `tos_uri` are
-//!   length-capped, and the URIs must be absolute https URIs.
+//! - `client_name` and the informational `logo_uri`, `policy_uri`, `tos_uri` are length-capped,
+//!   and the URIs must be absolute https URIs;
+//! - `client_uri` and `initiate_login_uri` pass the shared
+//!   [`crate::service::client::validate_client_home_uri`] (https only, no fragment) and are
+//!   stored in [`ClientOptions`]; the end-user UI never renders them for a dynamic client.
 //!
 //! Callers resolve "empty `allowed_scopes` means the tenant defaults" before calling: here an empty
 //! list allows no scope at all (fail closed).
@@ -58,7 +61,7 @@ use crate::oauth::resource::parse_resources;
 use crate::service::admin_scope::{ORG_ADMIN_SCOPE, is_reserved_admin_token};
 use crate::service::client::{
     ClientInput, ClientOptions, ClientPolicyView, MAX_REDIRECT_URIS, validate_client,
-    validate_client_phase4, validate_client_policy,
+    validate_client_home_uri, validate_client_phase4, validate_client_policy,
 };
 
 /// Whether a scope token can never be obtained by self-registration (DCR, CIMD, and the tenant's
@@ -72,7 +75,8 @@ pub fn is_registration_forbidden_scope(token: &str) -> bool {
 /// Name given to a registered client that sent no `client_name`.
 pub const DEFAULT_CLIENT_NAME: &str = "Dynamically registered client";
 
-/// Longest accepted `logo_uri`, `client_uri`, `policy_uri` and `tos_uri`.
+/// Longest accepted `logo_uri`, `policy_uri` and `tos_uri` (`client_uri` and
+/// `initiate_login_uri`: [`crate::service::client::MAX_HOME_URI_LEN`], the same value).
 pub const MAX_METADATA_URI_LEN: usize = MAX_REDIRECT_URI_LEN;
 
 /// The registration policy the request arrived under. A disabled policy never reaches validation
@@ -91,7 +95,8 @@ pub struct ValidatedRegistration {
     /// What `ClientService::create` stores. `jwks_uri` is always `None`, `require_pkce` is
     /// always `Some(true)`.
     pub client: ClientInput,
-    /// Client options. `consent_mode` is always [`ConsentMode::Required`].
+    /// Client options. `consent_mode` is always [`ConsentMode::Required`]; `client_uri` and
+    /// `initiate_login_uri` are the validated request values.
     pub options: ClientOptions,
     /// The `client_name` as sent (trimmed); `None` when absent ([`DEFAULT_CLIENT_NAME`] is
     /// stored instead).
@@ -100,7 +105,6 @@ pub struct ValidatedRegistration {
     pub response_types: Vec<String>,
     /// Informational metadata, validated and echoed in the response; never fetched.
     pub logo_uri: Option<String>,
-    pub client_uri: Option<String>,
     pub policy_uri: Option<String>,
     pub tos_uri: Option<String>,
 }
@@ -154,7 +158,8 @@ impl ValidatedRegistration {
         }
         for (key, value) in [
             ("logo_uri", &self.logo_uri),
-            ("client_uri", &self.client_uri),
+            ("client_uri", &o.client_uri),
+            ("initiate_login_uri", &o.initiate_login_uri),
             ("policy_uri", &self.policy_uri),
             ("tos_uri", &self.tos_uri),
         ] {
@@ -257,7 +262,7 @@ fn host_allowed(uri: &str, allowed: &[String]) -> bool {
     }
 }
 
-/// `logo_uri`, `client_uri`, `policy_uri`, `tos_uri`: absolute https, with a host, no userinfo,
+/// `logo_uri`, `policy_uri`, `tos_uri`: absolute https, with a host, no userinfo,
 /// no whitespace, at most [`MAX_METADATA_URI_LEN`] bytes.
 fn check_https_uri(key: &str, value: &str) -> Result<(), CoreError> {
     let bad = || meta(format!("{key} must be an absolute https URI"));
@@ -492,17 +497,23 @@ pub fn validate(
             Some(trimmed.to_owned())
         }
     };
-    let mut info = [None, None, None, None];
-    for (slot, key) in info
-        .iter_mut()
-        .zip(["logo_uri", "client_uri", "policy_uri", "tos_uri"])
-    {
+    let mut info = [None, None, None];
+    for (slot, key) in info.iter_mut().zip(["logo_uri", "policy_uri", "tos_uri"]) {
         if let Some(value) = opt_str(obj, key)? {
             check_https_uri(key, value)?;
             *slot = Some(value.to_owned());
         }
     }
-    let [logo_uri, client_uri, policy_uri, tos_uri] = info;
+    let [logo_uri, policy_uri, tos_uri] = info;
+    // Home URLs: the one rule of every client write path, https only for DCR.
+    let mut home = [None, None];
+    for (slot, key) in home.iter_mut().zip(["client_uri", "initiate_login_uri"]) {
+        if let Some(value) = opt_str(obj, key)? {
+            validate_client_home_uri(key, value, false).map_err(map_client_error)?;
+            *slot = Some(value.to_owned());
+        }
+    }
+    let [client_uri, initiate_login_uri] = home;
 
     let client = ClientInput {
         name: client_name
@@ -533,6 +544,8 @@ pub fn validate(
         // Administrator-only fields: never taken from the request.
         client_kind: ClientKind::Application,
         headless_native: false,
+        client_uri,
+        initiate_login_uri,
     };
 
     // The client rules every client obeys (one implementation: `service::client`).
@@ -550,7 +563,6 @@ pub fn validate(
         client_name,
         response_types,
         logo_uri,
-        client_uri,
         policy_uri,
         tos_uri,
     })
@@ -663,6 +675,11 @@ mod tests {
         assert_eq!(v.client.name, "Desktop");
         assert_eq!(v.logo_uri.as_deref(), Some("https://app.example/logo.png"));
         assert_eq!(v.tos_uri.as_deref(), Some("https://app.example/tos"));
+        assert_eq!(
+            v.options.client_uri.as_deref(),
+            Some("https://app.example/")
+        );
+        assert_eq!(v.metadata()["client_uri"], "https://app.example/");
     }
 
     #[test]
@@ -1175,7 +1192,13 @@ mod tests {
 
     #[test]
     fn dcr_informational_uris_must_be_capped_https() {
-        for key in ["logo_uri", "client_uri", "policy_uri", "tos_uri"] {
+        for key in [
+            "logo_uri",
+            "client_uri",
+            "initiate_login_uri",
+            "policy_uri",
+            "tos_uri",
+        ] {
             for bad in [
                 "http://app.example/x".to_owned(),
                 "javascript:alert(1)".to_owned(),

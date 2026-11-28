@@ -311,3 +311,28 @@ async fn headless_native_refused_via_cimd() {
     );
     assert!(!stored(&app, &client_id).await.unwrap().headless_native);
 }
+
+/// rc.4: a document's `client_uri` / `initiate_login_uri` go through the one home URL validation
+/// (`service::client::validate_client_home_uri`); an unsafe value refuses the whole document
+/// with the existing CIMD error (unknown client page, no redirect, nothing stored).
+#[tokio::test]
+async fn cimd_unsafe_home_uris_rejected() {
+    let (app, docs) = dev_open().await;
+    let cases = [
+        ("client_uri", "javascript:alert(1)"),
+        ("client_uri", "http://evil.example/"),
+        ("client_uri", "https://user:pw@agent.example/"),
+        ("initiate_login_uri", "https://agent.example/#frag"),
+        ("initiate_login_uri", "/login"),
+    ];
+    for (i, (key, bad)) in cases.into_iter().enumerate() {
+        let path = format!("/home-{i}.json");
+        let client_id = docs.url(&path);
+        let mut body = doc(&client_id);
+        body[key] = json!(bad);
+        docs.serve(&path, &body, None).await;
+        let resp = app.get(&authorize_path(&client_id, &[])).await;
+        authz::assert_error_page(&resp, "unknown_client");
+        assert!(stored(&app, &client_id).await.is_none(), "{key}={bad}");
+    }
+}

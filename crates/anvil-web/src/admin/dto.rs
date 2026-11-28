@@ -1088,6 +1088,13 @@ pub struct ClientView {
     /// May use the native headless flow API (administrator-registered first-party clients
     /// with PKCE only).
     pub headless_native: bool,
+    /// OIDC `client_uri`, the app's home page; `null` = none. The end-user pages link to it
+    /// ("Back to <app>") only for administrator-registered (static) clients; values of dynamic
+    /// and metadata-document clients are stored and shown here but never rendered to end users.
+    pub client_uri: Option<String>,
+    /// OIDC `initiate_login_uri`, where the app starts a sign-in (preferred over `client_uri`
+    /// for "Back to <app>"); `null` = none. Same rendering rule as `client_uri`.
+    pub initiate_login_uri: Option<String>,
     /// How the client came to exist. Dynamic and CIMD clients can be deleted like any client;
     /// a deleted CIMD client is fetched again on its next use if the CIMD policy allows it.
     pub registration_source: ClientSource,
@@ -1131,6 +1138,8 @@ impl From<Client> for ClientView {
             require_pushed_authorization_requests: c.require_pushed_authorization_requests,
             client_kind: c.client_kind.into(),
             headless_native: c.headless_native,
+            client_uri: c.client_uri,
+            initiate_login_uri: c.initiate_login_uri,
             registration_source: c.registration_source.into(),
             metadata_expires_at: c.metadata_expires_at.map(ts),
             created_at: ts(c.created_at),
@@ -1251,6 +1260,15 @@ pub struct CreateClient {
     /// `application` (422 otherwise).
     #[serde(default)]
     pub headless_native: Option<bool>,
+    /// The app's home page (OIDC `client_uri`): an absolute https URL with a host, no userinfo
+    /// and no fragment, at most 2048 characters; http only for localhost and loopback addresses
+    /// (422 otherwise). Shown to end users ("Back to <app>") for administrator-registered
+    /// clients only.
+    #[serde(default)]
+    pub client_uri: Option<String>,
+    /// Where the app starts a sign-in (OIDC `initiate_login_uri`); the rules of `client_uri`.
+    #[serde(default)]
+    pub initiate_login_uri: Option<String>,
 }
 
 impl CreateClient {
@@ -1276,6 +1294,8 @@ impl CreateClient {
                 .unwrap_or(defaults.require_pushed_authorization_requests),
             client_kind: self.client_kind.map_or(defaults.client_kind, Into::into),
             headless_native: self.headless_native.unwrap_or(defaults.headless_native),
+            client_uri: self.client_uri.clone(),
+            initiate_login_uri: self.initiate_login_uri.clone(),
         };
         (self.into(), options)
     }
@@ -1356,6 +1376,14 @@ pub struct UpdateClient {
     /// administrator-registered client (422 otherwise).
     #[serde(default)]
     pub headless_native: Option<bool>,
+    /// `null` removes the home page; the rules of `CreateClient.client_uri`.
+    #[serde(default, deserialize_with = "double_option")]
+    #[schema(value_type = Option<String>)]
+    pub client_uri: Option<Option<String>>,
+    /// `null` removes the initiate-login URI; the rules of `CreateClient.client_uri`.
+    #[serde(default, deserialize_with = "double_option")]
+    #[schema(value_type = Option<String>)]
+    pub initiate_login_uri: Option<Option<String>>,
 }
 
 impl UpdateClient {
@@ -1375,6 +1403,8 @@ impl UpdateClient {
             require_pushed_authorization_requests: self.require_pushed_authorization_requests,
             client_kind: self.client_kind.map(Into::into),
             headless_native: self.headless_native,
+            client_uri: self.client_uri,
+            initiate_login_uri: self.initiate_login_uri,
         };
         let patch = ClientPatch {
             name: self.name,

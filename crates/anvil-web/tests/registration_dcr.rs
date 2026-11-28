@@ -161,15 +161,15 @@ async fn informational_uris_are_not_echoed() {
     let resp = register(&app, &req, None).await;
     assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.text());
     let body = json(&resp);
-    for key in [
-        "logo_uri",
-        "client_uri",
-        "policy_uri",
-        "tos_uri",
-        "unknown_member",
-    ] {
+    for key in ["logo_uri", "policy_uri", "tos_uri", "unknown_member"] {
         assert!(body.get(key).is_none(), "{key} echoed");
     }
+    // rc.4: client_uri is stored and returned (RFC 7591 §3.2.1: what was registered).
+    assert_eq!(body["client_uri"], "https://rp.example/");
+    let path = client_path(&app, str_of(&body, "registration_client_uri"));
+    let rat = str_of(&body, "registration_access_token");
+    let read = json(&send_json(&app, Method::GET, &path, Some(rat), None).await);
+    assert_eq!(read["client_uri"], "https://rp.example/");
 }
 
 #[tokio::test]

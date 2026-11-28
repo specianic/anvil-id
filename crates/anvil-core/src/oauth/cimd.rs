@@ -27,7 +27,11 @@
 //! - `client_kind`, `headless_native` and `require_pushed_authorization_requests` are never read
 //!   from a document (unknown members are ignored): a CIMD client is always an `application`,
 //!   never native headless, and follows the tenant PAR policy. The shared
-//!   [`crate::service::client::validate_client_policy`] runs with source `cimd`.
+//!   [`crate::service::client::validate_client_policy`] runs with source `cimd`;
+//! - `client_uri` and `initiate_login_uri` are optional and pass the shared
+//!   [`crate::service::client::validate_client_home_uri`] (https; loopback http only with
+//!   `allow_http_loopback`). They are stored, never rendered: the end-user UI links to a home
+//!   URL only for static clients.
 //!
 //! The client rules shared with every other client (name, auth method and grant consistency,
 //! inline JWKS, redirect URI syntax) are those of [`crate::service::client::validate_client`].
@@ -45,7 +49,7 @@ use crate::oauth::redirect::validate_redirect_uri;
 use crate::oauth::registration::is_registration_forbidden_scope;
 use crate::service::client::{
     ClientInput, ClientOptions, ClientPolicyView, MAX_REDIRECT_URIS, uses_secret, validate_client,
-    validate_client_policy,
+    validate_client_home_uri, validate_client_policy,
 };
 
 /// Largest accepted metadata document (draft-03 §4: 5 kilobytes).
@@ -113,6 +117,10 @@ pub struct NewClientMetadata {
     pub response_types: Vec<String>,
     pub scopes: Vec<String>,
     pub post_logout_redirect_uris: Vec<String>,
+    /// The document's `client_uri` (stored, never rendered for CIMD clients).
+    pub client_uri: Option<String>,
+    /// The document's `initiate_login_uri` (stored, never rendered for CIMD clients).
+    pub initiate_login_uri: Option<String>,
 }
 
 impl NewClientMetadata {
@@ -155,8 +163,8 @@ impl NewClientMetadata {
             require_pushed_authorization_requests: false,
             client_kind: CIMD_CLIENT_KIND,
             headless_native: false,
-            client_uri: None,
-            initiate_login_uri: None,
+            client_uri: self.client_uri.clone(),
+            initiate_login_uri: self.initiate_login_uri.clone(),
         }
     }
 }
@@ -399,6 +407,14 @@ pub fn validate(
     };
     validate_client_policy(&ClientPolicyView::of(&input, &options), ClientSource::Cimd)
         .map_err(to_invalid)?;
+    let mut home = [None, None];
+    for (slot, key) in home.iter_mut().zip(["client_uri", "initiate_login_uri"]) {
+        if let Some(value) = opt_str(obj, key)? {
+            validate_client_home_uri(key, value, allow_http_loopback).map_err(to_invalid)?;
+            *slot = Some(value.to_owned());
+        }
+    }
+    let [client_uri, initiate_login_uri] = home;
 
     Ok(NewClientMetadata {
         client_id: url.to_owned(),
@@ -413,6 +429,8 @@ pub fn validate(
         response_types,
         scopes,
         post_logout_redirect_uris,
+        client_uri,
+        initiate_login_uri,
     })
 }
 
@@ -646,6 +664,34 @@ mod tests {
         d["logo_uri"] = json!("https://app.example/logo.png");
         let m = check(&d).unwrap();
         assert_eq!(m.scopes, vec!["openid", "offline_access"]);
+    }
+
+    #[test]
+    fn cimd_home_uris_are_kept_and_validated() {
+        let mut d = with("client_uri", json!("https://app.example/"));
+        d["initiate_login_uri"] = json!("https://app.example/login");
+        let m = check(&d).unwrap();
+        assert_eq!(m.client_uri.as_deref(), Some("https://app.example/"));
+        assert_eq!(
+            m.initiate_login_uri.as_deref(),
+            Some("https://app.example/login")
+        );
+        let c = m.to_new_client(
+            ClientId::new_v7(),
+            OffsetDateTime::UNIX_EPOCH,
+            OffsetDateTime::UNIX_EPOCH,
+            vec![],
+        );
+        assert_eq!(c.client_uri.as_deref(), Some("https://app.example/"));
+        for (key, bad) in [
+            ("client_uri", json!("javascript:alert(1)")),
+            ("client_uri", json!("http://app.example/")),
+            ("initiate_login_uri", json!("https://u:p@app.example/")),
+            ("initiate_login_uri", json!("https://app.example/#f")),
+            ("client_uri", json!(5)),
+        ] {
+            assert_doc_rejected(check(&with(key, bad)));
+        }
     }
 
     #[test]

@@ -614,6 +614,9 @@ fn client_input(c: &ClientSection) -> (ClientInput, ClientOptions) {
             require_pushed_authorization_requests: c.require_pushed_authorization_requests,
             client_kind: c.client_kind,
             headless_native: c.headless_native,
+            // Not part of the tenant document yet (07.1-11 adds the YAML keys).
+            client_uri: None,
+            initiate_login_uri: None,
         },
     )
 }
@@ -2020,6 +2023,9 @@ impl ConfigService {
                     .then_some(s.require_pushed_authorization_requests),
                 client_kind: has("client_kind").then_some(s.client_kind),
                 headless_native: has("headless_native").then_some(s.headless_native),
+                // Not part of the tenant document yet: never changed by an apply.
+                client_uri: None,
+                initiate_login_uri: None,
             };
             if patch != ClientPatch::default() || options != ClientOptionsPatch::default() {
                 self.clients

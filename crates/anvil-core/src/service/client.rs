@@ -32,6 +32,7 @@ use crate::model::{
     MfaPolicy, NewClient, OrgClientPolicy, Page, PageRequest, RequestContext, SYSTEM_TENANT_SLUG,
     Scope, SecretHash, Tenant, TenantId, TenantSettings, TokenFormat,
 };
+use crate::oauth::redirect::MAX_REDIRECT_URI_LEN;
 use crate::oauth::resource::parse_resources;
 use crate::ports::{Storage, StorageError};
 use crate::service::admin_scope::{ORG_ADMIN_SCOPE, is_reserved_admin_token};
@@ -110,6 +111,12 @@ pub struct ClientOptions {
     /// May use the native headless flow API (UI-05). Administrator-registered, first-party
     /// (`consent_mode = skip_first_party`), PKCE-required, non-agent clients only.
     pub headless_native: bool,
+    /// OIDC `client_uri`, the app's home page ([`validate_client_home_uri`]). Stored for every
+    /// client; the end-user UI renders it only for static (administrator-registered) clients,
+    /// never for DCR or CIMD clients whose values are third-party controlled.
+    pub client_uri: Option<String>,
+    /// OIDC `initiate_login_uri`, where the app starts a sign-in. Same rules as `client_uri`.
+    pub initiate_login_uri: Option<String>,
 }
 
 /// Partial update of [`ClientOptions`]. `id_token_signed_response_alg: Some(None)` resets the
@@ -131,6 +138,10 @@ pub struct ClientOptionsPatch {
     pub require_pushed_authorization_requests: Option<bool>,
     pub client_kind: Option<ClientKind>,
     pub headless_native: Option<bool>,
+    /// `Some(None)` removes the client home page.
+    pub client_uri: Option<Option<String>>,
+    /// `Some(None)` removes the initiate-login URI.
+    pub initiate_login_uri: Option<Option<String>>,
 }
 
 /// A created client. `client_secret` is the plaintext secret, returned exactly once and only for
@@ -395,6 +406,75 @@ pub fn validate_client_phase4(
     Ok(())
 }
 
+/// Longest accepted `client_uri` / `initiate_login_uri` (the length cap of DCR's informational
+/// metadata URIs).
+pub const MAX_HOME_URI_LEN: usize = MAX_REDIRECT_URI_LEN;
+
+/// The one validation of a client home URL (`client_uri`, `initiate_login_uri`), shared by the
+/// admin API, declarative configuration, dynamic registration (RFC 7591) and Client ID Metadata
+/// Documents: an absolute `https` URL with a host, no userinfo, no fragment, no whitespace or
+/// control characters, at most [`MAX_HOME_URI_LEN`] bytes. `http` is accepted only when
+/// `allow_http_loopback` is set and the host is `localhost` or a loopback address (the
+/// administrator rule, as for redirect URIs; CIMD in development mode). DCR passes `false`.
+///
+/// These values are stored, not trusted: the end-user UI links to a client's home URL only for
+/// static clients. Errors are `Validation` on `field`.
+pub fn validate_client_home_uri(
+    field: &'static str,
+    value: &str,
+    allow_http_loopback: bool,
+) -> Result<(), CoreError> {
+    if value.is_empty() {
+        return Err(invalid(field, "must be an absolute https URL"));
+    }
+    if value.len() > MAX_HOME_URI_LEN {
+        return Err(invalid(
+            field,
+            format!("must be at most {MAX_HOME_URI_LEN} characters"),
+        ));
+    }
+    if value.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err(invalid(field, "must not contain whitespace"));
+    }
+    let parsed =
+        url::Url::parse(value).map_err(|_| invalid(field, "must be an absolute https URL"))?;
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(invalid(field, "must not contain user information"));
+    }
+    if parsed.fragment().is_some() {
+        return Err(invalid(field, "must not contain a fragment"));
+    }
+    let loopback = match parsed.host() {
+        Some(url::Host::Domain(d)) => d.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
+    };
+    match parsed.scheme() {
+        "https" if parsed.host_str().is_some_and(|h| !h.is_empty()) => Ok(()),
+        "http" if allow_http_loopback && loopback => Ok(()),
+        "http" if allow_http_loopback => Err(invalid(
+            field,
+            "http is only allowed for localhost and loopback addresses; use https",
+        )),
+        _ => Err(invalid(field, "must be an absolute https URL")),
+    }
+}
+
+/// [`validate_client_home_uri`] for both home URLs of a set of options.
+pub fn validate_client_home_uris(
+    options: &ClientOptions,
+    allow_http_loopback: bool,
+) -> Result<(), CoreError> {
+    if let Some(uri) = &options.client_uri {
+        validate_client_home_uri("client_uri", uri, allow_http_loopback)?;
+    }
+    if let Some(uri) = &options.initiate_login_uri {
+        validate_client_home_uri("initiate_login_uri", uri, allow_http_loopback)?;
+    }
+    Ok(())
+}
+
 /// The client fields [`validate_client_policy`] looks at, taken from a registration being
 /// written (create: input and options; update: the merged values).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -482,6 +562,8 @@ fn options_of(client: &Client) -> ClientOptions {
         require_pushed_authorization_requests: client.require_pushed_authorization_requests,
         client_kind: client.client_kind,
         headless_native: client.headless_native,
+        client_uri: client.client_uri.clone(),
+        initiate_login_uri: client.initiate_login_uri.clone(),
     }
 }
 
@@ -527,6 +609,8 @@ fn changed_fields(patch: &ClientPatch, options: &ClientOptionsPatch) -> Vec<&'st
     );
     push(options.client_kind.is_some(), "client_kind");
     push(options.headless_native.is_some(), "headless_native");
+    push(options.client_uri.is_some(), "client_uri");
+    push(options.initiate_login_uri.is_some(), "initiate_login_uri");
     f
 }
 
@@ -726,6 +810,9 @@ impl ClientService {
             ClientSource::Static
         };
         validate_client_policy(&ClientPolicyView::of(&input, &options), source)?;
+        // Administrator-registered clients may point at a loopback http app (local
+        // development, as for redirect URIs); DCR never.
+        validate_client_home_uris(&options, source == ClientSource::Static)?;
         let allowed_resources = parse_resources(&options.allowed_resources)?;
         let provided = chosen.as_ref().and_then(|(_, s)| s.clone());
         let (secret, hash) = match (uses_secret(input.auth_method), provided) {
@@ -778,8 +865,8 @@ impl ClientService {
             require_pushed_authorization_requests: options.require_pushed_authorization_requests,
             client_kind: options.client_kind,
             headless_native: options.headless_native,
-            client_uri: None,
-            initiate_login_uri: None,
+            client_uri: options.client_uri,
+            initiate_login_uri: options.initiate_login_uri,
         };
         let action = if new.registration_access_token_hash.is_some() {
             AuditAction::ClientRegistered
@@ -975,6 +1062,16 @@ impl ClientService {
         if let Some(h) = options.headless_native {
             merged_options.headless_native = h;
         }
+        // Only the home URLs the patch sets are checked: stored values passed their source's
+        // rule (CIMD in development mode may hold a loopback http URL).
+        validate_client_home_uris(
+            &ClientOptions {
+                client_uri: options.client_uri.clone().flatten(),
+                initiate_login_uri: options.initiate_login_uri.clone().flatten(),
+                ..ClientOptions::default()
+            },
+            current.registration_source == ClientSource::Static,
+        )?;
         check_org_policy(
             tenant.slug == SYSTEM_TENANT_SLUG,
             merged_options.organization,
@@ -1015,8 +1112,8 @@ impl ClientService {
             require_pushed_authorization_requests: options.require_pushed_authorization_requests,
             client_kind: options.client_kind,
             headless_native: options.headless_native,
-            client_uri: None,
-            initiate_login_uri: None,
+            client_uri: options.client_uri.clone(),
+            initiate_login_uri: options.initiate_login_uri.clone(),
         };
         let client = self
             .storage
@@ -1776,5 +1873,80 @@ mod tests {
             )),
             "headless_native"
         );
+    }
+
+    #[test]
+    fn home_uris_accept_https_and_admin_loopback_http() {
+        for ok in [
+            "https://app.example/",
+            "https://app.example:8443/login?from=idp",
+            "https://xn--bcher-kva.example/",
+        ] {
+            assert!(
+                validate_client_home_uri("client_uri", ok, false).is_ok(),
+                "{ok}"
+            );
+        }
+        for ok in [
+            "http://localhost:5173/",
+            "http://127.0.0.1:3000/x",
+            "http://[::1]/",
+        ] {
+            assert!(
+                validate_client_home_uri("client_uri", ok, true).is_ok(),
+                "{ok}"
+            );
+            assert!(
+                validate_client_home_uri("client_uri", ok, false).is_err(),
+                "{ok}"
+            );
+        }
+    }
+
+    #[test]
+    fn home_uris_refuse_unsafe_values() {
+        let long = format!("https://app.example/{}", "a".repeat(MAX_HOME_URI_LEN));
+        for bad in [
+            "",
+            "javascript:alert(1)",
+            "data:text/html,x",
+            "file:///etc/passwd",
+            "http://evil.example/",
+            "https://user:pw@app.example/",
+            "https://user@app.example/",
+            "https://app.example/#frag",
+            "https://app.example/#",
+            "/home",
+            "app.example",
+            "https://app.example/ x",
+            "https://app.example/\u{7}",
+            long.as_str(),
+        ] {
+            for allow in [false, true] {
+                let r = validate_client_home_uri("initiate_login_uri", bad, allow);
+                assert_eq!(field_of(r), "initiate_login_uri", "{bad} allow={allow}");
+            }
+        }
+        // The non-loopback http message names the real problem.
+        let Err(CoreError::Validation { message, .. }) =
+            validate_client_home_uri("client_uri", "http://evil.example/", true)
+        else {
+            panic!("expected a validation error");
+        };
+        assert!(message.contains("localhost"), "{message}");
+    }
+
+    #[test]
+    fn home_uris_of_options_name_the_field() {
+        let options = ClientOptions {
+            client_uri: Some("https://app.example/".into()),
+            initiate_login_uri: Some("https://app.example/#x".into()),
+            ..ClientOptions::default()
+        };
+        assert_eq!(
+            field_of(validate_client_home_uris(&options, true)),
+            "initiate_login_uri"
+        );
+        assert!(validate_client_home_uris(&ClientOptions::default(), false).is_ok());
     }
 }
