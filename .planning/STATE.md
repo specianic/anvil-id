@@ -6,15 +6,15 @@ current_phase: 05
 current_phase_name: release 0 4 operate it
 current_plan: 33
 status: verifying
-stopped_at: Completed 07-04-PLAN.md
-last_updated: "2026-11-26T16:54:50.716Z"
-last_activity: 2026-11-26
+stopped_at: Completed 07.1-05-PLAN.md
+last_updated: "2026-11-28T02:36:23.161Z"
+last_activity: 2026-11-28
 progress:
-  total_phases: 7
+  total_phases: 8
   completed_phases: 3
-  total_plans: 193
-  completed_plans: 168
-  percent: 84
+  total_plans: 215
+  completed_plans: 187
+  percent: 87
 ---
 
 # Project State
@@ -34,9 +34,9 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 **Current Plan:** 33
 **Total Plans in Phase:** 33
 **Status:** Phase complete — ready for verification
-**Last Activity:** 2026-11-26
+**Last Activity:** 2026-11-28
 **Last Activity Description:** 06-26 phase gate complete (921-pair security map, 1.0 plaintext scans, `just doc`, legacy console redirects removed, anvilid 1.0.0-beta.1, 1.0 migrations pinned, every workflow incl. load, deploy and the macOS release dry run green on 9c40f61). Open: 04-33/v0.3.0 and 05-29/v0.4.0 (owner), then 06-27 (v1.0.0-beta.1)
-**Progress:** [████████░░] 84%
+**Progress:** [█████████░] 87%
 
 Phase 5 has 33 plans (05-01 through 05-33). Every plan except 05-29 (release v0.4.0 after owner sign-off) has a
 SUMMARY. Current Plan counts plans in execution order: 05-29 is the 33rd and last. Phase 4 still has one open plan, 04-33 (manual real-provider checklist, then tag v0.3.0); it must be
@@ -221,6 +221,7 @@ done before 05-29 tags v0.4.0.
 | Phase 06 P31 | 1h30m | 2 tasks | 15 files |
 | Phase 06 P26 | 160min | 3 tasks | 53 files |
 | Phase 07 P04 | 70 min | 2 tasks | 22 files |
+| Phase 07.1 P05 | 25min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -516,6 +517,7 @@ Recent decisions affecting current work:
 - [Phase 06]: 06-26: Q8 tags v0.3.0/v0.4.0 absent; gate pushed under orchestrator authorization, no tag created; v1.0.0-beta.1 (06-27) blocked on both tags
 - [Phase 06]: 06-26: tenant connections page org-name paging deferred to Phase 7 (needs org name on the connection view)
 - [Phase 07]: 07-04: api_flows serves a JSON 404 catch-all below /api/flows/v1 (outside ui Fetch-Metadata); users import/export run(cfg,args) fail with TRANSITIONAL(07-14/07-15)
+- [Phase 07.1]: 07.1-05: journey helpers in tests/e2e/lib (ux-state, console-ux, layout); clients cached in E2E_STATE_FILE.ux.json; fake RP on E2E_FAKE_RP_PORT (default 18199); consoleSignIn waits for the shell only (not consoleLogin's Users landing)
 
 ### Roadmap Evolution
 
@@ -533,6 +535,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-26T16:54:50.713Z
-Stopped at: Completed 07-04-PLAN.md
+Last session: 2026-11-28T02:36:23.158Z
+Stopped at: Completed 07.1-05-PLAN.md
 Resume file: None
