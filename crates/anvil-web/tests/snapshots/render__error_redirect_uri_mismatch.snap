@@ -15,11 +15,16 @@ expression: html
 
 <main id="main" aria-labelledby="page-heading">
 <p class="anvil-tenant">Acme</p>
-<h1 id="page-heading">Something went wrong</h1>
+<h1 id="page-heading">This app&#x27;s sign-in link is set up wrongly</h1>
 
+<p class="anvil-error-label" id="error-label"><svg class="anvil-icon" aria-hidden="true" focusable="false" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="7" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg> <span>Error</span></p>
 <p class="anvil-error-text" id="error-message" data-error-key="redirect_uri_mismatch" role="alert">The redirect URI in this request is not registered for this client.</p>
+<p class="anvil-lead" id="error-explanation">The app sent you here with an address it has not registered, so you can&#x27;t sign in from this link. Go back to the app and try again, or tell its operator.</p>
 
 <p class="anvil-muted anvil-status">Error 400</p>
+<nav class="anvil-links" aria-label="Next steps">
+<a id="link-login" href="&#x2f;t&#x2f;acme&#x2f;ui&#x2f;login?flow=f1">Go to sign in</a>
+</nav>
 
 
 </main>

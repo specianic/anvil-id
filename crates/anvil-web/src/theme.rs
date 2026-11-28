@@ -27,8 +27,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use serde::Deserialize;
 
-use crate::errors::{core_error_page, error_page};
+use crate::errors::{core_error_page_in, error_page_in};
 use crate::http_cache::{if_none_match, strong_etag};
+use crate::i18n::{Locale, RequestLocale};
 use crate::state::AppState;
 use crate::tenant::ResolvedTenant;
 
@@ -143,14 +144,22 @@ pub(crate) fn css_response(headers: &HeaderMap, theme: &EffectiveTheme) -> Respo
     resp
 }
 
-fn not_found(state: &AppState, tenant: &ResolvedTenant) -> Response {
-    error_page(state, Some(tenant), StatusCode::NOT_FOUND, "not_found", "")
+fn not_found(state: &AppState, tenant: &ResolvedTenant, loc: &Locale) -> Response {
+    error_page_in(
+        state,
+        Some(tenant),
+        loc,
+        StatusCode::NOT_FOUND,
+        "not_found",
+        "",
+    )
 }
 
 /// `GET /theme/theme.css[?flow={id}|?preview={token}]`.
 async fn theme_css(
     State(state): State<AppState>,
     tenant: ResolvedTenant,
+    RequestLocale(loc, _): RequestLocale,
     headers: HeaderMap,
     Query(q): Query<ThemeQuery>,
 ) -> Response {
@@ -158,7 +167,7 @@ async fn theme_css(
     let theme = if let Some(token) = q.preview.as_deref() {
         match service.draft_for_preview(tenant.tenant.id, token).await {
             Ok(Some(t)) => Ok(t),
-            Ok(None) => return not_found(&state, &tenant),
+            Ok(None) => return not_found(&state, &tenant, &loc),
             Err(e) => Err(e),
         }
     } else {
@@ -174,7 +183,7 @@ async fn theme_css(
         Ok(theme) => css_response(&headers, &theme),
         Err(e) => {
             tracing::error!(error = %e, "theme: building the stylesheet failed");
-            core_error_page(&state, Some(&tenant), &e)
+            core_error_page_in(&state, Some(&tenant), &loc, &e)
         }
     }
 }
@@ -183,12 +192,13 @@ async fn theme_css(
 async fn logo(
     State(state): State<AppState>,
     tenant: ResolvedTenant,
+    RequestLocale(loc, _): RequestLocale,
     Path(sha): Path<String>,
 ) -> Response {
     let logo = match state.branding().logo(tenant.tenant.id, &sha).await {
         Ok(Some(l)) => l,
-        Ok(None) => return not_found(&state, &tenant),
-        Err(e) => return core_error_page(&state, Some(&tenant), &e),
+        Ok(None) => return not_found(&state, &tenant, &loc),
+        Err(e) => return core_error_page_in(&state, Some(&tenant), &loc, &e),
     };
     // Only the types the upload accepts are ever served as images.
     let content_type = match logo.content_type.as_str() {
@@ -196,9 +206,10 @@ async fn logo(
         "image/jpeg" => "image/jpeg",
         "image/webp" => "image/webp",
         _ => {
-            return core_error_page(
+            return core_error_page_in(
                 &state,
                 Some(&tenant),
+                &loc,
                 &CoreError::Internal("stored logo has an unexpected content type".into()),
             );
         }

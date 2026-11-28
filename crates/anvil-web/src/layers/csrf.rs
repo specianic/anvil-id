@@ -23,7 +23,8 @@ use axum::http::{HeaderMap, Method, Request, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use tower::{Layer, Service};
 
-use crate::errors::error_page;
+use crate::errors::error_page_in;
+use crate::i18n::locale_of;
 use crate::state::AppState;
 use crate::tenant::{AllowedOrigins, ResolvedTenant};
 
@@ -72,13 +73,11 @@ pub(crate) fn allowed(method: &Method, headers: &HeaderMap, origins: &[String]) 
 fn reject(req: &Request<Body>) -> Response {
     tracing::info!(method = %req.method(), path = %req.uri().path(), "cross-origin form submission rejected");
     match req.extensions().get::<AppState>() {
-        Some(state) => error_page(
-            state,
-            req.extensions().get::<ResolvedTenant>(),
-            StatusCode::FORBIDDEN,
-            "csrf",
-            "",
-        ),
+        Some(state) => {
+            let tenant = req.extensions().get::<ResolvedTenant>();
+            let locale = locale_of(state, tenant, req.headers(), req.uri().query());
+            error_page_in(state, tenant, &locale, StatusCode::FORBIDDEN, "csrf", "")
+        }
         None => (StatusCode::FORBIDDEN, "forbidden").into_response(),
     }
 }

@@ -29,7 +29,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use serde_json::Value;
 
-use crate::errors::{error_page, oauth_json};
+use crate::errors::{error_page_in, oauth_json};
+use crate::i18n::locale_of;
 use crate::protocol::token::no_store;
 use crate::protocol::userinfo::bearer_from_header;
 use crate::request_context::AuditContext;
@@ -56,8 +57,16 @@ pub(super) fn routes() -> Router<AppState> {
 }
 
 /// The 404 of a route that does not exist (the fallback's page), for a disabled policy.
-fn not_found(state: &AppState, tenant: &ResolvedTenant) -> Response {
-    error_page(state, Some(tenant), StatusCode::NOT_FOUND, "not_found", "")
+fn not_found(state: &AppState, tenant: &ResolvedTenant, headers: &HeaderMap) -> Response {
+    let locale = locale_of(state, Some(tenant), headers, None);
+    error_page_in(
+        state,
+        Some(tenant),
+        &locale,
+        StatusCode::NOT_FOUND,
+        "not_found",
+        "",
+    )
 }
 
 fn disabled(tenant: &ResolvedTenant) -> bool {
@@ -99,11 +108,12 @@ fn json_body(headers: &HeaderMap, body: &[u8]) -> Result<Value, CoreError> {
 fn respond(
     state: &AppState,
     tenant: &ResolvedTenant,
+    headers: &HeaderMap,
     result: Result<Response, CoreError>,
 ) -> Response {
     match result {
         Ok(resp) => no_store(resp),
-        Err(CoreError::NotFound) => not_found(state, tenant),
+        Err(CoreError::NotFound) => not_found(state, tenant, headers),
         Err(e) => oauth_json(&e),
     }
 }
@@ -116,7 +126,7 @@ async fn register(
     body: Bytes,
 ) -> Response {
     if disabled(&tenant) {
-        return not_found(&state, &tenant);
+        return not_found(&state, &tenant, &headers);
     }
     let result = async {
         let iat = bearer(&headers);
@@ -132,7 +142,7 @@ async fn register(
             .into_response())
     }
     .await;
-    respond(&state, &tenant, result)
+    respond(&state, &tenant, &headers, result)
 }
 
 async fn read(
@@ -142,7 +152,7 @@ async fn read(
     headers: HeaderMap,
 ) -> Response {
     if disabled(&tenant) {
-        return not_found(&state, &tenant);
+        return not_found(&state, &tenant, &headers);
     }
     let result = async {
         let rat = bearer(&headers);
@@ -154,7 +164,7 @@ async fn read(
         Ok(axum::Json(Value::Object(info)).into_response())
     }
     .await;
-    respond(&state, &tenant, result)
+    respond(&state, &tenant, &headers, result)
 }
 
 async fn update(
@@ -166,7 +176,7 @@ async fn update(
     body: Bytes,
 ) -> Response {
     if disabled(&tenant) {
-        return not_found(&state, &tenant);
+        return not_found(&state, &tenant, &headers);
     }
     let result = async {
         let rat = bearer(&headers);
@@ -183,7 +193,7 @@ async fn update(
         Ok(axum::Json(Value::Object(info)).into_response())
     }
     .await;
-    respond(&state, &tenant, result)
+    respond(&state, &tenant, &headers, result)
 }
 
 async fn delete(
@@ -194,7 +204,7 @@ async fn delete(
     headers: HeaderMap,
 ) -> Response {
     if disabled(&tenant) {
-        return not_found(&state, &tenant);
+        return not_found(&state, &tenant, &headers);
     }
     let result = async {
         let rat = bearer(&headers);
@@ -205,5 +215,5 @@ async fn delete(
         Ok(StatusCode::NO_CONTENT.into_response())
     }
     .await;
-    respond(&state, &tenant, result)
+    respond(&state, &tenant, &headers, result)
 }

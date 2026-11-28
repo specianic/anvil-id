@@ -110,12 +110,24 @@ pub fn router(state: AppState) -> Router {
         .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
 }
 
-async fn not_found(State(state): State<AppState>, tenant: Option<ResolvedTenant>) -> Response {
-    errors::error_page(
+/// The router fallback: the 404 page in the request's language, with the signed-in or signed-out
+/// way forward.
+async fn not_found(
+    State(state): State<AppState>,
+    tenant: Option<ResolvedTenant>,
+    i18n::RequestLocale(loc, _): i18n::RequestLocale,
+    jar: axum_extra::extract::cookie::CookieJar,
+) -> Response {
+    errors::error_page_for(
         &state,
         tenant.as_ref(),
-        StatusCode::NOT_FOUND,
-        "not_found",
-        "",
+        &loc,
+        &jar,
+        errors::ErrorPage {
+            status: StatusCode::NOT_FOUND,
+            error_key: "not_found",
+            detail: "",
+        },
     )
+    .await
 }

@@ -1,8 +1,22 @@
 {% extends "base.html" %}
-{#- The sentences below are a stable contract (see themes/default/README.md). Snapshot tests, the
-    conformance configuration and the e2e suite match on them. Do not reword them. -#}
-{% block heading %}{{ heading or t("error.heading") }}{% endblock %}
+{#- The sentences in #error-message are a stable contract (see themes/default/README.md). Snapshot
+    tests, the conformance configuration and the e2e suite match on them. Do not reword them; the
+    friendly heading and explanation (errors_friendly.ftl) go around them.
+    Variables besides `page`: status, error_key, heading (optional override), detail (development
+    mode only; the handler leaves it empty otherwise). The way forward comes from page.links
+    (ui::nav::NavContext): link-back-to-app, link-continue, link-login, link-account,
+    link-console, link-home and the sign-out form form-sign-out. -#}
+{% block heading %}
+{%- if heading -%}
+{{ heading }}
+{%- elif error_key in ["redirect_uri_mismatch", "unknown_client", "invalid_request", "flow_expired", "csrf", "not_found", "too_many_requests"] -%}
+{{ t("errors_friendly.heading." ~ error_key) }}
+{%- else -%}
+{{ t("errors_friendly.heading.generic") }}
+{%- endif -%}
+{% endblock %}
 {% block content %}
+<p class="anvil-error-label" id="error-label"><svg class="anvil-icon" aria-hidden="true" focusable="false" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="7" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg> <span>{{ t("errors_friendly.danger_label") }}</span></p>
 <p class="anvil-error-text" id="error-message" data-error-key="{{ error_key }}" role="alert">
 {%- if error_key in ["redirect_uri_mismatch", "unknown_client", "invalid_request", "flow_expired", "csrf", "not_found", "too_many_requests"] -%}
 {{ t("error." ~ error_key) }}
@@ -10,11 +24,40 @@
 {{ t("error.generic") }}
 {%- endif -%}
 </p>
-{% if detail %}<p class="anvil-muted" id="error-detail">{{ detail }}</p>{% endif %}
+<p class="anvil-lead" id="error-explanation">
+{%- if error_key in ["redirect_uri_mismatch", "unknown_client", "invalid_request", "flow_expired", "csrf", "not_found", "too_many_requests"] -%}
+{{ t("errors_friendly.explain." ~ error_key) }}
+{%- else -%}
+{{ t("errors_friendly.explain.generic") }}
+{%- endif -%}
+</p>
+{% if detail and page.dev_mode %}<p class="anvil-muted" id="error-detail"><span>{{ t("errors_friendly.detail_label") }}</span> {{ detail }}</p>{% endif %}
 {% if status %}<p class="anvil-muted anvil-status">{{ t("error.status", status=status) }}</p>{% endif %}
-{% if page.links.login and error_key in ["flow_expired", "csrf"] %}
+{% if page.links.app_home or page.links.continue_to or page.links.login or page.links.account or page.links.console or page.links.home -%}
 <nav class="anvil-links" aria-label="{{ t("nav.next_steps") }}">
-<a id="link-login" href="{{ page.links.login }}">{{ t("error.start_again") }}</a>
+{% if page.links.app_home -%}
+<a id="link-back-to-app" href="{{ page.links.app_home.href }}">{{ t("errors_friendly.back_to_app", app=page.links.app_home.app_name) }}</a>
+{% endif -%}
+{% if page.links.continue_to -%}
+<a id="link-continue" href="{{ page.links.continue_to.href }}">{{ t("nav.continue_to", app=page.links.continue_to.app_name) }}</a>
+{% endif -%}
+{% if page.links.login -%}
+<a id="link-login" href="{{ page.links.login }}">{% if error_key in ["flow_expired", "csrf"] %}{{ t("error.start_again") }}{% else %}{{ t("message.go_to_sign_in") }}{% endif %}</a>
+{% endif -%}
+{% if page.links.account -%}
+<a id="link-account" href="{{ page.links.account }}">{{ t("nav.go_to_account") }}</a>
+{% endif -%}
+{% if page.links.console -%}
+<a id="link-console" href="{{ page.links.console }}">{{ t("nav.open_console") }}</a>
+{% endif -%}
+{% if page.links.home -%}
+<a id="link-home" href="{{ page.links.home }}">{{ t("errors_friendly.go_home") }}</a>
+{% endif -%}
 </nav>
+{% endif -%}
+{% if page.links.sign_out -%}
+<form id="form-sign-out" method="post" action="{{ page.links.sign_out }}">
+<button type="submit" id="sign-out-submit">{{ t("nav.sign_out") }}</button>
+</form>
 {% endif %}
 {% endblock %}

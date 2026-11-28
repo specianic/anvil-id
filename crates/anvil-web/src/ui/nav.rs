@@ -19,9 +19,18 @@
 //! URLs take their scheme and host from the tenant's issuer (or the installation's public URL for
 //! the console), never from the request. An honoured `ui_locales` is carried on every flow link
 //! ([`carry_ui_locales`]).
+//!
+//! **Back to the app** (decision 1 of 07.1): when the request's client, or a client the caller
+//! validated ([`NavContext::for_client`]), is a *static* client (admin API or tenant YAML) with an
+//! `initiate_login_uri` (preferred) or `client_uri`, the way forward offers "Back to &lt;app&gt;"
+//! with that stored URL. Clients registered through DCR or a Client ID Metadata Document chose
+//! those URLs themselves (third-party controlled): they are stored (RFC 7591) but never rendered.
+//! The URL always comes from the stored client, never from the request.
 
 use anvil_core::flow::login::{IDENTIFY_FORM_ID, SSO_CHOICE_FORM_ID};
-use anvil_core::model::{AuthRequestId, FlowId, RegistrationMode, SYSTEM_TENANT_SLUG};
+use anvil_core::model::{
+    AuthRequestId, Client, ClientSource, FlowId, RegistrationMode, SYSTEM_TENANT_SLUG,
+};
 use anvil_core::policy::return_to::ReturnTarget;
 
 use super::flow_driver;
@@ -40,6 +49,8 @@ pub(crate) const SIGN_OUT_KEY: &str = "nav.sign_out";
 pub(crate) const CONSOLE_KEY: &str = "nav.open_console";
 /// Message key of the plain sign-in link.
 pub(crate) const SIGN_IN_KEY: &str = "message.go_to_sign_in";
+/// Message key of the "Back to &lt;app&gt;" link (argument `app`): the static client's own home.
+pub(crate) const BACK_TO_APP_KEY: &str = "errors_friendly.back_to_app";
 
 /// An end-user page a flow links to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,6 +111,15 @@ pub(crate) struct LiveRequest {
     pub client_id: String,
     /// The client's display name (its client id when it has none).
     pub client_name: String,
+    /// The client's home ([`app_home`]): static clients only.
+    pub app_home: Option<String>,
+}
+
+/// The home of an application ("Back to &lt;app&gt;"), from a stored static client.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AppHome {
+    pub name: String,
+    pub href: String,
 }
 
 /// A `request=` that cannot be continued. Deliberately without a reason (unknown, expired,
@@ -133,6 +153,12 @@ impl WayForward {
         let mut links = PageLinks::default();
         for link in std::iter::once(self.primary).chain(self.secondary) {
             match link.label_key {
+                BACK_TO_APP_KEY => {
+                    links.app_home = Some(ContinueLink {
+                        href: link.href,
+                        app_name: link.app_name.unwrap_or_default(),
+                    });
+                }
                 CONTINUE_KEY => {
                     links.continue_to = Some(ContinueLink {
                         href: link.href,
@@ -156,6 +182,8 @@ pub(crate) struct NavContext {
     /// The allowlisted return target of a login without an authorization request (the request
     /// always wins, like the flow service).
     return_to: Option<ReturnTarget>,
+    /// The home of a client the caller validated without a live request ([`Self::for_client`]).
+    client_home: Option<AppHome>,
 }
 
 /// `Debug` without the return target (its token is never logged).
@@ -164,6 +192,7 @@ impl std::fmt::Debug for NavContext {
         f.debug_struct("NavContext")
             .field("request", &self.request)
             .field("return_to", &self.return_to.as_ref().map(|_| ".."))
+            .field("client_home", &self.client_home)
             .finish()
     }
 }
@@ -191,7 +220,7 @@ impl NavContext {
         match resolve(state, tenant, id).await {
             Some(request) => Ok(Self {
                 request: Some(request),
-                return_to: None,
+                ..Self::none()
             }),
             None => Err(StaleRequest::Unknown),
         }
@@ -223,7 +252,39 @@ impl NavContext {
         };
         Self {
             request,
-            return_to: None,
+            ..Self::none()
+        }
+    }
+
+    /// The context of a client the caller already validated (logout's `client_id`, the client
+    /// of a refused authorization request), without a live request. Only the client's stored
+    /// home is used ([`app_home`]: static clients only); an unknown client, or a lookup
+    /// failure, is no context.
+    pub(crate) async fn for_client(
+        state: &AppState,
+        tenant: &ResolvedTenant,
+        client_id: &str,
+    ) -> Self {
+        let client = match state
+            .storage()
+            .clients()
+            .get(tenant.tenant.id, client_id)
+            .await
+        {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(error = %e, "loading the client for its links failed");
+                None
+            }
+        };
+        Self {
+            client_home: client.as_ref().and_then(|c| {
+                app_home(c).map(|href| AppHome {
+                    name: display_name(c),
+                    href,
+                })
+            }),
+            ..Self::none()
         }
     }
 
@@ -236,6 +297,20 @@ impl NavContext {
     /// The live authorization request, if any.
     pub(crate) fn request(&self) -> Option<&LiveRequest> {
         self.request.as_ref()
+    }
+
+    /// The application's home ("Back to &lt;app&gt;"): the live request's static client, else
+    /// the validated client of [`Self::for_client`].
+    pub(crate) fn app_home(&self) -> Option<AppHome> {
+        self.request
+            .as_ref()
+            .and_then(|r| {
+                r.app_home.clone().map(|href| AppHome {
+                    name: r.client_name.clone(),
+                    href,
+                })
+            })
+            .or_else(|| self.client_home.clone())
     }
 
     /// The URL of `page`. Flow pages carry the live request (`?request=`), a sign-in link without
@@ -284,9 +359,10 @@ impl NavContext {
     }
 
     /// Where to go after a step that ends here: a live request continues its app (through the
-    /// authorization continuation when signed in, else through sign-in); a signed-in user gets
-    /// the account page and the sign-out form (plus the admin console in the system tenant);
-    /// anyone else the tenant's sign-in page.
+    /// authorization continuation when signed in, else through sign-in); a validated client
+    /// without a request offers "Back to &lt;app&gt;" first; a signed-in user gets the account
+    /// page and the sign-out form (plus the admin console in the system tenant); anyone else the
+    /// tenant's sign-in page.
     pub(crate) fn way_forward(
         &self,
         state: &AppState,
@@ -295,6 +371,37 @@ impl NavContext {
         signed_in: bool,
     ) -> WayForward {
         self.way_forward_from(state.config().public_url.as_str(), tenant, loc, signed_in)
+    }
+
+    /// The way forward of an error page: the application's home first when its static client
+    /// has one (the request may be the broken part), then [`Self::way_forward`].
+    pub(crate) fn error_way_forward(
+        &self,
+        state: &AppState,
+        tenant: &ResolvedTenant,
+        loc: &Locale,
+        signed_in: bool,
+    ) -> WayForward {
+        self.error_way_forward_from(state.config().public_url.as_str(), tenant, loc, signed_in)
+    }
+
+    fn error_way_forward_from(
+        &self,
+        public_url: &str,
+        tenant: &ResolvedTenant,
+        loc: &Locale,
+        signed_in: bool,
+    ) -> WayForward {
+        let base = self.way_forward_from(public_url, tenant, loc, signed_in);
+        match self.app_home() {
+            Some(app) if base.primary.label_key != BACK_TO_APP_KEY => WayForward {
+                primary: back_to(app),
+                secondary: std::iter::once(base.primary)
+                    .chain(base.secondary)
+                    .collect(),
+            },
+            _ => base,
+        }
     }
 
     /// [`Self::way_forward`] with the installation's public URL (the console's origin).
@@ -324,6 +431,26 @@ impl NavContext {
                 secondary: Vec::new(),
             };
         }
+        let plain = self.plain_way_forward(public_url, tenant, loc, signed_in);
+        match &self.client_home {
+            Some(app) => WayForward {
+                primary: back_to(app.clone()),
+                secondary: std::iter::once(plain.primary)
+                    .chain(plain.secondary)
+                    .collect(),
+            },
+            None => plain,
+        }
+    }
+
+    /// The way forward without any application: account (signed in) or sign-in.
+    fn plain_way_forward(
+        &self,
+        public_url: &str,
+        tenant: &ResolvedTenant,
+        loc: &Locale,
+        signed_in: bool,
+    ) -> WayForward {
         if signed_in {
             let mut secondary = vec![NavLink {
                 href: self.url(tenant, loc, UiPage::SignOut),
@@ -361,6 +488,56 @@ impl NavContext {
     }
 }
 
+/// The "Back to &lt;app&gt;" link.
+fn back_to(app: AppHome) -> NavLink {
+    NavLink {
+        href: app.href,
+        label_key: BACK_TO_APP_KEY,
+        app_name: Some(app.name),
+        method_post: false,
+    }
+}
+
+/// The client's display name (its client id when it has none).
+fn display_name(client: &Client) -> String {
+    if client.name.trim().is_empty() {
+        client.client_id.clone()
+    } else {
+        client.name.clone()
+    }
+}
+
+/// The home a user can be sent back to: `initiate_login_uri`, else `client_uri`, of a **static**
+/// client only (DCR and CIMD clients' URLs are third-party controlled and never rendered), and
+/// only an absolute `https` (or `http`) URL, so a stored value can never become a `javascript:`
+/// or relative link.
+pub(crate) fn app_home(client: &Client) -> Option<String> {
+    home_of(
+        client.registration_source,
+        client.initiate_login_uri.as_deref(),
+        client.client_uri.as_deref(),
+    )
+}
+
+/// [`app_home`] over the three fields it reads.
+fn home_of(
+    source: ClientSource,
+    initiate_login_uri: Option<&str>,
+    client_uri: Option<&str>,
+) -> Option<String> {
+    if source != ClientSource::Static {
+        return None;
+    }
+    [initiate_login_uri, client_uri]
+        .into_iter()
+        .flatten()
+        .find(|u| {
+            url::Url::parse(u)
+                .is_ok_and(|p| matches!(p.scheme(), "https" | "http") && p.host_str().is_some())
+        })
+        .map(str::to_owned)
+}
+
 /// The live request `id` of this tenant with its client's name, through the grants and client
 /// ports. Anything else (unknown, expired, other tenant, client gone, lookup failure) is `None`.
 async fn resolve(
@@ -382,15 +559,11 @@ async fn resolve(
         .await
         .inspect_err(|e| tracing::warn!(error = %e, "loading the client for its links failed"))
         .ok()??;
-    let client_name = if client.name.trim().is_empty() {
-        client.client_id.clone()
-    } else {
-        client.name.clone()
-    };
     Some(LiveRequest {
         id: request.id,
+        client_name: display_name(&client),
+        app_home: app_home(&client),
         client_id: client.client_id,
-        client_name,
     })
 }
 
@@ -429,8 +602,9 @@ mod tests {
                 id: AuthRequestId(uuid::Uuid::parse_str(REQ).expect("uuid")),
                 client_id: "shop".into(),
                 client_name: "Shop".into(),
+                app_home: None,
             }),
-            return_to: None,
+            ..NavContext::none()
         }
     }
 
@@ -617,5 +791,89 @@ mod tests {
         assert_eq!(wf.primary.label_key, SIGN_IN_KEY);
         assert_eq!(wf.primary.href, format!("{ISSUER}/ui/login"));
         assert!(wf.secondary.is_empty());
+    }
+
+    #[test]
+    fn app_home_prefers_initiate_login_uri_of_static_clients_only() {
+        let home = Some("https://shop.example/");
+        let login = Some("https://shop.example/login");
+        assert_eq!(
+            home_of(ClientSource::Static, login, home).as_deref(),
+            Some("https://shop.example/login")
+        );
+        assert_eq!(
+            home_of(ClientSource::Static, None, home).as_deref(),
+            Some("https://shop.example/")
+        );
+        assert_eq!(home_of(ClientSource::Static, None, None), None);
+        for source in [ClientSource::Dynamic, ClientSource::Cimd] {
+            assert_eq!(home_of(source, login, home), None, "{source:?}");
+        }
+        for bad in [
+            "javascript:alert(1)",
+            "/relative",
+            "data:text/html,x",
+            "https://",
+        ] {
+            assert_eq!(
+                home_of(ClientSource::Static, Some(bad), None),
+                None,
+                "{bad}"
+            );
+        }
+        // An unusable initiate_login_uri falls back to a usable client_uri.
+        assert_eq!(
+            home_of(ClientSource::Static, Some("javascript:x"), home).as_deref(),
+            Some("https://shop.example/")
+        );
+    }
+
+    #[test]
+    fn error_way_forward_puts_the_app_home_first() {
+        let t = tenant("acme", RegistrationMode::Open);
+        let en = Locale::fallback();
+        let public = "https://id.example.com";
+        let mut nav = live();
+        if let Some(r) = nav.request.as_mut() {
+            r.app_home = Some("https://shop.example/login".into());
+        }
+        let wf = nav.error_way_forward_from(public, &t, &en, false);
+        assert_eq!(wf.primary.label_key, BACK_TO_APP_KEY);
+        assert_eq!(wf.primary.href, "https://shop.example/login");
+        assert_eq!(wf.primary.app_name.as_deref(), Some("Shop"));
+        assert_eq!(wf.secondary[0].label_key, CONTINUE_KEY);
+        let links = wf.into_links();
+        assert!(links.app_home.is_some() && links.continue_to.is_some());
+        // A message page with a live request still continues the request first.
+        assert_eq!(
+            nav.way_forward_from(public, &t, &en, false)
+                .primary
+                .label_key,
+            CONTINUE_KEY
+        );
+        // Without an app home the error way forward is the plain one.
+        let wf = NavContext::none().error_way_forward_from(public, &t, &en, false);
+        assert_eq!(wf.primary.label_key, SIGN_IN_KEY);
+    }
+
+    #[test]
+    fn validated_client_without_request_goes_back_to_the_app() {
+        let t = tenant("acme", RegistrationMode::Open);
+        let en = Locale::fallback();
+        let public = "https://id.example.com";
+        let nav = NavContext {
+            client_home: Some(AppHome {
+                name: "Shop".into(),
+                href: "https://shop.example/".into(),
+            }),
+            ..NavContext::none()
+        };
+        let wf = nav.way_forward_from(public, &t, &en, true);
+        assert_eq!(wf.primary.label_key, BACK_TO_APP_KEY);
+        assert_eq!(wf.secondary[0].label_key, ACCOUNT_KEY);
+        let wf = nav.error_way_forward_from(public, &t, &en, false);
+        assert_eq!(wf.primary.label_key, BACK_TO_APP_KEY);
+        assert_eq!(wf.secondary.len(), 1);
+        assert_eq!(wf.secondary[0].label_key, SIGN_IN_KEY);
     }
 }

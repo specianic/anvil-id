@@ -174,6 +174,13 @@ pub struct PageLinks {
     /// The admin console (`#link-console`, system tenant only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub console: Option<String>,
+    /// "Back to &lt;app&gt;" (`#link-back-to-app`): a static client's stored
+    /// `initiate_login_uri` or `client_uri` (ui::nav::app_home), never a request value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_home: Option<ContinueLink>,
+    /// The installation's start page (`#link-home`), on pages without a tenant.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub home: Option<String>,
 }
 
 /// The "Continue to &lt;app&gt;" link of a page.

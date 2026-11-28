@@ -40,7 +40,8 @@ use serde_json::json;
 use std::net::IpAddr;
 
 use crate::client_ip::ClientIp;
-use crate::errors::error_page;
+use crate::errors::error_page_in;
+use crate::i18n::{Locale, default_locale, locale_of};
 use crate::observability::{AUTH_ATTEMPTS_TOTAL, RATELIMIT_REJECTIONS_TOTAL, class_label};
 use crate::state::AppState;
 use crate::tenant::ResolvedTenant;
@@ -134,10 +135,24 @@ fn retry_after_secs(d: Duration) -> u64 {
     secs.max(1)
 }
 
-/// The 429 response for `surface`, with `Retry-After` and `Cache-Control: no-store`.
+/// The 429 response for `surface`, with `Retry-After` and `Cache-Control: no-store`. The browser
+/// page is in the tenant's default language; callers holding the request use
+/// [`too_many_requests_in`] with its negotiated locale.
 pub fn too_many_requests(
     state: &AppState,
     tenant: Option<&ResolvedTenant>,
+    surface: Surface,
+    retry_after: Duration,
+) -> Response {
+    let locale = default_locale(state.renderer().catalogs(), tenant);
+    too_many_requests_in(state, tenant, &locale, surface, retry_after)
+}
+
+/// [`too_many_requests`] with the browser page in the negotiated `locale`.
+pub fn too_many_requests_in(
+    state: &AppState,
+    tenant: Option<&ResolvedTenant>,
+    locale: &Locale,
     surface: Surface,
     retry_after: Duration,
 ) -> Response {
@@ -168,9 +183,10 @@ pub fn too_many_requests(
             );
             r
         }
-        Surface::Browser => error_page(
+        Surface::Browser => error_page_in(
             state,
             tenant,
+            locale,
             status,
             "too_many_requests",
             "Too many requests. Please wait a moment and try again.",
@@ -206,9 +222,12 @@ pub(crate) async fn layer(State(state): State<AppState>, req: Request, next: Nex
             tracing::info!(?class, "rate limited");
             metrics::counter!(RATELIMIT_REJECTIONS_TOTAL, "route_class" => class_label(class))
                 .increment(1);
-            too_many_requests(
+            let tenant = parts.extensions.get::<ResolvedTenant>();
+            let locale = locale_of(&state, tenant, &parts.headers, parts.uri.query());
+            too_many_requests_in(
                 &state,
-                parts.extensions.get::<ResolvedTenant>(),
+                tenant,
+                &locale,
                 Surface::of(parts.uri.path()),
                 retry_after,
             )

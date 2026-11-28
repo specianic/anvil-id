@@ -1,7 +1,8 @@
 //! The single place where a [`CoreError`] becomes an HTTP response.
 //!
 //! - [`oauth_json`]: OAuth / RFC 6750 JSON errors for protocol endpoints.
-//! - [`error_page`]: the themed HTML error page for browser-facing routes.
+//! - [`error_page_in`] / [`core_error_page_in`]: the themed HTML error page for browser-facing
+//!   routes, always in the request's negotiated language and with a way forward.
 //! - [`problem_json`]: RFC 9457 problem details for the management API.
 //!
 //! Status codes, error codes and client-safe descriptions come from [`CoreError::http_status`],
@@ -10,12 +11,14 @@
 use anvil_core::error::CoreError;
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
+use axum_extra::extract::cookie::CookieJar;
 use serde_json::json;
 
-use crate::i18n::{Locale, default_locale};
+use crate::i18n::Locale;
 use crate::render::PageContext;
 use crate::state::AppState;
 use crate::tenant::ResolvedTenant;
+use crate::ui::nav::NavContext;
 
 /// Errors raised while building or running the web application itself (not protocol errors).
 #[derive(Debug, thiserror::Error)]
@@ -107,22 +110,12 @@ pub fn problem_json(err: &CoreError) -> Response {
     resp
 }
 
-/// The themed HTML error page in the tenant's default language (English without a tenant), for
-/// callers without the request's negotiated locale (layers). Browser pages that have it use
-/// [`error_page_in`]. `error_key` selects the fixed sentence (themes/default/README.md); `detail`
-/// is optional extra text (empty = none). The page never redirects.
-pub fn error_page(
-    state: &AppState,
-    tenant: Option<&ResolvedTenant>,
-    status: StatusCode,
-    error_key: &str,
-    detail: &str,
-) -> Response {
-    let locale = default_locale(state.renderer().catalogs(), tenant);
-    error_page_in(state, tenant, &locale, status, error_key, detail)
-}
-
-/// The themed HTML error page in the negotiated `locale`.
+/// The themed HTML error page in the negotiated `locale` (callers negotiate it from the request:
+/// [`crate::i18n::RequestLocale`], [`crate::i18n::locale_of`] or the authorization request's
+/// `ui_locales`). `error_key` selects the fixed sentence (themes/default/README.md); `detail` is
+/// optional technical text (empty = none), shown in development mode only. The way forward is the
+/// signed-out one ([`NavContext::none`]); callers that know more use [`error_page_nav`]. The page
+/// never redirects.
 pub fn error_page_in(
     state: &AppState,
     tenant: Option<&ResolvedTenant>,
@@ -131,16 +124,76 @@ pub fn error_page_in(
     error_key: &str,
     detail: &str,
 ) -> Response {
+    error_page_nav(
+        state,
+        tenant,
+        locale,
+        ErrorPage {
+            status,
+            error_key,
+            detail,
+        },
+        &NavContext::none(),
+        false,
+    )
+}
+
+/// What an error page says: status, sentence key and optional (dev-only) detail.
+#[derive(Debug, Clone, Copy)]
+pub struct ErrorPage<'a> {
+    pub status: StatusCode,
+    pub error_key: &'a str,
+    pub detail: &'a str,
+}
+
+/// The one renderer of `error.html`: friendly heading and explanation (errors_friendly.ftl), the
+/// contract sentence of `error_key` unchanged, the status line, the technical `detail` only in
+/// development mode, and a way forward for every key: from `nav` (an application's home or live
+/// request) and `signed_in` on tenant pages, the installation's start page without a tenant.
+pub(crate) fn error_page_nav(
+    state: &AppState,
+    tenant: Option<&ResolvedTenant>,
+    locale: &Locale,
+    err: ErrorPage<'_>,
+    nav: &NavContext,
+    signed_in: bool,
+) -> Response {
+    let ErrorPage {
+        status,
+        error_key,
+        detail,
+    } = err;
     let page = match tenant {
-        Some(t) => PageContext::for_tenant(state, t, locale, "title.error"),
-        None => PageContext::installation(state, locale, "title.error"),
+        Some(t) => {
+            let mut page = PageContext::for_tenant(state, t, locale, "title.error");
+            page.links = nav
+                .error_way_forward(state, t, locale, signed_in)
+                .into_links();
+            page
+        }
+        None => {
+            let mut page = PageContext::installation(state, locale, "title.error");
+            page.links.home = Some(format!(
+                "{}/",
+                state.config().public_url.as_str().trim_end_matches('/')
+            ));
+            page
+        }
     };
+    let dev = state.config().dev_mode();
+    if !detail.is_empty() && !dev {
+        tracing::debug!(
+            error_key,
+            detail,
+            "error page detail (shown in development mode only)"
+        );
+    }
     let ctx = minijinja::context! {
         page => page.into_value(),
         status => status.as_u16(),
         error_key => error_key,
         heading => minijinja::Value::from(()),
-        detail => (!detail.is_empty()).then_some(detail),
+        detail => (dev && !detail.is_empty()).then_some(detail),
     };
     match state.renderer().page("error.html", ctx) {
         Ok(html) => (status, html).into_response(),
@@ -151,6 +204,46 @@ pub fn error_page_in(
                 Html("<!DOCTYPE html><title>Error</title><p>Something went wrong.</p>"),
             )
                 .into_response()
+        }
+    }
+}
+
+/// [`error_page_nav`] for a handler holding the request's cookies: the way forward is the signed-in
+/// one (account, sign-out) when the tenant's session cookie names an active session.
+pub(crate) async fn error_page_for(
+    state: &AppState,
+    tenant: Option<&ResolvedTenant>,
+    locale: &Locale,
+    jar: &CookieJar,
+    err: ErrorPage<'_>,
+) -> Response {
+    let signed_in = match tenant {
+        Some(t) => is_signed_in(state, t, jar).await,
+        None => false,
+    };
+    error_page_nav(state, tenant, locale, err, &NavContext::none(), signed_in)
+}
+
+/// `true` if the tenant's session cookie in `jar` names an active session. A lookup failure is
+/// "signed out" (the page only chooses links from it).
+pub(crate) async fn is_signed_in(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    jar: &CookieJar,
+) -> bool {
+    let name = state.cookies().session_name(&tenant.tenant);
+    let Some(token) = jar.get(&name).map(|c| c.value().to_owned()) else {
+        return false;
+    };
+    match state
+        .authorize_session_service()
+        .current(tenant.tenant.id, Some(&token))
+        .await
+    {
+        Ok(session) => session.is_some(),
+        Err(e) => {
+            tracing::warn!(error = %e, "session lookup for the page links failed");
+            false
         }
     }
 }
@@ -170,18 +263,8 @@ fn error_key(err: &CoreError) -> &'static str {
     }
 }
 
-/// The error page for a domain failure in the tenant's default language ([`error_page`]): the
-/// key is derived from the error, the status from the single mapping.
-pub fn core_error_page(
-    state: &AppState,
-    tenant: Option<&ResolvedTenant>,
-    err: &CoreError,
-) -> Response {
-    log_if_internal(err);
-    error_page(state, tenant, status_of(err), error_key(err), "")
-}
-
-/// [`core_error_page`] in the negotiated `locale`.
+/// The error page for a domain failure in the negotiated `locale`: the key is derived from the
+/// error, the status from the single mapping.
 pub fn core_error_page_in(
     state: &AppState,
     tenant: Option<&ResolvedTenant>,

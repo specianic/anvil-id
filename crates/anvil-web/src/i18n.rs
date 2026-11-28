@@ -527,23 +527,36 @@ impl FromRequestParts<AppState> for RequestLocale {
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Infallible> {
         let tenant = parts.extensions.get::<ResolvedTenant>();
-        let ui_locales = parts.uri.query().and_then(|q| {
-            url::form_urlencoded::parse(q.as_bytes())
-                .find(|(k, _)| k == "ui_locales")
-                .map(|(_, v)| v.into_owned())
-        });
+        let locale = locale_of(state, tenant, &parts.headers, parts.uri.query());
         let accept = accept_language(&parts.headers).map(str::to_owned);
-        let locale = negotiate(
-            state.renderer().catalogs(),
-            &LocaleInputs {
-                ui_locales: ui_locales.as_deref(),
-                user_locale: None,
-                accept_language: accept.as_deref(),
-                tenant_default: tenant_default(tenant),
-            },
-        );
         Ok(Self(locale, accept))
     }
+}
+
+/// The negotiated locale of a request from its headers and raw query string (the
+/// [`RequestLocale`] rule: `ui_locales` query parameter, then `Accept-Language`, then the tenant
+/// default). For code that holds the request but not an extractor (layers, the tenant
+/// resolver, the router fallback).
+pub fn locale_of(
+    state: &AppState,
+    tenant: Option<&ResolvedTenant>,
+    headers: &HeaderMap,
+    query: Option<&str>,
+) -> Locale {
+    let ui_locales = query.and_then(|q| {
+        url::form_urlencoded::parse(q.as_bytes())
+            .find(|(k, _)| k == "ui_locales")
+            .map(|(_, v)| v.into_owned())
+    });
+    negotiate(
+        state.renderer().catalogs(),
+        &LocaleInputs {
+            ui_locales: ui_locales.as_deref().filter(|u| !u.is_empty()),
+            user_locale: None,
+            accept_language: accept_language(headers),
+            tenant_default: tenant_default(tenant),
+        },
+    )
 }
 
 /// Appends `&ui_locales=` (or `?ui_locales=`) to `url` when the locale honours an explicit

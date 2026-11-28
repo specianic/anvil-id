@@ -25,11 +25,12 @@
 use anvil_core::model::{DEFAULT_TENANT_SLUG, Tenant, TenantBase, issuer};
 use axum::extract::{FromRequestParts, OptionalFromRequestParts, Request, State};
 use axum::http::request::Parts;
-use axum::http::{StatusCode, Uri, header};
+use axum::http::{HeaderMap, StatusCode, Uri, header};
 use axum::middleware::Next;
 use axum::response::Response;
 
-use crate::errors::error_page;
+use crate::errors::error_page_in;
+use crate::i18n::locale_of;
 use crate::state::AppState;
 
 /// The tenant a request addresses, inserted as a request extension by the tenant layer.
@@ -147,18 +148,22 @@ fn rewrite(uri: &Uri, new_path: &str) -> Option<Uri> {
     Uri::from_parts(parts).ok()
 }
 
-fn internal(state: &AppState) -> Response {
-    error_page(
+fn internal(state: &AppState, headers: &HeaderMap, query: Option<&str>) -> Response {
+    let locale = locale_of(state, None, headers, query);
+    error_page_in(
         state,
         None,
+        &locale,
         StatusCode::INTERNAL_SERVER_ERROR,
         "server_error",
         "",
     )
 }
 
-fn not_found(state: &AppState) -> Response {
-    error_page(state, None, StatusCode::NOT_FOUND, "not_found", "")
+/// The installation-level 404 (no tenant resolved), in the request's language.
+fn not_found(state: &AppState, headers: &HeaderMap, query: Option<&str>) -> Response {
+    let locale = locale_of(state, None, headers, query);
+    error_page_in(state, None, &locale, StatusCode::NOT_FOUND, "not_found", "")
 }
 
 /// The tenant layer (used with `axum::middleware::from_fn_with_state` around the inner router).
@@ -188,7 +193,7 @@ pub(crate) async fn resolve(
             Ok(None) => state.unknown_hosts().insert(host, ()),
             Err(e) => {
                 tracing::error!(error = %e, "tenant lookup by host failed");
-                return internal(&state);
+                return internal(&state, req.headers(), req.uri().query());
             }
         }
     }
@@ -198,21 +203,21 @@ pub(crate) async fn resolve(
         host_tenant.as_ref().and_then(|t| t.host.as_deref()),
     );
     let (tenant, base) = match target {
-        Target::Invalid => return not_found(&state),
+        Target::Invalid => return not_found(&state, req.headers(), req.uri().query()),
         Target::Host(h) => (host_tenant, TenantBase::Host(h)),
         Target::Path(slug) => match tenants.get_by_slug(&slug).await {
             Ok(Some(t)) => (Some(t), TenantBase::Path(slug)),
-            Ok(None) => return not_found(&state),
+            Ok(None) => return not_found(&state, req.headers(), req.uri().query()),
             Err(e) => {
                 tracing::error!(error = %e, "tenant lookup by slug failed");
-                return internal(&state);
+                return internal(&state, req.headers(), req.uri().query());
             }
         },
         Target::Root => match tenants.get_by_slug(DEFAULT_TENANT_SLUG).await {
             Ok(t) => (t, TenantBase::Root),
             Err(e) => {
                 tracing::error!(error = %e, "default tenant lookup failed");
-                return internal(&state);
+                return internal(&state, req.headers(), req.uri().query());
             }
         },
     };
@@ -234,7 +239,7 @@ pub(crate) async fn resolve(
     if path != req.uri().path() {
         match rewrite(req.uri(), &path) {
             Some(uri) => *req.uri_mut() = uri,
-            None => return not_found(&state),
+            None => return not_found(&state, req.headers(), req.uri().query()),
         }
     }
     next.run(req).await
@@ -248,7 +253,7 @@ impl FromRequestParts<AppState> for ResolvedTenant {
             .extensions
             .get::<ResolvedTenant>()
             .cloned()
-            .ok_or_else(|| not_found(state))
+            .ok_or_else(|| not_found(state, &parts.headers, parts.uri.query()))
     }
 }
 

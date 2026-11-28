@@ -40,11 +40,12 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum_extra::extract::cookie::CookieJar;
 
-use crate::errors::{core_error_page, error_page};
-use crate::i18n::default_locale;
+use crate::errors::{ErrorPage, core_error_page_in, error_page_in, error_page_nav};
+use crate::i18n::{Locale, LocaleInputs, default_locale, locale_of, negotiate};
 use crate::render::PageContext;
 use crate::state::AppState;
 use crate::tenant::ResolvedTenant;
+use crate::ui::nav::NavContext;
 
 impl AppState {
     /// The authorization endpoint service over this state's storage and clock.
@@ -57,7 +58,9 @@ impl AppState {
     }
 
     /// The HTTP response for an authorization outcome (shared with the consent screen, so the
-    /// response modes have one implementation).
+    /// response modes have one implementation). An `ErrorPage` outcome renders in the tenant's
+    /// default language here; the authorization endpoint itself renders its error pages in the
+    /// request's language with the client's way forward ([`authorize_error_page`]).
     pub(crate) fn authorize_response(
         &self,
         tenant: &ResolvedTenant,
@@ -190,9 +193,10 @@ fn respond(state: &AppState, tenant: &ResolvedTenant, outcome: AuthorizeOutcome)
         AuthorizeOutcome::Register { request_id } => {
             see_other(&tenant.ui_url(&format!("/ui/registration?request={request_id}")))
         }
-        AuthorizeOutcome::ErrorPage { error_key, detail } => error_page(
+        AuthorizeOutcome::ErrorPage { error_key, detail } => error_page_in(
             state,
             Some(tenant),
+            &default_locale(state.renderer().catalogs(), Some(tenant)),
             StatusCode::BAD_REQUEST,
             error_key,
             &detail,
@@ -200,23 +204,90 @@ fn respond(state: &AppState, tenant: &ResolvedTenant, outcome: AuthorizeOutcome)
     }
 }
 
+/// The language of an authorization error page: the request's raw `ui_locales` (OIDC Core
+/// §3.1.2.1), then `Accept-Language`, then the tenant default.
+fn request_locale(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    headers: &HeaderMap,
+    raw: &RawParams,
+) -> Locale {
+    negotiate(
+        state.renderer().catalogs(),
+        &LocaleInputs {
+            ui_locales: raw.single("ui_locales").filter(|u| !u.is_empty()),
+            user_locale: None,
+            accept_language: headers
+                .get(header::ACCEPT_LANGUAGE)
+                .and_then(|v| v.to_str().ok()),
+            tenant_default: &tenant.tenant.settings.default_locale,
+        },
+    )
+}
+
+/// The `400` error page of a refused authorization request, with a way forward: when the
+/// request names a registered client, that client's own stored home ("Back to &lt;app&gt;",
+/// static clients only, [`NavContext::for_client`]), then sign-in or the account.
+async fn authorize_error_page(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    locale: &Locale,
+    client_id: Option<&str>,
+    signed_in: bool,
+    error_key: &str,
+    detail: &str,
+) -> Response {
+    let nav = match client_id.filter(|c| !c.is_empty()) {
+        Some(c) => NavContext::for_client(state, tenant, c).await,
+        None => NavContext::none(),
+    };
+    error_page_nav(
+        state,
+        Some(tenant),
+        locale,
+        ErrorPage {
+            status: StatusCode::BAD_REQUEST,
+            error_key,
+            detail,
+        },
+        &nav,
+        signed_in,
+    )
+}
+
 async fn authorize(
     state: &AppState,
     tenant: &ResolvedTenant,
     jar: &CookieJar,
+    headers: &HeaderMap,
     raw: RawParams,
 ) -> Response {
-    let result = async {
-        let session = current_session(state, tenant, jar).await?;
-        state
-            .authorize_service()
-            .authorize(&tenant.tenant, &tenant.issuer, raw, session)
-            .await
-    }
-    .await;
+    let locale = request_locale(state, tenant, headers, &raw);
+    let client_id = raw.single("client_id").map(str::to_owned);
+    let session = match current_session(state, tenant, jar).await {
+        Ok(s) => s,
+        Err(e) => return core_error_page_in(state, Some(tenant), &locale, &e),
+    };
+    let signed_in = session.is_some();
+    let result = state
+        .authorize_service()
+        .authorize(&tenant.tenant, &tenant.issuer, raw, session)
+        .await;
     match result {
+        Ok(AuthorizeOutcome::ErrorPage { error_key, detail }) => {
+            authorize_error_page(
+                state,
+                tenant,
+                &locale,
+                client_id.as_deref(),
+                signed_in,
+                error_key,
+                &detail,
+            )
+            .await
+        }
         Ok(outcome) => respond(state, tenant, outcome),
-        Err(e) => core_error_page(state, Some(tenant), &e),
+        Err(e) => core_error_page_in(state, Some(tenant), &locale, &e),
     }
 }
 
@@ -224,10 +295,11 @@ async fn authorize_get(
     State(state): State<AppState>,
     tenant: ResolvedTenant,
     jar: CookieJar,
+    headers: HeaderMap,
     RawQuery(query): RawQuery,
 ) -> Response {
     let raw = parse_raw(query.unwrap_or_default().as_bytes());
-    authorize(&state, &tenant, &jar, raw).await
+    authorize(&state, &tenant, &jar, &headers, raw).await
 }
 
 fn is_form(headers: &HeaderMap) -> bool {
@@ -249,52 +321,74 @@ async fn authorize_post(
     body: Bytes,
 ) -> Response {
     if !is_form(&headers) {
-        return error_page(
+        let locale = locale_of(&state, Some(&tenant), &headers, None);
+        return error_page_in(
             &state,
             Some(&tenant),
+            &locale,
             StatusCode::BAD_REQUEST,
             "invalid_request",
             "the authorization request must be sent as application/x-www-form-urlencoded",
         );
     }
-    authorize(&state, &tenant, &jar, parse_raw(&body)).await
-}
-
-fn flow_expired(state: &AppState, tenant: &ResolvedTenant) -> Response {
-    error_page(
-        state,
-        Some(tenant),
-        StatusCode::BAD_REQUEST,
-        "flow_expired",
-        "",
-    )
+    authorize(&state, &tenant, &jar, &headers, parse_raw(&body)).await
 }
 
 async fn authorize_continue(
     State(state): State<AppState>,
     tenant: ResolvedTenant,
     jar: CookieJar,
+    headers: HeaderMap,
     RawQuery(query): RawQuery,
 ) -> Response {
+    let locale = locale_of(&state, Some(&tenant), &headers, query.as_deref());
     let params = parse_raw(query.unwrap_or_default().as_bytes());
+    let session = match current_session(&state, &tenant, &jar).await {
+        Ok(s) => s,
+        Err(e) => return core_error_page_in(&state, Some(&tenant), &locale, &e),
+    };
+    let signed_in = session.is_some();
     let Some(request_id) = params
         .single("request")
         .and_then(|r| uuid::Uuid::parse_str(r).ok())
         .map(AuthRequestId)
     else {
-        return flow_expired(&state, &tenant);
+        return authorize_error_page(
+            &state,
+            &tenant,
+            &locale,
+            None,
+            signed_in,
+            "flow_expired",
+            "",
+        )
+        .await;
     };
-    let result = async {
-        let session = current_session(&state, &tenant, &jar).await?;
-        state
-            .authorize_service()
-            .resume(&tenant.tenant, &tenant.issuer, request_id, session)
-            .await
-    }
-    .await;
+    // The request's client, looked up before resuming (a refused request may be deleted): an
+    // error page sends the user back to that app, never into the same continuation again.
+    let client_id = NavContext::from_request(&state, &tenant, Some(request_id))
+        .await
+        .request()
+        .map(|r| r.client_id.clone());
+    let result = state
+        .authorize_service()
+        .resume(&tenant.tenant, &tenant.issuer, request_id, session)
+        .await;
     match result {
+        Ok(AuthorizeOutcome::ErrorPage { error_key, detail }) => {
+            authorize_error_page(
+                &state,
+                &tenant,
+                &locale,
+                client_id.as_deref(),
+                signed_in,
+                error_key,
+                &detail,
+            )
+            .await
+        }
         Ok(outcome) => respond(&state, &tenant, outcome),
-        Err(e) => core_error_page(&state, Some(&tenant), &e),
+        Err(e) => core_error_page_in(&state, Some(&tenant), &locale, &e),
     }
 }
 
