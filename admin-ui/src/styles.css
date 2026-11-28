@@ -1,58 +1,96 @@
 @import "tailwindcss";
 
-/* shadcn/ui design tokens (neutral). Everything is in this stylesheet: the console's CSP has no
-   'unsafe-inline' for scripts, and no component here injects <style> elements. */
+/* Specianic design tokens mapped onto the shadcn/ui variable names (07.1-specianic-tokens.json).
+   Everything is in this stylesheet: the console's CSP has no 'unsafe-inline' for scripts, and no
+   component here injects <style> elements.
 
-@custom-variant dark (&:is(.dark *));
+   Dark mode follows the operating system (prefers-color-scheme); there is no class toggle. */
+
+@custom-variant dark (@media (prefers-color-scheme: dark));
 
 :root {
-  --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.48 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.556 0 0);
+  color-scheme: light;
+  /* Controls (buttons, inputs, tags) get 2px; cards and panels are square (radius-none). */
+  --radius: 2px;
+
+  /* canvas / surface / sunken */
+  --background: #fafaf9;
+  --card: #ffffff;
+  --popover: #ffffff;
+  --muted: #f3f2f0;
+  --secondary: #f3f2f0;
+  --accent: #f3f2f0;
+
+  /* ink / ink-muted */
+  --foreground: #0f0f10;
+  --card-foreground: #0f0f10;
+  --popover-foreground: #0f0f10;
+  --secondary-foreground: #0f0f10;
+  --accent-foreground: #0f0f10;
+  --muted-foreground: #5c5a56;
+
+  /* signal: fills only, always with ink text (never white) in both themes */
+  --primary: #ff5a1f;
+  --primary-foreground: #0f0f10;
+
+  /* signal-text: links, active navigation, focus rings */
+  --link: #c2410c;
+  --ring: #c2410c;
+
+  /* line / line-strong */
+  --border: #e5e3df;
+  --input: #8f8c86;
+
+  /* danger: white text on the light fill, ink on the dark one (both >= 6:1) */
+  --destructive: #b42318;
+  --destructive-foreground: #ffffff;
+  --success: #1a7f4b;
 }
 
-.dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --background: #0f0f10;
+    --card: #18181a;
+    --popover: #18181a;
+    --muted: #0a0a0b;
+    --secondary: #0a0a0b;
+    --accent: #2a2a2d;
+
+    --foreground: #f4f3f1;
+    --card-foreground: #f4f3f1;
+    --popover-foreground: #f4f3f1;
+    --secondary-foreground: #f4f3f1;
+    --accent-foreground: #f4f3f1;
+    --muted-foreground: #a3a19c;
+
+    --primary: #ff5a1f;
+    --primary-foreground: #0f0f10;
+
+    --link: #ff7a45;
+    --ring: #ff7a45;
+
+    --border: #2a2a2d;
+    --input: #6a6a70;
+
+    --destructive: #f0695e;
+    --destructive-foreground: #0f0f10;
+    --success: #3ccf86;
+  }
 }
 
 @theme inline {
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
+  /* Specianic stacks. The self-hosted font files are wired by 07.1-10 (fonts.css); until then the
+     browser falls back to the next family in each stack. No font CDN. */
+  --font-sans: "Hanken Grotesk", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Every rounded-* utility up to xl reads as a control (2px); square surfaces use rounded-none. */
+  --radius-sm: var(--radius);
+  --radius-md: var(--radius);
   --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+  --radius-xl: var(--radius);
+
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -68,6 +106,9 @@
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-link: var(--link);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
@@ -78,6 +119,12 @@
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground antialiased;
+    @apply bg-background text-foreground font-sans antialiased;
+  }
+  code,
+  kbd,
+  samp,
+  pre {
+    @apply font-mono;
   }
 }
