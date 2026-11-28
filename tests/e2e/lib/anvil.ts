@@ -168,25 +168,18 @@ export function getUser(token: string, id: string, tenant = 'default'): Promise<
   );
 }
 
-/** Finds a user by email by paging through the admin API user list. */
+/** Finds a user by email with the admin API's exact lookup (`GET /users?email=`: 0 or 1 items). */
 export async function findUserByEmail(
   token: string,
   email: string,
   tenant = 'default',
 ): Promise<UserView | undefined> {
-  let after: string | undefined;
-  for (;;) {
-    const query = new URLSearchParams({ limit: '200' });
-    if (after) query.set('after', after);
-    const page = await adminGet<{ items: UserView[]; next_cursor?: string | null }>(
-      token,
-      `/tenants/${encodeURIComponent(tenant)}/users?${query}`,
-    );
-    const found = page.items.find((u) => u.email === email.toLowerCase());
-    if (found) return found;
-    if (!page.next_cursor) return undefined;
-    after = page.next_cursor;
-  }
+  const query = new URLSearchParams({ email: email.toLowerCase() });
+  const page = await adminGet<{ items: UserView[] }>(
+    token,
+    `/tenants/${encodeURIComponent(tenant)}/users?${query}`,
+  );
+  return page.items.find((u) => u.email === email.toLowerCase());
 }
 
 /**
