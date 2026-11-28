@@ -1028,7 +1028,7 @@ function Tabs({ active, onSelect }: { active: TabId; onSelect: (tab: TabId) => v
     refs.current[tab]?.focus();
   };
   return (
-    <div role="tablist" aria-label="User sections" className="flex gap-1 border-b">
+    <div role="tablist" aria-label="User sections" className="flex gap-1 overflow-x-auto border-b">
       {TABS.map((t) => (
         <button
           key={t.id}
@@ -1043,7 +1043,7 @@ function Tabs({ active, onSelect }: { active: TabId; onSelect: (tab: TabId) => v
           tabIndex={active === t.id ? 0 : -1}
           onClick={() => onSelect(t.id)}
           onKeyDown={onKeyDown}
-          className={`-mb-px border-b-2 px-3 py-2 text-sm focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none ${
+          className={`-mb-px shrink-0 border-b-2 px-3 py-2 text-sm whitespace-nowrap focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none ${
             active === t.id ? "border-foreground font-medium" : "text-muted-foreground border-transparent"
           }`}
         >
