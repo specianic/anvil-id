@@ -9,3 +9,4 @@ nav-sign_out = Abmelden
 nav-open_console = Admin-Konsole öffnen
 nav-request_expired = Dieser Anmeldelink ist abgelaufen
 nav-check_email_sent_to = Wir haben den Bestätigungslink an { $email } gesendet.
+nav-signed_in_as = Angemeldet als

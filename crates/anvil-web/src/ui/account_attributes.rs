@@ -42,7 +42,7 @@ use anvil_core::service::account::SettingsBinding;
 use anvil_core::service::attribute::{AttributeError, AttributeService};
 use axum::Router;
 use axum::extract::rejection::FormRejection;
-use axum::extract::{Form, Query, State};
+use axum::extract::{Form, Query, RawQuery, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -51,6 +51,7 @@ use secrecy::ExposeSecret as _;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
+use super::account_security::{account_header, client_id_param};
 use super::consent::{PageMessage, account_locale, current_session, localized, no_store};
 use super::login::{UiQuery, csrf_page, rejected_form};
 use super::nav::{AccountSection, NavContext};
@@ -491,6 +492,8 @@ struct Overlay {
     typed: BTreeMap<String, String>,
     errors: BTreeSet<String>,
     messages: Vec<PageMessage>,
+    /// The `client_id` the page was opened with (account header, GET only).
+    client_id: Option<String>,
 }
 
 async fn render(
@@ -515,6 +518,11 @@ async fn render(
         Ok(l) => l,
         Err(e) => return core_error_page_in(state, Some(tenant), loc, &e),
     };
+    let header =
+        match account_header(state, tenant, loc, session, overlay.client_id.as_deref()).await {
+            Ok(h) => h,
+            Err(page) => return *page,
+        };
     let fields = field_views(&defs, &stored, &overlay.typed, &overlay.errors);
     let messages = localized(state, loc, overlay.messages);
     let ctx = minijinja::context! {
@@ -522,6 +530,7 @@ async fn render(
         account_base => tenant.base_path(),
         account_nav => "attributes",
         account_attributes_nav => !fields.is_empty(),
+        account_header => header.value(),
         csrf_token => &bound.csrf,
         messages => minijinja::Value::from(minijinja::value::Serde(&messages)),
         action => tenant.ui_url(&format!("{PAGE}?flow={}", bound.flow_id)),
@@ -547,6 +556,7 @@ async fn show(
     tenant: ResolvedTenant,
     locale: RequestLocale,
     jar: CookieJar,
+    RawQuery(query): RawQuery,
 ) -> Response {
     let (session, loc) = match page_session(&state, &tenant, &locale, &jar).await {
         Ok(s) => s,
@@ -562,7 +572,10 @@ async fn show(
         &loc,
         &session,
         bound,
-        Overlay::default(),
+        Overlay {
+            client_id: client_id_param(query.as_deref()),
+            ..Overlay::default()
+        },
         StatusCode::OK,
     )
     .await
@@ -673,6 +686,7 @@ async fn submit(
                     typed,
                     errors: error_fields(&pointers),
                     messages: vec![PageMessage::error("attributes.invalid")],
+                    client_id: None,
                 },
                 StatusCode::BAD_REQUEST,
             )

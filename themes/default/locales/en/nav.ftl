@@ -9,3 +9,4 @@ nav-sign_out = Sign out
 nav-open_console = Open the admin console
 nav-request_expired = This sign-in link has expired
 nav-check_email_sent_to = We sent the confirmation link to { $email }.
+nav-signed_in_as = Signed in as

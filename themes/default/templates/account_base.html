@@ -6,21 +6,40 @@
                     "apps", "linked" or "attributes" (sets aria-current)
       account_attributes_nav  true when the tenant defines user-editable attributes (shows the
                     Attributes entry; absent = hidden)
+      account_header  the header of every signed-in account page (ui::account_security::
+                    AccountHeader): email (#account-identity), sign_out_url (the end-session
+                    endpoint the #form-sign-out POST goes to; it asks for the CSRF-protected
+                    confirmation), back_to_app ({href, name} of a static client only:
+                    #link-back-to-app) and nav_query ("?client_id=…" carried by the account
+                    navigation links, or "")
     Child templates fill {% block account %}. -#}
 {% extends "base.html" %}
 {% block content %}
 {% set base = account_base | default("") %}
 {% set current = account_nav | default("") %}
+{% set header = account_header | default(none) %}
+{% set q = header.nav_query if header else "" %}
+{% if header -%}
+<header class="anvil-account-header anvil-links" id="account-header">
+<p>{{ t("nav.signed_in_as") }} <strong id="account-identity">{{ header.email }}</strong></p>
+{% if header.back_to_app -%}
+<a id="link-back-to-app" href="{{ header.back_to_app.href }}">{{ t("errors_friendly.back_to_app", app=header.back_to_app.name) }}</a>
+{% endif -%}
+<form id="form-sign-out" method="post" action="{{ header.sign_out_url }}">
+<button type="submit" id="sign-out-submit">{{ t("nav.sign_out") }}</button>
+</form>
+</header>
+{% endif -%}
 <nav class="anvil-account-nav" id="account-nav" aria-label="{{ t("account_nav.label") }}">
 <ul>
-<li><a id="account-nav-profile" href="{{ base }}/ui/account/profile"{% if current == "profile" %} aria-current="page"{% endif %}>{{ t("account_nav.profile") }}</a></li>
-<li><a id="account-nav-email" href="{{ base }}/ui/account/email"{% if current == "email" %} aria-current="page"{% endif %}>{{ t("account_nav.email") }}</a></li>
-<li><a id="account-nav-password" href="{{ base }}/ui/account/password"{% if current == "password" %} aria-current="page"{% endif %}>{{ t("account_nav.password") }}</a></li>
-<li><a id="account-nav-security" href="{{ base }}/ui/account/security"{% if current == "security" %} aria-current="page"{% endif %}>{{ t("account_nav.security") }}</a></li>
-<li><a id="account-nav-sessions" href="{{ base }}/ui/account/sessions"{% if current == "sessions" %} aria-current="page"{% endif %}>{{ t("account_nav.sessions") }}</a></li>
-<li><a id="account-nav-apps" href="{{ base }}/ui/account/apps"{% if current == "apps" %} aria-current="page"{% endif %}>{{ t("account_nav.apps") }}</a></li>
-<li><a id="account-nav-linked" href="{{ base }}/ui/account/linked"{% if current == "linked" %} aria-current="page"{% endif %}>{{ t("account_nav.linked") }}</a></li>
-{% if account_attributes_nav | default(false) %}<li><a id="account-nav-attributes" href="{{ base }}/ui/account/attributes"{% if current == "attributes" %} aria-current="page"{% endif %}>{{ t("account_nav.attributes") }}</a></li>{% endif %}
+<li><a id="account-nav-profile" href="{{ base }}/ui/account/profile{{ q }}"{% if current == "profile" %} aria-current="page"{% endif %}>{{ t("account_nav.profile") }}</a></li>
+<li><a id="account-nav-email" href="{{ base }}/ui/account/email{{ q }}"{% if current == "email" %} aria-current="page"{% endif %}>{{ t("account_nav.email") }}</a></li>
+<li><a id="account-nav-password" href="{{ base }}/ui/account/password{{ q }}"{% if current == "password" %} aria-current="page"{% endif %}>{{ t("account_nav.password") }}</a></li>
+<li><a id="account-nav-security" href="{{ base }}/ui/account/security{{ q }}"{% if current == "security" %} aria-current="page"{% endif %}>{{ t("account_nav.security") }}</a></li>
+<li><a id="account-nav-sessions" href="{{ base }}/ui/account/sessions{{ q }}"{% if current == "sessions" %} aria-current="page"{% endif %}>{{ t("account_nav.sessions") }}</a></li>
+<li><a id="account-nav-apps" href="{{ base }}/ui/account/apps{{ q }}"{% if current == "apps" %} aria-current="page"{% endif %}>{{ t("account_nav.apps") }}</a></li>
+<li><a id="account-nav-linked" href="{{ base }}/ui/account/linked{{ q }}"{% if current == "linked" %} aria-current="page"{% endif %}>{{ t("account_nav.linked") }}</a></li>
+{% if account_attributes_nav | default(false) %}<li><a id="account-nav-attributes" href="{{ base }}/ui/account/attributes{{ q }}"{% if current == "attributes" %} aria-current="page"{% endif %}>{{ t("account_nav.attributes") }}</a></li>{% endif %}
 </ul>
 </nav>
 <section class="anvil-account" id="account-content" aria-labelledby="page-heading">

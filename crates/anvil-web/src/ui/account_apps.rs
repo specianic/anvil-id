@@ -17,7 +17,7 @@ use anvil_core::model::BrowserSession;
 use anvil_core::service::consent::{ConsentBinding, RevokeResult};
 use axum::Router;
 use axum::extract::rejection::FormRejection;
-use axum::extract::{Form, Path, Query, State};
+use axum::extract::{Form, Path, Query, RawQuery, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -27,6 +27,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use super::account_attributes::attributes_nav_or_page;
+use super::account_security::{AccountHeader, account_header, client_id_param};
 use super::consent::{
     PageMessage, ScopeView, account_locale, current_session, localized, no_store, scope_views,
 };
@@ -103,6 +104,7 @@ async fn apps_page(
     tenant: &ResolvedTenant,
     loc: &Locale,
     session: &BrowserSession,
+    header: &AccountHeader,
     messages: Vec<PageMessage>,
     status: StatusCode,
 ) -> Response {
@@ -148,6 +150,7 @@ async fn apps_page(
         account_base => tenant.base_path(),
         account_nav => "apps",
         account_attributes_nav => attributes_nav,
+        account_header => header.value(),
         csrf_token => flow.csrf_token.expose_secret(),
         messages => minijinja::Value::from(minijinja::value::Serde(&messages)),
         apps => minijinja::Value::from(minijinja::value::Serde(&rows)),
@@ -171,11 +174,27 @@ async fn show(
     tenant: ResolvedTenant,
     locale: RequestLocale,
     jar: CookieJar,
+    RawQuery(query): RawQuery,
 ) -> Response {
     match current_session(&state, &tenant, &jar).await {
         Ok(Some(s)) => {
             let loc = account_locale(&state, &tenant, &locale, &s).await;
-            apps_page(&state, &tenant, &loc, &s, Vec::new(), StatusCode::OK).await
+            let client_id = client_id_param(query.as_deref());
+            let header = match account_header(&state, &tenant, &loc, &s, client_id.as_deref()).await
+            {
+                Ok(h) => h,
+                Err(page) => return *page,
+            };
+            apps_page(
+                &state,
+                &tenant,
+                &loc,
+                &s,
+                &header,
+                Vec::new(),
+                StatusCode::OK,
+            )
+            .await
         }
         Ok(None) => to_login(&tenant),
         Err(e) => core_error_page_in(&state, Some(&tenant), &locale.0, &e),
@@ -206,6 +225,10 @@ async fn revoke(
         Err(e) => return core_error_page_in(&state, Some(&tenant), &locale.0, &e),
     };
     let loc = account_locale(&state, &tenant, &locale, &session).await;
+    let header = match account_header(&state, &tenant, &loc, &session, None).await {
+        Ok(h) => h,
+        Err(page) => return *page,
+    };
     let (Some(flow_id), Some(csrf)) = (q.flow_id(), form.csrf_token.filter(|c| !c.is_empty()))
     else {
         return csrf_page(&state, Some(&tenant), &loc);
@@ -234,7 +257,16 @@ async fn revoke(
         Err(CoreError::Forbidden) => return csrf_page(&state, Some(&tenant), &loc),
         Err(e) => return core_error_page_in(&state, Some(&tenant), &loc, &e),
     };
-    apps_page(&state, &tenant, &loc, &session, vec![message], status).await
+    apps_page(
+        &state,
+        &tenant,
+        &loc,
+        &session,
+        &header,
+        vec![message],
+        status,
+    )
+    .await
 }
 
 #[cfg(test)]

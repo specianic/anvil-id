@@ -3,6 +3,7 @@
 // - Every entry of the account navigation (Profile, Email, Password, Security, Sessions, Connected
 //   apps, Linked accounts) opens its page, marks itself as current and passes axe; the security
 //   page reaches passkeys and the authenticator app, the linked accounts page lists no links yet.
+//   Every page has the account header (07.1-12): the signed-in email and the sign-out form.
 // - Profile edits persist.
 // - Email change: a confirmation link goes to the new address, opening it shows a button (nothing
 //   changes on GET), confirming switches the address, the old address gets the "changed" notice,
@@ -101,6 +102,8 @@ test('every account navigation entry opens its page and passes axe', async ({ pa
     await expect(page.locator(entry.ready)).toBeVisible();
     await expect(page.locator(`#${entry.id}`)).toHaveAttribute('aria-current', 'page');
     await expect(page.locator('#account-nav [aria-current="page"]')).toHaveCount(1);
+    await expect(page.locator('#account-identity')).toHaveText(user.email);
+    await expect(page.locator('#form-sign-out')).toHaveAttribute('method', 'post');
     await expectNoA11yViolations(page);
   }
 

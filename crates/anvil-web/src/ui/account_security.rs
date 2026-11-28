@@ -30,7 +30,7 @@ use anvil_core::service::account::{
 };
 use axum::Router;
 use axum::extract::rejection::FormRejection;
-use axum::extract::{Form, Path, Query, State};
+use axum::extract::{Form, Path, Query, RawQuery, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -42,7 +42,7 @@ use super::account_attributes::attributes_nav_or_page;
 use super::consent::{PageMessage, account_locale, localized};
 use super::format::{human, iso};
 use super::login::{UiQuery, csrf_page, rejected_form, rejection_is_too_large};
-use super::nav::{AccountSection, NavContext};
+use super::nav::{AccountSection, NavContext, UiPage};
 use crate::adapters::passkey::{WebauthnPasskeys, relying_party};
 use crate::errors::core_error_page_in;
 use crate::i18n::{Locale, RequestLocale};
@@ -103,6 +103,8 @@ struct Submission {
     flow_id: FlowId,
     cookie: Option<String>,
     csrf: String,
+    /// The account header (no `client_id` on a form post).
+    header: AccountHeader,
 }
 
 impl Submission {
@@ -133,6 +135,98 @@ fn with_headers(mut resp: Response) -> Response {
 fn to_login(tenant: &ResolvedTenant) -> Response {
     let location = NavContext::login_returning_to(tenant, AccountSection::Security);
     with_headers((StatusCode::SEE_OTHER, [(header::LOCATION, location)]).into_response())
+}
+
+/// Longest `client_id` an account page looks up (longer values are ignored, never echoed).
+const MAX_CLIENT_ID_LEN: usize = 255;
+
+/// The `client_id` an account page was opened with (`?client_id=`, the app the user came from):
+/// the first non-empty value of at most [`MAX_CLIENT_ID_LEN`] bytes. It is only ever used to look
+/// up the stored client ([`account_header`]); the value itself is never rendered.
+pub(crate) fn client_id_param(query: Option<&str>) -> Option<String> {
+    url::form_urlencoded::parse(query.unwrap_or_default().as_bytes())
+        .find(|(k, _)| k == "client_id")
+        .map(|(_, v)| v.into_owned())
+        .filter(|v| !v.is_empty() && v.len() <= MAX_CLIENT_ID_LEN)
+}
+
+/// "Back to &lt;app&gt;" in the account header.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct HeaderApp {
+    href: String,
+    name: String,
+}
+
+/// The header of every account page (U-H4): who is signed in, the sign-out form and, when the
+/// page was opened for a static client with a stored home, "Back to &lt;app&gt;".
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct AccountHeader {
+    /// The signed-in user's email (`#account-identity`).
+    email: String,
+    /// The end-session endpoint the sign-out form posts to (`#form-sign-out`). Without an
+    /// `id_token_hint` it only asks for the CSRF-protected confirmation; nothing is signed out by
+    /// a `GET` or by a cross-site `POST`.
+    sign_out_url: String,
+    /// The static client's stored home (`#link-back-to-app`); never a DCR or CIMD client's URL.
+    back_to_app: Option<HeaderApp>,
+    /// `?client_id=…` for the links between account pages: set only when the client resolved
+    /// to a home, so an unknown or third-party value is never echoed.
+    nav_query: String,
+}
+
+impl AccountHeader {
+    /// The template value (`account_header`).
+    pub(crate) fn value(&self) -> minijinja::Value {
+        minijinja::Value::from(minijinja::value::Serde(self))
+    }
+}
+
+/// Builds the [`AccountHeader`] of `session`'s user. `client_id` is looked up through
+/// [`NavContext::for_client`] (static clients only); an unknown client is no link, never an
+/// error. A storage failure loading the user is the tenant's error page.
+pub(crate) async fn account_header(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    loc: &Locale,
+    session: &BrowserSession,
+    client_id: Option<&str>,
+) -> Result<AccountHeader, Box<Response>> {
+    let user = state
+        .storage()
+        .users()
+        .get(tenant.tenant.id, session.user_id)
+        .await
+        .map_err(|e| {
+            Box::new(core_error_page_in(
+                state,
+                Some(tenant),
+                loc,
+                &CoreError::from(e),
+            ))
+        })?;
+    let email = user.map(|u| u.email).unwrap_or_default();
+    let (back_to_app, nav_query) = match client_id {
+        Some(id) => match NavContext::for_client(state, tenant, id).await.app_home() {
+            Some(app) => {
+                let encoded: String = url::form_urlencoded::byte_serialize(id.as_bytes()).collect();
+                (
+                    Some(HeaderApp {
+                        href: app.href,
+                        name: app.name,
+                    }),
+                    format!("?client_id={encoded}"),
+                )
+            }
+            None => (None, String::new()),
+        },
+        None => (None, String::new()),
+    };
+    Ok(AccountHeader {
+        email,
+        sign_out_url: NavContext::none().url(tenant, loc, UiPage::SignOut),
+        back_to_app,
+        nav_query,
+    })
 }
 
 /// The caller's active session, if any.
@@ -178,12 +272,14 @@ async fn submission(
     let cookie = jar
         .get(&state.cookies().flow_name(&tenant.tenant))
         .map(|c| c.value().to_owned());
+    let header = account_header(state, tenant, &loc, &session, None).await?;
     Ok(Submission {
         session,
         locale: loc,
         flow_id,
         cookie,
         csrf,
+        header,
     })
 }
 
@@ -262,6 +358,7 @@ async fn render_overview(
     tenant: &ResolvedTenant,
     loc: &Locale,
     session: &BrowserSession,
+    header: &AccountHeader,
     flow: FlowId,
     csrf: &str,
     messages: Vec<PageMessage>,
@@ -292,6 +389,7 @@ async fn render_overview(
         account_base => tenant.base_path(),
         account_nav => "security",
         account_attributes_nav => attributes_nav,
+        account_header => header.value(),
         csrf_token => csrf,
         messages => minijinja::Value::from(minijinja::value::Serde(&messages)),
         recent_auth => overview.recent_auth,
@@ -321,6 +419,7 @@ async fn fresh_overview(
     tenant: &ResolvedTenant,
     loc: &Locale,
     session: &BrowserSession,
+    header: &AccountHeader,
     messages: Vec<PageMessage>,
     status: StatusCode,
 ) -> Response {
@@ -342,6 +441,7 @@ async fn fresh_overview(
         tenant,
         loc,
         session,
+        header,
         started.flow_id,
         started.csrf_token.expose_secret(),
         messages,
@@ -367,6 +467,7 @@ async fn refused(
                 tenant,
                 &sub.locale,
                 &sub.session,
+                &sub.header,
                 vec![PageMessage::error(AccountFailure::FlowExpired.key())],
                 StatusCode::BAD_REQUEST,
             )
@@ -378,6 +479,7 @@ async fn refused(
                 tenant,
                 &sub.locale,
                 &sub.session,
+                &sub.header,
                 sub.flow_id,
                 &sub.csrf,
                 vec![PageMessage::error(f.key())],
@@ -427,6 +529,7 @@ fn render_enrolment(
         account_base => tenant.base_path(),
         account_nav => "security",
         account_attributes_nav => attributes_nav,
+        account_header => sub.header.value(),
         csrf_token => &sub.csrf,
         qr_svg => minijinja::Value::from_safe_string(svg),
         secret_groups => grouped(enrolment.secret_base32.expose_secret()),
@@ -452,6 +555,7 @@ fn render_codes(
     codes: &[secrecy::SecretString],
     message: PageMessage,
     attributes_nav: bool,
+    header: &AccountHeader,
 ) -> Response {
     let message = message.localized(state, loc);
     let codes: Vec<String> = codes.iter().map(|c| c.expose_secret().to_owned()).collect();
@@ -461,6 +565,7 @@ fn render_codes(
         account_base => tenant.base_path(),
         account_nav => "security",
         account_attributes_nav => attributes_nav,
+        account_header => header.value(),
         message => minijinja::Value::from(minijinja::value::Serde(&message)),
         codes => codes,
         codes_text => codes_text,
@@ -486,11 +591,27 @@ async fn show(
     tenant: ResolvedTenant,
     locale: RequestLocale,
     jar: CookieJar,
+    RawQuery(query): RawQuery,
 ) -> Response {
     match session(&state, &tenant, &jar).await {
         Ok(Some(s)) => {
             let loc = account_locale(&state, &tenant, &locale, &s).await;
-            fresh_overview(&state, &tenant, &loc, &s, Vec::new(), StatusCode::OK).await
+            let client_id = client_id_param(query.as_deref());
+            let header = match account_header(&state, &tenant, &loc, &s, client_id.as_deref()).await
+            {
+                Ok(h) => h,
+                Err(page) => return *page,
+            };
+            fresh_overview(
+                &state,
+                &tenant,
+                &loc,
+                &s,
+                &header,
+                Vec::new(),
+                StatusCode::OK,
+            )
+            .await
         }
         Ok(None) => to_login(&tenant),
         Err(e) => core_error_page_in(&state, Some(&tenant), &locale.0, &e),
@@ -601,6 +722,7 @@ async fn passkey_finish(
                 &tenant,
                 &sub.locale,
                 &sub.session,
+                &sub.header,
                 sub.flow_id,
                 &sub.csrf,
                 vec![PageMessage::info("account.passkey_registered")],
@@ -684,6 +806,7 @@ async fn totp_confirm(
             &codes,
             PageMessage::info("account.totp_enrolled"),
             attributes_nav,
+            &sub.header,
         ),
         Err(AccountError::Failure(AccountFailure::TotpInvalidCode)) => {
             // The pending secret is kept: show the same QR code again with the error.
@@ -740,6 +863,7 @@ async fn recovery_codes(
             &codes,
             PageMessage::info("account.recovery_codes_regenerated"),
             attributes_nav,
+            &sub.header,
         ),
         Err(e) => refused(&state, &tenant, &sub, e).await,
     }
@@ -791,6 +915,7 @@ async fn remove_credential(
                 &tenant,
                 &sub.locale,
                 &sub.session,
+                &sub.header,
                 sub.flow_id,
                 &sub.csrf,
                 vec![PageMessage::info(key)],

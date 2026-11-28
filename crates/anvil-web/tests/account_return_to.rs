@@ -10,6 +10,7 @@ mod support;
 mod token_support;
 mod ui_helpers;
 
+use anvil_core::model::{ClientAuthMethod, ClientSource, TenantId};
 use support::{TestApp, TestResponse, location};
 use ui_helpers::{message_keys, to_path};
 
@@ -170,5 +171,223 @@ async fn return_to_account_path_stays_on_the_own_tenant() {
         )
         .await;
         signed_in_page(&resp, forged);
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Account header (U-H4)
+// ---------------------------------------------------------------------------------------------
+
+const APP_LOGIN: &str = "https://shop.example/start-login";
+const APP_HOME: &str = "https://shop.example/";
+
+/// The `href` of the element with `id`, decoded like a browser would (`None` when absent).
+fn href(html: &str, id: &str) -> Option<String> {
+    let start = html.find(&format!("id=\"{id}\""))?;
+    let tag_end = html[start..].find('>')? + start;
+    let tag_start = html[..start].rfind('<')?;
+    let tag = &html[tag_start..tag_end];
+    let marker = "href=\"";
+    let at = tag.find(marker)? + marker.len();
+    let end = tag[at..].find('"')? + at;
+    Some(tag[at..end].replace("&#x2f;", "/").replace("&amp;", "&"))
+}
+
+/// A first-party client named Shop with the given source and home URLs.
+async fn shop(
+    app: &TestApp,
+    tenant: TenantId,
+    source: ClientSource,
+    initiate_login_uri: Option<&str>,
+    client_uri: Option<&str>,
+) -> token_support::Rp {
+    token_support::register_with(
+        app,
+        tenant,
+        token_support::web_input(ClientAuthMethod::ClientSecretBasic),
+        |c| {
+            c.name = "Shop".into();
+            c.registration_source = source;
+            c.initiate_login_uri = initiate_login_uri.map(str::to_owned);
+            c.client_uri = client_uri.map(str::to_owned);
+        },
+    )
+    .await
+}
+
+/// Registers and signs in Alice on the default tenant.
+async fn signed_in() -> TestApp {
+    let app = app().await;
+    ui_helpers::register(&app, "", ALICE, PASSWORD).await;
+    let resp = ui_helpers::login(&app, "", ALICE, PASSWORD).await;
+    assert!(resp.status == 200 || resp.status == 303, "{}", resp.text());
+    app
+}
+
+/// The header every account page shows: who is signed in and the sign-out form (a POST).
+fn assert_header(html: &str, what: &str) {
+    assert!(
+        html.contains(&format!("<strong id=\"account-identity\">{ALICE}</strong>")),
+        "{what}: identity\n{html}"
+    );
+    assert!(
+        html.contains("<form id=\"form-sign-out\" method=\"post\" action=\"https:&#x2f;&#x2f;op.test&#x2f;logout\">"),
+        "{what}: sign-out form\n{html}"
+    );
+}
+
+#[tokio::test]
+async fn every_account_page_shows_identity_and_sign_out() {
+    let app = signed_in().await;
+    for page in ACCOUNT_PAGES {
+        let resp = app.get(page).await;
+        assert_eq!(resp.status, 200, "{page}: {}", resp.text());
+        let html = resp.text();
+        assert_header(&html, page);
+        assert!(!html.contains("id=\"link-back-to-app\""), "{page}");
+        // Without a client the navigation links are the plain pages.
+        assert_eq!(
+            href(&html, "account-nav-security").as_deref(),
+            Some("/ui/account/security"),
+            "{page}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn account_sign_out_is_a_post_that_needs_the_confirmation() {
+    let app = signed_in().await;
+    // The form posts to the end-session endpoint: without an id_token_hint it only asks.
+    let resp = app.post_form("/logout", &[]).await;
+    assert_eq!(resp.status, 303, "{}", resp.text());
+    assert_eq!(location(&resp), "https://op.test/ui/logout");
+    assert_eq!(
+        app.get("/ui/account/profile").await.status,
+        200,
+        "still signed in"
+    );
+    // A GET of the end-session endpoint signs nothing out either.
+    let resp = app.get("/logout").await;
+    assert_eq!(resp.status, 303, "{}", resp.text());
+    assert_eq!(
+        app.get("/ui/account/profile").await.status,
+        200,
+        "still signed in"
+    );
+    // A confirmation POST without its CSRF token changes nothing.
+    let page = app.get("/ui/logout").await;
+    assert_eq!(page.status, 200, "{}", page.text());
+    let action = ui_helpers::form_action(&app, &page.html());
+    let resp = app.post_form(&action, &[]).await;
+    assert_eq!(resp.status, 403, "{}", resp.text());
+    assert_eq!(
+        app.get("/ui/account/profile").await.status,
+        200,
+        "still signed in"
+    );
+    // The confirmation with its token signs out.
+    let resp = ui_helpers::submit_form(&app, "/ui/logout", &[]).await;
+    assert!(resp.status == 200 || resp.status == 303, "{}", resp.text());
+    assert_eq!(
+        app.get("/ui/account/profile").await.status,
+        303,
+        "signed out"
+    );
+}
+
+#[tokio::test]
+async fn account_header_links_back_to_a_static_app() {
+    let app = signed_in().await;
+    let tenant = ui_helpers::default_tenant(&app).id;
+    let preferred = shop(
+        &app,
+        tenant,
+        ClientSource::Static,
+        Some(APP_LOGIN),
+        Some(APP_HOME),
+    )
+    .await;
+    let home_only = shop(&app, tenant, ClientSource::Static, None, Some(APP_HOME)).await;
+    for (rp, expected) in [(&preferred, APP_LOGIN), (&home_only, APP_HOME)] {
+        for page in ACCOUNT_PAGES {
+            let resp = app
+                .get(&format!("{page}?client_id={}", encoded(rp.id())))
+                .await;
+            assert_eq!(resp.status, 200, "{page}: {}", resp.text());
+            let html = resp.text();
+            assert_header(&html, page);
+            assert_eq!(
+                href(&html, "link-back-to-app").as_deref(),
+                Some(expected),
+                "{page}"
+            );
+            assert!(html.contains("Back to Shop"), "{page}");
+            // The links between account pages keep the app.
+            assert_eq!(
+                href(&html, "account-nav-sessions"),
+                Some(format!("/ui/account/sessions?client_id={}", rp.id())),
+                "{page}"
+            );
+        }
+    }
+
+    // A static client without a home, an unknown id and another tenant's client: no link,
+    // no error, and the value is never echoed.
+    let no_home = shop(&app, tenant, ClientSource::Static, None, None).await;
+    let other = ui_helpers::create_tenant(&app, "other").await;
+    let foreign = shop(&app, other.id, ClientSource::Static, Some(APP_LOGIN), None).await;
+    for client_id in [
+        no_home.id(),
+        "unknown-client",
+        foreign.id(),
+        "javascript:alert(1)",
+        "",
+    ] {
+        let resp = app
+            .get(&format!(
+                "/ui/account/profile?client_id={}",
+                encoded(client_id)
+            ))
+            .await;
+        assert_eq!(resp.status, 200, "{client_id:?}: {}", resp.text());
+        let html = resp.text();
+        assert_header(&html, client_id);
+        assert!(!html.contains("id=\"link-back-to-app\""), "{client_id:?}");
+        assert!(!html.contains("shop.example"), "{client_id:?}");
+        assert!(!html.contains("client_id="), "{client_id:?}: not echoed");
+    }
+}
+
+#[tokio::test]
+async fn account_header_never_links_dynamic_or_cimd_client() {
+    let app = signed_in().await;
+    let tenant = ui_helpers::default_tenant(&app).id;
+    for (source, host) in [
+        (ClientSource::Dynamic, "dcr-app.example"),
+        (ClientSource::Cimd, "cimd-app.example"),
+    ] {
+        let login = format!("https://{host}/login");
+        let home = format!("https://{host}/");
+        let rp = shop(&app, tenant, source, Some(&login), Some(&home)).await;
+        for page in ACCOUNT_PAGES {
+            let resp = app
+                .get(&format!("{page}?client_id={}", encoded(rp.id())))
+                .await;
+            assert_eq!(resp.status, 200, "{source:?} {page}: {}", resp.text());
+            let html = resp.text();
+            assert_header(&html, page);
+            assert!(
+                !html.contains("id=\"link-back-to-app\""),
+                "{source:?} {page}: {html}"
+            );
+            assert!(
+                !html.contains(host),
+                "{source:?} {page}: no link to {host} anywhere"
+            );
+            assert!(
+                !html.contains("client_id="),
+                "{source:?} {page}: the id is not carried"
+            );
+        }
     }
 }

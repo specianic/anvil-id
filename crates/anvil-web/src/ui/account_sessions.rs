@@ -21,7 +21,7 @@ use anvil_core::service::session::{
 };
 use axum::Router;
 use axum::extract::rejection::FormRejection;
-use axum::extract::{Form, Path, Query, State};
+use axum::extract::{Form, Path, Query, RawQuery, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -30,6 +30,7 @@ use secrecy::ExposeSecret as _;
 use serde::{Deserialize, Serialize};
 
 use super::account_attributes::attributes_nav_or_page;
+use super::account_security::{AccountHeader, account_header, client_id_param};
 use super::consent::{PageMessage, account_locale, localized};
 use super::format::{human, iso};
 use super::login::{UiQuery, csrf_page, rejected_form};
@@ -65,6 +66,8 @@ struct Submission {
     flow_id: FlowId,
     cookie: Option<String>,
     csrf: String,
+    /// The account header (no `client_id` on a form post).
+    header: AccountHeader,
 }
 
 impl Submission {
@@ -194,12 +197,14 @@ async fn submission(
     let cookie = jar
         .get(&state.cookies().flow_name(&tenant.tenant))
         .map(|c| c.value().to_owned());
+    let header = account_header(state, tenant, &loc, &session, None).await?;
     Ok(Submission {
         session,
         locale: loc,
         flow_id,
         cookie,
         csrf,
+        header,
     })
 }
 
@@ -213,6 +218,7 @@ async fn render_list(
     tenant: &ResolvedTenant,
     loc: &Locale,
     session: &BrowserSession,
+    header: &AccountHeader,
     flow: FlowId,
     csrf: &str,
     messages: Vec<PageMessage>,
@@ -242,6 +248,7 @@ async fn render_list(
         account_base => tenant.base_path(),
         account_nav => "sessions",
         account_attributes_nav => attributes_nav,
+        account_header => header.value(),
         csrf_token => csrf,
         messages => minijinja::Value::from(minijinja::value::Serde(&messages)),
         sessions => minijinja::Value::from(minijinja::value::Serde(&rows)),
@@ -268,6 +275,7 @@ async fn fresh_list(
     tenant: &ResolvedTenant,
     loc: &Locale,
     session: &BrowserSession,
+    header: &AccountHeader,
     messages: Vec<PageMessage>,
     status: StatusCode,
 ) -> Response {
@@ -289,6 +297,7 @@ async fn fresh_list(
         tenant,
         loc,
         session,
+        header,
         started.flow_id,
         started.csrf_token.expose_secret(),
         messages,
@@ -325,6 +334,7 @@ async fn check_binding(
                 tenant,
                 &sub.locale,
                 &sub.session,
+                &sub.header,
                 vec![PageMessage::error(f.key())],
                 StatusCode::BAD_REQUEST,
             )
@@ -346,6 +356,7 @@ async fn same_flow(
         tenant,
         &sub.locale,
         &sub.session,
+        &sub.header,
         sub.flow_id,
         &sub.csrf,
         vec![message],
@@ -364,11 +375,27 @@ async fn show(
     tenant: ResolvedTenant,
     locale: RequestLocale,
     jar: CookieJar,
+    RawQuery(query): RawQuery,
 ) -> Response {
     match session(&state, &tenant, &jar).await {
         Ok(Some(s)) => {
             let loc = account_locale(&state, &tenant, &locale, &s).await;
-            fresh_list(&state, &tenant, &loc, &s, Vec::new(), StatusCode::OK).await
+            let client_id = client_id_param(query.as_deref());
+            let header = match account_header(&state, &tenant, &loc, &s, client_id.as_deref()).await
+            {
+                Ok(h) => h,
+                Err(page) => return *page,
+            };
+            fresh_list(
+                &state,
+                &tenant,
+                &loc,
+                &s,
+                &header,
+                Vec::new(),
+                StatusCode::OK,
+            )
+            .await
         }
         Ok(None) => to_login(&tenant, CookieJar::new()),
         Err(e) => core_error_page_in(&state, Some(&tenant), &locale.0, &e),

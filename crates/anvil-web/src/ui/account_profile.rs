@@ -26,7 +26,7 @@ use anvil_core::service::account::{
 };
 use axum::Router;
 use axum::extract::rejection::FormRejection;
-use axum::extract::{Form, Query, State};
+use axum::extract::{Form, Query, RawQuery, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -35,6 +35,7 @@ use secrecy::{ExposeSecret as _, SecretString};
 use serde::{Deserialize, Serialize};
 
 use super::account_attributes::attributes_nav_or_page;
+use super::account_security::{account_header, client_id_param};
 use super::consent::{PageMessage, account_locale, localized};
 use super::login::{UiQuery, csrf_page, rejected_form};
 use super::nav::{AccountSection, NavContext};
@@ -106,6 +107,8 @@ struct Bound {
     flow_id: FlowId,
     csrf: String,
     jar: CookieJar,
+    /// The `client_id` the page was opened with (account header, GET only).
+    client_id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -214,6 +217,7 @@ async fn start_flow(
                     .cookies()
                     .flow_cookie(&tenant.tenant, started.cookie_token.expose_secret()),
             ),
+            client_id: None,
         }),
         Err(e) => Err(Box::new(core_error_page_in(state, Some(tenant), loc, &e))),
     }
@@ -226,6 +230,7 @@ impl Submission {
             flow_id: self.flow_id,
             csrf: self.csrf.clone(),
             jar: CookieJar::new(),
+            client_id: None,
         }
     }
 }
@@ -336,11 +341,17 @@ async fn render_profile(
         Ok(f) => f,
         Err(page) => return *page,
     };
+    let header = match account_header(state, tenant, loc, session, bound.client_id.as_deref()).await
+    {
+        Ok(h) => h,
+        Err(page) => return *page,
+    };
     let ctx = minijinja::context! {
         page => PageContext::for_tenant(state, tenant, loc, "title.account_profile").into_value(),
         account_base => tenant.base_path(),
         account_nav => "profile",
         account_attributes_nav => attributes_nav,
+        account_header => header.value(),
         csrf_token => &bound.csrf,
         messages => messages_value(state, loc, messages),
         action => flow_url(tenant, PROFILE, bound.flow_id),
@@ -362,6 +373,7 @@ async fn profile_show(
     tenant: ResolvedTenant,
     locale: RequestLocale,
     jar: CookieJar,
+    RawQuery(query): RawQuery,
 ) -> Response {
     let (session, loc) =
         match page_session(&state, &tenant, &locale, &jar, AccountSection::Profile).await {
@@ -369,7 +381,10 @@ async fn profile_show(
             Err(resp) => return *resp,
         };
     let bound = match start_flow(&state, &tenant, &loc, &session).await {
-        Ok(b) => b,
+        Ok(b) => Bound {
+            client_id: client_id_param(query.as_deref()),
+            ..b
+        },
         Err(resp) => return *resp,
     };
     render_profile(
@@ -494,11 +509,17 @@ async fn render_email(
         Ok(f) => f,
         Err(page) => return *page,
     };
+    let header = match account_header(state, tenant, loc, session, bound.client_id.as_deref()).await
+    {
+        Ok(h) => h,
+        Err(page) => return *page,
+    };
     let ctx = minijinja::context! {
         page => PageContext::for_tenant(state, tenant, loc, "title.account_email").into_value(),
         account_base => tenant.base_path(),
         account_nav => "email",
         account_attributes_nav => attributes_nav,
+        account_header => header.value(),
         mode => "change",
         csrf_token => &bound.csrf,
         messages => messages_value(state, loc, messages),
@@ -524,6 +545,7 @@ async fn email_show(
     tenant: ResolvedTenant,
     locale: RequestLocale,
     jar: CookieJar,
+    RawQuery(query): RawQuery,
 ) -> Response {
     let (session, loc) =
         match page_session(&state, &tenant, &locale, &jar, AccountSection::Email).await {
@@ -531,7 +553,10 @@ async fn email_show(
             Err(resp) => return *resp,
         };
     let bound = match start_flow(&state, &tenant, &loc, &session).await {
-        Ok(b) => b,
+        Ok(b) => Bound {
+            client_id: client_id_param(query.as_deref()),
+            ..b
+        },
         Err(resp) => return *resp,
     };
     render_email(
@@ -763,11 +788,17 @@ async fn render_password(
         Ok(f) => f,
         Err(page) => return *page,
     };
+    let header = match account_header(state, tenant, loc, session, bound.client_id.as_deref()).await
+    {
+        Ok(h) => h,
+        Err(page) => return *page,
+    };
     let ctx = minijinja::context! {
         page => PageContext::for_tenant(state, tenant, loc, "title.account_password").into_value(),
         account_base => tenant.base_path(),
         account_nav => "password",
         account_attributes_nav => attributes_nav,
+        account_header => header.value(),
         csrf_token => &bound.csrf,
         messages => messages_value(state, loc, messages),
         action => flow_url(tenant, PASSWORD, bound.flow_id),
@@ -792,6 +823,7 @@ async fn password_show(
     tenant: ResolvedTenant,
     locale: RequestLocale,
     jar: CookieJar,
+    RawQuery(query): RawQuery,
 ) -> Response {
     let (session, loc) =
         match page_session(&state, &tenant, &locale, &jar, AccountSection::Password).await {
@@ -799,7 +831,10 @@ async fn password_show(
             Err(resp) => return *resp,
         };
     let bound = match start_flow(&state, &tenant, &loc, &session).await {
-        Ok(b) => b,
+        Ok(b) => Bound {
+            client_id: client_id_param(query.as_deref()),
+            ..b
+        },
         Err(resp) => return *resp,
     };
     // Signing out the other devices is the default.
