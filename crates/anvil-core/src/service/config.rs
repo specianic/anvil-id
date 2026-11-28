@@ -16,11 +16,15 @@
 //!   secret (`None`) keeps the current one. Secret field diffs carry no values.
 //! - Dynamic and CIMD clients are runtime state, not configuration: [`plan_excluding`] drops
 //!   them from both sides.
-//! - Organization-owned connections and roles (`org_id = Some`) are runtime state of their
-//!   organization, not tenant configuration: [`StoredConfig`] exposes only tenant-level ones to
-//!   the export, the plan's current side and therefore the prune candidates, so an apply with
-//!   prune never deletes them (nor, through them, identity links, org memberships or org role
-//!   assignments, which the document never covers).
+//! - Organization-owned objects (`org_id = Some`) appear only under `organizations[]`: the
+//!   tenant sections ([`StoredConfig::tenant_connections`], [`StoredConfig::tenant_roles`]) never
+//!   contain them, so tenant-section prune never deletes them. An absent `organizations` key
+//!   (rc.3 documents) plans nothing for organizations, even with prune. A listed organization is
+//!   created or updated, never deleted; with prune, its roles, connections, domain claims and
+//!   branding missing from its entry are deleted. Members, invitations, identity links, org role
+//!   assignments and domain verification are never part of the document.
+//! - Logos compare by SHA-256 (inline data is hashed first). An absent `logo` keeps the stored
+//!   logo; `null` clears it.
 //!
 //! [`ConfigService`] exports a tenant ([`StoredConfig::document`]) and applies a document:
 //!
@@ -32,7 +36,8 @@
 //! 2. [`normalize_document`] brings the document into the form the services store, so that a
 //!    re-applied document plans empty.
 //! 3. The plan is applied resource by resource through the owning services (tenant settings,
-//!    roles, attributes, connections, clients, branding, email templates and SMTP, webhooks),
+//!    roles, attributes, connections, organizations with their roles, connections, domain
+//!    claims, default roles and branding, clients, branding, email templates and SMTP, webhooks),
 //!    which validate and audit each write as usual. Deletes run only with `prune`. Roles go
 //!    through [`RoleService`] only, so its last-administrator and escalation guards hold for
 //!    every change. Finally `tenant_config_applied` is recorded with the counts.
@@ -54,7 +59,7 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 
 use anvil_jose::Kek;
-use anvil_jose::encoding::{ct_eq, secret_hash};
+use anvil_jose::encoding::{b64std_decode, ct_eq, secret_hash, sha256};
 use anvil_jose::webhook::parse_webhook_secret;
 use secrecy::{ExposeSecret as _, SecretString};
 use serde::Serialize;
@@ -66,20 +71,24 @@ use crate::model::{
     ApplicationType, AttributeDefinition, AuditAction, AuditActor, AuditDetails, AuditOutcome,
     Branding, BrandingScope, BrandingSection, CimdPolicy, Client, ClientSection, ClientSource,
     ConfigChange, ConfigKind, ConfigObjectKind, ConfigPlan, Connection, ConnectionSection,
-    DcrPolicy, EmailKind, EmailTemplate, EmailTemplateSection, FieldDiff, LogoInput, OrgId,
-    PageRequest, RequestContext, Role, RoleId, RoleSection, RoleUpdate, SYSTEM_TENANT_SLUG, Scope,
-    SecretInput, SmtpSection, SmtpSettings, SmtpTls, TENANT_CONFIG_VERSION, Tenant,
-    TenantConfigDocument, TenantId, TenantSection, TenantSettings, WebhookEndpoint,
-    WebhookEndpointUpdate, WebhookSection, normalize_permissions, validate_role_name,
+    DcrPolicy, EmailKind, EmailTemplate, EmailTemplateSection, FieldDiff, LogoInput,
+    OrgBrandingSection, OrgDomain, OrgDomainSection, OrgDomainStatus, OrgId, OrgSettingsSection,
+    Organization, OrganizationSection, PageRequest, RequestContext, Role, RoleId, RoleSection,
+    RoleUpdate, SYSTEM_TENANT_SLUG, Scope, SecretInput, SmtpSection, SmtpSettings, SmtpTls,
+    TENANT_CONFIG_VERSION, Tenant, TenantConfigDocument, TenantId, TenantSection, TenantSettings,
+    WebhookEndpoint, WebhookEndpointUpdate, WebhookSection, normalize_permissions,
+    validate_org_slug, validate_role_name,
 };
+use crate::policy::branding::{LogoError, MAX_LOGO_BYTES, sniff_logo};
 use crate::policy::claims_mapping::validate_mapping;
+use crate::policy::home_realm::normalize_domain;
 use crate::ports::{AttributeSchemaCheck, EmailTemplateCheck, Storage};
 use crate::service::admin_scope::ADMIN_WRITE;
 use crate::service::attribute::{AttributeService, check_definition};
 use crate::service::audit::AuditService;
 use crate::service::bootstrap::CONSOLE_CLIENT_ID;
 use crate::service::branding::{
-    BrandingInput, BrandingService, validate_input as validate_branding,
+    BrandingInput, BrandingService, is_sha256_hex, validate_input as validate_branding,
 };
 use crate::service::client::{
     ClientInput, ClientOptions, ClientOptionsPatch, ClientPatch, ClientPolicyView, ClientService,
@@ -88,12 +97,17 @@ use crate::service::client::{
     validate_client_policy, validate_client_secret,
 };
 use crate::service::connection::{
-    ConnectionPatch, ConnectionService, NewConnectionInput, validate_config,
-    validate_connection_slug, validate_secret as validate_connection_secret,
+    ConnectionOwner, ConnectionPatch, ConnectionService, NewConnectionInput, validate_config,
+    validate_config_for, validate_connection_slug, validate_secret as validate_connection_secret,
 };
 use crate::service::mail_settings::{
     MAX_SMTP_PASSWORD_LEN, MailSettingsService, SmtpInput, TemplateInput, plan_smtp, plan_template,
     smtp_connection,
+};
+use crate::service::org_domain::{DomainPatch, OrgDomainService};
+use crate::service::organization::{
+    MAX_DEFAULT_ROLES, OrgActor, OrgInput, OrgPatch, OrgService, refuse_admin_permissions,
+    validate_display_name as validate_org_display_name, validate_metadata,
 };
 use crate::service::role::{
     RoleInput, RoleService, check_escalation, guard_roles_losing_admin, validate_description,
@@ -336,6 +350,164 @@ fn sections<'a>(
     ]
 }
 
+/// Longest base64 text of a logo ([`MAX_LOGO_BYTES`] once decoded).
+const MAX_LOGO_BASE64: usize = MAX_LOGO_BYTES.div_ceil(3) * 4;
+
+/// The image types a logo may have (what [`sniff_logo`] recognises).
+const LOGO_TYPES: [&str; 3] = ["image/png", "image/jpeg", "image/webp"];
+
+fn hex_lower(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
+}
+
+/// Decodes and checks inline logo data (standard base64; ASCII whitespace such as YAML line
+/// breaks is ignored) with the upload rules: PNG, JPEG or WebP by magic bytes, at most 256 KiB,
+/// SVG refused. The size is checked before decoding. Returns the bytes and the content type.
+pub fn decode_logo(data: &str) -> Result<(Vec<u8>, &'static str), String> {
+    // Cheap bound first, then the exact one on the text without whitespace.
+    if data.len() > MAX_LOGO_BASE64 * 2 {
+        return Err(LogoError::TooLarge.to_string());
+    }
+    let compact: String = data.chars().filter(|c| !c.is_ascii_whitespace()).collect();
+    if compact.len() > MAX_LOGO_BASE64 {
+        return Err(LogoError::TooLarge.to_string());
+    }
+    let bytes = b64std_decode(&compact)
+        .map_err(|_| "logo data must be base64 (standard alphabet)".to_owned())?;
+    let content_type = sniff_logo(&bytes).map_err(|e| e.to_string())?;
+    Ok((bytes, content_type))
+}
+
+/// The lowercase hex SHA-256 of logo bytes (the stored key).
+fn logo_hash(bytes: &[u8]) -> String {
+    hex_lower(&sha256(bytes))
+}
+
+/// Inline logo data in a comparable item becomes `{sha256, content_type}`, the form the stored
+/// side exports, so a re-applied image is no change. Invalid data is left alone (validation
+/// reports it).
+fn comparable_logo(value: &mut Value) {
+    let Value::Object(m) = value else {
+        return;
+    };
+    let Some(data) = m
+        .get("logo")
+        .and_then(|l| l.get("data"))
+        .and_then(Value::as_str)
+    else {
+        return;
+    };
+    if let Ok((bytes, content_type)) = decode_logo(data) {
+        m.insert(
+            "logo".to_owned(),
+            serde_json::json!({"sha256": logo_hash(&bytes), "content_type": content_type}),
+        );
+    }
+}
+
+/// Logo rules of the plan: an absent desired `logo` is not compared (the stored logo is kept);
+/// a desired `null` equals "no stored logo".
+fn align_logos(cur: &mut BTreeMap<String, Item<'_>>, des: &mut BTreeMap<String, Item<'_>>) {
+    for (key, d) in des.iter_mut() {
+        comparable_logo(&mut d.value);
+        let Some(c) = cur.get_mut(key) else {
+            continue;
+        };
+        let (Value::Object(dm), Value::Object(cm)) = (&d.value, &mut c.value) else {
+            continue;
+        };
+        match dm.get("logo") {
+            None => {
+                cm.remove("logo");
+            }
+            Some(Value::Null) if !cm.contains_key("logo") => {
+                cm.insert("logo".to_owned(), Value::Null);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// An organization without what it owns (compared on its own; roles, connections, domains and
+/// branding are separate objects of the plan).
+fn org_head(o: &OrganizationSection) -> Item<'_> {
+    let mut value = serde_json::to_value(o).unwrap_or(Value::Null);
+    if let Value::Object(m) = &mut value {
+        for k in ["roles", "connections", "domains", "branding"] {
+            m.remove(k);
+        }
+    }
+    Item {
+        value,
+        secrets: Vec::new(),
+    }
+}
+
+/// The plan of the organizations the desired document lists (none when it has no
+/// `organizations` key). An organization is never planned as a delete; the objects it owns are,
+/// when its entry no longer lists them (prune only).
+fn plan_organizations<'a>(
+    differ: &mut Differ<'_, '_>,
+    current: &'a TenantConfigDocument,
+    desired: &'a TenantConfigDocument,
+) {
+    use ConfigObjectKind as K;
+    let Some(wanted) = &desired.organizations else {
+        return;
+    };
+    let stored = current.organizations.as_deref().unwrap_or_default();
+    for d in wanted {
+        let c = stored.iter().find(|c| c.slug == d.slug);
+        let slug = d.slug.as_str();
+        let nested = |name: &str| format!("{slug}/{name}");
+        differ.section(
+            K::Organization,
+            c.map(|c| (c.slug.clone(), org_head(c)))
+                .into_iter()
+                .collect(),
+            [(d.slug.clone(), org_head(d))].into_iter().collect(),
+        );
+        let roles = |o: Option<&'a OrganizationSection>| {
+            keyed(
+                o.map(|o| o.roles.as_slice()).unwrap_or_default(),
+                |r| nested(&r.name),
+                |r| item(r, vec![]),
+            )
+        };
+        differ.section(K::OrgRole, roles(c), roles(Some(d)));
+        let conns = |o: Option<&'a OrganizationSection>| {
+            keyed(
+                o.map(|o| o.connections.as_slice()).unwrap_or_default(),
+                |x| nested(&x.slug),
+                |x| item(x, vec![("secret", x.secret.as_ref())]),
+            )
+        };
+        differ.section(K::OrgConnection, conns(c), conns(Some(d)));
+        let domains = |o: Option<&'a OrganizationSection>| {
+            keyed(
+                o.map(|o| o.domains.as_slice()).unwrap_or_default(),
+                |x| nested(&x.domain),
+                |x| item(x, vec![]),
+            )
+        };
+        differ.section(K::OrgDomain, domains(c), domains(Some(d)));
+        let branding = |o: Option<&'a OrganizationSection>| {
+            keyed(
+                o.and_then(|o| o.branding.as_ref()),
+                |_| slug.to_owned(),
+                |b| item(b, vec![]),
+            )
+        };
+        let (mut cb, mut db) = (branding(c), branding(Some(d)));
+        align_logos(&mut cb, &mut db);
+        differ.section(K::OrgBranding, cb, db);
+    }
+}
+
 /// The plan turning `current` into `desired`. See the module docs for the rules. Assumes both
 /// documents passed [`check_unique_keys`] (a duplicated key keeps only its last entry here).
 pub fn plan(
@@ -383,8 +555,13 @@ pub fn plan_excluding(
             }
             continue;
         }
+        let (mut cur, mut des) = (cur, des);
+        if kind == ConfigObjectKind::Branding {
+            align_logos(&mut cur, &mut des);
+        }
         differ.section(kind, cur, des);
     }
+    plan_organizations(&mut differ, current, desired);
     plan
 }
 
@@ -777,6 +954,189 @@ fn validate_webhook_section(issues: &mut Issues, p: &str, w: &WebhookSection, v:
     }
 }
 
+/// A branding logo: inline data with the upload rules, a stored reference by shape (whether it
+/// exists is checked against the tenant before anything is written).
+fn validate_logo(issues: &mut Issues, path: &str, logo: Option<&Option<LogoInput>>) {
+    match logo {
+        Some(Some(LogoInput::Data { data })) => {
+            if let Err(message) = decode_logo(data) {
+                issues.push(path, message);
+            }
+        }
+        Some(Some(LogoInput::Stored {
+            sha256,
+            content_type,
+        })) => {
+            if !is_sha256_hex(sha256) {
+                issues.push(
+                    format!("{path}.sha256"),
+                    "must be a lowercase hex SHA-256 (64 characters)",
+                );
+            }
+            if !LOGO_TYPES.contains(&content_type.as_str()) {
+                issues.push(
+                    format!("{path}.content_type"),
+                    "must be image/png, image/jpeg or image/webp",
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Tokens and custom CSS of a branding section at `p`.
+fn validate_branding_at(issues: &mut Issues, p: &str, input: &BrandingInput) {
+    if let Err(e) = validate_branding(input) {
+        let prefix = match &e {
+            CoreError::Validation {
+                field: "custom_css",
+                ..
+            } => p.to_owned(),
+            _ => format!("{p}.tokens"),
+        };
+        issues.core(&prefix, e);
+    }
+}
+
+/// The `organizations` section: the organization services' rules for each organization, its
+/// roles (no `admin:*` permissions), connections (OIDC or SAML; one slug namespace with the
+/// tenant's connections), domain claims and branding. Refused for the system tenant.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one pass over the parts of an organization entry"
+)]
+fn validate_organizations(issues: &mut Issues, doc: &TenantConfigDocument, system: bool) {
+    let Some(orgs) = &doc.organizations else {
+        return;
+    };
+    if system {
+        issues.push(
+            "organizations",
+            "organizations do not exist in the system tenant",
+        );
+        return;
+    }
+    duplicates(
+        issues,
+        "organizations",
+        "slug",
+        orgs.iter().map(|o| o.slug.clone()).collect(),
+    );
+    // Tenant and organization connections share one slug namespace.
+    let mut slugs: BTreeMap<&str, String> = BTreeMap::new();
+    for (i, c) in doc.connections.iter().enumerate() {
+        slugs
+            .entry(c.slug.as_str())
+            .or_insert_with(|| format!("connections[{i}]"));
+    }
+    for (i, o) in orgs.iter().enumerate() {
+        let p = format!("organizations[{i}]");
+        issues.check(&p, validate_org_slug(&o.slug));
+        issues.check(&p, validate_org_display_name(&o.display_name));
+        issues.check(&p, validate_metadata(&o.metadata));
+        if o.settings.default_roles.len() > MAX_DEFAULT_ROLES {
+            issues.push(
+                format!("{p}.settings.default_roles"),
+                format!("at most {MAX_DEFAULT_ROLES} roles"),
+            );
+        }
+        duplicates(
+            issues,
+            &format!("{p}.roles"),
+            "name",
+            o.roles.iter().map(|r| r.name.clone()).collect(),
+        );
+        duplicates(
+            issues,
+            &format!("{p}.connections"),
+            "slug",
+            o.connections.iter().map(|c| c.slug.clone()).collect(),
+        );
+        duplicates(
+            issues,
+            &format!("{p}.domains"),
+            "domain",
+            o.domains
+                .iter()
+                .map(|d| normalize_domain(&d.domain).unwrap_or_else(|_| d.domain.clone()))
+                .collect(),
+        );
+        for (j, r) in o.roles.iter().enumerate() {
+            let rp = format!("{p}.roles[{j}]");
+            issues.check(&rp, validate_role_name(&r.name));
+            issues.check(&rp, validate_description(&r.description));
+            match normalize_permissions(&r.permissions) {
+                Ok(perms) => issues.check(&rp, refuse_admin_permissions(&perms)),
+                Err(e) => issues.core(&rp, e),
+            }
+        }
+        for (j, c) in o.connections.iter().enumerate() {
+            let cp = format!("{p}.connections[{j}]");
+            issues.check(&cp, validate_connection_slug(&c.slug));
+            issues.check(&cp, validate_display_name(&c.display_name));
+            issues.check(&cp, validate_config_for(&c.config, true));
+            let saml = matches!(c.config, crate::model::ConnectionConfig::Saml(_));
+            match &c.secret {
+                Some(s) if saml && s.is_configured() => {
+                    issues.push(format!("{cp}.secret"), "a SAML connection has no secret");
+                }
+                Some(SecretInput::Inline { value }) => {
+                    issues.check(&cp, validate_connection_secret(c.config.kind(), value));
+                }
+                _ => {}
+            }
+            match slugs.get(c.slug.as_str()) {
+                Some(first) => issues.push(
+                    format!("{cp}.slug"),
+                    format!(
+                        "duplicate {:?} (also {first}); tenant and organization connections \
+                         share one slug namespace",
+                        c.slug
+                    ),
+                ),
+                None => {
+                    slugs.insert(c.slug.as_str(), cp.clone());
+                }
+            }
+        }
+        for (j, d) in o.domains.iter().enumerate() {
+            let dp = format!("{p}.domains[{j}]");
+            if let Err(e) = normalize_domain(&d.domain) {
+                issues.push(format!("{dp}.domain"), message_of(e.into()));
+            }
+            match &d.connection {
+                None if d.routing => issues.push(
+                    format!("{dp}.connection"),
+                    "routing needs a target connection of this organization",
+                ),
+                Some(slug) if !o.connections.iter().any(|c| &c.slug == slug) => issues.push(
+                    format!("{dp}.connection"),
+                    "names no connection of this organization's entry",
+                ),
+                _ => {}
+            }
+            if !d.allow_local_password && !d.routing {
+                issues.push(
+                    format!("{dp}.allow_local_password"),
+                    "password sign-in can only be turned off for a routed domain",
+                );
+            }
+        }
+        if let Some(b) = &o.branding {
+            let bp = format!("{p}.branding");
+            validate_branding_at(
+                issues,
+                &bp,
+                &BrandingInput {
+                    tokens: b.tokens.clone(),
+                    custom_css: b.custom_css.clone(),
+                },
+            );
+            validate_logo(issues, &format!("{bp}.logo"), b.logo.as_ref());
+        }
+    }
+}
+
 /// Validates a whole document with the services' own rules, without storage: header, tenant
 /// settings (CAPTCHA is not part of the document; DCR and CIMD must stay disabled for the system
 /// tenant), unique natural keys, and every object. Collects every problem instead of stopping at
@@ -871,16 +1231,8 @@ pub fn validate_document(
             tokens: b.tokens.clone(),
             custom_css: b.custom_css.clone(),
         };
-        if let Err(e) = validate_branding(&input) {
-            let prefix = match &e {
-                CoreError::Validation {
-                    field: "custom_css",
-                    ..
-                } => p.clone(),
-                _ => format!("{p}.tokens"),
-            };
-            issues.core(&prefix, e);
-        }
+        validate_branding_at(&mut issues, &p, &input);
+        validate_logo(&mut issues, &format!("{p}.logo"), b.logo.as_ref());
     }
     for (i, r) in doc.roles.iter().enumerate() {
         let p = format!("roles[{i}]");
@@ -947,6 +1299,7 @@ pub fn validate_document(
     for (i, w) in doc.webhooks.iter().enumerate() {
         validate_webhook_section(&mut issues, &format!("webhooks[{i}]"), w, v);
     }
+    validate_organizations(&mut issues, doc, system);
     issues.into_result()
 }
 
@@ -1010,6 +1363,28 @@ pub fn normalize_document(doc: &TenantConfigDocument) -> TenantConfigDocument {
             w.events = e;
         }
     }
+    for o in d.organizations.iter_mut().flatten() {
+        o.display_name = o.display_name.trim().to_owned();
+        o.settings.default_roles.sort();
+        o.settings.default_roles.dedup();
+        for r in &mut o.roles {
+            r.description = r.description.trim().to_owned();
+            if let Ok(p) = normalize_permissions(&r.permissions) {
+                r.permissions = p;
+            }
+        }
+        for c in &mut o.connections {
+            c.display_name = c.display_name.trim().to_owned();
+        }
+        for dm in &mut o.domains {
+            if let Ok(n) = normalize_domain(&dm.domain) {
+                dm.domain = n;
+            }
+        }
+        if let Some(b) = &mut o.branding {
+            b.custom_css = b.custom_css.take().filter(|c| !c.trim().is_empty());
+        }
+    }
     d
 }
 
@@ -1031,6 +1406,18 @@ pub struct StoredConfig {
     pub templates: Vec<EmailTemplate>,
     pub smtp: Option<SmtpSettings>,
     pub webhooks: Vec<WebhookEndpoint>,
+    /// The tenant's organizations with their domain claims and branding (their roles and
+    /// connections are in `roles` and `connections`, `org_id = Some`). Empty for the system
+    /// tenant.
+    pub orgs: Vec<StoredOrg>,
+}
+
+/// One stored organization as the export needs it.
+#[derive(Debug, Clone)]
+pub struct StoredOrg {
+    pub org: Organization,
+    pub domains: Vec<OrgDomain>,
+    pub branding: Option<Branding>,
 }
 
 fn is_system(tenant: &Tenant) -> bool {
@@ -1062,6 +1449,95 @@ impl StoredConfig {
         self.connections
             .iter()
             .find(|c| !is_document_managed(c.org_id) && c.slug == slug)
+    }
+
+    /// The stored organization with `slug`.
+    fn org(&self, slug: &str) -> Option<&StoredOrg> {
+        self.orgs.iter().find(|o| o.org.slug == slug)
+    }
+
+    /// The `organizations` entry of a stored organization: its roles, connections, domain
+    /// claims (target by connection slug) and branding; default roles by name. Never members,
+    /// invitations, links, assignments or verification state.
+    fn org_section(&self, so: &StoredOrg) -> OrganizationSection {
+        let id = so.org.id;
+        let mut roles: Vec<RoleSection> = self
+            .roles
+            .iter()
+            .filter(|r| r.org_id == Some(id))
+            .map(role_section)
+            .collect();
+        roles.sort_by(|a, b| a.name.cmp(&b.name));
+        let mut connections: Vec<ConnectionSection> = self
+            .connections
+            .iter()
+            .filter(|c| c.org_id == Some(id))
+            .map(connection_section)
+            .collect();
+        connections.sort_by(|a, b| a.slug.cmp(&b.slug));
+        let mut domains: Vec<OrgDomainSection> = so
+            .domains
+            .iter()
+            .map(|d| OrgDomainSection {
+                domain: d.domain.clone(),
+                connection: d.connection_id.and_then(|cid| {
+                    self.connections
+                        .iter()
+                        .find(|c| c.id == cid)
+                        .map(|c| c.slug.clone())
+                }),
+                routing: d.routing,
+                allow_local_password: d.allow_local_password,
+            })
+            .collect();
+        domains.sort_by(|a, b| a.domain.cmp(&b.domain));
+        let mut default_roles: Vec<String> = so
+            .org
+            .settings
+            .default_role_ids
+            .iter()
+            .filter_map(|rid| self.roles.iter().find(|r| r.id == *rid))
+            .map(|r| r.name.clone())
+            .collect();
+        default_roles.sort();
+        default_roles.dedup();
+        OrganizationSection {
+            slug: so.org.slug.clone(),
+            display_name: so.org.display_name.clone(),
+            mfa_policy: so.org.mfa_policy,
+            metadata: so.org.metadata.clone(),
+            settings: OrgSettingsSection { default_roles },
+            roles,
+            connections,
+            domains,
+            branding: so.branding.as_ref().map(|b| OrgBrandingSection {
+                tokens: b.tokens.clone(),
+                custom_css: b.custom_css.clone(),
+                logo: exported_logo(b),
+            }),
+        }
+    }
+}
+
+fn connection_section(c: &Connection) -> ConnectionSection {
+    ConnectionSection {
+        slug: c.slug.clone(),
+        display_name: c.display_name.clone(),
+        enabled: c.enabled,
+        config: c.config.clone(),
+        // SAML connections have no secret.
+        secret: (c.kind() != crate::model::ConnectionKind::Saml).then(|| SecretInput::Configured {
+            configured: c.secret_enc.is_some(),
+        }),
+        trust_email_verified: c.trust_email_verified,
+    }
+}
+
+fn role_section(r: &Role) -> RoleSection {
+    RoleSection {
+        name: r.name.clone(),
+        description: r.description.clone(),
+        permissions: r.permissions.clone(),
     }
 }
 
@@ -1147,17 +1623,8 @@ impl StoredConfig {
             .map(client_section)
             .collect();
         clients.sort_by(|a, b| a.client_id.cmp(&b.client_id));
-        let mut connections: Vec<ConnectionSection> = self
-            .tenant_connections()
-            .map(|c| ConnectionSection {
-                slug: c.slug.clone(),
-                display_name: c.display_name.clone(),
-                enabled: c.enabled,
-                config: c.config.clone(),
-                secret: configured_secret(c.secret_enc.is_some()),
-                trust_email_verified: c.trust_email_verified,
-            })
-            .collect();
+        let mut connections: Vec<ConnectionSection> =
+            self.tenant_connections().map(connection_section).collect();
         connections.sort_by(|a, b| a.slug.cmp(&b.slug));
         let mut branding: Vec<BrandingSection> = self
             .branding
@@ -1170,14 +1637,7 @@ impl StoredConfig {
             })
             .collect();
         branding.sort_by(|a, b| a.client_id.cmp(&b.client_id));
-        let mut roles: Vec<RoleSection> = self
-            .tenant_roles()
-            .map(|r| RoleSection {
-                name: r.name.clone(),
-                description: r.description.clone(),
-                permissions: r.permissions.clone(),
-            })
-            .collect();
+        let mut roles: Vec<RoleSection> = self.tenant_roles().map(role_section).collect();
         roles.sort_by(|a, b| a.name.cmp(&b.name));
         let mut attributes = self.attributes.clone();
         attributes.sort_by(|a, b| (a.position, &a.name).cmp(&(b.position, &b.name)));
@@ -1229,8 +1689,20 @@ impl StoredConfig {
             email_templates,
             smtp,
             webhooks,
-            organizations: None,
+            organizations: self.organizations(),
         }
+    }
+
+    /// The `organizations` section: absent for the system tenant and for a tenant without
+    /// organizations (so documents of tenants without organizations stay as before).
+    fn organizations(&self) -> Option<Vec<OrganizationSection>> {
+        if is_system(&self.tenant) || self.orgs.is_empty() {
+            return None;
+        }
+        let mut orgs: Vec<OrganizationSection> =
+            self.orgs.iter().map(|o| self.org_section(o)).collect();
+        orgs.sort_by(|a, b| a.slug.cmp(&b.slug));
+        Some(orgs)
     }
 
     /// Whether `client_id` is a client the document never manages (dynamic, CIMD, console).
@@ -1320,8 +1792,8 @@ fn check_against_stored(
         if cur.org_connection(&c.slug).is_some() {
             issues.push(
                 format!("{p}.slug"),
-                "is used by an organization connection; organization connections are not part \
-                 of the document",
+                "is used by an organization connection; organization connections are listed \
+                 under their organization (organizations[].connections)",
             );
             continue;
         }
@@ -1361,6 +1833,107 @@ fn check_against_stored(
         ),
     );
     issues.0
+}
+
+/// Checks of the `organizations` section against the stored state: connection slugs owned by
+/// someone else (the tenant or another organization), kind changes, secrets that must be
+/// provided, and default roles that name no role.
+fn check_organizations(
+    current: Option<&StoredConfig>,
+    desired: &TenantConfigDocument,
+    prune: bool,
+) -> Vec<ConfigIssue> {
+    let mut issues = Issues::default();
+    let Some(orgs) = &desired.organizations else {
+        return issues.0;
+    };
+    for (i, o) in orgs.iter().enumerate() {
+        let p = format!("organizations[{i}]");
+        let org_id = current.and_then(|c| c.org(&o.slug)).map(|s| s.org.id);
+        for (j, c) in o.connections.iter().enumerate() {
+            let cp = format!("{p}.connections[{j}]");
+            let stored = current.and_then(|cur| cur.connections.iter().find(|s| s.slug == c.slug));
+            if let Some(s) = stored {
+                if s.org_id.is_none() {
+                    issues.push(
+                        format!("{cp}.slug"),
+                        "is used by a tenant connection (tenant and organization connections \
+                         share one slug namespace)",
+                    );
+                    continue;
+                }
+                if s.org_id != org_id {
+                    issues.push(
+                        format!("{cp}.slug"),
+                        "is used by a connection of another organization",
+                    );
+                    continue;
+                }
+                if s.kind() != c.config.kind() {
+                    issues.push(
+                        format!("{cp}.config"),
+                        "the kind of a connection cannot change; remove it (apply with prune) \
+                         and add a new one",
+                    );
+                }
+            }
+            if matches!(c.secret, Some(SecretInput::Configured { configured: true }))
+                && stored.is_none_or(|s| s.secret_enc.is_none())
+            {
+                issues.push(
+                    format!("{cp}.secret"),
+                    "no secret is stored yet: provide it inline",
+                );
+            }
+        }
+        for (k, name) in o.settings.default_roles.iter().enumerate() {
+            let in_entry = o.roles.iter().any(|r| &r.name == name);
+            let in_doc = desired.roles.iter().any(|r| &r.name == name);
+            let stored_tenant_role =
+                !prune && current.is_some_and(|c| c.tenant_roles().any(|r| &r.name == name));
+            if !(in_entry || in_doc || stored_tenant_role) {
+                issues.push(
+                    format!("{p}.settings.default_roles[{k}]"),
+                    "names no role of this organization or of the tenant",
+                );
+            }
+        }
+    }
+    issues.0
+}
+
+/// A document cannot turn on routing (or turn off password sign-in) for a domain that is not
+/// verified through DNS: for such a claim the routing settings stay as stored (a new claim:
+/// routing off, password sign-in allowed) and are applied by an apply after verification. The
+/// routing target is set either way.
+fn defer_unverified_routing(desired: &mut TenantConfigDocument, current: Option<&StoredConfig>) {
+    for o in desired.organizations.iter_mut().flatten() {
+        let stored_org = current.and_then(|c| c.org(&o.slug));
+        for d in &mut o.domains {
+            let stored = stored_org.and_then(|so| so.domains.iter().find(|x| x.domain == d.domain));
+            if stored.is_some_and(|x| x.status == OrgDomainStatus::Verified) {
+                continue;
+            }
+            d.routing = stored.is_some_and(|x| x.routing);
+            d.allow_local_password = stored.is_none_or(|x| x.allow_local_password);
+        }
+    }
+}
+
+/// The logo positions of a document with their paths.
+fn logo_slots(doc: &TenantConfigDocument) -> Vec<(String, &LogoInput)> {
+    let mut out = Vec::new();
+    for (i, b) in doc.branding.iter().enumerate() {
+        if let Some(Some(l)) = &b.logo {
+            out.push((format!("branding[{i}].logo"), l));
+        }
+    }
+    for (i, o) in doc.organizations.iter().flatten().enumerate() {
+        if let Some(Some(l)) = o.branding.as_ref().and_then(|b| b.logo.as_ref()) {
+            out.push((format!("organizations[{i}].branding.logo"), l));
+        }
+    }
+    out
 }
 
 fn smtp_input(s: &SmtpSection) -> SmtpInput {
@@ -1509,6 +2082,10 @@ pub struct ConfigService {
     pub attributes: AttributeService,
     pub webhooks: WebhookService,
     pub mail: MailSettingsService,
+    /// Organizations and their roles (as a tenant administrator).
+    pub orgs: OrgService,
+    /// Organization domain claims (never verified by a document; the TXT lookup is unused).
+    pub domains: OrgDomainService,
     /// Whether the installation SMTP (`smtp_url`) is configured.
     pub installation_smtp: bool,
     /// Whether the server runs in development mode (`AppConfig::dev_mode`): headless origins
@@ -1528,6 +2105,23 @@ fn of_kind(
     kind: ConfigObjectKind,
 ) -> impl Iterator<Item = &ConfigChange> {
     changes.iter().filter(move |c| c.kind == kind)
+}
+
+/// The changes of `kind` inside the organization `org` (keys `{org}/{name}`), with the name.
+fn org_changes<'a>(
+    changes: &'a [ConfigChange],
+    kind: ConfigObjectKind,
+    org: &'a str,
+) -> impl Iterator<Item = (&'a ConfigChange, &'a str)> + 'a {
+    changes
+        .iter()
+        .filter(move |c| c.kind == kind)
+        .filter_map(move |c| {
+            c.key
+                .strip_prefix(org)
+                .and_then(|rest| rest.strip_prefix('/'))
+                .map(|name| (c, name))
+        })
 }
 
 fn branding_scope(key: &str) -> BrandingScope {
@@ -1583,9 +2177,39 @@ impl ConfigService {
                 branding.push((Some(c.client_id.clone()), b));
             }
         }
+        let mut orgs = Vec::new();
+        // Tenant roles; the organizations' own roles are appended below.
+        let mut roles = self.roles.list(tenant.id).await?;
+        if !is_system(&tenant) {
+            let mut after = None;
+            loop {
+                let page = self
+                    .orgs
+                    .list(tenant.id, PageRequest { after, limit: 200 })
+                    .await?;
+                for org in page.items {
+                    roles.extend(self.orgs.list_roles(tenant.id, org.id).await?);
+                    let domains = self.domains.list(&org).await?;
+                    let branding = self
+                        .branding
+                        .get(tenant.id, &BrandingScope::Org(org.id))
+                        .await?;
+                    orgs.push(StoredOrg {
+                        org,
+                        domains,
+                        branding,
+                    });
+                }
+                match page.next_cursor {
+                    Some(next) => after = Some(next),
+                    None => break,
+                }
+            }
+        }
         Ok(StoredConfig {
+            orgs,
             connections: self.connections.list(tenant.id).await?,
-            roles: self.roles.list(tenant.id).await?,
+            roles,
             attributes: self.attributes.list(tenant.id).await?,
             templates: self.mail.list_templates(tenant.id).await?,
             smtp: self.storage().mail_settings().smtp(tenant.id).await?,
@@ -1620,6 +2244,17 @@ impl ConfigService {
             ConfigObjectKind::Connection => cur
                 .tenant_connections()
                 .find(|c| c.slug == r.key)
+                .and_then(|c| self.connections.open_secret(c).ok().flatten())
+                .is_some_and(|s| ct_eq(s.expose_secret().as_bytes(), presented.as_bytes())),
+            ConfigObjectKind::OrgConnection => r
+                .key
+                .split_once('/')
+                .and_then(|(org, slug)| {
+                    let id = cur.org(org)?.org.id;
+                    cur.connections
+                        .iter()
+                        .find(|c| c.org_id == Some(id) && c.slug == slug)
+                })
                 .and_then(|c| self.connections.open_secret(c).ok().flatten())
                 .is_some_and(|s| ct_eq(s.expose_secret().as_bytes(), presented.as_bytes())),
             ConfigObjectKind::Webhook => {
@@ -1730,31 +2365,153 @@ impl ConfigService {
         guard_roles_losing_admin(self.storage(), &cur.tenant, &losing).await
     }
 
+    /// Stored logo references (`{sha256, content_type}`) must name a logo stored in the tenant,
+    /// with its content type; a document for another instance must carry the image.
+    async fn check_logos(
+        &self,
+        current: Option<&StoredConfig>,
+        desired: &TenantConfigDocument,
+    ) -> Result<Vec<ConfigIssue>, CoreError> {
+        let mut issues = Issues::default();
+        for (path, logo) in logo_slots(desired) {
+            let LogoInput::Stored {
+                sha256,
+                content_type,
+            } = logo
+            else {
+                continue;
+            };
+            let stored = match current {
+                Some(cur) => self.branding.logo(cur.tenant.id, sha256).await?,
+                None => None,
+            };
+            match stored {
+                None => issues.push(
+                    path,
+                    "unknown logo hash: no logo with this sha256 is stored in the tenant; send \
+                     the image as {data: <base64>} (the CLI also accepts {file: path})",
+                ),
+                Some(l) if &l.content_type != content_type => issues.push(
+                    format!("{path}.content_type"),
+                    format!("the stored logo with this sha256 is {}", l.content_type),
+                ),
+                Some(_) => {}
+            }
+        }
+        Ok(issues.0)
+    }
+
+    /// SAML organization connections are created or changed only while the operator flag
+    /// `saml_experimental` is on (disabling one always works), refused before anything is
+    /// written.
+    fn check_saml(&self, desired: &TenantConfigDocument, plan: &ConfigPlan) -> Vec<ConfigIssue> {
+        let mut issues = Issues::default();
+        if self.connections.saml_enabled {
+            return issues.0;
+        }
+        for (i, o) in desired.organizations.iter().flatten().enumerate() {
+            for (j, c) in o.connections.iter().enumerate() {
+                if !matches!(c.config, crate::model::ConnectionConfig::Saml(_)) {
+                    continue;
+                }
+                let key = format!("{}/{}", o.slug, c.slug);
+                let created =
+                    of_kind(&plan.creates, ConfigObjectKind::OrgConnection).any(|x| x.key == key);
+                let changed = of_kind(&plan.updates, ConfigObjectKind::OrgConnection)
+                    .find(|x| x.key == key)
+                    .is_some_and(|x| !(top_fields(x) == BTreeSet::from(["enabled"]) && !c.enabled));
+                if created || changed {
+                    issues.push(
+                        format!("organizations[{i}].connections[{j}].config"),
+                        "SAML connections need the operator flag saml_experimental",
+                    );
+                }
+            }
+        }
+        issues.0
+    }
+
+    /// Applies a branding section's logo to `scope`: absent keeps it, `null` clears a stored
+    /// one, inline data or a stored reference sets it (checked like an upload).
+    async fn write_logo(
+        &self,
+        tenant: TenantId,
+        scope: &BrandingScope,
+        logo: Option<&Option<LogoInput>>,
+        actor: AuditActor,
+        ctx: &RequestContext,
+    ) -> Result<(), CoreError> {
+        let bytes = match logo {
+            None => return Ok(()),
+            Some(None) => {
+                let has_logo = self
+                    .branding
+                    .get(tenant, scope)
+                    .await?
+                    .is_some_and(|b| b.logo_sha256.is_some());
+                if has_logo {
+                    self.branding.clear_logo(tenant, scope, actor, ctx).await?;
+                }
+                return Ok(());
+            }
+            Some(Some(LogoInput::Data { data })) => {
+                decode_logo(data)
+                    .map_err(|message| CoreError::Validation {
+                        field: "logo",
+                        message,
+                    })?
+                    .0
+            }
+            Some(Some(LogoInput::Stored { sha256, .. })) => {
+                self.branding
+                    .logo(tenant, sha256)
+                    .await?
+                    .ok_or_else(|| CoreError::Validation {
+                        field: "logo",
+                        message: "unknown logo hash".to_owned(),
+                    })?
+                    .bytes
+            }
+        };
+        self.branding
+            .set_logo(tenant, scope, bytes, actor, ctx)
+            .await?;
+        Ok(())
+    }
+
     /// Validates `document` completely (the services' rules, then the checks against the stored
     /// state and the role guards), computes the plan and, unless `dry_run`, applies it through
     /// the services in dependency order: tenant settings, roles, attributes, connections,
+    /// organizations (with their roles, connections, domain claims, default roles and branding),
     /// clients, branding, email templates and SMTP, webhooks. Deletes run only with `prune`.
     /// Records `tenant_config_applied` (counts only) when something was written. A missing
     /// tenant is created.
     pub async fn apply(&self, req: ApplyRequest<'_>) -> Result<ApplyOutcome, ConfigError> {
         validate_document(req.document, &self.validators()).map_err(ConfigError::Invalid)?;
-        let desired = normalize_document(req.document);
+        let mut desired = normalize_document(req.document);
         let current = match self.tenants.get(&desired.tenant.slug).await {
             Ok(t) => Some(self.load(t).await?),
             Err(CoreError::NotFound) => None,
             Err(e) => return Err(e.into()),
         };
-        let issues = check_against_stored(
+        defer_unverified_routing(&mut desired, current.as_ref());
+        let mut issues = check_against_stored(
             current.as_ref(),
             &desired,
             req.prune,
             self.installation_smtp,
             &self.tenants.kek,
         );
+        issues.extend(check_organizations(current.as_ref(), &desired, req.prune));
+        issues.extend(self.check_logos(current.as_ref(), &desired).await?);
         if !issues.is_empty() {
             return Err(ConfigError::Invalid(issues));
         }
         let plan = self.plan_for(current.as_ref(), &desired);
+        let issues = self.check_saml(&desired, &plan);
+        if !issues.is_empty() {
+            return Err(ConfigError::Invalid(issues));
+        }
         if let Some(cur) = &current {
             self.check_roles(cur, &desired, &plan, req.prune, req.caller)
                 .await?;
@@ -1998,6 +2755,11 @@ impl ConfigService {
             }
         }
 
+        // 4b. Organizations (only those the document lists; never deleted).
+        for o in desired.organizations.iter().flatten() {
+            self.write_org(req, &tenant, current, o, &plan).await?;
+        }
+
         // 5. Clients (deletes after the branding deletes).
         for c in of_kind(&plan.creates, K::Client) {
             let s = desired
@@ -2097,18 +2859,27 @@ impl ConfigService {
                 .iter()
                 .find(|b| b.client_id.as_deref().unwrap_or(TENANT_BRANDING_KEY) == c.key)
                 .ok_or_else(|| missing("branding", &c.key))?;
-            self.branding
-                .put(
-                    tid,
-                    &branding_scope(&c.key),
-                    BrandingInput {
-                        tokens: b.tokens.clone(),
-                        custom_css: b.custom_css.clone(),
-                    },
-                    actor(),
-                    ctx,
-                )
-                .await?;
+            let scope = branding_scope(&c.key);
+            let created = c.fields.is_empty();
+            let f = top_fields(c);
+            if created || f.contains("tokens") || f.contains("custom_css") {
+                self.branding
+                    .put(
+                        tid,
+                        &scope,
+                        BrandingInput {
+                            tokens: b.tokens.clone(),
+                            custom_css: b.custom_css.clone(),
+                        },
+                        actor(),
+                        ctx,
+                    )
+                    .await?;
+            }
+            if created || f.contains("logo") {
+                self.write_logo(tid, &scope, b.logo.as_ref(), actor(), ctx)
+                    .await?;
+            }
         }
         if prune {
             for c in of_kind(&plan.deletes, K::Branding) {
@@ -2260,6 +3031,323 @@ impl ConfigService {
                 let id = stored_hook(&c.key)?;
                 self.webhooks.delete(tid, id, actor(), ctx).await?;
             }
+        }
+        Ok(())
+    }
+
+    /// Writes one organization entry through the organization services, in order: the
+    /// organization, its roles, connections (secret first), domain claims (routing target by
+    /// slug), default roles, then the prune-only deletes (domains, connections, roles) and its
+    /// branding. Everything is done as a tenant administrator and audited by the services.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one linear pass over the parts of an organization in dependency order"
+    )]
+    async fn write_org(
+        &self,
+        req: &ApplyRequest<'_>,
+        tenant: &Tenant,
+        current: Option<&StoredConfig>,
+        o: &OrganizationSection,
+        plan: &ConfigPlan,
+    ) -> Result<(), CoreError> {
+        use ConfigObjectKind as K;
+        let actor = OrgActor::TenantAdmin(req.actor.clone());
+        let audit = || req.actor.clone();
+        let ctx = req.ctx;
+        let prune = req.prune;
+        let tid = tenant.id;
+        let slug = o.slug.as_str();
+        let stored = current.and_then(|c| c.org(slug));
+
+        // The organization.
+        let created = of_kind(&plan.creates, K::Organization).any(|c| c.key == slug);
+        let head_change = of_kind(&plan.updates, K::Organization).find(|c| c.key == slug);
+        let org = if created {
+            self.orgs
+                .create(
+                    tenant,
+                    OrgInput {
+                        slug: o.slug.clone(),
+                        display_name: o.display_name.clone(),
+                        mfa_policy: o.mfa_policy,
+                        metadata: Some(o.metadata.clone()),
+                    },
+                    &actor,
+                    ctx,
+                )
+                .await?
+        } else {
+            let org = stored
+                .map(|s| s.org.clone())
+                .ok_or_else(|| missing("organization", slug))?;
+            let f = head_change.map(top_fields).unwrap_or_default();
+            let patch = OrgPatch {
+                display_name: f.contains("display_name").then(|| o.display_name.clone()),
+                mfa_policy: f.contains("mfa_policy").then_some(o.mfa_policy),
+                metadata: f.contains("metadata").then(|| o.metadata.clone()),
+                ..OrgPatch::default()
+            };
+            if patch == OrgPatch::default() {
+                org
+            } else {
+                self.orgs.update(tenant, &org, patch, &actor, ctx).await?
+            }
+        };
+        let default_roles_change = if created {
+            !o.settings.default_roles.is_empty()
+        } else {
+            head_change.is_some_and(|c| top_fields(c).contains("settings"))
+        };
+
+        // Roles.
+        for (_, name) in org_changes(&plan.creates, K::OrgRole, slug) {
+            let r = o
+                .roles
+                .iter()
+                .find(|r| r.name == name)
+                .ok_or_else(|| missing("organization role", name))?;
+            self.orgs
+                .create_role(
+                    tenant,
+                    &org,
+                    RoleInput {
+                        name: r.name.clone(),
+                        description: r.description.clone(),
+                        permissions: r.permissions.clone(),
+                    },
+                    &actor,
+                    ctx,
+                )
+                .await?;
+        }
+        for (c, name) in org_changes(&plan.updates, K::OrgRole, slug) {
+            let r = o
+                .roles
+                .iter()
+                .find(|r| r.name == name)
+                .ok_or_else(|| missing("organization role", name))?;
+            let f = top_fields(c);
+            let update = RoleUpdate {
+                name: None,
+                description: f.contains("description").then(|| r.description.clone()),
+                permissions: f.contains("permissions").then(|| r.permissions.clone()),
+            };
+            self.orgs
+                .update_role(tenant, &org, name, update, &actor, ctx)
+                .await?;
+        }
+
+        // Connections.
+        let owner = ConnectionOwner::Org(&org);
+        let stored_conn = |name: &str| {
+            current
+                .and_then(|cur| {
+                    cur.connections
+                        .iter()
+                        .find(|c| c.org_id == Some(org.id) && c.slug == name)
+                })
+                .map(|c| c.id)
+                .ok_or_else(|| missing("organization connection", name))
+        };
+        for (_, name) in org_changes(&plan.creates, K::OrgConnection, slug) {
+            let s = o
+                .connections
+                .iter()
+                .find(|s| s.slug == name)
+                .ok_or_else(|| missing("organization connection", name))?;
+            self.connections
+                .create_as(
+                    tid,
+                    owner,
+                    NewConnectionInput {
+                        slug: s.slug.clone(),
+                        display_name: s.display_name.clone(),
+                        enabled: s.enabled,
+                        config: s.config.clone(),
+                        secret: match &s.secret {
+                            Some(SecretInput::Inline { value }) => Some(value.clone()),
+                            _ => None,
+                        },
+                        trust_email_verified: Some(s.trust_email_verified),
+                        accept_email_trust_risk: true,
+                    },
+                    audit(),
+                    ctx,
+                )
+                .await?;
+        }
+        for (c, name) in org_changes(&plan.updates, K::OrgConnection, slug) {
+            let s = o
+                .connections
+                .iter()
+                .find(|s| s.slug == name)
+                .ok_or_else(|| missing("organization connection", name))?;
+            let id = stored_conn(name)?;
+            let f = top_fields(c);
+            // The secret first, as for tenant connections (enabling needs it).
+            if f.contains("secret") {
+                let secret = match &s.secret {
+                    Some(SecretInput::Inline { value }) => Some(value.clone()),
+                    _ => None,
+                };
+                self.connections
+                    .set_secret_as(tid, owner, id, secret, audit(), ctx)
+                    .await?;
+            }
+            let patch = ConnectionPatch {
+                display_name: f.contains("display_name").then(|| s.display_name.clone()),
+                enabled: f.contains("enabled").then_some(s.enabled),
+                config: f.contains("config").then(|| s.config.clone()),
+                trust_email_verified: f
+                    .contains("trust_email_verified")
+                    .then_some(s.trust_email_verified),
+                accept_email_trust_risk: true,
+            };
+            if patch.display_name.is_some()
+                || patch.enabled.is_some()
+                || patch.config.is_some()
+                || patch.trust_email_verified.is_some()
+            {
+                self.connections
+                    .update_as(tid, owner, id, patch, audit(), ctx)
+                    .await?;
+            }
+        }
+
+        // Domain claims: a new claim is pending with a fresh token (OrgDomainService::add);
+        // routing settings of unverified claims were held back (`defer_unverified_routing`).
+        let conns = self.connections.list_for_org(tid, &org).await?;
+        let conn_id = |name: &str| {
+            conns
+                .iter()
+                .find(|c| c.slug == name)
+                .map(|c| c.id)
+                .ok_or_else(|| missing("organization connection", name))
+        };
+        let stored_domain = |name: &str| {
+            stored
+                .and_then(|so| so.domains.iter().find(|d| d.domain == name))
+                .map(|d| d.id)
+                .ok_or_else(|| missing("organization domain", name))
+        };
+        for (_, name) in org_changes(&plan.creates, K::OrgDomain, slug) {
+            let d = o
+                .domains
+                .iter()
+                .find(|d| d.domain == name)
+                .ok_or_else(|| missing("organization domain", name))?;
+            let claim = self.domains.add(&org, &d.domain, audit(), ctx).await?;
+            let patch = DomainPatch {
+                connection_id: match &d.connection {
+                    Some(c) => Some(Some(conn_id(c)?)),
+                    None => None,
+                },
+                routing: (d.routing != claim.routing).then_some(d.routing),
+                allow_local_password: (d.allow_local_password != claim.allow_local_password)
+                    .then_some(d.allow_local_password),
+            };
+            if patch != DomainPatch::default() {
+                self.domains
+                    .update(&org, claim.id, patch, audit(), ctx)
+                    .await?;
+            }
+        }
+        for (c, name) in org_changes(&plan.updates, K::OrgDomain, slug) {
+            let d = o
+                .domains
+                .iter()
+                .find(|d| d.domain == name)
+                .ok_or_else(|| missing("organization domain", name))?;
+            let id = stored_domain(name)?;
+            let f = top_fields(c);
+            let patch = DomainPatch {
+                connection_id: if f.contains("connection") {
+                    Some(match &d.connection {
+                        Some(c) => Some(conn_id(c)?),
+                        None => None,
+                    })
+                } else {
+                    None
+                },
+                routing: f.contains("routing").then_some(d.routing),
+                allow_local_password: f
+                    .contains("allow_local_password")
+                    .then_some(d.allow_local_password),
+            };
+            if patch != DomainPatch::default() {
+                self.domains.update(&org, id, patch, audit(), ctx).await?;
+            }
+        }
+
+        // Default roles, by name: the organization's role first, then the tenant's.
+        if default_roles_change {
+            let mut ids = Vec::with_capacity(o.settings.default_roles.len());
+            for name in &o.settings.default_roles {
+                ids.push(self.orgs.resolve_role(tid, org.id, name, None).await?.id);
+            }
+            self.orgs
+                .update(
+                    tenant,
+                    &org,
+                    OrgPatch {
+                        default_role_ids: Some(ids),
+                        ..OrgPatch::default()
+                    },
+                    &actor,
+                    ctx,
+                )
+                .await?;
+        }
+
+        // Prune-only deletes of what the entry no longer lists (never the organization).
+        if prune {
+            for (_, name) in org_changes(&plan.deletes, K::OrgDomain, slug) {
+                self.domains
+                    .delete(&org, stored_domain(name)?, audit(), ctx)
+                    .await?;
+            }
+            for (_, name) in org_changes(&plan.deletes, K::OrgConnection, slug) {
+                self.connections
+                    .delete_as(tid, owner, stored_conn(name)?, audit(), ctx)
+                    .await?;
+            }
+            for (_, name) in org_changes(&plan.deletes, K::OrgRole, slug) {
+                self.orgs
+                    .delete_role(tenant, &org, name, &actor, ctx)
+                    .await?;
+            }
+        }
+
+        // Branding.
+        let scope = BrandingScope::Org(org.id);
+        let branding_create = of_kind(&plan.creates, K::OrgBranding).any(|c| c.key == slug);
+        let branding_update = of_kind(&plan.updates, K::OrgBranding).find(|c| c.key == slug);
+        if let Some(b) = &o.branding
+            && (branding_create || branding_update.is_some())
+        {
+            let f = branding_update.map(top_fields).unwrap_or_default();
+            if branding_create || f.contains("tokens") || f.contains("custom_css") {
+                self.branding
+                    .put(
+                        tid,
+                        &scope,
+                        BrandingInput {
+                            tokens: b.tokens.clone(),
+                            custom_css: b.custom_css.clone(),
+                        },
+                        audit(),
+                        ctx,
+                    )
+                    .await?;
+            }
+            if branding_create || f.contains("logo") {
+                self.write_logo(tid, &scope, b.logo.as_ref(), audit(), ctx)
+                    .await?;
+            }
+        }
+        if prune && of_kind(&plan.deletes, K::OrgBranding).any(|c| c.key == slug) {
+            self.branding.delete(tid, &scope, audit(), ctx).await?;
         }
         Ok(())
     }
@@ -2905,6 +3993,7 @@ mod tests {
             }),
             webhooks: vec![hook],
             tenant: t,
+            orgs: vec![],
         }
     }
 
@@ -3148,5 +4237,148 @@ mod tests {
             paths(validate_document(&app, &validators())),
             Vec::<String>::new()
         );
+    }
+
+    fn with_orgs(orgs: Value) -> TenantConfigDocument {
+        let mut d = serde_json::to_value(doc()).unwrap();
+        d["organizations"] = orgs;
+        serde_json::from_value(d).unwrap()
+    }
+
+    fn acme_org() -> Value {
+        json!([{
+            "slug": "globex",
+            "display_name": "Globex",
+            "settings": {"default_roles": ["member"]},
+            "roles": [{"name": "member", "permissions": ["docs:read"]}],
+            "connections": [{
+                "slug": "globex-sso",
+                "display_name": "Globex SSO",
+                "enabled": false,
+                "config": {"type": "oidc", "issuer": "https://idp.globex.example.test", "client_id": "anvil"},
+                "secret": {"configured": true},
+            }],
+            "domains": [{"domain": "globex.example.test", "connection": "globex-sso"}],
+            "branding": {"tokens": {"radius_px": 2}},
+        }])
+    }
+
+    #[test]
+    fn config_absent_organizations_plans_nothing_for_them() {
+        let cur = with_orgs(acme_org());
+        let des = doc();
+        let p = plan(&cur, &des, &never_equal);
+        assert!(p.is_empty(), "{p:?}");
+        // An empty list manages organizations but never deletes one.
+        let des = with_orgs(json!([]));
+        assert!(plan(&cur, &des, &never_equal).is_empty());
+    }
+
+    #[test]
+    fn org_objects_plan_by_natural_key_and_the_org_is_never_deleted() {
+        use ConfigObjectKind as K;
+        let des = with_orgs(acme_org());
+        let p = plan(&doc(), &des, &never_equal);
+        let creates: Vec<(K, &str)> = p.creates.iter().map(|c| (c.kind, c.key.as_str())).collect();
+        assert_eq!(
+            creates,
+            [
+                (K::Organization, "globex"),
+                (K::OrgRole, "globex/member"),
+                (K::OrgConnection, "globex/globex-sso"),
+                (K::OrgDomain, "globex/globex.example.test"),
+                (K::OrgBranding, "globex"),
+            ]
+        );
+        assert!(render(&p).contains("+ organization role globex/member"));
+        // The entry without its roles, connections, domains and branding: prune-only deletes of
+        // the owned objects, never of the organization.
+        let mut fewer = serde_json::to_value(&des).unwrap();
+        for k in ["roles", "connections", "domains", "branding"] {
+            fewer["organizations"][0].as_object_mut().unwrap().remove(k);
+        }
+        fewer["organizations"][0]["settings"]["default_roles"] = json!([]);
+        let fewer: TenantConfigDocument = serde_json::from_value(fewer).unwrap();
+        let p = plan(&des, &fewer, &never_equal);
+        let mut deletes: Vec<(K, &str)> =
+            p.deletes.iter().map(|c| (c.kind, c.key.as_str())).collect();
+        deletes.sort();
+        assert_eq!(
+            deletes,
+            [
+                (K::OrgRole, "globex/member"),
+                (K::OrgConnection, "globex/globex-sso"),
+                (K::OrgDomain, "globex/globex.example.test"),
+                (K::OrgBranding, "globex"),
+            ]
+        );
+        assert!(!p.deletes.iter().any(|c| c.kind == K::Organization));
+        assert_eq!(p.updates.len(), 1, "{p:?}");
+        assert_eq!(p.updates[0].kind, K::Organization);
+        // An organization missing from the list is not deleted either.
+        let other = with_orgs(json!([{"slug": "initech", "display_name": "Initech"}]));
+        let p = plan(&des, &other, &never_equal);
+        assert!(p.deletes.is_empty(), "{p:?}");
+        assert_eq!(p.creates[0].kind, K::Organization);
+    }
+
+    const PNG_1X1: &[u8] = &[
+        0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, b'I', b'H', b'D', b'R',
+    ];
+
+    #[test]
+    fn logos_compare_by_hash_absent_keeps_and_null_equals_none() {
+        let sha = logo_hash(PNG_1X1);
+        let mut cur = doc();
+        cur.branding = vec![
+            serde_json::from_value(json!({
+                "logo": {"sha256": sha, "content_type": "image/png"}
+            }))
+            .unwrap(),
+        ];
+        // Absent logo: the stored logo is kept, no change.
+        let mut des = cur.clone();
+        des.branding[0].logo = None;
+        assert!(plan(&cur, &des, &never_equal).is_empty());
+        // The same image inline: no change.
+        des.branding[0].logo = Some(Some(LogoInput::Data {
+            data: anvil_jose::encoding::b64std(PNG_1X1),
+        }));
+        assert!(plan(&cur, &des, &never_equal).is_empty());
+        // null clears it.
+        des.branding[0].logo = Some(None);
+        let p = plan(&cur, &des, &never_equal);
+        assert_eq!(p.updates.len(), 1);
+        assert_eq!(p.updates[0].fields[0].field, "logo");
+        // null against no stored logo: no change.
+        let mut none = cur.clone();
+        none.branding[0].logo = None;
+        assert!(plan(&none, &des, &never_equal).is_empty());
+    }
+
+    #[test]
+    fn decode_logo_applies_the_upload_rules() {
+        let b64 = anvil_jose::encoding::b64std;
+        let (bytes, ty) = decode_logo(&b64(PNG_1X1)).unwrap();
+        assert_eq!((bytes.as_slice(), ty), (PNG_1X1, "image/png"));
+        // Line breaks (YAML block scalars) are ignored.
+        let wrapped = b64(PNG_1X1).chars().fold(String::new(), |mut s, c| {
+            s.push(c);
+            if s.len() % 9 == 0 {
+                s.push('\n');
+            }
+            s
+        });
+        assert!(decode_logo(&wrapped).is_ok());
+        let svg = b64(b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>");
+        assert!(decode_logo(&svg).unwrap_err().contains("PNG, JPEG or WebP"));
+        assert!(decode_logo(&b64(b"plain text")).is_err());
+        assert!(decode_logo("not base64 !!").unwrap_err().contains("base64"));
+        // Too large is refused from the length, before decoding.
+        let big = "A".repeat(MAX_LOGO_BASE64 + 4);
+        assert!(decode_logo(&big).unwrap_err().contains("256 KiB"));
+        let mut over = PNG_1X1.to_vec();
+        over.resize(MAX_LOGO_BYTES + 1, 0);
+        assert!(decode_logo(&b64(&over)).unwrap_err().contains("256 KiB"));
     }
 }

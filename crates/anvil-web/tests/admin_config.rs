@@ -660,10 +660,10 @@ fn rc4_document() -> Value {
                 "slug": "globex-sso",
                 "display_name": "Globex SSO",
                 "enabled": false,
-                "config": {"type": "oidc", "issuer": "https://idp.globex.example.test", "client_id": "anvil"},
+                "config": {"type": "oidc", "issuer": "https://idp.globex-corp.com", "client_id": "anvil"},
                 "secret": {"value": "globex-upstream-secret"},
             }],
-            "domains": [{"domain": "globex.example.test", "connection": "globex-sso", "routing": true}],
+            "domains": [{"domain": "globex-corp.com", "connection": "globex-sso", "routing": true}],
             "branding": {"tokens": {"radius_px": 2}, "logo": {"data": "iVBORw0KGgo="}},
         }],
     })
@@ -940,37 +940,80 @@ async fn assert_org_intact(app: &TestApp, tenant: TenantId, seed: &OrgSeed) {
 }
 
 #[tokio::test]
-async fn config_export_excludes_org_connections_and_org_roles() {
+async fn config_export_lists_org_objects_only_under_organizations() {
     let app = TestApp::new().await;
     let tenant = default_tenant(&app);
     let token = admin_token(&app, "admin:write").await;
     let before = export(&app, &token, "default").await;
+    assert!(before.get("organizations").is_none(), "no orgs, no key");
     seed_org(&app, tenant, "org-admin").await;
     let doc = export(&app, &token, "default").await;
-    assert_eq!(doc, before, "org-owned objects never appear in the export");
+    // The tenant sections are unchanged: org objects never appear there.
+    for k in ["connections", "roles", "clients", "branding"] {
+        assert_eq!(doc[k], before[k], "{k}");
+    }
+    let orgs = doc["organizations"].as_array().expect("organizations");
+    assert_eq!(orgs.len(), 1);
+    let org = &orgs[0];
+    assert_eq!(org["slug"], "acme");
+    assert_eq!(org["roles"][0]["name"], "org-admin");
+    assert_eq!(org["connections"][0]["slug"], "acme-sso");
+    assert_eq!(
+        org["connections"][0]["secret"],
+        json!({"configured": false})
+    );
+    // Runtime data is never exported: no member, link or assignment.
     let text = doc.to_string();
-    assert!(!text.contains("acme-sso"), "{text}");
-    assert!(!text.contains("org-admin"), "{text}");
+    for runtime in ["member@acme.example.test", "acme-user-1"] {
+        assert!(!text.contains(runtime), "{runtime} in {text}");
+    }
+    let mut fields: Vec<&str> = org
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    fields.sort_unstable();
+    assert_eq!(
+        fields,
+        [
+            "branding",
+            "connections",
+            "display_name",
+            "domains",
+            "metadata",
+            "mfa_policy",
+            "roles",
+            "settings",
+            "slug"
+        ]
+    );
 }
 
 #[tokio::test]
-async fn config_plan_never_lists_org_objects_as_deletes() {
+async fn config_tenant_prune_never_plans_org_objects() {
     let app = TestApp::new().await;
     let tenant = default_tenant(&app);
     let token = admin_token(&app, "admin:write").await;
     seed_org(&app, tenant, "org-admin").await;
-    let doc = export(&app, &token, "default").await;
-    let p = plan(&app, &token, "default", &doc).await;
-    assert_eq!(keys(&p["deletes"]), Vec::<String>::new());
-    assert_eq!(keys(&p["creates"]), Vec::<String>::new());
-    assert_eq!(keys(&p["updates"]), Vec::<String>::new());
-    let text = p["text"].as_str().unwrap();
-    assert!(
-        !text.contains("acme-sso") && !text.contains("org-admin"),
-        "{text}"
-    );
+    let mut doc = export(&app, &token, "default").await;
+    // The export plans empty; so does the same document without `organizations` (rc.3 shape).
+    for d in [doc.clone(), {
+        doc.as_object_mut().unwrap().remove("organizations");
+        doc.clone()
+    }] {
+        let p = plan(&app, &token, "default", &d).await;
+        assert_eq!(keys(&p["deletes"]), Vec::<String>::new());
+        assert_eq!(keys(&p["creates"]), Vec::<String>::new());
+        assert_eq!(keys(&p["updates"]), Vec::<String>::new());
+        let text = p["text"].as_str().unwrap();
+        assert!(
+            !text.contains("acme-sso") && !text.contains("org-admin"),
+            "{text}"
+        );
+    }
 
-    // A document reusing the org connection's slug is refused by path, not planned as a create.
+    // A tenant connection reusing the org connection's slug is refused by path, not planned.
     let mut taken = doc.clone();
     taken["connections"] = json!([{
         "slug": "acme-sso",
@@ -991,7 +1034,7 @@ async fn config_plan_never_lists_org_objects_as_deletes() {
 }
 
 #[tokio::test]
-async fn config_apply_prune_keeps_org_connections_and_org_roles() {
+async fn config_tenant_section_prune_keeps_org_objects() {
     let app = TestApp::new().await;
     let tenant = default_tenant(&app);
     let token = admin_token(&app, "admin:write").await;
@@ -1054,6 +1097,222 @@ async fn config_apply_prune_keeps_org_connections_and_org_roles() {
     empty.as_object_mut().unwrap().remove("smtp");
     apply(&app, &token, "default", &empty, true).await;
     assert_org_intact(&app, tenant, &seed).await;
+}
+
+/// A PNG (magic bytes; the server sniffs, it does not decode images) and its base64.
+const PNG: &[u8] = &[
+    0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, b'I', b'H', b'D', b'R', 1, 2,
+];
+
+fn png_b64() -> String {
+    anvil_jose::encoding::b64std(PNG)
+}
+
+/// A tenant document with one organization owning everything the document can carry.
+fn org_doc(mut doc: Value) -> Value {
+    doc["roles"] = json!([{"name": "auditor", "permissions": ["audit:read"]}]);
+    doc["clients"] = json!([{
+        "client_id": "portal",
+        "name": "Portal",
+        "client_type": "public",
+        "application_type": "web",
+        "auth_method": "none",
+        "redirect_uris": ["https://portal.example.test/cb"],
+        "grant_types": ["authorization_code"],
+        "scopes": ["openid"],
+        "client_uri": "https://portal.example.test/",
+        "initiate_login_uri": "https://portal.example.test/login",
+    }]);
+    doc["branding"] = json!([
+        {"tokens": {"radius_px": 3}, "logo": {"data": png_b64()}},
+        {"client_id": "portal", "tokens": {}},
+    ]);
+    doc["organizations"] = json!([{
+        "slug": "globex",
+        "display_name": "Globex",
+        "mfa_policy": "required",
+        "metadata": {"crm": "42"},
+        "settings": {"default_roles": ["member", "auditor"]},
+        "roles": [{"name": "member", "description": "Member", "permissions": ["docs:read"]}],
+        "connections": [{
+            "slug": "globex-sso",
+            "display_name": "Globex SSO",
+            "enabled": false,
+            "config": {"type": "oidc", "issuer": "https://idp.globex-corp.com", "client_id": "anvil"},
+            "secret": {"value": "globex-upstream-secret"},
+        }],
+        "domains": [{"domain": "Globex-Corp.com", "connection": "globex-sso"}],
+        "branding": {"tokens": {"radius_px": 2}, "logo": {"data": png_b64()}},
+    }]);
+    doc
+}
+
+#[tokio::test]
+async fn config_organizations_logos_and_home_urls_round_trip() {
+    let app = TestApp::new().await;
+    let tenant = default_tenant(&app);
+    let token = admin_token(&app, "admin:write").await;
+    let doc = org_doc(export(&app, &token, "default").await);
+    let out = apply(&app, &token, "default", &doc, false).await;
+    let creates = keys(&out["plan"]["creates"]);
+    for k in [
+        "organization globex",
+        "org_role globex/member",
+        "org_connection globex/globex-sso",
+        "org_domain globex/globex-corp.com",
+        "org_branding globex",
+    ] {
+        assert!(creates.contains(&k.to_owned()), "{k}: {creates:?}");
+    }
+
+    let exported = export(&app, &token, "default").await;
+    let org = &exported["organizations"][0];
+    assert_eq!(
+        org["settings"]["default_roles"],
+        json!(["auditor", "member"])
+    );
+    assert_eq!(org["connections"][0]["secret"], json!({"configured": true}));
+    assert_eq!(
+        org["domains"][0],
+        json!({"domain": "globex-corp.com", "connection": "globex-sso", "routing": false, "allow_local_password": true})
+    );
+    let sha = org["branding"]["logo"]["sha256"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(org["branding"]["logo"]["content_type"], "image/png");
+    assert_eq!(exported["branding"][0]["logo"]["sha256"], sha);
+    assert_eq!(
+        exported["clients"][0]["client_uri"],
+        "https://portal.example.test/"
+    );
+    assert!(!exported.to_string().contains("globex-upstream-secret"));
+    assert_eq!(errors(&schema_validator(), &exported), Vec::<String>::new());
+
+    // Through the services: org connection audited with the org, roles stored as ids.
+    let ev = events(&app, tenant).await;
+    assert_eq!(count(&ev, AuditAction::OrganizationCreated), 1);
+    assert_eq!(count(&ev, AuditAction::OrgDomainCreated), 1);
+
+    // Re-applying the export (logos by hash) and the original (logos inline) is a no-op.
+    for d in [&exported, &doc] {
+        let p = plan(&app, &token, "default", d).await;
+        assert_eq!(p["empty"], true, "{}", p["text"]);
+    }
+
+    // Into a fresh tenant: hash references are unknown there, so the images travel inline.
+    let mut fresh = exported.clone();
+    fresh["tenant"]["slug"] = json!("fresh");
+    fresh["tenant"]["host"] = Value::Null;
+    fresh["branding"][0]["logo"] = json!({"data": png_b64()});
+    fresh["organizations"][0]["branding"]["logo"] = json!({"data": png_b64()});
+    fresh["organizations"][0]["connections"][0]["secret"] = json!({"value": "fresh-secret"});
+    apply(&app, &token, "fresh", &fresh, false).await;
+    let again = export(&app, &token, "fresh").await;
+    assert_eq!(again["organizations"], exported["organizations"]);
+    assert_eq!(again["branding"], exported["branding"]);
+    assert_eq!(again["clients"], exported["clients"]);
+    let p = plan(&app, &token, "fresh", &again).await;
+    assert_eq!(p["empty"], true, "{}", p["text"]);
+}
+
+#[tokio::test]
+async fn config_org_prune_removes_owned_objects_of_listed_orgs_only() {
+    let app = TestApp::new().await;
+    let tenant = default_tenant(&app);
+    let token = admin_token(&app, "admin:write").await;
+    let doc = org_doc(export(&app, &token, "default").await);
+    apply(&app, &token, "default", &doc, false).await;
+    let org_id = app
+        .storage()
+        .organizations()
+        .get_by_slug(tenant, "globex")
+        .await
+        .unwrap()
+        .expect("org")
+        .id;
+
+    // The entry without its role, connection, domain and branding.
+    let mut bare = doc.clone();
+    bare["organizations"][0] = json!({
+        "slug": "globex",
+        "display_name": "Globex",
+        "mfa_policy": "required",
+        "metadata": {"crm": "42"},
+        "settings": {"default_roles": ["auditor"]},
+    });
+    // Without prune nothing is deleted.
+    let out = apply(&app, &token, "default", &bare, false).await;
+    assert_eq!(out["pruned"], false);
+    let mut deletes = keys(&out["plan"]["deletes"]);
+    deletes.sort();
+    assert_eq!(
+        deletes,
+        [
+            "org_branding globex",
+            "org_connection globex/globex-sso",
+            "org_domain globex/globex-corp.com",
+            "org_role globex/member",
+        ]
+    );
+    assert_eq!(
+        app.storage()
+            .roles()
+            .list_org_roles(tenant, org_id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    // With prune they go; the organization stays.
+    let out = apply(&app, &token, "default", &bare, true).await;
+    assert_eq!(out["pruned"], true);
+    assert!(
+        app.storage()
+            .roles()
+            .list_org_roles(tenant, org_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        app.storage()
+            .connections()
+            .list_for_org(tenant, org_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        app.storage()
+            .organizations()
+            .list_domains(tenant, org_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        app.storage()
+            .organizations()
+            .get_by_slug(tenant, "globex")
+            .await
+            .unwrap()
+            .is_some(),
+        "organizations are never pruned"
+    );
+    // An empty organizations list with prune deletes no organization.
+    let mut none = bare.clone();
+    none["organizations"] = json!([]);
+    let out = apply(&app, &token, "default", &none, true).await;
+    assert_eq!(keys(&out["plan"]["deletes"]), Vec::<String>::new());
+    assert!(
+        app.storage()
+            .organizations()
+            .get_by_slug(tenant, "globex")
+            .await
+            .unwrap()
+            .is_some()
+    );
 }
 
 #[tokio::test]

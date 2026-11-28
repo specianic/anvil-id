@@ -29,10 +29,13 @@ use anvil_core::service::client::ClientService;
 use anvil_core::service::config::{ApplyOutcome, ApplyRequest, ConfigError, ConfigService, render};
 use anvil_core::service::connection::ConnectionService;
 use anvil_core::service::mail_settings::MailSettingsService;
+use anvil_core::service::org_domain::OrgDomainService;
+use anvil_core::service::organization::OrgService;
 use anvil_core::service::role::RoleService;
 use anvil_core::service::tenant::TenantService;
 use anvil_core::service::webhook::WebhookService;
 use anvil_web::adapters::attribute_schema::JsonSchemaCheck;
+use anvil_web::adapters::dns_txt::HickoryTxtLookup;
 use anvil_web::adapters::upstream::UpstreamHttp;
 use anvil_web::config::AppConfig;
 use anyhow::{Context, bail};
@@ -112,8 +115,8 @@ async fn service(cfg: &Config) -> anyhow::Result<ConfigService> {
             storage: Arc::clone(&storage),
             clock: Arc::clone(&clock),
             kek: Arc::clone(&kek),
-            // SAML connections are never part of tenant YAML.
-            saml_enabled: false,
+            // SAML organization connections follow the operator flag, as in the admin API.
+            saml_enabled: cfg.saml_experimental,
             saml_xml: None,
             // Enabling a generic OIDC connection checks its issuer like the admin API does.
             upstream: Some(Arc::new(UpstreamHttp::new(Arc::clone(&outbound)))),
@@ -136,6 +139,19 @@ async fn service(cfg: &Config) -> anyhow::Result<ConfigService> {
             kek: Arc::clone(&kek),
             clock: Arc::clone(&clock),
             url_check: outbound,
+        },
+        orgs: OrgService {
+            storage: Arc::clone(&storage),
+            clock: Arc::clone(&clock),
+        },
+        // Domain claims only (a document never verifies a domain): the server's DNS resolvers.
+        domains: OrgDomainService {
+            storage: Arc::clone(&storage),
+            clock: Arc::clone(&clock),
+            lookup: Arc::new(
+                HickoryTxtLookup::new(&cfg.domain_verification_resolvers)
+                    .context("invalid configuration: domain_verification_resolvers")?,
+            ),
         },
         mail: MailSettingsService {
             storage,

@@ -657,3 +657,509 @@ async fn config_apply_refuses_admin_scope_on_non_system_client() {
         .unwrap();
     assert_eq!(stored.scopes, vec!["openid"]);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Organizations and logos in the document (07.1-11)
+// ---------------------------------------------------------------------------------------------
+
+const ORG_SECRET: &str = "org-upstream-secret-do-not-leak";
+
+/// A PNG by magic bytes (the server sniffs, it does not decode images).
+const PNG: &[u8] = &[
+    0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, b'I', b'H', b'D', b'R', 7,
+];
+
+fn b64(bytes: &[u8]) -> String {
+    anvil_jose::encoding::b64std(bytes)
+}
+
+async fn apply_ok(app: &TestApp, token: &str, doc: &Value, prune: bool) -> Value {
+    let query = if prune { "?prune=true" } else { "" };
+    let resp = post(
+        app,
+        Some(token),
+        &format!("{API}/tenants/default/config/apply{query}"),
+        doc,
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    body_json(&resp)
+}
+
+fn fields_of(body: &Value) -> Vec<String> {
+    body["errors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["field"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// An organization `acme` with an enabled OIDC connection `acme-sso`, seeded through storage
+/// (enabling through a service would fetch the issuer's discovery document).
+async fn seed_org_with_connection(app: &TestApp, tenant: TenantId) -> anvil_core::model::OrgId {
+    use anvil_core::model::{ConnectionId, NewConnection, NewOrganization, OrgId};
+    let now = app.clock_now();
+    let org = app
+        .storage()
+        .organizations()
+        .create(
+            tenant,
+            &NewOrganization {
+                id: OrgId::new_v7(),
+                slug: "acme".into(),
+                display_name: "Acme".into(),
+                mfa_policy: None,
+                settings: Default::default(),
+                metadata: json!({}),
+                created_at: now,
+            },
+        )
+        .await
+        .expect("org");
+    app.storage()
+        .connections()
+        .create(
+            tenant,
+            &NewConnection {
+                id: ConnectionId::new_v7(),
+                org_id: Some(org.id),
+                slug: "acme-sso".into(),
+                display_name: "Acme SSO".into(),
+                enabled: true,
+                config: serde_json::from_value(json!({
+                    "type": "oidc",
+                    "issuer": "https://idp.acme-corp.com",
+                    "client_id": "anvil",
+                }))
+                .expect("oidc config"),
+                secret_enc: None,
+                trust_email_verified: false,
+                created_at: now,
+            },
+        )
+        .await
+        .expect("org connection");
+    org.id
+}
+
+#[tokio::test]
+async fn config_cannot_mark_domain_verified() {
+    use anvil_core::model::OrgDomainStatus;
+    use anvil_core::policy::domain_verification::{record_name, record_value};
+    let app = TestApp::new().await;
+    let tenant = default_tenant(&app);
+    let token = admin_token(&app, "admin:write").await;
+    let org = seed_org_with_connection(&app, tenant).await;
+    let mut doc = export(&app, &token, "default").await;
+    doc["organizations"][0]["domains"] = json!([
+        {"domain": "acme-corp.com", "connection": "acme-sso", "routing": true},
+        {"domain": "acme-corp.net"},
+    ]);
+
+    // Any verification field is an unknown key: refused, nothing written.
+    for (key, value) in [
+        ("verified", json!(true)),
+        ("status", json!("verified")),
+        ("token", json!("anvil-domain-verification=attacker")),
+        ("verified_at", json!("2026-01-01T00:00:00Z")),
+        ("last_checked_at", json!("2026-01-01T00:00:00Z")),
+    ] {
+        let mut bad = doc.clone();
+        bad["organizations"][0]["domains"][0][key] = value;
+        let resp = post(
+            &app,
+            Some(&token),
+            &format!("{API}/tenants/default/config/apply"),
+            &bad,
+        )
+        .await;
+        let body = assert_problem(&resp, 422);
+        assert!(body.to_string().contains(key), "{key}: {body}");
+    }
+    let domains = app.storage().organizations();
+    assert!(domains.list_domains(tenant, org).await.unwrap().is_empty());
+
+    // Applied: pending claims with fresh tokens; routing held back until DNS verification.
+    apply_ok(&app, &token, &doc, false).await;
+    let claims = domains.list_domains(tenant, org).await.unwrap();
+    assert_eq!(claims.len(), 2);
+    for c in &claims {
+        assert_eq!(c.status, OrgDomainStatus::Pending, "{}", c.domain);
+        assert!(c.verified_at.is_none());
+        assert!(!c.routing, "routing inactive until verified");
+        assert!(!c.token.is_empty());
+    }
+    assert_ne!(claims[0].token, claims[1].token, "a fresh token per claim");
+    let com = claims.iter().find(|c| c.domain == "acme-corp.com").unwrap();
+    assert!(com.connection_id.is_some(), "the routing target is set");
+    // The export carries neither the status nor the token.
+    let exported = export(&app, &token, "default").await;
+    let text = exported.to_string();
+    assert!(
+        !text.contains(&com.token) && !text.contains("pending"),
+        "{text}"
+    );
+    // Re-applying plans nothing (the held-back routing is no pending change).
+    let p = post(
+        &app,
+        Some(&token),
+        &format!("{API}/tenants/default/config/plan"),
+        &doc,
+    )
+    .await;
+    assert_eq!(body_json(&p)["empty"], true, "{}", p.text());
+
+    // After verification through DNS, the next apply turns routing on.
+    app.txt()
+        .set(&record_name(&com.domain), &[&record_value(&com.token)]);
+    let resp = call(
+        &app,
+        Method::POST,
+        &format!(
+            "{API}/tenants/default/organizations/acme/domains/{}/verify",
+            com.id
+        ),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let out = apply_ok(&app, &token, &doc, false).await;
+    assert_eq!(out["plan"]["updates"][0]["key"], "acme/acme-corp.com");
+    let claims = domains.list_domains(tenant, org).await.unwrap();
+    let com = claims.iter().find(|c| c.domain == "acme-corp.com").unwrap();
+    assert!(com.routing && com.status == OrgDomainStatus::Verified);
+    let net = claims.iter().find(|c| c.domain == "acme-corp.net").unwrap();
+    assert_eq!(
+        net.status,
+        OrgDomainStatus::Pending,
+        "the other claim is untouched"
+    );
+}
+
+#[tokio::test]
+async fn config_absent_organizations_touches_nothing_even_with_prune() {
+    use anvil_core::model::BrandingScope;
+    let app = TestApp::new().await;
+    let tenant = default_tenant(&app);
+    let token = admin_token(&app, "admin:write").await;
+    // An rc.3-shaped document: no organizations, tenant branding without a logo key.
+    let mut rc3 = with_secrets(export(&app, &token, "default").await);
+    rc3["branding"] = json!([{"tokens": {"radius_px": 4}}]);
+    apply_ok(&app, &token, &rc3, false).await;
+    assert!(
+        export(&app, &token, "default")
+            .await
+            .get("organizations")
+            .is_none()
+    );
+
+    let mut doc = export(&app, &token, "default").await;
+    doc["branding"][0]["logo"] = json!({"data": b64(PNG)});
+    doc["organizations"] = json!([{
+        "slug": "globex",
+        "display_name": "Globex",
+        "roles": [{"name": "member", "permissions": ["docs:read"]}],
+        "connections": [{
+            "slug": "globex-sso",
+            "display_name": "Globex SSO",
+            "enabled": false,
+            "config": {"type": "oidc", "issuer": "https://idp.globex-corp.com", "client_id": "anvil"},
+            "secret": {"value": ORG_SECRET},
+        }],
+        "domains": [{"domain": "globex-corp.com"}],
+        "branding": {"tokens": {"radius_px": 2}, "logo": {"data": b64(PNG)}},
+    }]);
+    apply_ok(&app, &token, &doc, false).await;
+    let org = app
+        .storage()
+        .organizations()
+        .get_by_slug(tenant, "globex")
+        .await
+        .unwrap()
+        .expect("org")
+        .id;
+
+    // The rc.3 document with prune deletes nothing it did not delete before (nothing), keeps
+    // the tenant logo and every organization object.
+    let out = apply_ok(&app, &token, &rc3, true).await;
+    assert_eq!(out["plan"]["deletes"], json!([]), "{}", out["plan"]["text"]);
+    assert_eq!(out["plan"]["empty"], true, "{}", out["plan"]["text"]);
+    let storage = app.storage();
+    assert_eq!(
+        storage
+            .roles()
+            .list_org_roles(tenant, org)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        storage
+            .connections()
+            .list_for_org(tenant, org)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        storage
+            .organizations()
+            .list_domains(tenant, org)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    let org_branding = storage
+        .branding()
+        .get(tenant, &BrandingScope::Org(org).scope_key())
+        .await
+        .unwrap()
+        .expect("org branding kept");
+    assert!(org_branding.logo_sha256.is_some());
+    let tenant_branding = storage
+        .branding()
+        .get(tenant, &BrandingScope::Tenant.scope_key())
+        .await
+        .unwrap()
+        .expect("tenant branding kept");
+    assert!(
+        tenant_branding.logo_sha256.is_some(),
+        "absent logo keeps the logo"
+    );
+}
+
+#[tokio::test]
+async fn config_org_connection_secret_is_write_only() {
+    let app = TestApp::new().await;
+    let tenant = default_tenant(&app);
+    let token = admin_token(&app, "admin:write").await;
+    let mut doc = export(&app, &token, "default").await;
+    doc["organizations"] = json!([{
+        "slug": "globex",
+        "display_name": "Globex",
+        "connections": [{
+            "slug": "globex-sso",
+            "display_name": "Globex SSO",
+            "enabled": false,
+            "config": {"type": "oidc", "issuer": "https://idp.globex-corp.com", "client_id": "anvil"},
+            "secret": {"value": ORG_SECRET},
+        }],
+    }]);
+    let out = apply_ok(&app, &token, &doc, false).await;
+    assert!(!out.to_string().contains(ORG_SECRET));
+    let exported = export(&app, &token, "default").await;
+    assert_eq!(
+        exported["organizations"][0]["connections"][0]["secret"],
+        json!({"configured": true})
+    );
+    assert!(!exported.to_string().contains(ORG_SECRET));
+    let audit = format!("{:?}", events(&app, tenant).await);
+    assert!(!audit.contains(ORG_SECRET));
+    // The same inline value is no change; another one changes without printing either.
+    let p = post(
+        &app,
+        Some(&token),
+        &format!("{API}/tenants/default/config/plan"),
+        &doc,
+    )
+    .await;
+    assert_eq!(body_json(&p)["empty"], true, "{}", p.text());
+    doc["organizations"][0]["connections"][0]["secret"] = json!({"value": "another-org-secret"});
+    let p = body_json(
+        &post(
+            &app,
+            Some(&token),
+            &format!("{API}/tenants/default/config/plan"),
+            &doc,
+        )
+        .await,
+    );
+    let text = p["text"].as_str().unwrap();
+    assert!(text.contains("secret: (secret changed)"), "{text}");
+    assert!(!p.to_string().contains("another-org-secret"));
+    // A reference is resolved by the CLI only.
+    doc["organizations"][0]["connections"][0]["secret"] = json!({"env": "HOME"});
+    let resp = post(
+        &app,
+        Some(&token),
+        &format!("{API}/tenants/default/config/apply"),
+        &doc,
+    )
+    .await;
+    let body = assert_problem(&resp, 422);
+    assert_eq!(fields_of(&body), ["organizations[0].connections[0].secret"]);
+}
+
+#[tokio::test]
+async fn config_logo_refusals_name_the_path() {
+    let app = TestApp::new().await;
+    let tenant = default_tenant(&app);
+    let token = admin_token(&app, "admin:write").await;
+    let base = export(&app, &token, "default").await;
+    let svg = b64(br#"<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>"#);
+    let mut big = PNG.to_vec();
+    big.resize(256 * 1024 + 1, 0);
+    let unknown = "ab".repeat(32);
+    let tenant_logo = |logo: Value| {
+        let mut d = base.clone();
+        d["branding"] = json!([{"tokens": {}, "logo": logo}]);
+        d
+    };
+    let org_logo = |logo: Value| {
+        let mut d = base.clone();
+        d["organizations"] =
+            json!([{"slug": "globex", "display_name": "Globex", "branding": {"logo": logo}}]);
+        d
+    };
+    let cases = [
+        (
+            tenant_logo(json!({"data": svg})),
+            "branding[0].logo",
+            "PNG, JPEG or WebP",
+        ),
+        (
+            org_logo(json!({"data": b64(b"just text")})),
+            "organizations[0].branding.logo",
+            "PNG, JPEG or WebP",
+        ),
+        (
+            tenant_logo(json!({"data": b64(&big)})),
+            "branding[0].logo",
+            "256 KiB",
+        ),
+        (
+            tenant_logo(json!({"data": "not base64!"})),
+            "branding[0].logo",
+            "base64",
+        ),
+        (
+            tenant_logo(json!({"sha256": unknown, "content_type": "image/png"})),
+            "branding[0].logo",
+            "unknown logo hash",
+        ),
+        (
+            org_logo(json!({"sha256": unknown, "content_type": "image/png"})),
+            "organizations[0].branding.logo",
+            "unknown logo hash",
+        ),
+        (
+            tenant_logo(json!({"sha256": "ABC", "content_type": "image/svg+xml"})),
+            "branding[0].logo.sha256",
+            "SHA-256",
+        ),
+        (
+            tenant_logo(json!({"file": "logo.png"})),
+            "branding[0].logo",
+            "anvilid CLI",
+        ),
+    ];
+    let before = events(&app, tenant).await.len();
+    for (doc, path, message) in cases {
+        for op in ["plan", "apply"] {
+            let resp = post(
+                &app,
+                Some(&token),
+                &format!("{API}/tenants/default/config/{op}"),
+                &doc,
+            )
+            .await;
+            let body = assert_problem(&resp, 422);
+            let issue = body["errors"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|e| e["field"] == path)
+                .unwrap_or_else(|| panic!("{path}: {body}"));
+            assert!(
+                issue["message"].as_str().unwrap().contains(message),
+                "{path}: {body}"
+            );
+        }
+    }
+    // Nothing was written.
+    assert_eq!(events(&app, tenant).await.len(), before);
+    assert!(
+        app.storage()
+            .organizations()
+            .get_by_slug(tenant, "globex")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn config_system_tenant_refuses_organizations() {
+    let app = TestApp::new().await;
+    let token = admin_token(&app, "admin:write").await;
+    let base = export(&app, &token, "system").await;
+    assert!(base.get("organizations").is_none());
+    for orgs in [json!([]), json!([{"slug": "ops", "display_name": "Ops"}])] {
+        let mut doc = base.clone();
+        doc["organizations"] = orgs;
+        for op in ["plan", "apply"] {
+            let resp = post(
+                &app,
+                Some(&token),
+                &format!("{API}/tenants/system/config/{op}"),
+                &doc,
+            )
+            .await;
+            let body = assert_problem(&resp, 422);
+            assert_eq!(fields_of(&body), ["organizations"], "{body}");
+        }
+    }
+    assert!(
+        app.storage()
+            .organizations()
+            .get_by_slug(system(&app), "ops")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn config_client_home_urls_use_the_shared_rule() {
+    let app = TestApp::new().await;
+    let tenant = default_tenant(&app);
+    let token = admin_token(&app, "admin:write").await;
+    let mut doc = export(&app, &token, "default").await;
+    doc["clients"] = json!([{
+        "client_id": "portal",
+        "name": "Portal",
+        "client_type": "public",
+        "application_type": "web",
+        "auth_method": "none",
+        "redirect_uris": ["https://portal.example.test/cb"],
+        "grant_types": ["authorization_code"],
+        "scopes": ["openid"],
+        "client_uri": "javascript:alert(1)",
+        "initiate_login_uri": "https://user:pw@portal.example.test/login#x",
+    }]);
+    let resp = post(
+        &app,
+        Some(&token),
+        &format!("{API}/tenants/default/config/apply"),
+        &doc,
+    )
+    .await;
+    let body = assert_problem(&resp, 422);
+    assert_eq!(
+        fields_of(&body),
+        ["clients[0].client_uri", "clients[0].initiate_login_uri"]
+    );
+    assert!(
+        app.storage()
+            .clients()
+            .get(tenant, "portal")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}

@@ -28,6 +28,7 @@ use anvil_core::service::config::{
 };
 use anvil_core::service::connection::ConnectionService;
 use anvil_core::service::mail_settings::MailSettingsService;
+use anvil_core::service::org_domain::OrgDomainService;
 use anvil_core::service::role::RoleService;
 use axum::extract::{Path, State};
 use axum::http::{HeaderValue, StatusCode, header};
@@ -73,6 +74,12 @@ impl AppState {
                 checker: Arc::new(anvil_mail::TemplateChecker),
                 tester: Arc::new(anvil_mail::LettreSmtpTester::default()),
             },
+            orgs: self.admin_orgs(),
+            domains: OrgDomainService {
+                storage: self.storage_arc(),
+                clock: self.clock_arc(),
+                lookup: self.domain_txt_arc(),
+            },
             installation_smtp: self.config().installation_smtp,
             dev_mode: self.config().dev_mode(),
         })
@@ -115,10 +122,12 @@ pub struct ConfigFieldDiff {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ConfigChangeDto {
     /// `tenant`, `client`, `connection`, `branding`, `role`, `attribute`, `email_template`,
-    /// `smtp` or `webhook`.
+    /// `smtp`, `webhook`, `organization`, `org_role`, `org_connection`, `org_domain` or
+    /// `org_branding`.
     pub kind: String,
     /// The natural key (`client_id`, slug, name, template kind, `(tenant)` for tenant-wide
-    /// branding, `smtp`).
+    /// branding, `smtp`; organization objects `{org slug}/{name}`, organization and its branding
+    /// the org slug).
     pub key: String,
     pub fields: Vec<ConfigFieldDiff>,
 }
@@ -254,15 +263,21 @@ fn issue(path: impl Into<String>, message: impl Into<String>) -> ConfigIssue {
     }
 }
 
-/// Secret fields holding a reference (`{env: …}` / `{file: …}`) instead of an inline value.
-/// The server never resolves them.
+/// Secret fields holding a reference (`{env: …}` / `{file: …}`) instead of an inline value,
+/// and logos holding a `{file: …}` reference. The server never resolves them.
 fn secret_references(body: &Value) -> Vec<ConfigIssue> {
     let is_reference = |v: Option<&Value>| {
         v.and_then(Value::as_object)
             .is_some_and(|o| o.contains_key("env") || o.contains_key("file"))
     };
+    let is_file = |v: Option<&Value>| {
+        v.and_then(Value::as_object)
+            .is_some_and(|o| o.contains_key("file"))
+    };
     let message = "secret references ({env: …}, {file: …}) are resolved by the anvilid CLI; \
                    the API accepts inline secrets ({value: …}) only";
+    let logo_message = "logo file references ({file: …}) are resolved by the anvilid CLI; the \
+                        API accepts {data: <base64>} or {sha256, content_type}";
     let mut out = Vec::new();
     for section in ["clients", "connections", "webhooks"] {
         if let Some(items) = body.get(section).and_then(Value::as_array) {
@@ -275,6 +290,33 @@ fn secret_references(body: &Value) -> Vec<ConfigIssue> {
     }
     if is_reference(body.get("smtp").and_then(|s| s.get("password"))) {
         out.push(issue("smtp.password", message));
+    }
+    if let Some(items) = body.get("branding").and_then(Value::as_array) {
+        for (i, item) in items.iter().enumerate() {
+            if is_file(item.get("logo")) {
+                out.push(issue(format!("branding[{i}].logo"), logo_message));
+            }
+        }
+    }
+    if let Some(orgs) = body.get("organizations").and_then(Value::as_array) {
+        for (i, org) in orgs.iter().enumerate() {
+            if let Some(items) = org.get("connections").and_then(Value::as_array) {
+                for (j, item) in items.iter().enumerate() {
+                    if is_reference(item.get("secret")) {
+                        out.push(issue(
+                            format!("organizations[{i}].connections[{j}].secret"),
+                            message,
+                        ));
+                    }
+                }
+            }
+            if is_file(org.get("branding").and_then(|b| b.get("logo"))) {
+                out.push(issue(
+                    format!("organizations[{i}].branding.logo"),
+                    logo_message,
+                ));
+            }
+        }
     }
     out
 }
