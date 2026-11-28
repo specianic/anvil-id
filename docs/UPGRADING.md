@@ -604,7 +604,7 @@ See [CONFIG-YAML.md](CONFIG-YAML.md).
   link to the console (it was a 403). Before setup an unknown token is still refused.
 - **Root page:** `/` and `/ui` show sign-in, the account and (system tenant) the console.
 - **Look:** the default theme uses the new palette and self-hosts its fonts (`font-src 'self'`).
-  Stored themes keep their colours; see [the theme README](../themes/default/README.md) for the
+  Stored themes keep their colours; see [the theme README](https://github.com/specianic/anvil-id/blob/main/themes/default/README.md) for the
   selector contract, the new CSS variables and the new templates. Themes that override templates
   should compare them with the new defaults.
 

@@ -98,6 +98,47 @@ async fn fresh_database() -> String {
     format!("{server}/{db}")
 }
 
+/// Drops a `fresh_database` when a contract test ends. The upgraded-contract modules create one
+/// database per test (hundreds per run); kept until the container stops, they exhaust the
+/// container's tmpfs on CI runners ("No space left on device"). `TestStorage` drops its storage
+/// (and with it the pool) before this guard, and `WITH (FORCE)` ends any connection left over.
+struct DropDatabase(String);
+
+impl Drop for DropDatabase {
+    fn drop(&mut self) {
+        let Some((server, db)) = self.0.rsplit_once('/') else {
+            return;
+        };
+        if !db.starts_with("upgrade_") {
+            return;
+        }
+        let (server, db) = (server.to_owned(), db.to_owned());
+        // Drop runs inside the test's runtime, which cannot be blocked on; a short-lived thread
+        // with its own runtime does the cleanup. Best effort: a failure only leaves the database
+        // until the container stops.
+        let _ = std::thread::spawn(move || {
+            let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            else {
+                return;
+            };
+            rt.block_on(async {
+                if let Ok(mut admin) = PgConnection::connect(&format!("{server}/postgres")).await {
+                    // `db` is built only from a UUID's hex digits (checked prefix above).
+                    let _ = sqlx::query(sqlx::AssertSqlSafe(format!(
+                        "DROP DATABASE IF EXISTS {db} WITH (FORCE)"
+                    )))
+                    .execute(&mut admin)
+                    .await;
+                    let _ = admin.close().await;
+                }
+            });
+        })
+        .join();
+    }
+}
+
 struct Upgraded {
     storage: PostgresStorage,
     kid: String,
@@ -1348,7 +1389,7 @@ pub async fn upgraded_postgres() -> TestStorage {
     }
     TestStorage {
         storage: Arc::new(up.storage),
-        _guard: Box::new(up.url),
+        _guard: Box::new(DropDatabase(up.url)),
     }
 }
 
@@ -1824,7 +1865,7 @@ pub async fn upgraded_beta1_postgres() -> TestStorage {
     }
     TestStorage {
         storage: Arc::new(up.storage),
-        _guard: Box::new(up.url),
+        _guard: Box::new(DropDatabase(up.url)),
     }
 }
 
@@ -2072,7 +2113,7 @@ pub async fn upgraded_rc3_postgres() -> TestStorage {
     }
     TestStorage {
         storage: Arc::new(up.storage),
-        _guard: Box::new(up.url),
+        _guard: Box::new(DropDatabase(up.url)),
     }
 }
 
