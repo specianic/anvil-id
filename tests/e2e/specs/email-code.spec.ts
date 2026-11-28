@@ -174,10 +174,12 @@ test('magic link opened in another browser does not sign that browser in', async
     await expect(otherPage.locator('form#magic-link')).toHaveCount(0);
     await expect(otherPage.locator('#link-login')).toHaveText('Start signing in again here');
     await expectNoA11yViolations(otherPage);
-    await expectNoSession(otherPage, tenant);
     // Start again leads to this tenant's sign-in page.
     await otherPage.locator('#link-login').click();
+    await expect(otherPage).toHaveURL((url) => url.pathname.endsWith(`/t/${tenant.slug}/ui/login`));
     await expect(otherPage.locator('form#login')).toBeVisible();
+    // Opening the link signed nothing in here (expectNoSession navigates away, so it comes last).
+    await expectNoSession(otherPage, tenant);
   } finally {
     await other.close();
   }
