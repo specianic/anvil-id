@@ -8,8 +8,12 @@
 //! | `POST /ui/account/security/passkey?flow=` | finishes the passkey registration |
 //! | `POST /ui/account/security/totp?flow=` | starts TOTP enrolment (QR code + key) |
 //! | `POST /ui/account/security/totp/confirm?flow=` | confirms it; shows the recovery codes once |
-//! | `POST /ui/account/security/recovery-codes?flow=` | new recovery codes (old set invalidated) |
-//! | `POST /ui/account/security/credentials/{id}/delete?flow=` | removes a passkey or the TOTP |
+//! | `POST /ui/account/security/recovery-codes?flow=` | new recovery codes (old set invalidated); confirmation step first |
+//! | `POST /ui/account/security/credentials/{id}/delete?flow=` | removes a passkey or the TOTP; confirmation step first |
+//!
+//! The two destructive POSTs answer without `confirm=yes` with the confirmation step
+//! ([`super::account_confirm`]) after checking the binding and the recent sign-in; nothing changes
+//! until the confirmed POST.
 //!
 //! Without a session every route answers 303 to the sign-in page (the options endpoint: 401
 //! JSON). Every POST is behind the Fetch-Metadata layer and must carry the flow cookie and the
@@ -39,6 +43,7 @@ use secrecy::ExposeSecret as _;
 use serde::{Deserialize, Serialize};
 
 use super::account_attributes::attributes_nav_or_page;
+use super::account_confirm::{Confirmation, Destructive, confirm_page, confirmed};
 use super::consent::{PageMessage, account_locale, localized};
 use super::format::{human, iso};
 use super::login::{UiQuery, csrf_page, rejected_form, rejection_is_too_large};
@@ -94,6 +99,8 @@ struct SecurityForm {
     label: Option<String>,
     response: Option<String>,
     code: Option<String>,
+    /// `yes` on the confirmed POST of a destructive action.
+    confirm: Option<String>,
 }
 
 /// A submission resolved to its session, page locale and settings flow binding.
@@ -175,6 +182,17 @@ pub(crate) struct AccountHeader {
 }
 
 impl AccountHeader {
+    /// `?client_id=…` of a resolved static client (or ""): what account links and redirects
+    /// carry so "Back to &lt;app&gt;" survives them. Never an unresolved value.
+    pub(crate) fn client_query(&self) -> &str {
+        &self.nav_query
+    }
+
+    /// [`Self::client_query`] to append to a URL that already has a query (`&client_id=…`).
+    pub(crate) fn client_query_tail(&self) -> String {
+        self.nav_query.replacen('?', "&", 1)
+    }
+
     /// The template value (`account_header`).
     pub(crate) fn value(&self) -> minijinja::Value {
         minijinja::Value::from(minijinja::value::Serde(self))
@@ -582,6 +600,36 @@ fn render_codes(
     )
 }
 
+/// The confirmation step of a destructive POST without `confirm=yes`, after the handler checked
+/// the binding, the recent sign-in and the target (a refusal is shown like the action's own).
+/// Changes nothing.
+async fn ask(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    sub: &Submission,
+    action: Destructive,
+    subject: String,
+    post_url: String,
+) -> Response {
+    let resp = confirm_page(
+        state,
+        tenant,
+        &sub.locale,
+        Confirmation {
+            action,
+            subject,
+            section: "security",
+            title_key: "title.account_security",
+            post_url,
+            csrf: &sub.csrf,
+            cancel_url: tenant.ui_url(PAGE),
+            header: &sub.header,
+        },
+    )
+    .await;
+    with_headers(resp)
+}
+
 // ---------------------------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------------------------
@@ -846,6 +894,32 @@ async fn recovery_codes(
         Ok(s) => s,
         Err(resp) => return *resp,
     };
+    if !confirmed(form.confirm.as_deref()) {
+        // Binding and recent sign-in first, then the enrolled TOTP the codes belong to.
+        let service = state.ui_account_service();
+        if let Err(e) = service
+            .check_change(tenant.tenant.id, &sub.session, &sub.binding())
+            .await
+        {
+            return refused(&state, &tenant, &sub, e).await;
+        }
+        match service.overview(tenant.tenant.id, &sub.session).await {
+            Ok(o) if o.totp.is_some() => {}
+            Ok(_) => {
+                return refused(&state, &tenant, &sub, AccountFailure::TotpRequired.into()).await;
+            }
+            Err(e) => return core_error_page_in(&state, Some(&tenant), &sub.locale, &e),
+        }
+        return ask(
+            &state,
+            &tenant,
+            &sub,
+            Destructive::RegenerateRecoveryCodes,
+            String::new(),
+            flow_url(&tenant, "/ui/account/security/recovery-codes", sub.flow_id),
+        )
+        .await;
+    }
     // Computed before the change, so a failure here never loses its one-time result.
     let attributes_nav = match attributes_nav_or_page(&state, &tenant, &sub.locale).await {
         Ok(f) => f,
@@ -900,6 +974,46 @@ async fn remove_credential(
         )
         .await;
     };
+    if !confirmed(form.confirm.as_deref()) {
+        let service = state.ui_account_service();
+        // The binding first: an unbound request learns nothing about the credential.
+        if let Err(e) = service
+            .check_change(tenant.tenant.id, &sub.session, &sub.binding())
+            .await
+        {
+            return refused(&state, &tenant, &sub, e).await;
+        }
+        let overview = match service.overview(tenant.tenant.id, &sub.session).await {
+            Ok(o) => o,
+            Err(e) => return core_error_page_in(&state, Some(&tenant), &sub.locale, &e),
+        };
+        let (action, subject) = if overview.totp.as_ref().is_some_and(|t| t.id == id) {
+            (Destructive::RemoveTotp, String::new())
+        } else if let Some(p) = overview.passkeys.iter().find(|p| p.id == id) {
+            (Destructive::RemovePasskey, p.label.clone())
+        } else {
+            return refused(
+                &state,
+                &tenant,
+                &sub,
+                AccountFailure::CredentialNotFound.into(),
+            )
+            .await;
+        };
+        return ask(
+            &state,
+            &tenant,
+            &sub,
+            action,
+            subject,
+            flow_url(
+                &tenant,
+                &format!("/ui/account/security/credentials/{id}/delete"),
+                sub.flow_id,
+            ),
+        )
+        .await;
+    }
     match state
         .ui_account_service()
         .remove_credential(&tenant.tenant, &sub.session, &sub.binding(), id, &ctx)

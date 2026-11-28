@@ -27,7 +27,9 @@
 //! `attr.{name}`; an empty text, select or number field removes the value. A submission naming
 //! an attribute that is not editable on this page (not `user_editable`, or a read-only shape) is
 //! refused (400, nothing saved); one naming an unknown attribute or a value the schema rejects
-//! re-renders the form (400) with the failing fields marked. Validation itself is the core
+//! shows the form again (400) with the failing fields marked. Refusals follow Post/Redirect/Get
+//! (07.1-21): `303` to `GET ?flow=` with a sealed one-shot flash (messages, failing fields and
+//! the typed values) that the `GET` shows on a fresh flow. Validation itself is the core
 //! service's (one implementation for the account page and the admin API).
 //!
 //! The navigation entry is shown when the tenant defines at least one user-editable attribute
@@ -53,6 +55,7 @@ use serde_json::{Map, Value};
 
 use super::account_security::{account_header, client_id_param};
 use super::consent::{PageMessage, account_locale, current_session, localized, no_store};
+use super::flash::{self, Flash, FlashValues};
 use super::login::{UiQuery, csrf_page, rejected_form};
 use super::nav::{AccountSection, NavContext};
 use crate::errors::core_error_page_in;
@@ -63,6 +66,9 @@ use crate::state::AppState;
 use crate::tenant::ResolvedTenant;
 
 const PAGE: &str = "/ui/account/attributes";
+
+/// The form id (the flash belongs to it).
+const FORM_ID: &str = "attributes-form";
 
 /// Prefix of the attribute form fields.
 const FIELD_PREFIX: &str = "attr.";
@@ -533,7 +539,11 @@ async fn render(
         account_header => header.value(),
         csrf_token => &bound.csrf,
         messages => minijinja::Value::from(minijinja::value::Serde(&messages)),
-        action => tenant.ui_url(&format!("{PAGE}?flow={}", bound.flow_id)),
+        action => tenant.ui_url(&format!(
+            "{PAGE}?flow={}{}",
+            bound.flow_id,
+            header.client_query_tail()
+        )),
         fields => minijinja::Value::from(minijinja::value::Serde(&fields)),
         editable => fields.iter().any(|f| f.kind != "readonly"),
     };
@@ -562,25 +572,93 @@ async fn show(
         Ok(s) => s,
         Err(resp) => return *resp,
     };
-    let bound = match start_flow(&state, &tenant, &loc, &session).await {
+    let mut bound = match start_flow(&state, &tenant, &loc, &session).await {
         Ok(b) => b,
         Err(resp) => return *resp,
     };
-    render(
+    // The flash of a refused POST (`?flow=`): its messages, marked fields and typed values.
+    let (flash, out) = flash::take_account(
         &state,
-        &tenant,
-        &loc,
-        &session,
-        bound,
-        Overlay {
-            client_id: client_id_param(query.as_deref()),
-            ..Overlay::default()
-        },
-        StatusCode::OK,
-    )
-    .await
+        &tenant.tenant,
+        query.as_deref(),
+        FORM_ID,
+        &jar,
+        std::mem::take(&mut bound.jar),
+    );
+    bound.jar = out;
+    let client_id = client_id_param(query.as_deref());
+    let (overlay, status) = match flash {
+        Some(f) => (
+            Overlay {
+                typed: f.values().attributes.clone(),
+                errors: f.error_fields().map(str::to_owned).collect(),
+                messages: f
+                    .page_messages()
+                    .map(|(e, k)| PageMessage::from_flash(e, k))
+                    .collect(),
+                client_id,
+            },
+            f.status()
+                .and_then(|s| StatusCode::from_u16(s).ok())
+                .unwrap_or(StatusCode::BAD_REQUEST),
+        ),
+        None => (
+            Overlay {
+                client_id,
+                ..Overlay::default()
+            },
+            StatusCode::OK,
+        ),
+    };
+    render(&state, &tenant, &loc, &session, bound, overlay, status).await
 }
 
+/// A refused submission: `303` to the page's `GET ?flow=` with `key`, the failing `fields` and
+/// the `typed` values in the flash, carrying the resolved client.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the refusal and the request it answers"
+)]
+async fn refused_redirect(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    loc: &Locale,
+    session: &BrowserSession,
+    flow: FlowId,
+    client_id: Option<&str>,
+    key: &str,
+    fields: &BTreeSet<String>,
+    typed: BTreeMap<String, String>,
+) -> Response {
+    let header = match account_header(state, tenant, loc, session, client_id).await {
+        Ok(h) => h,
+        Err(page) => return *page,
+    };
+    let fields: Vec<String> = fields.iter().cloned().collect();
+    flash::account_redirect(
+        state,
+        tenant,
+        loc,
+        PAGE,
+        flow,
+        header.client_query(),
+        Flash::account(
+            FORM_ID,
+            &[(true, key)],
+            &fields,
+            FlashValues {
+                attributes: typed,
+                ..FlashValues::default()
+            },
+            StatusCode::BAD_REQUEST.as_u16(),
+        ),
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "axum handler: one argument per extractor"
+)]
 async fn submit(
     State(state): State<AppState>,
     tenant: ResolvedTenant,
@@ -588,6 +666,7 @@ async fn submit(
     jar: CookieJar,
     AuditContext(ctx): AuditContext,
     Query(q): Query<UiQuery>,
+    RawQuery(raw): RawQuery,
     form: Result<Form<Vec<(String, String)>>, FormRejection>,
 ) -> Response {
     let pairs = match form {
@@ -615,10 +694,29 @@ async fn submit(
         cookie_token: cookie.as_deref(),
         csrf_token: &csrf,
     };
+    let client_id = client_id_param(raw.as_deref());
     let same_flow = || Bound {
         flow_id,
         csrf: csrf.clone(),
         jar: CookieJar::new(),
+    };
+    let redirect = |key: &'static str, fields: BTreeSet<String>, typed| {
+        let client_id = client_id.clone();
+        let (state, tenant, loc, session) = (&state, &tenant, &loc, &session);
+        async move {
+            refused_redirect(
+                state,
+                tenant,
+                loc,
+                session,
+                flow_id,
+                client_id.as_deref(),
+                key,
+                &fields,
+                typed,
+            )
+            .await
+        }
     };
     let service = match state.attribute_service() {
         Ok(s) => s,
@@ -638,21 +736,12 @@ async fn submit(
                 .await
             {
                 Ok(_) => {
-                    return render(
-                        &state,
-                        &tenant,
-                        &loc,
-                        &session,
-                        same_flow(),
-                        Overlay {
-                            messages: vec![PageMessage::error("attributes.not_editable")],
-                            ..Overlay::default()
-                        },
-                        StatusCode::BAD_REQUEST,
-                    )
-                    .await;
+                    return redirect("attributes.not_editable", BTreeSet::new(), BTreeMap::new())
+                        .await;
                 }
-                Err(e) => return refused(&state, &tenant, &loc, &session, same_flow(), e).await,
+                Err(e) => {
+                    return refused(e, redirect, &state, &tenant, &loc).await;
+                }
             }
         }
     };
@@ -676,71 +765,34 @@ async fn submit(
             .await
         }
         Err(AttributeError::Invalid(pointers)) => {
-            render(
-                &state,
-                &tenant,
-                &loc,
-                &session,
-                same_flow(),
-                Overlay {
-                    typed,
-                    errors: error_fields(&pointers),
-                    messages: vec![PageMessage::error("attributes.invalid")],
-                    client_id: None,
-                },
-                StatusCode::BAD_REQUEST,
-            )
-            .await
+            redirect("attributes.invalid", error_fields(&pointers), typed).await
         }
-        Err(e) => refused(&state, &tenant, &loc, &session, same_flow(), e).await,
+        Err(e) => refused(e, redirect, &state, &tenant, &loc).await,
     }
 }
 
-/// The response to a refused write other than invalid values.
-async fn refused(
+/// The response to a refused write other than invalid values: the `csrf` page for a broken
+/// binding, an error page for a core error, else the Post/Redirect/Get answer (`redirect`).
+async fn refused<F, Fut>(
+    err: AttributeError,
+    redirect: F,
     state: &AppState,
     tenant: &ResolvedTenant,
     loc: &Locale,
-    session: &BrowserSession,
-    bound: Bound,
-    err: AttributeError,
-) -> Response {
+) -> Response
+where
+    F: FnOnce(&'static str, BTreeSet<String>, BTreeMap<String, String>) -> Fut,
+    Fut: std::future::Future<Output = Response>,
+{
     match err {
         AttributeError::Core(CoreError::Forbidden) => csrf_page(state, Some(tenant), loc),
         AttributeError::Core(e) => core_error_page_in(state, Some(tenant), loc, &e),
         AttributeError::NotEditable(_) | AttributeError::Invalid(_) => {
-            render(
-                state,
-                tenant,
-                loc,
-                session,
-                bound,
-                Overlay {
-                    messages: vec![PageMessage::error("attributes.not_editable")],
-                    ..Overlay::default()
-                },
-                StatusCode::BAD_REQUEST,
-            )
-            .await
+            redirect("attributes.not_editable", BTreeSet::new(), BTreeMap::new()).await
         }
+        // The GET starts a fresh flow anyway.
         AttributeError::FlowExpired => {
-            let fresh = match start_flow(state, tenant, loc, session).await {
-                Ok(b) => b,
-                Err(resp) => return *resp,
-            };
-            render(
-                state,
-                tenant,
-                loc,
-                session,
-                fresh,
-                Overlay {
-                    messages: vec![PageMessage::error("account.flow_expired")],
-                    ..Overlay::default()
-                },
-                StatusCode::BAD_REQUEST,
-            )
-            .await
+            redirect("account.flow_expired", BTreeSet::new(), BTreeMap::new()).await
         }
     }
 }

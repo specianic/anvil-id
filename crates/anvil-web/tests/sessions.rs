@@ -142,6 +142,15 @@ impl<'a> Browser<'a> {
         let csrf = csrf_from(&html);
         self.post(&action, &[("csrf_token", &csrf)]).await
     }
+
+    /// [`Self::submit`] with the confirmation (`confirm=yes`) of a destructive action.
+    async fn submit_confirmed(&self, form_id: &str) -> TestResponse {
+        let html = self.page().await;
+        let action = action_of(self.app, &html, form_id);
+        let csrf = csrf_from(&html);
+        self.post(&action, &[("csrf_token", &csrf), ("confirm", "yes")])
+            .await
+    }
 }
 
 /// A session service sharing the app's storage, with a clock started at the app's current time.
@@ -447,7 +456,13 @@ async fn revoke_all_others_keeps_only_the_current_session() {
     let bob = user(&app, "bob@example.com").await;
     let (bobs, _) = sign_in(&app, bob, "198.51.100.1", "Bob").await;
 
+    // The first POST asks for confirmation and signs out nobody.
     let resp = browser_a.submit("sessions-revoke-others").await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert!(resp.html().contains("data-action=\"sign-out-others\""));
+    assert!(!is_revoked(&app, b).await && !is_revoked(&app, c).await);
+
+    let resp = browser_a.submit_confirmed("sessions-revoke-others").await;
     assert_eq!(resp.status, 200, "{}", resp.text());
     assert_eq!(message_keys(&resp.html()), vec!["sessions.revoked_others"]);
     assert!(
@@ -470,20 +485,82 @@ async fn revoke_all_others_keeps_only_the_current_session() {
 }
 
 #[tokio::test]
-async fn revoking_the_current_session_signs_out_and_redirects_to_sign_in() {
+async fn revoking_the_current_session_signs_out_and_shows_the_signed_out_page() {
     let app = TestApp::new().await;
     let alice = user(&app, "alice@example.com").await;
     let (a, browser) = sign_in(&app, alice, "192.0.2.10", UA_A).await;
     let resp = browser.submit(&format!("session-revoke-{a}")).await;
     assert_eq!(resp.status, 303, "{}", resp.text());
-    assert!(
-        location(&resp).ends_with("/ui/login?return_to=%2Fui%2Faccount%2Fsessions"),
-        "{}",
-        location(&resp)
-    );
+    assert_eq!(resp.header("cache-control"), Some("no-store"));
+    let to = location(&resp);
+    assert!(to.ends_with("/ui/signed-out"), "{to}");
     assert!(!browser.has_session_cookie(), "session cookie cleared");
     assert!(is_revoked(&app, a).await);
+
+    // U-L8: a signed-out message with a way forward, not a bare sign-in form.
+    let resp = browser.get(to.trim_start_matches("https://op.test")).await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let html = resp.html();
+    assert!(
+        html.contains("data-message-key=\"logout.signed_out\""),
+        "{html}"
+    );
+    assert!(html.contains("id=\"link-login\""), "{html}");
     assert_eq!(browser.get(PAGE).await.status, 303);
+}
+
+/// The confirmation step of "Sign out other devices" (07.1-21, U-M12): without `confirm=yes`
+/// the POST asks (same action and token, no-store) and signs out nobody; a confirmed POST
+/// without a valid binding is refused and signs out nobody.
+#[tokio::test]
+async fn destructive_post_without_confirm_changes_nothing() {
+    let app = TestApp::new().await;
+    let alice = user(&app, "alice@example.com").await;
+    let (a, browser) = sign_in(&app, alice, "192.0.2.10", UA_A).await;
+    let (b, _) = sign_in(&app, alice, "192.0.2.11", UA_B).await;
+    let html = browser.page().await;
+    let action = action_of(&app, &html, "sessions-revoke-others");
+    let csrf = csrf_from(&html);
+
+    for confirm in [None, Some(""), Some("no")] {
+        let mut pairs = vec![("csrf_token", csrf.as_str())];
+        if let Some(c) = confirm {
+            pairs.push(("confirm", c));
+        }
+        let resp = browser.post(&action, &pairs).await;
+        assert_eq!(resp.status, 200, "{confirm:?}: {}", resp.text());
+        assert_eq!(resp.header("cache-control"), Some("no-store"));
+        let page = resp.html();
+        assert!(page.contains("data-action=\"sign-out-others\""), "{page}");
+        assert!(page.contains("name=\"confirm\" value=\"yes\""), "{page}");
+        assert_eq!(csrf_from(&page), csrf);
+        assert_eq!(action_of(&app, &page, "form-confirm"), action);
+        assert!(!is_revoked(&app, b).await, "{confirm:?}");
+    }
+    for pairs in [
+        vec![("csrf_token", "wrong"), ("confirm", "yes")],
+        vec![("confirm", "yes")],
+    ] {
+        let resp = browser.post(&action, &pairs).await;
+        assert_eq!(resp.status, 403, "{pairs:?}");
+        assert_eq!(error_key(&resp.html()).as_deref(), Some("csrf"));
+    }
+    let resp = browser
+        .post_from(
+            &action,
+            &[("csrf_token", &csrf), ("confirm", "yes")],
+            "cross-site",
+        )
+        .await;
+    assert_eq!(resp.status, 403);
+    assert!(!is_revoked(&app, b).await);
+    assert!(audit_events(&app).await.is_empty());
+
+    let resp = browser
+        .post(&action, &[("csrf_token", &csrf), ("confirm", "yes")])
+        .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert!(is_revoked(&app, b).await && !is_revoked(&app, a).await);
 }
 
 #[tokio::test]

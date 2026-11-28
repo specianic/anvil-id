@@ -1142,7 +1142,8 @@ impl AccountService {
             .collect())
     }
 
-    /// The tenant's enabled connections the user has no link at, in slug order.
+    /// The tenant's offerable connections ([`crate::model::Connection::is_offerable`]: enabled and complete)
+    /// the user has no link at, in slug order. An incomplete connection is never offered.
     pub async fn available_connections(
         &self,
         tenant: TenantId,
@@ -1154,12 +1155,24 @@ impl AccountService {
             .list(tenant)
             .await?
             .into_iter()
-            .filter(|c| c.enabled && !links.iter().any(|l| l.connection_id == c.id))
+            .filter(|c| c.is_offerable() && !links.iter().any(|l| l.connection_id == c.id))
             .map(|c| AvailableConnection {
                 slug: c.slug,
                 display_name: c.display_name,
             })
             .collect())
+    }
+
+    /// Checks a submission of a change that needs a recent sign-in (flow cookie, CSRF token, flow
+    /// owner and a sign-in within the last 15 minutes) without changing anything: the
+    /// confirmation step before a destructive account action.
+    pub async fn check_change(
+        &self,
+        tenant: TenantId,
+        session: &BrowserSession,
+        binding: &SettingsBinding<'_>,
+    ) -> Result<(), AccountError> {
+        self.open(tenant, session, binding).await.map(|_| ())
     }
 
     /// Checks a submission that starts linking a provider from the account page: flow cookie,
@@ -1171,7 +1184,7 @@ impl AccountService {
         session: &BrowserSession,
         binding: &SettingsBinding<'_>,
     ) -> Result<(), AccountError> {
-        self.open(tenant, session, binding).await.map(|_| ())
+        self.check_change(tenant, session, binding).await
     }
 
     /// Disconnects one of the user's linked identities (re-authentication within 15 minutes),

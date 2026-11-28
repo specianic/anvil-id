@@ -322,7 +322,17 @@ async fn account_session_revocation_wakes_and_the_page_read_does_not() {
     other_session(&app, alice).await;
     other_session(&app, alice).await;
     drain(&app).await;
+    // The first POST only asks for confirmation (07.1-21): no revocation, no wake.
     let resp = submit_named(&app, "/ui/account/sessions", "sessions-revoke-others", &[]).await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert!(!woke(&app).await, "the confirmation step does not wake");
+    let resp = submit_named(
+        &app,
+        "/ui/account/sessions",
+        "sessions-revoke-others",
+        &[("confirm", "yes")],
+    )
+    .await;
     assert_eq!(resp.status, 200, "{}", resp.text());
     assert!(woke(&app).await, "signing out all others wakes");
 }

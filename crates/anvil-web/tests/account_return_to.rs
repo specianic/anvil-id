@@ -391,3 +391,60 @@ async fn account_header_never_links_dynamic_or_cimd_client() {
         }
     }
 }
+
+/// The `action` of the form with `id`, as a path (`&amp;` decoded).
+fn form_action_of(app: &TestApp, html: &str, id: &str) -> String {
+    let start = html
+        .find(&format!("<form id=\"{id}\""))
+        .unwrap_or_else(|| panic!("form #{id}"));
+    let marker = "action=\"";
+    let a = html[start..].find(marker).expect("action") + start + marker.len();
+    let b = html[a..].find('"').expect("quoted") + a;
+    to_path(
+        app,
+        &html[a..b].replace("&amp;", "&").replace("&#x2f;", "/"),
+    )
+}
+
+/// 07.1-21: an account form opened for a static client carries its `client_id` in the form
+/// action, and the Post/Redirect/Get answer of a refused POST keeps it, so "Back to <app>" is
+/// still there on the page that shows the refusal.
+#[tokio::test]
+async fn back_to_app_survives_a_refused_account_form() {
+    let app = signed_in().await;
+    let tenant = ui_helpers::default_tenant(&app).id;
+    let rp = shop(&app, tenant, ClientSource::Static, None, Some(APP_HOME)).await;
+    for (page, form, field) in [
+        ("/ui/account/password", "password-form", "new_password"),
+        ("/ui/account/profile", "profile-form", "locale"),
+        ("/ui/account/email", "email-change", "new_email"),
+    ] {
+        let resp = app
+            .get(&format!("{page}?client_id={}", encoded(rp.id())))
+            .await;
+        let html = resp.text();
+        let action = form_action_of(&app, &html, form);
+        assert!(
+            action.ends_with(&format!("&client_id={}", encoded(rp.id()))),
+            "{action}"
+        );
+        let csrf = support::csrf_from(&html);
+        let resp = app
+            .post_form(&action, &[("csrf_token", &csrf), (field, "x")])
+            .await;
+        assert!(support::is_prg(&resp), "{page}: {}", resp.status);
+        let to = location(&resp);
+        assert!(
+            to.ends_with(&format!("&client_id={}", encoded(rp.id()))),
+            "{to}"
+        );
+        let shown = app.follow(&resp).await;
+        assert_eq!(shown.status, 400, "{page}");
+        assert_eq!(message_keys(&shown.text()).len(), 1, "{page}");
+        assert_eq!(
+            href(&shown.text(), "link-back-to-app").as_deref(),
+            Some(APP_HOME),
+            "{page}"
+        );
+    }
+}

@@ -278,10 +278,22 @@ async fn revoking_removes_the_grant_and_that_clients_tokens_only() {
     let html = f.page().await;
     let action = revoke_action(&f.app, &html, f.rp.id());
     let csrf = csrf_from(&html);
+    // The first POST asks for confirmation (no JavaScript) and changes nothing.
     let resp = f
         .post(
             &action,
             &[("csrf_token", &csrf)],
+            Some(&f.cookies()),
+            "same-origin",
+        )
+        .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert!(resp.html().contains("id=\"form-confirm\""));
+    assert!(f.granted(&f.rp).await);
+    let resp = f
+        .post(
+            &action,
+            &[("csrf_token", &csrf), ("confirm", "yes")],
             Some(&f.cookies()),
             "same-origin",
         )
@@ -427,6 +439,96 @@ async fn revocations_without_a_valid_binding_change_nothing() {
         f.granted(&f.rp).await,
         "no rejected request revoked the grant"
     );
+}
+
+/// The confirmation step of "Remove access" (07.1-21, U-M12): without `confirm=yes` the POST
+/// shows the question (escaped app name, same action and CSRF token) and keeps the grant; a
+/// confirmed POST without a valid binding is refused and keeps it too.
+#[tokio::test]
+async fn destructive_post_without_confirm_changes_nothing() {
+    let f = fixture().await;
+    grant(&f.app, f.tenant, &f.user, &f.rp, &["openid"]).await;
+    let html = f.page().await;
+    let action = revoke_action(&f.app, &html, f.rp.id());
+    let csrf = csrf_from(&html);
+
+    for confirm in [None, Some(""), Some("no"), Some("YES")] {
+        let mut pairs = vec![("csrf_token", csrf.as_str())];
+        if let Some(c) = confirm {
+            pairs.push(("confirm", c));
+        }
+        let resp = f
+            .post(&action, &pairs, Some(&f.cookies()), "same-origin")
+            .await;
+        assert_eq!(resp.status, 200, "{confirm:?}: {}", resp.text());
+        assert_eq!(resp.header("cache-control"), Some("no-store"));
+        let page = resp.html();
+        assert!(page.contains("id=\"form-confirm\""), "{page}");
+        assert!(page.contains("data-action=\"revoke-app\""), "{page}");
+        assert!(page.contains("name=\"confirm\" value=\"yes\""), "{page}");
+        assert!(page.contains("Photo &lt;Prints&gt; &amp; Co"), "{page}");
+        assert!(!page.contains("Photo <Prints>"), "escaped");
+        assert!(page.contains("id=\"link-confirm-cancel\""), "{page}");
+        assert_eq!(csrf_from(&page), csrf, "same binding");
+        let confirm_action = page
+            .split("<form id=\"form-confirm\" method=\"post\" action=\"")
+            .nth(1)
+            .and_then(|s| s.split('"').next())
+            .expect("confirm action")
+            .replace("&amp;", "&");
+        assert!(
+            confirm_action.ends_with(&action),
+            "{confirm_action} vs {action}"
+        );
+        assert!(f.granted(&f.rp).await, "{confirm:?}: nothing changed");
+    }
+
+    // A first POST without a valid binding is refused before any question.
+    let resp = f
+        .post(
+            &action,
+            &[("csrf_token", "forged")],
+            Some(&f.cookies()),
+            "same-origin",
+        )
+        .await;
+    assert_eq!(resp.status, 403, "{}", resp.text());
+
+    // Confirmed, but with a forged token, without the flow cookie or cross-site: refused.
+    for (pairs, cookie, site) in [
+        (
+            vec![("csrf_token", "forged"), ("confirm", "yes")],
+            f.cookies(),
+            "same-origin",
+        ),
+        (vec![("confirm", "yes")], f.cookies(), "same-origin"),
+        (
+            vec![("csrf_token", csrf.as_str()), ("confirm", "yes")],
+            f.cookie.clone(),
+            "same-origin",
+        ),
+        (
+            vec![("csrf_token", csrf.as_str()), ("confirm", "yes")],
+            f.cookies(),
+            "cross-site",
+        ),
+    ] {
+        let resp = f.post(&action, &pairs, Some(&cookie), site).await;
+        assert_eq!(resp.status, 403, "{pairs:?} {site}: {}", resp.text());
+        assert!(f.granted(&f.rp).await);
+    }
+
+    // Confirmed with the page's binding: revoked.
+    let resp = f
+        .post(
+            &action,
+            &[("csrf_token", &csrf), ("confirm", "yes")],
+            Some(&f.cookies()),
+            "same-origin",
+        )
+        .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert!(!f.granted(&f.rp).await);
 }
 
 #[tokio::test]

@@ -17,7 +17,10 @@ profile-name = Vollständiger Name
 profile-given_name = Vorname
 profile-family_name = Nachname
 profile-locale = Sprache
-profile-locale_help = Ein Sprachcode wie en, de oder pt-BR. Die Kontoseiten verwenden diese Sprache, sofern sie verfügbar ist.
+profile-locale_help = Die Kontoseiten verwenden diese Sprache.
+profile-locale_default = Nicht festgelegt (Sprache Ihres Browsers verwenden)
+# The name of this catalog's language, in that language (the language select).
+profile-language_name = Deutsch
 profile-save = Speichern
 account-profile_saved = Ihre Angaben wurden gespeichert.
 
@@ -63,3 +66,24 @@ account-password_too_short = Das Passwort ist zu kurz.
 account-password_too_long = Das Passwort ist zu lang.
 account-password_breached = Dieses Passwort ist bereits bei einem Datenleck aufgetaucht. Bitte wählen Sie ein anderes.
 account-overloaded = Der Dienst ist gerade ausgelastet. Bitte versuchen Sie es gleich noch einmal.
+
+## Confirmation of destructive actions (account_confirm.html, plan 07.1-21)
+account_confirm-cancel = Abbrechen und nichts ändern
+account_confirm-remove_passkey_question = Passkey { $subject } entfernen?
+account_confirm-remove_passkey_explain = Mit diesem Passkey können Sie sich danach nicht mehr anmelden.
+account_confirm-remove_passkey_submit = Passkey entfernen
+account_confirm-remove_totp_question = Authenticator-App entfernen?
+account_confirm-remove_totp_explain = Die Anmeldung fragt nicht mehr nach einem Code aus Ihrer Authenticator-App, und Ihre Wiederherstellungscodes werden ungültig.
+account_confirm-remove_totp_submit = Authenticator-App entfernen
+account_confirm-regenerate_codes_question = Neue Wiederherstellungscodes erstellen?
+account_confirm-regenerate_codes_explain = Ihre bisherigen Wiederherstellungscodes werden sofort ungültig. Bewahren Sie die neuen an einem sicheren Ort auf.
+account_confirm-regenerate_codes_submit = Neue Wiederherstellungscodes erstellen
+account_confirm-revoke_app_question = Zugriff für { $subject } entfernen?
+account_confirm-revoke_app_explain = { $subject } kann Ihr Konto erst wieder nutzen, wenn Sie es erneut erlauben, und Sie werden dort abgemeldet.
+account_confirm-revoke_app_submit = Zugriff entfernen
+account_confirm-unlink_question = Verbindung mit { $subject } trennen?
+account_confirm-unlink_explain = Sie können sich danach nicht mehr mit { $subject } anmelden. Sie können die Verbindung später wieder herstellen.
+account_confirm-unlink_submit = Verbindung trennen
+account_confirm-sign_out_others_question = Auf allen anderen Geräten abmelden?
+account_confirm-sign_out_others_explain = Alle anderen Geräte, auf denen Sie angemeldet sind, werden abgemeldet. Dieses Gerät bleibt angemeldet.
+account_confirm-sign_out_others_submit = Andere Geräte abmelden

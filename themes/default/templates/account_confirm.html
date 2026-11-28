@@ -1,0 +1,24 @@
+{#- Confirmation step of a destructive account action (plan 07.1-21). No JavaScript: the first
+    POST of the action renders this page and changes nothing; the form below posts the same
+    action with the same flow binding, the page's CSRF token and confirm=yes.
+    Variables (besides page/account_base/account_nav/account_header): csrf_token, action_id
+    (remove-passkey, remove-totp, regenerate-recovery-codes, revoke-app, unlink,
+    sign-out-others), question_key, explain_key, submit_key (catalog keys with argument
+    $subject), subject (passkey label, app or provider name, or ""), post_url, cancel_url.
+    Selectors: section account-confirm (data-action = action_id), heading confirm-heading, form
+    form-confirm with submit button form-confirm-submit, link link-confirm-cancel. -#}
+{% extends "account_base.html" %}
+{% block account %}
+<section class="anvil-account-section" id="account-confirm" data-action="{{ action_id }}" aria-labelledby="confirm-heading">
+<h2 id="confirm-heading">{{ t(question_key, subject=subject) }}</h2>
+<p id="confirm-explain">{{ t(explain_key, subject=subject) }}</p>
+<form id="form-confirm" method="post" action="{{ post_url }}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+<input type="hidden" name="confirm" value="yes">
+<button type="submit" id="form-confirm-submit">{{ t(submit_key, subject=subject) }}</button>
+</form>
+<nav class="anvil-links" aria-label="{{ t("nav.next_steps") }}">
+<a id="link-confirm-cancel" href="{{ cancel_url }}">{{ t("account_confirm.cancel") }}</a>
+</nav>
+</section>
+{% endblock %}

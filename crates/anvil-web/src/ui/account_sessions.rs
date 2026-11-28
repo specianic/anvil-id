@@ -4,8 +4,8 @@
 //! | Route | |
 //! |---|---|
 //! | `GET  /ui/account/sessions` | page; starts a settings flow (flow cookie + CSRF token) |
-//! | `POST /ui/account/sessions/{id}/revoke?flow=` | signs out one session (the current one: 303 to sign-in) |
-//! | `POST /ui/account/sessions/revoke-others?flow=` | signs out every other session |
+//! | `POST /ui/account/sessions/{id}/revoke?flow=` | signs out one session (the current one: 303 to the signed-out page) |
+//! | `POST /ui/account/sessions/revoke-others?flow=` | signs out every other session (with `confirm=yes`; without it the confirmation step) |
 //!
 //! Without a session every route answers 303 to the sign-in page. Every POST is behind the
 //! Fetch-Metadata layer and must carry the flow cookie and the CSRF token of a settings flow of
@@ -30,10 +30,12 @@ use secrecy::ExposeSecret as _;
 use serde::{Deserialize, Serialize};
 
 use super::account_attributes::attributes_nav_or_page;
+use super::account_confirm::{Confirmation, Destructive, confirm_page, confirmed};
 use super::account_security::{AccountHeader, account_header, client_id_param};
 use super::consent::{PageMessage, account_locale, localized};
 use super::format::{human, iso};
 use super::login::{UiQuery, csrf_page, rejected_form};
+use super::logout::signed_out_url;
 use super::nav::{AccountSection, NavContext};
 use crate::errors::core_error_page_in;
 use crate::i18n::{Locale, RequestLocale};
@@ -57,6 +59,8 @@ pub fn routes() -> Router<AppState> {
 #[derive(Default, Deserialize)]
 struct SessionsForm {
     csrf_token: Option<String>,
+    /// `yes` on the confirmed "sign out other devices".
+    confirm: Option<String>,
 }
 
 /// A submission resolved to its session, page locale and settings flow binding.
@@ -438,11 +442,15 @@ async fn revoke_one(
     {
         Ok(()) if id == sub.session.id => {
             state.wake_logout_worker();
-            // Signed out of this browser: drop its cookies and go to the sign-in page.
+            // Signed out of this browser: drop its cookies and show the signed-out page (with
+            // "Sign in again"), like any other sign-out.
             let jar = CookieJar::new()
                 .add(state.cookies().clear_session(&tenant.tenant))
                 .add(state.cookies().clear_flow(&tenant.tenant));
-            to_login(&tenant, jar)
+            let location = signed_out_url(&tenant, &sub.locale, None);
+            with_headers(
+                (StatusCode::SEE_OTHER, jar, [(header::LOCATION, location)]).into_response(),
+            )
         }
         Ok(()) => {
             state.wake_logout_worker();
@@ -481,6 +489,26 @@ async fn revoke_others(
     };
     if let Err(resp) = check_binding(&state, &tenant, &sub).await {
         return *resp;
+    }
+    if !confirmed(form.confirm.as_deref()) {
+        return with_headers(
+            confirm_page(
+                &state,
+                &tenant,
+                &sub.locale,
+                Confirmation {
+                    action: Destructive::SignOutOthers,
+                    subject: String::new(),
+                    section: "sessions",
+                    title_key: "title.account_sessions",
+                    post_url: flow_url(&tenant, "/ui/account/sessions/revoke-others", sub.flow_id),
+                    csrf: &sub.csrf,
+                    cancel_url: tenant.ui_url(PAGE),
+                    header: &sub.header,
+                },
+            )
+            .await,
+        );
     }
     match state
         .ui_session_service()

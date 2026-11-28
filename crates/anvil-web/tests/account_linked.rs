@@ -10,7 +10,7 @@ mod upstream_support;
 
 use std::time::Duration;
 
-use anvil_core::model::{AuditAction, ConnectionUpdate, IdentityLink, User};
+use anvil_core::model::{AuditAction, ConnectionConfig, ConnectionUpdate, IdentityLink, User};
 use anvil_core::ports::Clock as _;
 use serde_json::json;
 use support::{TestApp, TestResponse, csrf_from};
@@ -122,7 +122,7 @@ async fn page_needs_a_session_and_is_in_the_navigation() {
 }
 
 #[tokio::test]
-async fn page_lists_links_and_only_unlinked_enabled_connections() {
+async fn page_lists_links_and_only_unlinked_offerable_connections() {
     let u = setup(true).await;
     let user = upstream_only_user(&u).await;
     let other = add_connection(&u.app, "other-id", "Other ID", u.conn.config.clone(), true).await;
@@ -143,7 +143,16 @@ async fn page_lists_links_and_only_unlinked_enabled_connections() {
         .expect("update")
         .expect("connection");
 
+    // Enabled but incomplete (no client id): never offered (Connection::is_offerable).
+    let mut incomplete = u.conn.config.clone();
+    if let ConnectionConfig::Oidc(o) = &mut incomplete {
+        o.client_id.clear();
+    }
+    add_connection(&u.app, "half-id", "Half ID", incomplete, true).await;
+
     let html = page(&u.app).await;
+    assert!(!html.contains("id=\"linked-connect-half-id\""), "{html}");
+    assert!(!html.contains("Half ID"), "{html}");
     let link = &links(&u.app, &user).await[0];
     let row_start = html
         .find(&format!("id=\"linked-{}\"", link.id))
@@ -264,7 +273,10 @@ async fn unlink_removes_the_link_when_a_password_remains() {
     connect(&u).await;
     let link = links(&u.app, &bob).await.remove(0);
     let (action, csrf) = unlink_form(&u.app, &link).await;
-    let resp = u.app.post_form(&action, &[("csrf_token", &csrf)]).await;
+    let resp = u
+        .app
+        .post_form(&action, &[("csrf_token", &csrf), ("confirm", "yes")])
+        .await;
     assert_message(&resp, 200, "linked.unlinked");
     assert!(links(&u.app, &bob).await.is_empty());
     let events = audit(&u.app, AuditAction::IdentityUnlinked).await;
@@ -284,7 +296,10 @@ async fn unlink_of_the_only_sign_in_method_is_refused() {
     let user = upstream_only_user(&u).await;
     let link = links(&u.app, &user).await.remove(0);
     let (action, csrf) = unlink_form(&u.app, &link).await;
-    let resp = u.app.post_form(&action, &[("csrf_token", &csrf)]).await;
+    let resp = u
+        .app
+        .post_form(&action, &[("csrf_token", &csrf), ("confirm", "yes")])
+        .await;
     assert_message(&resp, 409, "account.last_sign_in_method");
     assert_eq!(links(&u.app, &user).await.len(), 1);
     assert!(
@@ -295,7 +310,10 @@ async fn unlink_of_the_only_sign_in_method_is_refused() {
 
     // Once the tenant offers email sign-in codes, the link may go.
     tenant_settings(&u.app, |s| s.email_otp = true).await;
-    let resp = u.app.post_form(&action, &[("csrf_token", &csrf)]).await;
+    let resp = u
+        .app
+        .post_form(&action, &[("csrf_token", &csrf), ("confirm", "yes")])
+        .await;
     assert_message(&resp, 200, "linked.unlinked");
     assert!(links(&u.app, &user).await.is_empty());
 }
@@ -330,7 +348,10 @@ async fn unverified_email_is_not_a_remaining_sign_in_method() {
     .await;
     let link = links(&u.app, &user).await.remove(0);
     let (action, csrf) = unlink_form(&u.app, &link).await;
-    let resp = u.app.post_form(&action, &[("csrf_token", &csrf)]).await;
+    let resp = u
+        .app
+        .post_form(&action, &[("csrf_token", &csrf), ("confirm", "yes")])
+        .await;
     assert_message(&resp, 409, "account.last_sign_in_method");
     assert_eq!(
         links(&u.app, &user).await.len(),
@@ -352,7 +373,10 @@ async fn verified_email_with_email_sign_in_allows_unlink() {
     tenant_settings(&u.app, |s| s.email_otp = true).await;
     let link = links(&u.app, &user).await.remove(0);
     let (action, csrf) = unlink_form(&u.app, &link).await;
-    let resp = u.app.post_form(&action, &[("csrf_token", &csrf)]).await;
+    let resp = u
+        .app
+        .post_form(&action, &[("csrf_token", &csrf), ("confirm", "yes")])
+        .await;
     assert_message(&resp, 200, "linked.unlinked");
     assert!(links(&u.app, &user).await.is_empty());
     let events = audit(&u.app, AuditAction::IdentityUnlinked).await;
@@ -395,12 +419,18 @@ async fn unlink_with_another_link_left_is_allowed() {
         .find(|l| l.connection_id == u.conn.id)
         .expect("first link");
     let (action, csrf) = unlink_form(&u.app, &first).await;
-    let resp = u.app.post_form(&action, &[("csrf_token", &csrf)]).await;
+    let resp = u
+        .app
+        .post_form(&action, &[("csrf_token", &csrf), ("confirm", "yes")])
+        .await;
     assert_message(&resp, 200, "linked.unlinked");
     // The remaining link is now the last way in.
     let last = links(&u.app, &user).await.remove(0);
     let (action, csrf) = unlink_form(&u.app, &last).await;
-    let resp = u.app.post_form(&action, &[("csrf_token", &csrf)]).await;
+    let resp = u
+        .app
+        .post_form(&action, &[("csrf_token", &csrf), ("confirm", "yes")])
+        .await;
     assert_message(&resp, 409, "account.last_sign_in_method");
 }
 
@@ -416,12 +446,18 @@ async fn unlink_of_another_users_link_is_not_found() {
     let flow = &html[i..i + 36];
     let csrf = csrf_from(&html);
     let path = format!("{PAGE}/{}/unlink?flow={flow}", alice_link.id);
-    let resp = u.app.post_form(&path, &[("csrf_token", &csrf)]).await;
+    let resp = u
+        .app
+        .post_form(&path, &[("csrf_token", &csrf), ("confirm", "yes")])
+        .await;
     assert_message(&resp, 404, "account.link_not_found");
     assert_eq!(links(&u.app, &alice).await.len(), 1);
     // A malformed id is not found either.
     let path = format!("{PAGE}/not-a-uuid/unlink?flow={flow}");
-    let resp = u.app.post_form(&path, &[("csrf_token", &csrf)]).await;
+    let resp = u
+        .app
+        .post_form(&path, &[("csrf_token", &csrf), ("confirm", "yes")])
+        .await;
     assert_message(&resp, 404, "account.link_not_found");
     assert!(
         audit(&u.app, AuditAction::IdentityUnlinked)
@@ -491,5 +527,65 @@ async fn unlink_needs_a_recent_sign_in() {
         .post_form(&action, &[("csrf_token", &csrf_from(&html))])
         .await;
     assert_message(&resp, 400, "account.reauth_required");
+    assert_eq!(links(&u.app, &bob).await.len(), 1);
+}
+
+/// The confirmation step of "Disconnect" (07.1-21, U-M12): without `confirm=yes` the POST asks
+/// (provider name, same action and token, no-store) and keeps the link; a confirmed POST without a
+/// valid binding is refused and keeps it too; a stale sign-in is refused before any question.
+#[tokio::test]
+async fn destructive_post_without_confirm_changes_nothing() {
+    let u = setup(true).await;
+    let bob = bob_signed_in(&u).await;
+    connect(&u).await;
+    let link = links(&u.app, &bob).await.remove(0);
+    let (action, csrf) = unlink_form(&u.app, &link).await;
+
+    for confirm in [None, Some(""), Some("no")] {
+        let mut pairs = vec![("csrf_token", csrf.as_str())];
+        if let Some(c) = confirm {
+            pairs.push(("confirm", c));
+        }
+        let resp = u.app.post_form(&action, &pairs).await;
+        assert_eq!(resp.status, 200, "{confirm:?}: {}", resp.text());
+        assert_eq!(
+            resp.headers
+                .get("cache-control")
+                .map(|v| v.to_str().unwrap()),
+            Some("no-store")
+        );
+        let html = resp.html();
+        assert!(html.contains("data-action=\"unlink\""), "{html}");
+        assert!(html.contains(NAME), "provider named: {html}");
+        assert!(html.contains("name=\"confirm\" value=\"yes\""), "{html}");
+        assert_eq!(csrf_from(&html), csrf);
+        assert_eq!(action_of(&u.app, &html, "form-confirm"), action);
+        assert_eq!(links(&u.app, &bob).await.len(), 1, "{confirm:?}");
+    }
+    for pairs in [
+        vec![("csrf_token", "wrong"), ("confirm", "yes")],
+        vec![("confirm", "yes")],
+    ] {
+        let resp = u.app.post_form(&action, &pairs).await;
+        assert_eq!(resp.status, 403, "{pairs:?}");
+        assert_eq!(error_key(&resp.html()).as_deref(), Some("csrf"));
+    }
+    assert_eq!(links(&u.app, &bob).await.len(), 1);
+    assert!(
+        audit(&u.app, AuditAction::IdentityUnlinked)
+            .await
+            .is_empty()
+    );
+
+    // A stale sign-in: refused at the first POST, no question.
+    u.app.clock().advance(Duration::from_secs(16 * 60));
+    let html = page(&u.app).await;
+    let (action2, csrf2) = (
+        action_of(&u.app, &html, &format!("linked-unlink-{}", link.id)),
+        csrf_from(&html),
+    );
+    let resp = u.app.post_form(&action2, &[("csrf_token", &csrf2)]).await;
+    assert_message(&resp, 400, "account.reauth_required");
+    assert!(!resp.html().contains("id=\"form-confirm\""));
     assert_eq!(links(&u.app, &bob).await.len(), 1);
 }

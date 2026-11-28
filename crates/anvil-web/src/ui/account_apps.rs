@@ -4,7 +4,7 @@
 //! | Route | |
 //! |---|---|
 //! | `GET  /ui/account/apps` | lists the active grants; starts a consent flow that binds the page (flow cookie + CSRF token) |
-//! | `POST /ui/account/apps/{client_id}/revoke?flow=` | revokes the grant and every token family of that app for the user |
+//! | `POST /ui/account/apps/{client_id}/revoke?flow=` | revokes the grant and every token family of that app for the user (with `confirm=yes`; without it the confirmation step) |
 //!
 //! Without a session both routes answer 303 to the sign-in page. The POST is behind the
 //! Fetch-Metadata layer and must carry the flow cookie and the CSRF token; otherwise the `csrf`
@@ -27,6 +27,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use super::account_attributes::attributes_nav_or_page;
+use super::account_confirm::{Confirmation, Destructive, confirm_page, confirmed};
 use super::account_security::{AccountHeader, account_header, client_id_param};
 use super::consent::{
     PageMessage, ScopeView, account_locale, current_session, localized, no_store, scope_views,
@@ -52,6 +53,8 @@ pub fn routes() -> Router<AppState> {
 #[derive(Default, Deserialize)]
 struct RevokeForm {
     csrf_token: Option<String>,
+    /// `yes` on the confirmed POST.
+    confirm: Option<String>,
 }
 
 /// A connected app as listed on the page.
@@ -241,6 +244,55 @@ async fn revoke(
         cookie_token: cookie.as_deref(),
         csrf_token: &csrf,
     };
+    if !confirmed(form.confirm.as_deref()) {
+        // The confirmation step: the binding first, then the app (by its grant), nothing changes.
+        let consent = state.ui_consent_service();
+        let refusal = match consent
+            .check_apps_binding(tenant.tenant.id, &session, &binding)
+            .await
+        {
+            Ok(true) => match consent.list(tenant.tenant.id, session.user_id).await {
+                Ok(apps) => match apps.into_iter().find(|a| a.client_id == client_id) {
+                    Some(app) => {
+                        return confirm_page(
+                            &state,
+                            &tenant,
+                            &loc,
+                            Confirmation {
+                                action: Destructive::RevokeApp,
+                                subject: app.client_name,
+                                section: "apps",
+                                title_key: "title.account_apps",
+                                post_url: tenant.ui_url(&format!(
+                                    "/ui/account/apps/{}/revoke?flow={flow_id}",
+                                    path_segment(&client_id)
+                                )),
+                                csrf: &csrf,
+                                cancel_url: tenant.ui_url(PAGE),
+                                header: &header,
+                            },
+                        )
+                        .await;
+                    }
+                    None => PageMessage::error("apps.not_found"),
+                },
+                Err(e) => return core_error_page_in(&state, Some(&tenant), &loc, &e),
+            },
+            Ok(false) => PageMessage::error("apps.expired"),
+            Err(CoreError::Forbidden) => return csrf_page(&state, Some(&tenant), &loc),
+            Err(e) => return core_error_page_in(&state, Some(&tenant), &loc, &e),
+        };
+        return apps_page(
+            &state,
+            &tenant,
+            &loc,
+            &session,
+            &header,
+            vec![refusal],
+            StatusCode::BAD_REQUEST,
+        )
+        .await;
+    }
     let result = state
         .ui_consent_service()
         .revoke(tenant.tenant.id, &session, &binding, &client_id, &ctx)

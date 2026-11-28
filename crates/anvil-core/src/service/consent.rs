@@ -526,6 +526,17 @@ impl ConsentService {
         )
     }
 
+    /// Checks a connected-apps submission (flow cookie, CSRF token, flow owner) without changing
+    /// anything: the confirmation step before a revocation. `Ok(false)`: the flow expired.
+    pub async fn check_apps_binding(
+        &self,
+        tenant: TenantId,
+        session: &BrowserSession,
+        binding: &ConsentBinding<'_>,
+    ) -> Result<bool, CoreError> {
+        Ok(self.open(tenant, session, binding).await?.is_some())
+    }
+
     /// Revokes `user`'s grant for `client_id` (the binding was checked by the caller).
     async fn revoke_grant(
         &self,

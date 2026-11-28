@@ -15,8 +15,12 @@
 //! needs no session: the link token is the proof). Every POST is behind the Fetch-Metadata layer;
 //! the settings-flow POSTs must carry the flow cookie and the CSRF token, otherwise the `csrf`
 //! error page (403). Email and password changes need a sign-in within the last 15 minutes
-//! (`AccountService`). A refusal re-renders the page with a message (400; an address taken at
-//! confirmation: 409). The confirmation link is consumed only by the POST, so mail scanners that
+//! (`AccountService`). A refused profile, email or password POST follows Post/Redirect/Get
+//! (07.1-21): `303` to the page's `GET ?flow=` with a sealed one-shot flash (`ui::flash`), which
+//! shows the message (with the refusal's status, 400 or 503) and the typed profile values on a
+//! fresh flow; passwords are never kept. An address taken at confirmation is shown directly
+//! (409). Form actions and redirects carry `client_id` only for a resolved static client (the
+//! account header's back link). The confirmation link is consumed only by the POST, so mail scanners that
 //! fetch the link never use it up. No page needs JavaScript; the default CSP applies.
 
 use anvil_core::error::CoreError;
@@ -37,6 +41,7 @@ use serde::{Deserialize, Serialize};
 use super::account_attributes::attributes_nav_or_page;
 use super::account_security::{account_header, client_id_param};
 use super::consent::{PageMessage, account_locale, localized};
+use super::flash::{self, Flash, FlashValues};
 use super::login::{UiQuery, csrf_page, rejected_form};
 use super::nav::{AccountSection, NavContext};
 use crate::errors::core_error_page_in;
@@ -50,6 +55,11 @@ const PROFILE: &str = "/ui/account/profile";
 const EMAIL: &str = "/ui/account/email";
 const EMAIL_CONFIRM: &str = "/ui/account/email/confirm";
 const PASSWORD: &str = "/ui/account/password";
+
+/// Form ids (the flash belongs to one form).
+const PROFILE_FORM: &str = "profile-form";
+const EMAIL_FORM: &str = "email-change";
+const PASSWORD_FORM: &str = "password-form";
 
 /// Account profile routes, behind the Fetch-Metadata layer.
 pub(super) fn routes() -> Router<AppState> {
@@ -90,6 +100,8 @@ struct Submission {
     flow_id: FlowId,
     cookie: Option<String>,
     csrf: String,
+    /// The `client_id` of the form action (looked up for the header, never echoed raw).
+    client_id: Option<String>,
 }
 
 impl Submission {
@@ -107,7 +119,7 @@ struct Bound {
     flow_id: FlowId,
     csrf: String,
     jar: CookieJar,
-    /// The `client_id` the page was opened with (account header, GET only).
+    /// The `client_id` the page was opened with (account header; carried by the form action).
     client_id: Option<String>,
 }
 
@@ -172,12 +184,17 @@ async fn page_session(
 
 /// Resolves the session (303 to sign-in without one) and the flow binding (csrf page when the
 /// flow id or the CSRF token is missing).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one value per request part the submission is resolved from"
+)]
 async fn submission(
     state: &AppState,
     tenant: &ResolvedTenant,
     locale: &RequestLocale,
     jar: &CookieJar,
     query: &UiQuery,
+    raw_query: Option<&str>,
     csrf: Option<String>,
     section: AccountSection,
 ) -> Result<Submission, Box<Response>> {
@@ -194,6 +211,7 @@ async fn submission(
         flow_id,
         cookie,
         csrf,
+        client_id: client_id_param(raw_query),
     })
 }
 
@@ -230,7 +248,94 @@ impl Submission {
             flow_id: self.flow_id,
             csrf: self.csrf.clone(),
             jar: CookieJar::new(),
-            client_id: None,
+            client_id: self.client_id.clone(),
+        }
+    }
+
+    /// The Post/Redirect/Get answer of a refused form (`page`, `form_id`): 303 to the page's
+    /// `GET ?flow=` with the refusal and `values` in the flash, carrying the resolved client.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the refusal and the request it answers"
+    )]
+    async fn refused_redirect(
+        &self,
+        state: &AppState,
+        tenant: &ResolvedTenant,
+        page: &str,
+        form_id: &str,
+        failure: AccountFailure,
+        status: StatusCode,
+        values: FlashValues,
+    ) -> Response {
+        let header = match account_header(
+            state,
+            tenant,
+            &self.locale,
+            &self.session,
+            self.client_id.as_deref(),
+        )
+        .await
+        {
+            Ok(h) => h,
+            Err(page) => return *page,
+        };
+        flash::account_redirect(
+            state,
+            tenant,
+            &self.locale,
+            page,
+            self.flow_id,
+            header.client_query(),
+            Flash::account(
+                form_id,
+                &[(true, failure.key())],
+                &[],
+                values,
+                status.as_u16(),
+            ),
+        )
+    }
+}
+
+/// What a page `GET` shows from the flash of a refused POST (`?flow=`): its messages, values and
+/// status. The flash cookie is cleared in the returned jar.
+struct Shown {
+    messages: Vec<PageMessage>,
+    values: Option<FlashValues>,
+    status: StatusCode,
+    jar: CookieJar,
+}
+
+impl Shown {
+    fn take(
+        state: &AppState,
+        tenant: &ResolvedTenant,
+        query: Option<&str>,
+        form_id: &str,
+        jar: &CookieJar,
+        out: CookieJar,
+    ) -> Self {
+        let (flash, jar) = flash::take_account(state, &tenant.tenant, query, form_id, jar, out);
+        match flash {
+            Some(f) => Self {
+                messages: f
+                    .page_messages()
+                    .map(|(e, k)| PageMessage::from_flash(e, k))
+                    .collect(),
+                status: f
+                    .status()
+                    .and_then(|s| StatusCode::from_u16(s).ok())
+                    .unwrap_or(StatusCode::BAD_REQUEST),
+                values: Some(f.values().clone()),
+                jar,
+            },
+            None => Self {
+                messages: Vec::new(),
+                values: None,
+                status: StatusCode::OK,
+                jar,
+            },
         }
     }
 }
@@ -289,20 +394,6 @@ fn classify(
     }
 }
 
-/// The binding to render a refusal with: a fresh flow when the old one expired.
-async fn rebind(
-    state: &AppState,
-    tenant: &ResolvedTenant,
-    sub: &Submission,
-    failure: AccountFailure,
-) -> Result<Bound, Box<Response>> {
-    if failure == AccountFailure::FlowExpired {
-        start_flow(state, tenant, &sub.locale, &sub.session).await
-    } else {
-        Ok(sub.bound())
-    }
-}
-
 // ---------------------------------------------------------------------------------------------
 // Profile
 // ---------------------------------------------------------------------------------------------
@@ -354,7 +445,8 @@ async fn render_profile(
         account_header => header.value(),
         csrf_token => &bound.csrf,
         messages => messages_value(state, loc, messages),
-        action => flow_url(tenant, PROFILE, bound.flow_id),
+        action => format!("{}{}", flow_url(tenant, PROFILE, bound.flow_id), header.client_query_tail()),
+        locales => minijinja::Value::from(minijinja::value::Serde(&locale_options(state, &view.locale))),
         profile => minijinja::Value::from(minijinja::value::Serde(&view)),
     };
     render(
@@ -380,26 +472,107 @@ async fn profile_show(
             Ok(s) => s,
             Err(resp) => return *resp,
         };
-    let bound = match start_flow(&state, &tenant, &loc, &session).await {
-        Ok(b) => Bound {
-            client_id: client_id_param(query.as_deref()),
-            ..b
-        },
+    let (bound, shown) = match bound_and_shown(
+        &state,
+        &tenant,
+        &loc,
+        &session,
+        &jar,
+        query.as_deref(),
+        PROFILE_FORM,
+    )
+    .await
+    {
+        Ok(b) => b,
         Err(resp) => return *resp,
     };
+    // What the user typed before the refusal, so they can correct it.
+    let view = shown.values.map(|v| ProfileView {
+        name: v.name.unwrap_or_default(),
+        given_name: v.given_name.unwrap_or_default(),
+        family_name: v.family_name.unwrap_or_default(),
+        locale: v.locale.unwrap_or_default(),
+    });
     render_profile(
         &state,
         &tenant,
         &loc,
         bound,
-        None,
+        view,
         &session,
-        Vec::new(),
-        StatusCode::OK,
+        shown.messages,
+        shown.status,
     )
     .await
 }
 
+/// The fresh flow of a page `GET` (with the page's `client_id`) and what the flash of a refused
+/// POST adds to it; the bound jar sets the flow cookie and clears the flash.
+async fn bound_and_shown(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    loc: &Locale,
+    session: &BrowserSession,
+    jar: &CookieJar,
+    query: Option<&str>,
+    form_id: &str,
+) -> Result<(Bound, Shown), Box<Response>> {
+    let bound = start_flow(state, tenant, loc, session).await?;
+    let mut shown = Shown::take(state, tenant, query, form_id, jar, bound.jar);
+    let bound = Bound {
+        flow_id: bound.flow_id,
+        csrf: bound.csrf,
+        jar: std::mem::take(&mut shown.jar),
+        client_id: client_id_param(query),
+    };
+    Ok((bound, shown))
+}
+
+/// One option of the language select.
+#[derive(Serialize)]
+struct LocaleOption {
+    tag: String,
+    name: String,
+    selected: bool,
+}
+
+/// The language select: the available catalogs, each named in its own language
+/// (`profile.language_name`, else the tag), plus the stored tag when no catalog has it (so
+/// saving the form keeps it). The empty "not set" option is the template's.
+fn locale_options(state: &AppState, current: &str) -> Vec<LocaleOption> {
+    let catalogs = state.renderer().catalogs();
+    let english = catalogs.text(&Locale::fallback(), "profile.language_name", &[]);
+    let mut out: Vec<LocaleOption> = catalogs
+        .available()
+        .into_iter()
+        .map(|tag| {
+            let own = catalogs.text(&Locale::new(&tag), "profile.language_name", &[]);
+            let name = if tag == crate::i18n::FALLBACK || own != english {
+                own
+            } else {
+                tag.clone()
+            };
+            LocaleOption {
+                selected: tag.eq_ignore_ascii_case(current),
+                name,
+                tag,
+            }
+        })
+        .collect();
+    if !current.is_empty() && !out.iter().any(|o| o.selected) {
+        out.push(LocaleOption {
+            tag: current.to_owned(),
+            name: current.to_owned(),
+            selected: true,
+        });
+    }
+    out
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "axum handler: one argument per extractor"
+)]
 async fn profile_submit(
     State(state): State<AppState>,
     tenant: ResolvedTenant,
@@ -407,6 +580,7 @@ async fn profile_submit(
     jar: CookieJar,
     AuditContext(ctx): AuditContext,
     Query(q): Query<UiQuery>,
+    RawQuery(raw): RawQuery,
     form: Result<Form<AccountForm>, FormRejection>,
 ) -> Response {
     let form = match form {
@@ -419,6 +593,7 @@ async fn profile_submit(
         &locale,
         &jar,
         &q,
+        raw.as_deref(),
         form.csrf_token.clone(),
         AccountSection::Profile,
     )
@@ -458,26 +633,23 @@ async fn profile_submit(
                 Ok(c) => c,
                 Err(resp) => return *resp,
             };
-            let bound = match rebind(&state, &tenant, &sub, failure).await {
-                Ok(b) => b,
-                Err(resp) => return *resp,
+            // Keep what the user typed so they can correct it (the GET shows it again).
+            let typed = |v: &str| Some(v.to_owned()).filter(|v| !v.is_empty());
+            let values = FlashValues {
+                name: typed(input.name),
+                given_name: typed(input.given_name),
+                family_name: typed(input.family_name),
+                locale: typed(input.locale),
+                ..FlashValues::default()
             };
-            // Keep what the user typed so they can correct it.
-            let view = ProfileView {
-                name: input.name.to_owned(),
-                given_name: input.given_name.to_owned(),
-                family_name: input.family_name.to_owned(),
-                locale: input.locale.to_owned(),
-            };
-            render_profile(
+            sub.refused_redirect(
                 &state,
                 &tenant,
-                &sub.locale,
-                bound,
-                Some(view),
-                &sub.session,
-                vec![PageMessage::error(failure.key())],
+                PROFILE,
+                PROFILE_FORM,
+                failure,
                 status,
+                values,
             )
             .await
         }
@@ -523,7 +695,7 @@ async fn render_email(
         mode => "change",
         csrf_token => &bound.csrf,
         messages => messages_value(state, loc, messages),
-        action => flow_url(tenant, EMAIL, bound.flow_id),
+        action => format!("{}{}", flow_url(tenant, EMAIL, bound.flow_id), header.client_query_tail()),
         email => profile.email,
         email_verified => profile.email_verified,
         recent_auth => profile.recent_auth,
@@ -552,11 +724,18 @@ async fn email_show(
             Ok(s) => s,
             Err(resp) => return *resp,
         };
-    let bound = match start_flow(&state, &tenant, &loc, &session).await {
-        Ok(b) => Bound {
-            client_id: client_id_param(query.as_deref()),
-            ..b
-        },
+    let (bound, shown) = match bound_and_shown(
+        &state,
+        &tenant,
+        &loc,
+        &session,
+        &jar,
+        query.as_deref(),
+        EMAIL_FORM,
+    )
+    .await
+    {
+        Ok(b) => b,
         Err(resp) => return *resp,
     };
     render_email(
@@ -565,12 +744,16 @@ async fn email_show(
         &loc,
         bound,
         &session,
-        Vec::new(),
-        StatusCode::OK,
+        shown.messages,
+        shown.status,
     )
     .await
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "axum handler: one argument per extractor"
+)]
 async fn email_submit(
     State(state): State<AppState>,
     tenant: ResolvedTenant,
@@ -578,6 +761,7 @@ async fn email_submit(
     jar: CookieJar,
     AuditContext(ctx): AuditContext,
     Query(q): Query<UiQuery>,
+    RawQuery(raw): RawQuery,
     form: Result<Form<AccountForm>, FormRejection>,
 ) -> Response {
     let form = match form {
@@ -590,6 +774,7 @@ async fn email_submit(
         &locale,
         &jar,
         &q,
+        raw.as_deref(),
         form.csrf_token.clone(),
         AccountSection::Email,
     )
@@ -609,33 +794,36 @@ async fn email_submit(
             &ctx,
         )
         .await;
-    let (bound, message, status) = match result {
-        Ok(()) => (
-            sub.bound(),
-            PageMessage::info("account.email_change_sent"),
-            StatusCode::OK,
-        ),
+    match result {
+        Ok(()) => {
+            render_email(
+                &state,
+                &tenant,
+                &sub.locale,
+                sub.bound(),
+                &sub.session,
+                vec![PageMessage::info("account.email_change_sent")],
+                StatusCode::OK,
+            )
+            .await
+        }
         Err(e) => {
             let (failure, status) = match classify(&state, &tenant, &sub.locale, e) {
                 Ok(c) => c,
                 Err(resp) => return *resp,
             };
-            match rebind(&state, &tenant, &sub, failure).await {
-                Ok(b) => (b, PageMessage::error(failure.key()), status),
-                Err(resp) => return *resp,
-            }
+            sub.refused_redirect(
+                &state,
+                &tenant,
+                EMAIL,
+                EMAIL_FORM,
+                failure,
+                status,
+                FlashValues::default(),
+            )
+            .await
         }
-    };
-    render_email(
-        &state,
-        &tenant,
-        &sub.locale,
-        bound,
-        &sub.session,
-        vec![message],
-        status,
-    )
-    .await
+    }
 }
 
 /// The confirmation page: `mode` "confirm" (with the token in a hidden field) or "done".
@@ -801,7 +989,7 @@ async fn render_password(
         account_header => header.value(),
         csrf_token => &bound.csrf,
         messages => messages_value(state, loc, messages),
-        action => flow_url(tenant, PASSWORD, bound.flow_id),
+        action => format!("{}{}", flow_url(tenant, PASSWORD, bound.flow_id), header.client_query_tail()),
         has_password => profile.has_password,
         recent_auth => profile.recent_auth,
         login_url => NavContext::login_returning_to(tenant, AccountSection::Password),
@@ -830,11 +1018,18 @@ async fn password_show(
             Ok(s) => s,
             Err(resp) => return *resp,
         };
-    let bound = match start_flow(&state, &tenant, &loc, &session).await {
-        Ok(b) => Bound {
-            client_id: client_id_param(query.as_deref()),
-            ..b
-        },
+    let (bound, shown) = match bound_and_shown(
+        &state,
+        &tenant,
+        &loc,
+        &session,
+        &jar,
+        query.as_deref(),
+        PASSWORD_FORM,
+    )
+    .await
+    {
+        Ok(b) => b,
         Err(resp) => return *resp,
     };
     // Signing out the other devices is the default.
@@ -845,12 +1040,16 @@ async fn password_show(
         bound,
         &session,
         true,
-        Vec::new(),
-        StatusCode::OK,
+        shown.messages,
+        shown.status,
     )
     .await
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "axum handler: one argument per extractor"
+)]
 async fn password_submit(
     State(state): State<AppState>,
     tenant: ResolvedTenant,
@@ -858,6 +1057,7 @@ async fn password_submit(
     jar: CookieJar,
     AuditContext(ctx): AuditContext,
     Query(q): Query<UiQuery>,
+    RawQuery(raw): RawQuery,
     form: Result<Form<AccountForm>, FormRejection>,
 ) -> Response {
     let form = match form {
@@ -870,6 +1070,7 @@ async fn password_submit(
         &locale,
         &jar,
         &q,
+        raw.as_deref(),
         form.csrf_token.clone(),
         AccountSection::Password,
     )
@@ -897,40 +1098,42 @@ async fn password_submit(
             &ctx,
         )
         .await;
-    let (bound, message, status) = match result {
+    match result {
         Ok(_) => {
             if revoke_others {
                 // The change signed out the other sessions; send their back-channel logouts now.
                 state.wake_logout_worker();
             }
-            (
+            render_password(
+                &state,
+                &tenant,
+                &sub.locale,
                 sub.bound(),
-                PageMessage::info("account.password_changed"),
+                &sub.session,
+                revoke_others,
+                vec![PageMessage::info("account.password_changed")],
                 StatusCode::OK,
             )
+            .await
         }
         Err(e) => {
             let (failure, status) = match classify(&state, &tenant, &sub.locale, e) {
                 Ok(c) => c,
                 Err(resp) => return *resp,
             };
-            match rebind(&state, &tenant, &sub, failure).await {
-                Ok(b) => (b, PageMessage::error(failure.key()), status),
-                Err(resp) => return *resp,
-            }
+            // The password itself is never kept: the GET shows an empty field.
+            sub.refused_redirect(
+                &state,
+                &tenant,
+                PASSWORD,
+                PASSWORD_FORM,
+                failure,
+                status,
+                FlashValues::default(),
+            )
+            .await
         }
-    };
-    render_password(
-        &state,
-        &tenant,
-        &sub.locale,
-        bound,
-        &sub.session,
-        revoke_others,
-        vec![message],
-        status,
-    )
-    .await
+    }
 }
 
 #[cfg(test)]

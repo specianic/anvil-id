@@ -107,7 +107,7 @@ enum Answer {
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct PageMessage {
     pub(super) level: &'static str,
-    pub(super) key: &'static str,
+    pub(super) key: std::borrow::Cow<'static, str>,
     pub(super) text: String,
 }
 
@@ -115,7 +115,7 @@ impl PageMessage {
     pub(super) fn error(key: &'static str) -> Self {
         Self {
             level: "error",
-            key,
+            key: key.into(),
             text: String::new(),
         }
     }
@@ -123,14 +123,23 @@ impl PageMessage {
     pub(super) fn info(key: &'static str) -> Self {
         Self {
             level: "info",
-            key,
+            key: key.into(),
+            text: String::new(),
+        }
+    }
+
+    /// A message read back from a sealed flash (Post/Redirect/Get of an account form).
+    pub(super) fn from_flash(error: bool, key: &str) -> Self {
+        Self {
+            level: if error { "error" } else { "info" },
+            key: key.to_owned().into(),
             text: String::new(),
         }
     }
 
     /// The message with its text in `loc`.
     pub(super) fn localized(mut self, state: &AppState, loc: &Locale) -> Self {
-        self.text = state.renderer().text(loc, self.key);
+        self.text = state.renderer().text(loc, &self.key);
         self
     }
 }

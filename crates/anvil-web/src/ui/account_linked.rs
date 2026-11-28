@@ -4,7 +4,7 @@
 //! |---|---|
 //! | `GET  /ui/account/linked` | linked identities and the enabled connections not linked yet; starts a settings flow |
 //! | `POST /ui/account/linked/connect/{slug}?flow=` | starts linking `slug` (re-auth): 303 to the provider with the binding cookie |
-//! | `POST /ui/account/linked/{id}/unlink?flow=` | disconnects one link (re-auth, last-sign-in-method guard) |
+//! | `POST /ui/account/linked/{id}/unlink?flow=` | disconnects one link (re-auth, last-sign-in-method guard); confirmation step first |
 //!
 //! Without a session every route answers 303 to the sign-in page. Every POST is behind the
 //! Fetch-Metadata layer and must carry the flow cookie and the CSRF token of a settings flow of
@@ -31,6 +31,7 @@ use secrecy::ExposeSecret as _;
 use serde::{Deserialize, Serialize};
 
 use super::account_attributes::attributes_nav_or_page;
+use super::account_confirm::{Confirmation, Destructive, confirm_page, confirmed};
 use super::account_security::{AccountHeader, account_header, client_id_param};
 use super::consent::{PageMessage, account_locale, localized};
 use super::format::{human, iso};
@@ -58,6 +59,8 @@ pub(super) fn routes() -> Router<AppState> {
 #[derive(Default, Deserialize)]
 struct LinkedForm {
     csrf_token: Option<String>,
+    /// `yes` on the confirmed disconnect.
+    confirm: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -516,7 +519,7 @@ async fn unlink(
         Ok(Form(form)) => form,
         Err(e) => return rejected_form(&state, Some(&tenant), &locale.0, &e),
     };
-    let sub = match submission(&state, &tenant, &locale, &jar, &q, form.csrf_token).await {
+    let sub = match submission(&state, &tenant, &locale, &jar, &q, form.csrf_token.clone()).await {
         Ok(s) => s,
         Err(resp) => return *resp,
     };
@@ -532,6 +535,41 @@ async fn unlink(
         };
         return refused(&state, &tenant, &sub, refusal).await;
     };
+    if !confirmed(form.confirm.as_deref()) {
+        // The confirmation step: binding and recent sign-in first, then the link; no change.
+        if let Err(e) = accounts
+            .check_change(tenant.tenant.id, &sub.session, &sub.binding())
+            .await
+        {
+            return refused(&state, &tenant, &sub, e).await;
+        }
+        let links = match accounts
+            .linked_identities(tenant.tenant.id, sub.session.user_id)
+            .await
+        {
+            Ok(l) => l,
+            Err(e) => return core_error_page_in(&state, Some(&tenant), &sub.locale, &e),
+        };
+        let Some(link) = links.into_iter().find(|l| l.id == id) else {
+            return refused(&state, &tenant, &sub, AccountFailure::LinkNotFound.into()).await;
+        };
+        return confirm_page(
+            &state,
+            &tenant,
+            &sub.locale,
+            Confirmation {
+                action: Destructive::Unlink,
+                subject: link.connection_display_name,
+                section: "linked",
+                title_key: "title.account_linked",
+                post_url: flow_url(&tenant, &format!("{PAGE}/{id}/unlink"), sub.flow_id),
+                csrf: &sub.csrf,
+                cancel_url: tenant.ui_url(PAGE),
+                header: &sub.header,
+            },
+        )
+        .await;
+    }
     match accounts
         .unlink(&tenant.tenant, &sub.session, &sub.binding(), id, &ctx)
         .await

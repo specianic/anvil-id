@@ -1,8 +1,10 @@
 {#- Account profile page (plan 04-15). Variables (besides page/account_base/account_nav):
       csrf_token, messages [{level, key, text}], action,
-      profile {name, given_name, family_name, locale} (the stored or the submitted values)
-    Selectors: form profile-form with inputs name, given_name, family_name, locale; submit button
-    profile-form-submit. -#}
+      profile {name, given_name, family_name, locale} (the stored or the submitted values),
+      locales [{tag, name, selected}] (the supported languages, each named in its own language;
+      plus the stored tag when no catalog has it)
+    Selectors: form profile-form with inputs name, given_name, family_name and the select locale
+    (first option "" = not set); submit button profile-form-submit. -#}
 {% extends "account_base.html" %}
 {% block account %}
 <div class="anvil-form-messages" id="account-messages" aria-live="polite">
@@ -28,7 +30,10 @@
 </div>
 <div class="anvil-field">
 <label for="locale">{{ t("profile.locale") }} <span class="anvil-optional">{{ t("form.optional") }}</span></label>
-<input id="locale" name="locale" type="text" maxlength="35" autocomplete="language" spellcheck="false" aria-describedby="locale-help" value="{{ profile.locale }}">
+<select id="locale" name="locale" autocomplete="language" aria-describedby="locale-help">
+<option value=""{% if not profile.locale %} selected{% endif %}>{{ t("profile.locale_default") }}</option>
+{% for l in locales %}<option value="{{ l.tag }}" lang="{{ l.tag }}"{% if l.selected %} selected{% endif %}>{{ l.name }}</option>
+{% endfor %}</select>
 <p class="anvil-muted" id="locale-help">{{ t("profile.locale_help") }}</p>
 </div>
 <button type="submit" id="profile-form-submit">{{ t("profile.save") }}</button>

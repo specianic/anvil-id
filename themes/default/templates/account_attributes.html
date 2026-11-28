@@ -14,8 +14,8 @@
 <p class="anvil-message anvil-message-{{ m.level }}" id="account-msg-{{ loop.index }}" data-message-key="{{ m.key }}"{% if m.level == "error" %} role="alert"{% endif %}>{{ m.text }}</p>
 {% endfor %}
 </div>
-<section class="anvil-account-section" id="attributes" aria-labelledby="attributes-heading">
-<h2 id="attributes-heading">{{ t("attributes.heading") }}</h2>
+{#- No H2 here: it repeated the page's H1 (U-L5); the section is labelled by the H1. -#}
+<section class="anvil-account-section" id="attributes" aria-labelledby="page-heading">
 {% if not fields %}
 <p class="anvil-muted" id="attributes-none">{{ t("attributes.none") }}</p>
 {% else %}

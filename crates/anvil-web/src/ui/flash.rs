@@ -28,10 +28,14 @@ use anvil_core::flow::form::{FieldKind, FormDescription, FormMessage, MessageLev
 use anvil_core::model::{FlowId, Tenant, TenantId};
 use anvil_jose::Kek;
 use anvil_jose::encoding::{b64url, b64url_decode};
+use axum::http::{HeaderValue, StatusCode, header};
+use axum::response::{IntoResponse, Response};
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use serde::{Deserialize, Serialize};
 
+use crate::i18n::{Locale, carry_ui_locales};
 use crate::state::AppState;
+use crate::tenant::ResolvedTenant;
 
 /// KEK purpose of the flash payload.
 pub(crate) const FLASH_PURPOSE: &str = "anvilid/ui-flash/v1";
@@ -52,6 +56,18 @@ pub(crate) struct FlashValues {
     /// The display name of a registration (field `name`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) name: Option<String>,
+    /// Account profile form (07.1-21): given name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) given_name: Option<String>,
+    /// Account profile form: family name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) family_name: Option<String>,
+    /// Account profile form: the language tag.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) locale: Option<String>,
+    /// Account attributes form: the typed text per attribute name (non-secret profile data).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) attributes: BTreeMap<String, String>,
 }
 
 /// A message key with its arguments.
@@ -102,6 +118,9 @@ pub(crate) struct Flash {
     /// The reset token of the new-password form (sealed with the rest; module docs).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     reset_token: Option<String>,
+    /// The HTTP status the `GET` answers with (account forms keep their refusal status).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    status: Option<u16>,
 }
 
 impl Flash {
@@ -140,10 +159,67 @@ impl Flash {
             values: FlashValues {
                 identifier: value_of(&["identifier", "email"]),
                 name: value_of(&["name"]),
+                ..FlashValues::default()
             },
             captcha,
             reset_token,
+            status: None,
         }
+    }
+
+    /// The flash of a failed account form (07.1-21): `form_id`, its page messages
+    /// (`(is_error, key)`), the error fields, the non-secret `values` and the status of the
+    /// refusal. Passwords have no place in it.
+    pub(crate) fn account(
+        form_id: &str,
+        messages: &[(bool, &str)],
+        error_fields: &[String],
+        values: FlashValues,
+        status: u16,
+    ) -> Self {
+        let msg = |error: bool, key: &str| FlashMessage {
+            error,
+            key: key.to_owned(),
+            args: BTreeMap::new(),
+        };
+        Self {
+            form_id: form_id.to_owned(),
+            messages: messages.iter().map(|(e, k)| msg(*e, k)).collect(),
+            field_errors: error_fields
+                .iter()
+                .map(|f| (f.clone(), vec![msg(true, "attributes.field_invalid")]))
+                .collect(),
+            values,
+            captcha: false,
+            reset_token: None,
+            status: Some(status),
+        }
+    }
+
+    /// The page messages as `(is_error, key)`.
+    pub(crate) fn page_messages(&self) -> impl Iterator<Item = (bool, &str)> {
+        self.messages.iter().map(|m| (m.error, m.key.as_str()))
+    }
+
+    /// The names of the fields with a message.
+    pub(crate) fn error_fields(&self) -> impl Iterator<Item = &str> {
+        self.field_errors.keys().map(String::as_str)
+    }
+
+    /// The values to show again.
+    pub(crate) fn values(&self) -> &FlashValues {
+        &self.values
+    }
+
+    /// The status of the refusal the flash reports (account forms).
+    pub(crate) fn status(&self) -> Option<u16> {
+        self.status
+    }
+
+    /// The flash without the typed attribute values (keeps the cookie small).
+    pub(crate) fn without_attribute_values(mut self) -> Self {
+        self.values.attributes.clear();
+        self
     }
 
     /// The id of the form the flash belongs to.
@@ -231,6 +307,78 @@ pub(crate) fn write(
 ) -> Option<Cookie<'static>> {
     let value = seal(state.kek(), tenant.id, flow, flash)?;
     Some(build(state, tenant, value, MAX_AGE_SECS))
+}
+
+/// Longest sealed value an account-form flash may have: browsers drop cookies over 4 KiB, and a
+/// long attributes form could exceed that. Over it, the typed attribute values are dropped (the
+/// messages still arrive).
+const MAX_ACCOUNT_VALUE_LEN: usize = 3500;
+
+/// The Post/Redirect/Get answer of a failed account form (07.1-21): `303` to
+/// `{page}?flow={flow}` of the tenant (plus `client_query`, the account header's
+/// `?client_id=…` of a resolved static client, or "") with `flash` sealed for that flow. When
+/// sealing fails the redirect still happens; the page is then shown without messages.
+pub(crate) fn account_redirect(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    loc: &Locale,
+    page: &str,
+    flow: FlowId,
+    client_query: &str,
+    flash: Flash,
+) -> Response {
+    let sealed = seal(state.kek(), tenant.tenant.id, flow, &flash).and_then(|v| {
+        if v.len() <= MAX_ACCOUNT_VALUE_LEN {
+            Some(v)
+        } else {
+            seal(
+                state.kek(),
+                tenant.tenant.id,
+                flow,
+                &flash.clone().without_attribute_values(),
+            )
+            .filter(|v| v.len() <= MAX_ACCOUNT_VALUE_LEN)
+        }
+    });
+    let jar = match sealed {
+        Some(v) => CookieJar::new().add(build(state, &tenant.tenant, v, MAX_AGE_SECS)),
+        None => CookieJar::new(),
+    };
+    let client = client_query.replacen('?', "&", 1);
+    let location = carry_ui_locales(&tenant.ui_url(&format!("{page}?flow={flow}{client}")), loc);
+    match HeaderValue::from_str(&location) {
+        Ok(location) => (
+            StatusCode::SEE_OTHER,
+            jar,
+            [
+                (header::LOCATION, location),
+                (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+            ],
+        )
+            .into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+/// The flash of an account page `GET` (`?flow=` of the failed POST): read and cleared like
+/// [`take`]; kept only when it belongs to `form_id`. Without a `flow` parameter nothing is read.
+pub(crate) fn take_account(
+    state: &AppState,
+    tenant: &Tenant,
+    query: Option<&str>,
+    form_id: &str,
+    jar: &CookieJar,
+    out: CookieJar,
+) -> (Option<Flash>, CookieJar) {
+    let flow = url::form_urlencoded::parse(query.unwrap_or_default().as_bytes())
+        .find(|(k, _)| k == "flow")
+        .and_then(|(_, v)| uuid::Uuid::parse_str(&v).ok())
+        .map(FlowId);
+    let Some(flow) = flow else {
+        return (None, out);
+    };
+    let (flash, out) = take(state, tenant, flow, jar, out);
+    (flash.filter(|f| f.form_id == form_id), out)
 }
 
 /// Reads the flash for `flow` from `jar` and returns it (when it opens for this flow and tenant)

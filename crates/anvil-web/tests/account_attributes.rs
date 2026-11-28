@@ -229,6 +229,14 @@ async fn nav_entry_only_with_user_editable_attributes() {
     assert!(html.contains("id=\"attributes-none\""));
     assert!(!html.contains("account-nav-attributes"));
     assert!(!html.contains("attributes-form"));
+    // U-L5: one heading per level; the H1 is not repeated as an H2.
+    assert_eq!(html.matches("<h1").count(), 1, "{html}");
+    assert_eq!(html.matches("<h2").count(), 0, "{html}");
+    assert_eq!(
+        html.matches("Additional information</h").count(),
+        1,
+        "{html}"
+    );
 
     // A non-editable attribute alone does not show the entry either.
     define(
@@ -371,7 +379,6 @@ async fn valid_values_are_saved_and_audited() {
 async fn invalid_values_are_refused_with_field_errors() {
     let app = signed_in().await;
     define_all(&app).await;
-    let (action, csrf) = open(&app).await;
     for (field, value) in [
         ("attr.department", "sales"),
         ("attr.age", "abc"),
@@ -379,9 +386,13 @@ async fn invalid_values_are_refused_with_field_errors() {
         ("attr.work_email", "not-an-email"),
         ("attr.birthday", "yesterday"),
     ] {
-        let resp = app
+        let (action, csrf) = open(&app).await;
+        // Post/Redirect/Get: 303 with the flash, the GET shows the refusal.
+        let posted = app
             .post_form(&action, &[("csrf_token", &csrf), (field, value)])
             .await;
+        assert!(support::is_prg(&posted), "{field}: {}", posted.status);
+        let resp = app.follow(&posted).await;
         assert_messages(&resp, 400, "attributes.invalid");
         let html = resp.html();
         let id = format!("attr-{}", field.trim_start_matches("attr."));
@@ -399,8 +410,9 @@ async fn invalid_values_are_refused_with_field_errors() {
         }
     }
     // An unknown attribute is refused too.
+    let (action, csrf) = open(&app).await;
     let resp = app
-        .post_form(&action, &[("csrf_token", &csrf), ("attr.shoe_size", "42")])
+        .post_form_follow(&action, &[("csrf_token", &csrf), ("attr.shoe_size", "42")])
         .await;
     assert_messages(&resp, 400, "attributes.invalid");
     assert!(stored(&app).await.is_empty());
@@ -412,10 +424,10 @@ async fn non_editable_attributes_are_refused() {
     let app = signed_in().await;
     define_all(&app).await;
     set_stored(&app, json!({"cost_center": 7, "tags": ["a"]})).await;
-    let (action, csrf) = open(&app).await;
     for (field, value) in [("attr.cost_center", "8"), ("attr.tags", "[\"b\"]")] {
+        let (action, csrf) = open(&app).await;
         let resp = app
-            .post_form(
+            .post_form_follow(
                 &action,
                 &[
                     ("csrf_token", &csrf),
@@ -506,7 +518,7 @@ async fn expired_flow_shows_the_page_again() {
         FLOW_LIFETIME.whole_seconds() as u64 + 60,
     ));
     let resp = app
-        .post_form(
+        .post_form_follow(
             &action,
             &[("csrf_token", &csrf), ("attr.department", "eng")],
         )

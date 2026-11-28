@@ -653,11 +653,11 @@ async fn totp_enrolment_recovery_codes_regeneration_and_removal() {
 
     assert!(consume(&app, user, &codes[0]).await);
 
-    // Regenerate: new set, old codes stop working.
+    // Regenerate (confirmed): new set, old codes stop working.
     let resp = post(
         &app,
         &action_of(&app, &html, "recovery-codes-regenerate"),
-        &[("csrf_token", &csrf)],
+        &[("csrf_token", &csrf), ("confirm", "yes")],
     )
     .await;
     assert_eq!(resp.status, 200, "{}", resp.text());
@@ -673,7 +673,7 @@ async fn totp_enrolment_recovery_codes_regeneration_and_removal() {
 
     // Remove TOTP: recovery codes go with it.
     let delete = action_of(&app, &html, &format!("credential-delete-{}", totp.id));
-    let resp = post(&app, &delete, &[("csrf_token", &csrf)]).await;
+    let resp = post(&app, &delete, &[("csrf_token", &csrf), ("confirm", "yes")]).await;
     assert_eq!(resp.status, 200, "{}", resp.text());
     assert_eq!(
         message_keys(&resp.html()),
@@ -697,18 +697,24 @@ async fn totp_enrolment_recovery_codes_regeneration_and_removal() {
     );
     assert!(!consume(&app, user, &fresh[1]).await);
 
-    // Regenerating without TOTP is refused.
-    let resp = post(
-        &app,
-        &action_of(&app, &html, "recovery-codes-regenerate"),
-        &[("csrf_token", &csrf)],
-    )
-    .await;
-    assert_eq!(resp.status, 400);
-    assert_eq!(
-        message_keys(&resp.html()),
-        vec!["account.totp_required".to_owned()]
-    );
+    // Regenerating without TOTP is refused, with or without the confirmation (nobody is asked to
+    // confirm what would fail).
+    for pairs in [
+        vec![("csrf_token", csrf.as_str())],
+        vec![("csrf_token", csrf.as_str()), ("confirm", "yes")],
+    ] {
+        let resp = post(
+            &app,
+            &action_of(&app, &html, "recovery-codes-regenerate"),
+            &pairs,
+        )
+        .await;
+        assert_eq!(resp.status, 400);
+        assert_eq!(
+            message_keys(&resp.html()),
+            vec!["account.totp_required".to_owned()]
+        );
+    }
 
     let actions: Vec<AuditAction> = audit_actions(&app)
         .await
@@ -909,14 +915,20 @@ async fn removing_a_passkey_works_without_javascript_and_only_for_its_owner() {
 
     // Bob's credential id in Alice's form: not found, nothing deleted.
     let his_action = mine_action.replace(&mine.id.to_string(), &his.id.to_string());
-    let resp = post(&app, &his_action, &[("csrf_token", &csrf)]).await;
-    assert_eq!(resp.status, 400);
-    assert_eq!(
-        message_keys(&resp.html()),
-        vec!["account.credential_not_found".to_owned()]
-    );
     let bad = mine_action.replace(&mine.id.to_string(), "not-a-uuid");
-    assert_eq!(post(&app, &bad, &[("csrf_token", &csrf)]).await.status, 400);
+    for pairs in [
+        vec![("csrf_token", csrf.as_str())],
+        vec![("csrf_token", csrf.as_str()), ("confirm", "yes")],
+    ] {
+        let resp = post(&app, &his_action, &pairs).await;
+        assert_eq!(resp.status, 400);
+        assert_eq!(
+            message_keys(&resp.html()),
+            vec!["account.credential_not_found".to_owned()]
+        );
+        assert!(!resp.html().contains("id=\"form-confirm\""));
+        assert_eq!(post(&app, &bad, &pairs).await.status, 400);
+    }
     assert_eq!(
         app.storage()
             .users()
@@ -927,7 +939,12 @@ async fn removing_a_passkey_works_without_javascript_and_only_for_its_owner() {
         1
     );
 
-    let resp = post(&app, &mine_action, &[("csrf_token", &csrf)]).await;
+    let resp = post(
+        &app,
+        &mine_action,
+        &[("csrf_token", &csrf), ("confirm", "yes")],
+    )
+    .await;
     assert_eq!(resp.status, 200, "{}", resp.text());
     assert_eq!(
         message_keys(&resp.html()),
@@ -945,6 +962,207 @@ async fn removing_a_passkey_works_without_javascript_and_only_for_its_owner() {
     assert_eq!(
         audit_actions(&app).await,
         vec![(AuditAction::PasskeyRemoved, ActorKind::User)]
+    );
+}
+
+/// Enrols TOTP through the page (no JavaScript); returns the recovery codes shown.
+async fn enrol_totp(app: &TestApp) -> Vec<String> {
+    let html = open_page(app).await;
+    let csrf = csrf_from(&html);
+    let resp = post(
+        app,
+        &action_of(app, &html, "totp-begin"),
+        &[("csrf_token", &csrf)],
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let page = resp.html();
+    let base32: String = element_text(&page, "totp-secret")
+        .split_whitespace()
+        .collect();
+    let code = totp_code(&base32_decode(&base32), current_step(app));
+    let resp = post(
+        app,
+        &action_of(app, &page, "totp-confirm"),
+        &[("csrf_token", &csrf), ("code", &code)],
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    recovery_codes_on(&resp.html())
+}
+
+/// The passkey, the TOTP and all 10 recovery codes of `user` are still there.
+async fn assert_unchanged(app: &TestApp, user: UserId) {
+    let tenant = default_tenant(app).id;
+    let users = app.storage().users();
+    assert_eq!(
+        users.passkeys(tenant, user).await.expect("passkeys").len(),
+        1,
+        "passkey kept"
+    );
+    assert!(
+        users.totp(tenant, user).await.expect("totp").is_some(),
+        "TOTP kept"
+    );
+    assert_eq!(
+        users
+            .recovery_codes_remaining(tenant, user)
+            .await
+            .expect("count"),
+        10,
+        "codes kept"
+    );
+}
+
+/// The `action` of the confirmation form (`#form-confirm`), as a path.
+fn confirm_action(app: &TestApp, html: &str) -> String {
+    action_of(app, html, "form-confirm")
+}
+
+/// The confirmation step (07.1-21, U-M12) of every destructive action on the security page:
+/// removing a passkey, removing the authenticator app and new recovery codes. Without
+/// `confirm=yes` the POST answers the question (same action, same CSRF token, no-store) and
+/// changes nothing; a confirmed POST without a valid binding is refused (403) and changes
+/// nothing; the confirmed POST with the page's binding performs it.
+#[tokio::test]
+async fn destructive_post_without_confirm_changes_nothing() {
+    let app = signed_in().await;
+    let tenant = default_tenant(&app);
+    let user = user_id(&app, EMAIL).await;
+    let key = fake_passkey(b"confirm-cred", "Work <laptop>");
+    app.storage()
+        .users()
+        .create_passkey(tenant.id, user, &key)
+        .await
+        .expect("store passkey");
+    let codes = enrol_totp(&app).await;
+    assert_eq!(codes.len(), 10);
+    let totp_id = app
+        .storage()
+        .users()
+        .totp(tenant.id, user)
+        .await
+        .expect("totp")
+        .expect("enrolled")
+        .id;
+
+    let html = open_page(&app).await;
+    let csrf = csrf_from(&html);
+    let actions = [
+        (
+            action_of(&app, &html, &format!("credential-delete-{}", key.id)),
+            "remove-passkey",
+        ),
+        (
+            action_of(&app, &html, &format!("credential-delete-{totp_id}")),
+            "remove-totp",
+        ),
+        (
+            action_of(&app, &html, "recovery-codes-regenerate"),
+            "regenerate-recovery-codes",
+        ),
+    ];
+    for (action, id) in &actions {
+        for confirm in [None, Some(""), Some("no")] {
+            let mut pairs = vec![("csrf_token", csrf.as_str())];
+            if let Some(c) = confirm {
+                pairs.push(("confirm", c));
+            }
+            let resp = post(&app, action, &pairs).await;
+            assert_eq!(resp.status, 200, "{id} {confirm:?}: {}", resp.text());
+            assert_no_store(&resp);
+            let page = resp.html();
+            assert!(page.contains(&format!("data-action=\"{id}\"")), "{page}");
+            assert!(page.contains("name=\"confirm\" value=\"yes\""), "{page}");
+            assert!(page.contains("id=\"link-confirm-cancel\""), "{page}");
+            assert_eq!(csrf_from(&page), csrf, "same binding");
+            assert_eq!(&confirm_action(&app, &page), action, "same action and flow");
+            assert!(
+                !page.contains("<li><code>"),
+                "no codes before the confirmation"
+            );
+            if *id == "remove-passkey" {
+                assert!(page.contains("Work &lt;laptop&gt;"), "{page}");
+                assert!(!page.contains("Work <laptop>"), "escaped");
+            }
+            assert_unchanged(&app, user).await;
+        }
+        // Confirmed, but with a wrong or missing token: the csrf page, nothing changed.
+        for pairs in [
+            vec![("csrf_token", "wrong"), ("confirm", "yes")],
+            vec![("confirm", "yes")],
+        ] {
+            let resp = post(&app, action, &pairs).await;
+            assert_eq!(resp.status, 403, "{id} {pairs:?}");
+            assert_eq!(error_key(&resp.html()).as_deref(), Some("csrf"));
+            assert_unchanged(&app, user).await;
+        }
+        // Confirmed, the right token, but without the flow cookie (another browser).
+        let mut jar = app.cookies();
+        jar.retain(|k, _| !k.contains("anvil_flow_"));
+        let cookie = jar
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join("; ");
+        let resp = app
+            .send(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(action.as_str())
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .header(header::COOKIE, cookie)
+                    .body(Body::from(format!("csrf_token={csrf}&confirm=yes")))
+                    .expect("request"),
+            )
+            .await;
+        assert_eq!(resp.status, 403, "{id}");
+        assert_unchanged(&app, user).await;
+    }
+    assert!(
+        audit_actions(&app)
+            .await
+            .iter()
+            .all(|(a, _)| *a == AuditAction::TotpEnrolled),
+        "nothing but the enrolment was audited"
+    );
+
+    // Confirmed with the page's binding: performed.
+    let resp = post(
+        &app,
+        &actions[2].0,
+        &[("csrf_token", &csrf), ("confirm", "yes")],
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_eq!(recovery_codes_on(&resp.html()).len(), 10);
+    let resp = post(
+        &app,
+        &actions[0].0,
+        &[("csrf_token", &csrf), ("confirm", "yes")],
+    )
+    .await;
+    assert_eq!(
+        message_keys(&resp.html()),
+        vec!["account.passkey_removed".to_owned()]
+    );
+    let resp = post(
+        &app,
+        &actions[1].0,
+        &[("csrf_token", &csrf), ("confirm", "yes")],
+    )
+    .await;
+    assert_eq!(
+        message_keys(&resp.html()),
+        vec!["account.totp_removed".to_owned()]
+    );
+    assert!(
+        app.storage()
+            .users()
+            .totp(tenant.id, user)
+            .await
+            .expect("totp")
+            .is_none()
     );
 }
 

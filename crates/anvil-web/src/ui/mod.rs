@@ -5,6 +5,7 @@
 //! HTTP-POST binding is a cross-site form post).
 
 mod account_apps;
+mod account_confirm;
 // Phase 5 (pre-declared by plan 05-02; the owning plan adds its routes)
 mod account_attributes;
 mod account_linked;

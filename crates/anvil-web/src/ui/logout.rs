@@ -223,7 +223,11 @@ impl AppState {
 }
 
 /// The signed-out page's URL (outside `/ui/logout`), carrying the client the logout named.
-fn signed_out_url(tenant: &ResolvedTenant, loc: &Locale, client_id: Option<&str>) -> String {
+pub(crate) fn signed_out_url(
+    tenant: &ResolvedTenant,
+    loc: &Locale,
+    client_id: Option<&str>,
+) -> String {
     let url = match client_id.filter(|c| !c.is_empty()) {
         Some(c) => {
             let q = url::form_urlencoded::Serializer::new(String::new())

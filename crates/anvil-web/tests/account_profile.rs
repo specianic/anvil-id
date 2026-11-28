@@ -146,7 +146,7 @@ fn hidden_token(html: &str) -> String {
 async fn request_change(app: &TestApp, new_email: &str) -> String {
     let (action, csrf) = open(app, "/ui/account/email", "email-change").await;
     let resp = app
-        .post_form(&action, &[("csrf_token", &csrf), ("new_email", new_email)])
+        .post_form_follow(&action, &[("csrf_token", &csrf), ("new_email", new_email)])
         .await;
     assert_message(&resp, 200, "account.email_change_sent");
     let emails = take_emails(app).await;
@@ -177,7 +177,7 @@ async fn without_a_session_the_pages_send_the_user_to_sign_in() {
                 url::form_urlencoded::byte_serialize(page.as_bytes()).collect::<String>()
             )
         );
-        let resp = app.post_form(page, &[("csrf_token", "x")]).await;
+        let resp = app.post_form_follow(page, &[("csrf_token", "x")]).await;
         assert_eq!(resp.status, 303, "{page}");
     }
 }
@@ -246,13 +246,13 @@ async fn posts_without_csrf_wrong_token_or_flow_cookie_are_forbidden_and_change_
             vec![(field, value)],
             vec![("csrf_token", "wrong"), (field, value)],
         ] {
-            let resp = app.post_form(&action, &pairs).await;
+            let resp = app.post_form_follow(&action, &pairs).await;
             assert_eq!(resp.status, 403, "{page} {pairs:?}");
             assert_eq!(error_key(&resp.html()).as_deref(), Some("csrf"));
         }
         // Missing flow parameter.
         let resp = app
-            .post_form(page, &[("csrf_token", &csrf), (field, value)])
+            .post_form_follow(page, &[("csrf_token", &csrf), (field, value)])
             .await;
         assert_eq!(resp.status, 403, "{page}");
 
@@ -297,7 +297,7 @@ async fn profile_update_persists_is_audited_and_feeds_the_page_language() {
     let app = signed_in().await;
     let (action, csrf) = open(&app, "/ui/account/profile", "profile-form").await;
     let resp = app
-        .post_form(
+        .post_form_follow(
             &action,
             &[
                 ("csrf_token", &csrf),
@@ -339,11 +339,11 @@ async fn profile_update_persists_is_audited_and_feeds_the_page_language() {
         ("family_name", "Lovelace"),
         ("locale", "en-GB"),
     ];
-    let resp = app.post_form(&action, &same).await;
+    let resp = app.post_form_follow(&action, &same).await;
     assert_message(&resp, 200, "account.profile_saved");
     assert_eq!(events_of(&app, AuditAction::ProfileUpdated).await.len(), 1);
     let resp = app
-        .post_form(
+        .post_form_follow(
             &action,
             &[
                 ("csrf_token", &csrf),
@@ -365,7 +365,7 @@ async fn profile_update_persists_is_audited_and_feeds_the_page_language() {
 #[tokio::test]
 async fn invalid_profile_input_is_rejected_and_kept_in_the_form() {
     let app = signed_in().await;
-    let (action, csrf) = open(&app, "/ui/account/profile", "profile-form").await;
+    let (mut action, mut csrf) = open(&app, "/ui/account/profile", "profile-form").await;
     let long = "x".repeat(201);
     for (field, value, key) in [
         ("locale", "en_US", "account.invalid_locale"),
@@ -375,12 +375,17 @@ async fn invalid_profile_input_is_rejected_and_kept_in_the_form() {
         ("given_name", "line\nbreak", "account.invalid_name"),
     ] {
         let resp = app
-            .post_form(&action, &[("csrf_token", &csrf), (field, value)])
+            .post_form_follow(&action, &[("csrf_token", &csrf), (field, value)])
             .await;
         assert_message(&resp, 400, key);
         if field == "locale" && value == "en_US" {
             assert!(resp.html().contains("value=\"en_US\""));
         }
+        // The page after the redirect is bound to a fresh flow.
+        (action, csrf) = (
+            action_of(&app, &resp.html(), "profile-form"),
+            csrf_from(&resp.html()),
+        );
     }
     let user = user_by_email(&app, EMAIL).await.expect("user");
     assert_eq!(user.claims, StandardClaims::default());
@@ -406,7 +411,7 @@ async fn email_change_needs_a_recent_sign_in() {
     let (action, csrf) = (action_of(&app, &html, "email-change"), csrf_from(&html));
     app.clock().advance(Duration::from_secs(6 * 60));
     let resp = app
-        .post_form(&action, &[("csrf_token", &csrf), ("new_email", NEW_EMAIL)])
+        .post_form_follow(&action, &[("csrf_token", &csrf), ("new_email", NEW_EMAIL)])
         .await;
     assert_message(&resp, 400, "account.reauth_required");
     let html = resp.html();
@@ -426,7 +431,7 @@ async fn email_change_is_confirmed_by_post_only_switches_and_notifies_the_old_ad
     let user = user_id(&app, EMAIL).await;
     let (action, csrf) = open(&app, "/ui/account/email", "email-change").await;
     let resp = app
-        .post_form(
+        .post_form_follow(
             &action,
             &[
                 ("csrf_token", &csrf),
@@ -489,7 +494,7 @@ async fn email_change_is_confirmed_by_post_only_switches_and_notifies_the_old_ad
 
     // POST confirms.
     let resp = app
-        .post_form("/ui/account/email/confirm", &[("token", &token)])
+        .post_form_follow("/ui/account/email/confirm", &[("token", &token)])
         .await;
     assert_message(&resp, 200, "account.email_changed");
     assert!(user_by_email(&app, EMAIL).await.is_none());
@@ -508,7 +513,7 @@ async fn email_change_is_confirmed_by_post_only_switches_and_notifies_the_old_ad
 
     // A second POST: the link is used up.
     let resp = app
-        .post_form("/ui/account/email/confirm", &[("token", &token)])
+        .post_form_follow("/ui/account/email/confirm", &[("token", &token)])
         .await;
     assert_message(&resp, 400, "account.email_token_invalid");
     assert!(take_emails(&app).await.is_empty());
@@ -530,16 +535,20 @@ async fn email_change_is_confirmed_by_post_only_switches_and_notifies_the_old_ad
 #[tokio::test]
 async fn unchanged_malformed_and_taken_addresses() {
     let app = signed_in().await;
-    let (action, csrf) = open(&app, "/ui/account/email", "email-change").await;
+    let (mut action, mut csrf) = open(&app, "/ui/account/email", "email-change").await;
     for (value, key) in [
         ("ALICE@example.com", "account.email_unchanged"),
         ("not-an-address", "account.invalid_email"),
         ("", "account.invalid_email"),
     ] {
         let resp = app
-            .post_form(&action, &[("csrf_token", &csrf), ("new_email", value)])
+            .post_form_follow(&action, &[("csrf_token", &csrf), ("new_email", value)])
             .await;
         assert_message(&resp, 400, key);
+        (action, csrf) = (
+            action_of(&app, &resp.html(), "email-change"),
+            csrf_from(&resp.html()),
+        );
     }
 
     // Another account's address: the same answer as success, but nothing is sent.
@@ -550,7 +559,7 @@ async fn unchanged_malformed_and_taken_addresses() {
     login(&app, "", EMAIL, PASSWORD).await;
     let (action, csrf) = open(&app, "/ui/account/email", "email-change").await;
     let resp = app
-        .post_form(
+        .post_form_follow(
             &action,
             &[("csrf_token", &csrf), ("new_email", "bob@example.com")],
         )
@@ -591,7 +600,7 @@ async fn address_taken_at_confirmation_keeps_the_token_until_it_is_free() {
         .await
         .expect("carol");
     let resp = app
-        .post_form("/ui/account/email/confirm", &[("token", &token)])
+        .post_form_follow("/ui/account/email/confirm", &[("token", &token)])
         .await;
     assert_message(&resp, 409, "account.email_taken");
     assert_eq!(
@@ -611,7 +620,7 @@ async fn address_taken_at_confirmation_keeps_the_token_until_it_is_free() {
             .expect("delete")
     );
     let resp = app
-        .post_form("/ui/account/email/confirm", &[("token", &token)])
+        .post_form_follow("/ui/account/email/confirm", &[("token", &token)])
         .await;
     assert_message(&resp, 200, "account.email_changed");
     assert!(user_by_email(&app, "carol@example.com").await.is_some());
@@ -638,7 +647,7 @@ async fn tampered_expired_or_missing_links_are_rejected() {
         format!("{random}.{sealed}x"),
     ] {
         let resp = app
-            .post_form("/ui/account/email/confirm", &[("token", &bad)])
+            .post_form_follow("/ui/account/email/confirm", &[("token", &bad)])
             .await;
         assert_message(&resp, 400, "account.email_token_invalid");
     }
@@ -649,7 +658,7 @@ async fn tampered_expired_or_missing_links_are_rejected() {
     // After 24 hours the link has expired.
     app.clock().advance(Duration::from_secs(24 * 3600 + 1));
     let resp = app
-        .post_form("/ui/account/email/confirm", &[("token", &token)])
+        .post_form_follow("/ui/account/email/confirm", &[("token", &token)])
         .await;
     assert_message(&resp, 400, "account.email_token_invalid");
     assert!(user_by_email(&app, EMAIL).await.is_some());
@@ -795,7 +804,7 @@ async fn password_policy_violations_are_refused_and_change_nothing() {
     let app = signed_in().await;
     let user = user_id(&app, EMAIL).await;
     let phc = password_phc(&app, user).await;
-    let (action, csrf) = open(&app, "/ui/account/password", "password-form").await;
+    let (mut action, mut csrf) = open(&app, "/ui/account/password", "password-form").await;
     let long = "a".repeat(1025);
     for (value, key) in [
         ("short", "account.password_too_short"),
@@ -803,9 +812,13 @@ async fn password_policy_violations_are_refused_and_change_nothing() {
         (long.as_str(), "account.password_too_long"),
     ] {
         let resp = app
-            .post_form(&action, &[("csrf_token", &csrf), ("new_password", value)])
+            .post_form_follow(&action, &[("csrf_token", &csrf), ("new_password", value)])
             .await;
         assert_message(&resp, 400, key);
+        (action, csrf) = (
+            action_of(&app, &resp.html(), "password-form"),
+            csrf_from(&resp.html()),
+        );
     }
     assert_eq!(password_phc(&app, user).await, phc);
     assert!(take_emails(&app).await.is_empty());
@@ -825,7 +838,7 @@ async fn password_change_needs_a_recent_sign_in() {
     let (action, csrf) = open(&app, "/ui/account/password", "password-form").await;
     app.clock().advance(Duration::from_secs(6 * 60));
     let resp = app
-        .post_form(
+        .post_form_follow(
             &action,
             &[
                 ("csrf_token", &csrf),
@@ -854,7 +867,7 @@ async fn password_change_revokes_other_sessions_with_deliveries_and_keeps_this_o
     );
     let (action, csrf) = (action_of(&app, &html, "password-form"), csrf_from(&html));
     let resp = app
-        .post_form(
+        .post_form_follow(
             &action,
             &[
                 ("csrf_token", &csrf),
@@ -903,7 +916,7 @@ async fn password_change_without_revoking_keeps_other_sessions() {
     let other = other_session(&app, user).await;
     let (action, csrf) = open(&app, "/ui/account/password", "password-form").await;
     let resp = app
-        .post_form(
+        .post_form_follow(
             &action,
             &[
                 ("csrf_token", &csrf),
@@ -1163,5 +1176,108 @@ async fn breached_password_is_refused_and_a_social_only_user_can_set_one() {
     assert_eq!(
         password_phc(&app, session.user_id).await.as_deref(),
         Some("$fake$24")
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Post/Redirect/Get (07.1-21, U-M1)
+// ---------------------------------------------------------------------------------------------
+
+/// A refused profile, email or password POST answers 303 to the page's `GET ?flow=` with the
+/// one-shot flash; the GET shows the refusal (its status), keeps the typed profile values and
+/// never the password, and is a plain page once the flash was read (reload, Back).
+#[tokio::test]
+async fn failed_account_forms_follow_post_redirect_get() {
+    let app = signed_in().await;
+    for (page, form, pairs, key) in [
+        (
+            "/ui/account/profile",
+            "profile-form",
+            vec![("name", "Ada Lovelace"), ("locale", "en_US")],
+            "account.invalid_locale",
+        ),
+        (
+            "/ui/account/email",
+            "email-change",
+            vec![("new_email", "not-an-address")],
+            "account.invalid_email",
+        ),
+        (
+            "/ui/account/password",
+            "password-form",
+            vec![("new_password", "Sh0rt")],
+            "account.password_too_short",
+        ),
+    ] {
+        let (action, csrf) = open(&app, page, form).await;
+        let mut body = vec![("csrf_token", csrf.as_str())];
+        body.extend(pairs.iter().copied());
+        let resp = app.post_form(&action, &body).await;
+        assert!(
+            support::is_prg(&resp),
+            "{page}: {} {}",
+            resp.status,
+            resp.text()
+        );
+        assert_eq!(resp.header("cache-control"), Some("no-store"));
+        let to = location(&resp);
+        let flow = action.split("flow=").nth(1).expect("flow");
+        assert_eq!(
+            to,
+            format!("{}{page}?flow={flow}", app.issuer(None)),
+            "{page}"
+        );
+        let cookies: Vec<&str> = resp
+            .headers
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .collect();
+        assert!(
+            cookies
+                .iter()
+                .all(|c| !c.contains("Sh0rt") && !c.contains("Ada")),
+            "the flash is sealed: {cookies:?}"
+        );
+
+        let shown = app.follow(&resp).await;
+        assert_message(&shown, 400, key);
+        assert_eq!(shown.header("cache-control"), Some("no-store"));
+        let html = shown.html();
+        assert!(!html.contains("Sh0rt"), "no password: {html}");
+        if form == "profile-form" {
+            assert!(html.contains("value=\"Ada Lovelace\""), "typed name kept");
+        }
+        // The form is bound to a fresh flow; the flash is gone after one read.
+        assert_ne!(action_of(&app, &html, form), action);
+        let again = app.get(to.trim_start_matches(&app.issuer(None))).await;
+        assert_eq!(again.status, 200, "{page}");
+        assert!(message_keys(&again.html()).is_empty(), "{page}");
+    }
+    let user = user_by_email(&app, EMAIL).await.expect("user");
+    assert_eq!(user.claims, StandardClaims::default());
+}
+
+/// The PRG redirect keeps `?client_id=` only for a resolved static client: the back link
+/// survives a refused POST, an unknown id is never echoed.
+#[tokio::test]
+async fn failed_account_form_keeps_only_a_resolved_client() {
+    let app = signed_in().await;
+    // An unknown client id: no back link, nothing carried.
+    let resp = app.get("/ui/account/password?client_id=nope-unknown").await;
+    let html = resp.html();
+    let action = action_of(&app, &html, "password-form");
+    assert!(!action.contains("client_id"), "{action}");
+    let resp = app
+        .post_form(
+            &format!("{action}&client_id=nope-unknown"),
+            &[("csrf_token", &csrf_from(&html)), ("new_password", "short")],
+        )
+        .await;
+    assert!(support::is_prg(&resp));
+    assert!(
+        !location(&resp).contains("nope-unknown"),
+        "{}",
+        location(&resp)
     );
 }

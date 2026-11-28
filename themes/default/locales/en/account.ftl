@@ -17,7 +17,10 @@ profile-name = Full name
 profile-given_name = Given name
 profile-family_name = Family name
 profile-locale = Language
-profile-locale_help = A language tag such as en, de or pt-BR. Account pages use this language when it is available.
+profile-locale_help = Account pages use this language.
+profile-locale_default = Not set (use the language of your browser)
+# The name of this catalog's language, in that language (the language select).
+profile-language_name = English
 profile-save = Save
 account-profile_saved = Your details were saved.
 
@@ -63,3 +66,24 @@ account-password_too_short = The password is too short.
 account-password_too_long = The password is too long.
 account-password_breached = This password has appeared in a data breach. Please choose a different one.
 account-overloaded = The service is busy. Please try again in a moment.
+
+## Confirmation of destructive actions (account_confirm.html, plan 07.1-21)
+account_confirm-cancel = Cancel, keep everything as it is
+account_confirm-remove_passkey_question = Remove the passkey { $subject }?
+account_confirm-remove_passkey_explain = You can no longer sign in with this passkey.
+account_confirm-remove_passkey_submit = Remove passkey
+account_confirm-remove_totp_question = Remove the authenticator app?
+account_confirm-remove_totp_explain = Sign-in no longer asks for a code from your authenticator app, and your recovery codes stop working.
+account_confirm-remove_totp_submit = Remove authenticator app
+account_confirm-regenerate_codes_question = Create new recovery codes?
+account_confirm-regenerate_codes_explain = Your current recovery codes stop working right away. Keep the new ones in a safe place.
+account_confirm-regenerate_codes_submit = Create new recovery codes
+account_confirm-revoke_app_question = Remove access for { $subject }?
+account_confirm-revoke_app_explain = { $subject } can no longer use your account until you allow it again, and you are signed out of it.
+account_confirm-revoke_app_submit = Remove access
+account_confirm-unlink_question = Disconnect { $subject }?
+account_confirm-unlink_explain = You can no longer sign in with { $subject }. You can connect it again later.
+account_confirm-unlink_submit = Disconnect
+account_confirm-sign_out_others_question = Sign out on all other devices?
+account_confirm-sign_out_others_explain = Every other device where you are signed in is signed out. This device stays signed in.
+account_confirm-sign_out_others_submit = Sign out other devices
