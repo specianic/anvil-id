@@ -28,6 +28,16 @@
 //! validated redirect ([`LogoutState`]). [`LogoutService::confirm`] checks the binding (a wrong
 //! cookie or CSRF token is [`CoreError::Forbidden`]), consumes the flow (deleted, so a second
 //! submission finds nothing) and logs the current session out.
+//!
+//! # Without a session
+//!
+//! A request that would ask, while the browser has no active session of this tenant, does not
+//! ask: there is nothing to sign out. [`LogoutService::end_session`] answers
+//! [`LogoutOutcome::LoggedOut`] (`revoked: false`) and [`LogoutService::start_confirmation`]
+//! answers [`ConfirmationStart::NotSignedIn`], both with the validated post-logout redirect if the
+//! request had one. Refusals stay refusals (the decision runs first), and no flow is created.
+//! With a session nothing changes: the confirmation is asked as before. The outcomes carry the
+//! client the logout named (`client_id`) so the pages can offer a way back to it.
 
 use std::sync::Arc;
 
@@ -113,6 +123,8 @@ pub enum LogoutOutcome {
     LoggedOut {
         redirect: Option<String>,
         revoked: bool,
+        /// The client the logout named (hint or `client_id`), for the page's way forward.
+        client_id: Option<String>,
     },
     /// Ask the user first ([`LogoutService::start_confirmation`] opens the page).
     Confirm {
@@ -138,6 +150,14 @@ pub enum ConfirmationStart {
         flow: StartedLogoutFlow,
         /// The name of the client the request named, for the page.
         client_name: Option<String>,
+        /// The validated client the request named, for the page's way back.
+        client_id: Option<String>,
+    },
+    /// No active session of this tenant: nothing to confirm and no flow created. `redirect` is
+    /// the validated post-logout redirect (final URL with `state`), if the request had one.
+    NotSignedIn {
+        redirect: Option<String>,
+        client_id: Option<String>,
     },
     Error(LogoutError),
 }
@@ -157,6 +177,8 @@ pub enum ConfirmResult {
     LoggedOut {
         redirect: Option<String>,
         revoked: bool,
+        /// The client the confirmed logout named, for the page's way forward.
+        client_id: Option<String>,
     },
     /// The flow expired, does not exist or was already used; nothing changed.
     Expired,
@@ -171,6 +193,14 @@ pub struct LogoutService {
 /// `None` for an absent or empty parameter.
 fn non_empty(v: &Option<String>) -> Option<String> {
     v.as_ref().filter(|s| !s.is_empty()).cloned()
+}
+
+/// `current` if it is an unrevoked session of `tenant`.
+fn active_in<'a>(
+    tenant: &Tenant,
+    current: Option<&'a BrowserSession>,
+) -> Option<&'a BrowserSession> {
+    current.filter(|s| s.tenant_id == tenant.id && s.revoked_at.is_none())
 }
 
 impl LogoutService {
@@ -272,12 +302,10 @@ impl LogoutService {
             state: non_empty(&raw.state),
             ui_locales: non_empty(&raw.ui_locales),
         };
-        let current = current
-            .filter(|s| s.tenant_id == tenant.id && s.revoked_at.is_none())
-            .map(|s| CurrentSession {
-                user_id: s.user_id.to_string(),
-                session_id: s.id.to_string(),
-            });
+        let current = active_in(tenant, current).map(|s| CurrentSession {
+            user_id: s.user_id.to_string(),
+            session_id: s.id.to_string(),
+        });
         let decision = validate_end_session(
             &req,
             hint_client.as_ref(),
@@ -298,8 +326,7 @@ impl LogoutService {
         client_id: Option<&str>,
         ctx: &RequestContext,
     ) -> Result<bool, CoreError> {
-        let Some(session) = current.filter(|s| s.tenant_id == tenant.id && s.revoked_at.is_none())
-        else {
+        let Some(session) = active_in(tenant, current) else {
             return Ok(false);
         };
         let revoked = self
@@ -339,6 +366,15 @@ impl LogoutService {
             .await?;
         Ok(match decision {
             EndSessionDecision::Error(e) => LogoutOutcome::Error(e),
+            // Nothing to sign out: no question (module docs, "Without a session").
+            EndSessionDecision::Confirm {
+                client_id,
+                redirect,
+            } if active_in(tenant, current).is_none() => LogoutOutcome::LoggedOut {
+                redirect: redirect.map(|r| r.to_url()),
+                revoked: false,
+                client_id,
+            },
             EndSessionDecision::Confirm {
                 client_id,
                 redirect,
@@ -353,6 +389,7 @@ impl LogoutService {
                 LogoutOutcome::LoggedOut {
                     redirect: redirect.map(|r| r.to_url()),
                     revoked,
+                    client_id: attributed,
                 }
             }
         })
@@ -361,11 +398,14 @@ impl LogoutService {
     /// Opens the confirmation page for `client_id`, `post_logout_redirect_uri` and `state` of
     /// `raw` (any `id_token_hint` is ignored: without a hint the decision never logs out). The
     /// redirect is validated again here, so a hand-made page URL cannot add an unregistered one.
+    /// Without an active session of this tenant (`current`) there is nothing to confirm:
+    /// [`ConfirmationStart::NotSignedIn`], no flow.
     pub async fn start_confirmation(
         &self,
         tenant: &Tenant,
         issuer: &str,
         raw: &RawEndSession,
+        current: Option<&BrowserSession>,
     ) -> Result<ConfirmationStart, CoreError> {
         let (decision, _) = self.decide(tenant, issuer, raw, None, None).await?;
         let (client_id, redirect) = match decision {
@@ -380,11 +420,17 @@ impl LogoutService {
                 ));
             }
         };
+        if active_in(tenant, current).is_none() {
+            return Ok(ConfirmationStart::NotSignedIn {
+                redirect: redirect.map(|r| r.to_url()),
+                client_id,
+            });
+        }
         let client_name = match &client_id {
             Some(id) => self.client(tenant, id).await?.map(|c| c.name),
             None => None,
         };
-        let state = LogoutState::new(client_id, redirect);
+        let state = LogoutState::new(client_id.clone(), redirect);
         let now = self.clock.now();
         let cookie = random_token();
         let csrf = random_token();
@@ -406,6 +452,7 @@ impl LogoutService {
                 csrf_token: SecretString::from(csrf),
             },
             client_name,
+            client_id,
         })
     }
 
@@ -447,6 +494,7 @@ impl LogoutService {
         Ok(ConfirmResult::LoggedOut {
             redirect: state.redirect().map(|r| r.to_url()),
             revoked,
+            client_id: state.client_id,
         })
     }
 }

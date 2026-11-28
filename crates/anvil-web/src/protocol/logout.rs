@@ -13,7 +13,9 @@
 //!   enqueued in the same transaction), the session cookie is cleared, the delivery worker is
 //!   woken, and the browser goes to the post-logout redirect (exactly `state` added, nothing
 //!   else) or sees the signed-out page;
-//! - ask: 303 to the confirmation page `/ui/logout` (`ui::logout`);
+//! - ask: 303 to the confirmation page `/ui/logout` (`ui::logout`). Only with an active session:
+//!   without one there is nothing to sign out, so the request is answered like a logout (the
+//!   validated post-logout redirect, else the signed-out page) and never asks;
 //! - refuse: a 400 error page with the contract sentence. It never redirects and changes nothing.
 //!
 //! A parameter sent twice and a POST body that is not a form are the `invalid_request` page.
@@ -146,14 +148,32 @@ async fn end_session(
         .end_session(&tenant.tenant, &tenant.issuer, raw, session.as_ref(), ctx)
         .await
     {
-        Ok(LogoutOutcome::LoggedOut { redirect, revoked }) => {
-            state.logout_finished(tenant, &loc, CookieJar::new(), redirect, revoked, false)
+        Ok(LogoutOutcome::LoggedOut {
+            redirect,
+            revoked,
+            client_id,
+        }) => {
+            state
+                .logout_finished(
+                    tenant,
+                    &loc,
+                    CookieJar::new(),
+                    redirect,
+                    revoked,
+                    false,
+                    client_id.as_deref(),
+                )
+                .await
         }
         Ok(LogoutOutcome::Confirm {
             client_id,
             redirect,
         }) => state.logout_confirm_redirect(tenant, &loc, client_id.as_deref(), redirect.as_ref()),
-        Ok(LogoutOutcome::Error(e)) => state.logout_error_page(tenant, &loc, e),
+        Ok(LogoutOutcome::Error(e)) => {
+            state
+                .logout_error_page(tenant, &loc, e, raw.client_id.as_deref(), session.is_some())
+                .await
+        }
         Err(e) => no_store(core_error_page_in(state, Some(tenant), &loc, &e)),
     }
 }

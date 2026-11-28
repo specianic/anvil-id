@@ -408,3 +408,63 @@ async fn a_cross_site_post_without_a_valid_hint_never_logs_out() {
     assert!(loc(&resp).contains("/ui/logout"));
     assert!(f.session_active().await);
 }
+
+#[tokio::test]
+async fn without_a_session_the_confirmation_creates_no_flow_and_posts_stay_forbidden() {
+    let f = fixture().await;
+    // No session: no prompt, so no flow cookie and no CSRF token to replay.
+    let resp = f
+        .get_with(&format!("/ui/logout?client_id={}", f.rp.id()), None)
+        .await;
+    assert_eq!(resp.status, 303, "{}", resp.text());
+    assert!(
+        resp.headers
+            .get_all("set-cookie")
+            .iter()
+            .all(|c| !c.to_str().unwrap_or("").contains("flow")),
+        "no flow cookie without a session"
+    );
+    assert!(!resp.text().contains("csrf_token"));
+    // A POST without the flow cookie or the CSRF token is still the csrf page; nothing changes.
+    for (cookie, pairs) in [
+        (None, vec![]),
+        (Some(f.cookie.as_str()), vec![]),
+        (Some(f.cookie.as_str()), vec![("csrf_token", "guess")]),
+    ] {
+        let resp = f
+            .post(
+                "/ui/logout?flow=0192d0b4-0000-7000-8000-000000000001",
+                &pairs,
+                cookie,
+                "same-origin",
+            )
+            .await;
+        assert!(
+            resp.status == 403 || resp.status == 400,
+            "{}: {}",
+            resp.status,
+            resp.text()
+        );
+        assert!(resp.header("location").is_none());
+    }
+    assert!(f.session_active().await, "nothing changed");
+}
+
+#[tokio::test]
+async fn a_hand_made_signed_out_url_never_renders_a_request_value() {
+    let f = fixture().await;
+    for q in [
+        "client_id=javascript%3Aalert(1)",
+        "client_id=https%3A%2F%2Fevil.test%2F",
+        "client_id=%22%3E%3Cscript%3E",
+        "post_logout_redirect_uri=https%3A%2F%2Fevil.test%2F",
+    ] {
+        let resp = f.get_with(&format!("/ui/signed-out?{q}"), None).await;
+        assert_eq!(resp.status, 200, "{q}");
+        let html = resp.text();
+        assert!(!html.contains("evil.test"), "{q}");
+        assert!(!html.contains("javascript:"), "{q}");
+        assert!(!html.contains("<script>"), "{q}");
+        assert!(!html.contains("link-back-to-app"), "{q}");
+    }
+}

@@ -13,6 +13,7 @@ logout-expired = Diese Abmeldeseite ist abgelaufen. Bitte versuchen Sie es erneu
 
 logout-signed_out_heading = Abgemeldet
 logout-signed_out = Sie wurden abgemeldet.
+logout-sign_in_again = Erneut anmelden
 logout-error_heading = Abmeldung fehlgeschlagen
 
 logout-invalid_id_token_hint = Die Abmeldeanfrage ist ungültig: Der id_token_hint konnte nicht überprüft werden.

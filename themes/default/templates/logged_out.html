@@ -2,9 +2,33 @@
       heading_key, message_key, message, error (bool)
     Selector: logout-message with data-message-key (the key, e.g. logout.signed_out or one of the
     logout.* error keys). The sentences are a stable contract (themes/default/README.md,
-    tests/conformance). Never served under /ui/logout. No JavaScript. -#}
+    tests/conformance). Never served under /ui/logout. No JavaScript.
+    The way forward comes from page.links (ui::nav::NavContext, plan 07.1-20): link-back-to-app
+    (the logout client's static home only), link-login (signed-out page: "Sign in again"),
+    link-account, link-console and the sign-out form form-sign-out (error pages while signed in). -#}
 {% extends "base.html" %}
 {% block heading %}{{ t(heading_key) }}{% endblock %}
 {% block content %}
 <p class="{% if error %}anvil-error-text{% else %}anvil-lead{% endif %}" id="logout-message" data-message-key="{{ message_key }}"{% if error %} role="alert"{% endif %}>{{ message }}</p>
+{% if page.links.app_home or page.links.login or page.links.account or page.links.console -%}
+<nav class="anvil-links" aria-label="{{ t("nav.next_steps") }}">
+{% if page.links.app_home -%}
+<a id="link-back-to-app" href="{{ page.links.app_home.href }}">{{ t("errors_friendly.back_to_app", app=page.links.app_home.app_name) }}</a>
+{% endif -%}
+{% if page.links.login -%}
+<a id="link-login" href="{{ page.links.login }}">{% if error %}{{ t("message.go_to_sign_in") }}{% else %}{{ t("logout.sign_in_again") }}{% endif %}</a>
+{% endif -%}
+{% if page.links.account -%}
+<a id="link-account" href="{{ page.links.account }}">{{ t("nav.go_to_account") }}</a>
+{% endif -%}
+{% if page.links.console -%}
+<a id="link-console" href="{{ page.links.console }}">{{ t("nav.open_console") }}</a>
+{% endif -%}
+</nav>
+{% endif -%}
+{% if page.links.sign_out -%}
+<form id="form-sign-out" method="post" action="{{ page.links.sign_out }}">
+<button type="submit" id="sign-out-submit">{{ t("nav.sign_out") }}</button>
+</form>
+{% endif %}
 {% endblock %}

@@ -344,3 +344,339 @@ async fn discovery_advertises_logout() {
         assert!(doc.get(absent).is_none(), "{absent}");
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// No dead ends (07.1-20): no prompt without a session, "Stay signed in" back to the app, the
+// signed-out and error pages offer a way forward; third-party client URLs are never rendered.
+// ---------------------------------------------------------------------------------------------
+
+/// A static client's sign-in entry point (preferred home).
+const APP_LOGIN: &str = "https://shop.test/login";
+/// A static client's home page.
+const APP_HOME: &str = "https://shop.test/";
+/// A URL a DCR or CIMD client chose itself.
+const THIRD_PARTY: &str = "https://third-party.test/home";
+
+/// The `href` of the element with `id` (escapes decoded).
+fn href(html: &str, id: &str) -> Option<String> {
+    let start = html.find(&format!("id=\"{id}\""))?;
+    let tag_end = html[start..].find('>')? + start;
+    let tag_start = html[..start].rfind('<')?;
+    let tag = &html[tag_start..tag_end];
+    let marker = "href=\"";
+    let at = tag.find(marker)? + marker.len();
+    let end = tag[at..].find('"')? + at;
+    Some(tag[at..end].replace("&#x2f;", "/").replace("&amp;", "&"))
+}
+
+/// Gives the fixture's (static) client a home.
+async fn set_home(f: &Fx, initiate_login_uri: Option<&str>, client_uri: Option<&str>) {
+    f.app
+        .storage()
+        .clients()
+        .update(
+            f.tenant.id,
+            f.rp.id(),
+            &anvil_core::model::ClientUpdate {
+                initiate_login_uri: Some(initiate_login_uri.map(str::to_owned)),
+                client_uri: Some(client_uri.map(str::to_owned)),
+                ..anvil_core::model::ClientUpdate::default()
+            },
+            f.app.clock().now(),
+        )
+        .await
+        .expect("client update")
+        .expect("client exists");
+}
+
+/// A client registered through `source` (DCR or CIMD) that chose `THIRD_PARTY` as its home.
+async fn third_party(f: &Fx, source: anvil_core::model::ClientSource) -> String {
+    let rp = token_support::register_with(
+        &f.app,
+        f.tenant.id,
+        token_support::web_input(anvil_core::model::ClientAuthMethod::ClientSecretBasic),
+        |c| {
+            c.name = "Third Party".into();
+            c.registration_source = source;
+            c.client_uri = Some(THIRD_PARTY.into());
+            c.initiate_login_uri = Some(THIRD_PARTY.into());
+            c.post_logout_redirect_uris = vec![BYE.into()];
+        },
+    )
+    .await;
+    rp.id().to_owned()
+}
+
+#[tokio::test]
+async fn without_a_session_logout_never_asks_and_offers_sign_in() {
+    let f = fixture().await;
+    // End-session endpoint: no prompt, the signed-out page with a way forward.
+    let resp = f.get_with("/logout", None).await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_eq!(resp.header("cache-control"), Some("no-store"));
+    let html = resp.html();
+    assert!(html.contains("You have been signed out."), "{html}");
+    assert!(!html.contains("logout-confirm-submit"), "{html}");
+    assert_eq!(
+        href(&html, "link-login").as_deref(),
+        Some(format!("{}/ui/login", f.iss).as_str()),
+        "{html}"
+    );
+    assert!(html.contains("Sign in again"), "{html}");
+
+    // The confirmation page itself: no prompt, no flow, 303 to the signed-out page (outside
+    // /ui/logout, the conformance contract).
+    let resp = f.get_with("/ui/logout", None).await;
+    assert_eq!(resp.status, 303, "{}", resp.text());
+    assert_eq!(loc(&resp), format!("{}/ui/signed-out", f.iss));
+    assert!(
+        resp.headers
+            .get_all("set-cookie")
+            .iter()
+            .all(|c| !c.to_str().unwrap_or("").contains("flow")),
+        "no flow cookie without a session"
+    );
+    // The other browser's session and the audit log are untouched.
+    assert!(f.session_active().await);
+    assert!(f.audit(AuditAction::Logout).await.is_empty());
+}
+
+#[tokio::test]
+async fn without_a_session_a_registered_uri_is_followed_with_state() {
+    let f = fixture().await;
+    let pairs = [
+        ("client_id", f.rp.id()),
+        ("post_logout_redirect_uri", BYE),
+        ("state", "st"),
+    ];
+    let resp = f.get_with(&Fx::logout_path(&pairs), None).await;
+    assert_eq!(resp.status, 303, "{}", resp.text());
+    assert_eq!(loc(&resp), format!("{BYE}?state=st"));
+
+    let q = url::form_urlencoded::Serializer::new(String::new())
+        .extend_pairs(pairs)
+        .finish();
+    let resp = f.get_with(&format!("/ui/logout?{q}"), None).await;
+    assert_eq!(resp.status, 303, "{}", resp.text());
+    assert_eq!(loc(&resp), format!("{BYE}?state=st"));
+    assert!(f.session_active().await);
+    assert!(f.audit(AuditAction::Logout).await.is_empty());
+    assert_eq!(f.deliveries().await, 0);
+}
+
+#[tokio::test]
+async fn without_a_session_bad_requests_are_still_refused() {
+    let f = fixture().await;
+    for path in [
+        Fx::logout_path(&[
+            ("client_id", f.rp.id()),
+            ("post_logout_redirect_uri", "https://evil.test/bye"),
+        ]),
+        format!(
+            "/ui/logout?client_id={}&post_logout_redirect_uri=https%3A%2F%2Fevil.test%2Fbye",
+            f.rp.id()
+        ),
+    ] {
+        let resp = f.get_with(&path, None).await;
+        assert_logout_error(&resp, "logout.redirect_uri_not_registered");
+        assert!(
+            resp.html().contains(
+                "The sign-out request is invalid: the post_logout_redirect_uri is not registered for this client."
+            ),
+            "contract sentence unchanged"
+        );
+        assert!(!resp.text().contains("evil.test"));
+        // Signed out: the way forward is sign-in.
+        assert!(
+            href(&resp.html(), "link-login").is_some(),
+            "{}",
+            resp.html()
+        );
+    }
+    let resp = f
+        .get_with(&Fx::logout_path(&[("post_logout_redirect_uri", BYE)]), None)
+        .await;
+    assert_logout_error(&resp, "logout.id_token_hint_required");
+    let resp = f
+        .get_with(&Fx::logout_path(&[("client_id", "nope")]), None)
+        .await;
+    assert_logout_error(&resp, "logout.unknown_client");
+}
+
+#[tokio::test]
+async fn with_a_session_the_confirmation_is_still_asked() {
+    let f = fixture().await;
+    let resp = f.get("/logout").await;
+    assert_eq!(resp.status, 303);
+    assert_eq!(loc(&resp), format!("{}/ui/logout", f.iss));
+    let page = f.get("/ui/logout").await;
+    assert_eq!(page.status, 200, "{}", page.text());
+    assert!(page.html().contains("logout-confirm-submit"));
+    assert!(f.session_active().await);
+}
+
+#[tokio::test]
+async fn stay_signed_in_returns_to_the_static_client_home() {
+    let f = fixture().await;
+    set_home(&f, None, Some(APP_HOME)).await;
+    let page = f.get(&format!("/ui/logout?client_id={}", f.rp.id())).await;
+    assert_eq!(page.status, 200, "{}", page.text());
+    assert_eq!(
+        href(&page.html(), "logout-cancel").as_deref(),
+        Some(APP_HOME)
+    );
+    // initiate_login_uri is preferred.
+    set_home(&f, Some(APP_LOGIN), Some(APP_HOME)).await;
+    let page = f.get(&format!("/ui/logout?client_id={}", f.rp.id())).await;
+    assert_eq!(
+        href(&page.html(), "logout-cancel").as_deref(),
+        Some(APP_LOGIN)
+    );
+    assert!(f.session_active().await, "the session is kept");
+
+    // Without a client, or a client without a home: the account page.
+    let page = f.get("/ui/logout").await;
+    assert_eq!(
+        href(&page.html(), "logout-cancel").as_deref(),
+        Some(format!("{}/ui/account/sessions", f.iss).as_str())
+    );
+    set_home(&f, None, None).await;
+    let page = f.get(&format!("/ui/logout?client_id={}", f.rp.id())).await;
+    assert_eq!(
+        href(&page.html(), "logout-cancel").as_deref(),
+        Some(format!("{}/ui/account/sessions", f.iss).as_str())
+    );
+}
+
+#[tokio::test]
+async fn logout_cancel_never_uses_dynamic_client_uri() {
+    use anvil_core::model::ClientSource;
+    let f = fixture().await;
+    for source in [ClientSource::Dynamic, ClientSource::Cimd] {
+        let id = third_party(&f, source).await;
+        let page = f.get(&format!("/ui/logout?client_id={id}")).await;
+        assert_eq!(page.status, 200, "{}", page.text());
+        let html = page.html();
+        assert_eq!(
+            href(&html, "logout-cancel").as_deref(),
+            Some(format!("{}/ui/account/sessions", f.iss).as_str()),
+            "{source:?}"
+        );
+        assert!(!html.contains("third-party.test"), "{source:?}: {html}");
+
+        // The signed-out page and the error page never show it either.
+        let done = f
+            .get_with(&format!("/ui/signed-out?client_id={id}"), None)
+            .await;
+        assert!(!done.html().contains("third-party.test"), "{source:?}");
+        assert!(href(&done.html(), "link-back-to-app").is_none());
+        let err = f
+            .get(&Fx::logout_path(&[
+                ("client_id", &id),
+                ("post_logout_redirect_uri", "https://evil.test/"),
+            ]))
+            .await;
+        assert_logout_error(&err, "logout.redirect_uri_not_registered");
+        assert!(!err.html().contains("third-party.test"), "{source:?}");
+    }
+    assert!(f.session_active().await);
+}
+
+#[tokio::test]
+async fn the_signed_out_page_offers_back_to_the_static_app() {
+    let f = fixture().await;
+    set_home(&f, None, Some(APP_HOME)).await;
+    let page = f.get(&format!("/ui/logout?client_id={}", f.rp.id())).await;
+    let (action, csrf) = confirm_form(&f.app, &page);
+    let resp = f
+        .post(
+            &action,
+            &[("csrf_token", &csrf)],
+            Some(&f.cookies()),
+            "same-origin",
+        )
+        .await;
+    assert_eq!(resp.status, 303, "{}", resp.text());
+    let l = loc(&resp);
+    assert_eq!(
+        l,
+        format!("{}/ui/signed-out?client_id={}", f.iss, f.rp.id())
+    );
+    assert!(!l.contains("/ui/logout"));
+    assert!(!f.session_active().await);
+
+    let done = f
+        .get_with(l.strip_prefix(&f.iss).expect("same origin"), None)
+        .await;
+    assert_eq!(done.status, 200);
+    let html = done.html();
+    assert!(html.contains("You have been signed out."));
+    assert_eq!(href(&html, "link-back-to-app").as_deref(), Some(APP_HOME));
+    assert!(html.contains("Back to Test RP"), "{html}");
+    assert!(href(&html, "link-login").is_some(), "sign in again too");
+    // "Back to <app>" comes first.
+    assert!(html.find("link-back-to-app") < html.find("link-login"));
+
+    // The end-session endpoint's own signed-out page (valid hint, no URI) does the same.
+    let f = fixture().await;
+    set_home(&f, Some(APP_LOGIN), None).await;
+    let hint = f.id_token().await;
+    let resp = f.get(&Fx::logout_path(&[("id_token_hint", &hint)])).await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_eq!(
+        href(&resp.html(), "link-back-to-app").as_deref(),
+        Some(APP_LOGIN)
+    );
+}
+
+#[tokio::test]
+async fn the_signed_out_page_ignores_unknown_repeated_or_url_client_ids() {
+    let f = fixture().await;
+    set_home(&f, None, Some(APP_HOME)).await;
+    for q in [
+        "client_id=nope".to_owned(),
+        format!("client_id={0}&client_id={0}", f.rp.id()),
+        "client_id=https%3A%2F%2Fevil.test%2F".to_owned(),
+    ] {
+        let resp = f.get_with(&format!("/ui/signed-out?{q}"), None).await;
+        assert_eq!(resp.status, 200, "{q}");
+        let html = resp.html();
+        assert!(href(&html, "link-back-to-app").is_none(), "{q}: {html}");
+        assert!(!html.contains("evil.test"), "{q}");
+        assert!(href(&html, "link-login").is_some(), "{q}");
+    }
+}
+
+#[tokio::test]
+async fn logout_errors_keep_the_contract_and_offer_a_way_forward() {
+    let f = fixture().await;
+    set_home(&f, None, Some(APP_HOME)).await;
+    let resp = f
+        .get(&Fx::logout_path(&[
+            ("client_id", f.rp.id()),
+            ("post_logout_redirect_uri", "https://evil.test/bye"),
+        ]))
+        .await;
+    assert_logout_error(&resp, "logout.redirect_uri_not_registered");
+    let html = resp.html();
+    assert!(html.contains(
+        "role=\"alert\">The sign-out request is invalid: the post_logout_redirect_uri is not registered for this client.</p>"
+    ), "{html}");
+    // Signed in: back to the app first, then the account page and the sign-out form.
+    assert_eq!(href(&html, "link-back-to-app").as_deref(), Some(APP_HOME));
+    assert!(href(&html, "link-account").is_some(), "{html}");
+    assert!(html.contains("id=\"form-sign-out\""), "{html}");
+    assert!(f.session_active().await, "nothing changed");
+
+    // An expired confirmation also has a way forward.
+    let resp = f
+        .post(
+            "/ui/logout?flow=0192d0b4-0000-7000-8000-000000000000",
+            &[("csrf_token", "x")],
+            Some(&f.cookies()),
+            "same-origin",
+        )
+        .await;
+    assert_eq!(resp.status, 400, "{}", resp.text());
+    assert!(href(&resp.html(), "link-account").is_some());
+}

@@ -17,6 +17,7 @@ logout-expired = This sign-out page expired. Please try again.
 
 logout-signed_out_heading = Signed out
 logout-signed_out = You have been signed out.
+logout-sign_in_again = Sign in again
 logout-error_heading = Sign-out failed
 
 logout-invalid_id_token_hint = The sign-out request is invalid: the id_token_hint could not be verified.
