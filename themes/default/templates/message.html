@@ -1,10 +1,33 @@
 {% extends "base.html" %}
+{#- Message page. Variables besides `page`: heading, body_key, body, sent_to (optional: the address
+    a confirmation email went to). The way forward comes from page.links (ui::nav::NavContext):
+    link-continue ("Continue to <app>"), link-login, link-account, link-console and the sign-out
+    form form-sign-out (POST to the end-session endpoint, which asks for confirmation). -#}
 {% block heading %}{{ heading }}{% endblock %}
 {% block content %}
 <p class="anvil-lead" id="message-body" data-message-key="{{ body_key }}">{{ body }}</p>
-{% if page.links.login %}
+{% if sent_to -%}
+<p id="message-sent-to">{{ t("nav.check_email_sent_to", email=sent_to) }}</p>
+{% endif -%}
+{% if page.links.continue_to or page.links.login or page.links.account or page.links.console -%}
 <nav class="anvil-links" aria-label="{{ t("nav.next_steps") }}">
+{% if page.links.continue_to -%}
+<a id="link-continue" href="{{ page.links.continue_to.href }}">{{ t("nav.continue_to", app=page.links.continue_to.app_name) }}</a>
+{% endif -%}
+{% if page.links.login -%}
 <a id="link-login" href="{{ page.links.login }}">{{ t("message.go_to_sign_in") }}</a>
+{% endif -%}
+{% if page.links.account -%}
+<a id="link-account" href="{{ page.links.account }}">{{ t("nav.go_to_account") }}</a>
+{% endif -%}
+{% if page.links.console -%}
+<a id="link-console" href="{{ page.links.console }}">{{ t("nav.open_console") }}</a>
+{% endif -%}
 </nav>
+{% endif -%}
+{% if page.links.sign_out -%}
+<form id="form-sign-out" method="post" action="{{ page.links.sign_out }}">
+<button type="submit" id="sign-out-submit">{{ t("nav.sign_out") }}</button>
+</form>
 {% endif %}
 {% endblock %}

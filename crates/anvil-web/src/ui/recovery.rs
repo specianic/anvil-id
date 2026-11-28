@@ -3,6 +3,12 @@
 //! Without a token the page asks for an email address and always answers `recovery.sent`, whether
 //! or not an account exists. With a token (the emailed link) it shows the reset form; the token is
 //! consumed only by the POST that sets the new password.
+//!
+//! The page keeps the authorization request it was opened for (`request=`, also on the emailed
+//! link of a recovery started from an app's sign-in): after the reset, `recovery.done` offers
+//! "Continue to <app>" while the request is live. Without a token, a `request=` that is not a live
+//! request of this tenant answers the `flow_expired` page; with a token the reset still works
+//! (the token is valid on its own) and the stale request is simply dropped.
 
 use anvil_core::flow::engine::FlowInput;
 use anvil_core::model::FlowKind;
@@ -13,7 +19,8 @@ use axum::response::Response;
 use axum::routing::get;
 use axum_extra::extract::cookie::CookieJar;
 
-use super::login::{UiForm, UiQuery, rejected_form, start_page, submit_page};
+use super::login::{UiForm, UiQuery, rejected_form, stale_request_page, start_page, submit_page};
+use super::nav::NavContext;
 use crate::i18n::RequestLocale;
 use crate::request_context::AuditContext;
 use crate::state::AppState;
@@ -29,7 +36,13 @@ async fn show(
     RequestLocale(loc, _): RequestLocale,
     Query(q): Query<UiQuery>,
 ) -> Response {
-    start_page(&state, &tenant, &loc, FlowKind::Recovery, None, q.token()).await
+    let token = q.token();
+    let nav = match NavContext::from_query(&state, &tenant, q.request.as_deref()).await {
+        Ok(nav) => nav,
+        Err(_) if token.is_some() => NavContext::none(),
+        Err(_) => return stale_request_page(&state, &tenant, &loc),
+    };
+    start_page(&state, &tenant, &loc, FlowKind::Recovery, &nav, token).await
 }
 
 async fn submit(

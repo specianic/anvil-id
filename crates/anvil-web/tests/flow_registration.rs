@@ -2,21 +2,53 @@
 //! selected backend (`ANVILID_TEST_DB`).
 
 mod support;
+mod token_support;
 mod ui_helpers;
 
 use anvil_core::model::{RegistrationMode, TenantSettings};
 use support::{TestApp, location};
 use ui_helpers::*;
 
-const REQUEST: &str = "0192f0c4-7a1b-7c3d-8e9f-0123456789ab";
 const PASSWORD: &str = "correct horse battery";
+
+/// A live authorization request of the default tenant for a new test client (stored through the
+/// port): the sign-in pages only continue a request that exists (07.1-01; a stale id answers the
+/// `flow_expired` page).
+async fn live_request(app: &TestApp) -> String {
+    use anvil_core::ports::Clock as _;
+    let tenant = app.default.as_ref().expect("installed").tenant.id;
+    let rp = token_support::register(
+        app,
+        tenant,
+        token_support::web_input(anvil_core::model::ClientAuthMethod::ClientSecretBasic),
+    )
+    .await;
+    let id = anvil_core::model::AuthRequestId(uuid::Uuid::now_v7());
+    let now = app.clock().now();
+    app.storage()
+        .grants()
+        .create_authorization_request(
+            tenant,
+            &anvil_core::model::NewAuthorizationRequest {
+                id,
+                client_id: rp.id().to_owned(),
+                params: token_support::params("openid", Some(token_support::CHALLENGE)),
+                created_at: now,
+                expires_at: now + time::Duration::minutes(15),
+            },
+        )
+        .await
+        .expect("request stored");
+    id.0.to_string()
+}
 
 #[tokio::test]
 async fn open_registration_creates_the_user_signs_in_and_sends_a_verification_link() {
     let app = TestApp::new().await;
+    let request = live_request(&app).await;
     let resp = submit_form(
         &app,
-        &format!("/ui/registration?request={REQUEST}"),
+        &format!("/ui/registration?request={request}"),
         &[
             ("email", "  Bob@Example.COM "),
             ("password", PASSWORD),
@@ -27,7 +59,7 @@ async fn open_registration_creates_the_user_signs_in_and_sends_a_verification_li
     assert_eq!(resp.status, 303, "{}", resp.text());
     assert_eq!(
         location(&resp),
-        format!("{}/authorize/continue?request={REQUEST}", app.issuer(None))
+        format!("{}/authorize/continue?request={request}", app.issuer(None))
     );
     assert!(session_cookie(&app).is_some(), "registration signs in");
 

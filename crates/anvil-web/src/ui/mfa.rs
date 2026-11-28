@@ -4,7 +4,7 @@
 //! | Route | |
 //! |---|---|
 //! | `POST /ui/login/second-factor?flow=` | `code` (TOTP) or `recovery_code`, plus `factor_token`; in the enrolment step `code` confirms the new authenticator app |
-//! | `GET  /ui/login/second-factor` | 303 to `/ui/login` (the page only exists as a POST answer) |
+//! | `GET  /ui/login/second-factor[?flow=]` | 303 to the sign-in page (the page only exists as a POST answer), keeping the flow's request when the flow cookie is present |
 //!
 //! The same route serves the three steps of the login flow that come after the user is known:
 //! the second factor (`second_factor.html`), the enrolment required by a `required` policy
@@ -41,8 +41,10 @@ use axum_extra::extract::cookie::CookieJar;
 
 use super::flow_driver::{self, DriveOutcome, FlowBinding, Throttle};
 use super::login::{
-    Extras, UiForm, UiQuery, csrf_page, drive_response, locked_page, rejected_form, restart_login,
+    Extras, UiForm, UiQuery, csrf_page, drive_response, locked_page, rejected_form,
+    restart_login_in,
 };
+use super::nav::{NavContext, UiPage};
 use crate::i18n::{Locale, RequestLocale};
 use crate::request_context::AuditContext;
 use crate::state::AppState;
@@ -95,9 +97,23 @@ pub(super) fn open_factor_token(
 }
 
 /// `GET`: the page is only ever the answer to a POST (its CSRF token cannot be shown again), so
-/// a direct visit goes back to the sign-in page.
-async fn show(tenant: ResolvedTenant) -> Response {
-    let location = tenant.ui_url("/ui/login");
+/// a direct visit goes back to the sign-in page. A reload in the browser holding the flow cookie
+/// keeps the flow's authorization request.
+async fn show(
+    State(state): State<AppState>,
+    tenant: ResolvedTenant,
+    RequestLocale(loc, _): RequestLocale,
+    jar: CookieJar,
+    Query(q): Query<UiQuery>,
+) -> Response {
+    let has_cookie = jar
+        .get(&state.cookies().flow_name(&tenant.tenant))
+        .is_some();
+    let nav = match q.flow_id() {
+        Some(flow) if has_cookie => NavContext::from_flow(&state, &tenant, flow).await,
+        _ => NavContext::none(),
+    };
+    let location = nav.url(&tenant, &loc, UiPage::Login);
     (StatusCode::SEE_OTHER, [(header::LOCATION, location)]).into_response()
 }
 
@@ -119,12 +135,13 @@ async fn submit(
         return csrf_page(&state, Some(&tenant), &loc);
     };
     let tenant_id = tenant.tenant.id;
+    let nav = NavContext::from_flow(&state, &tenant, flow_id).await;
     let Some(user) = form
         .factor_token
         .as_deref()
         .and_then(|t| open_factor_token(state.kek(), tenant_id, flow_id, t))
     else {
-        return restart_login(&state, &tenant, &loc).await;
+        return restart_login_in(&state, &tenant, &loc, &nav).await;
     };
     let present = |v: &Option<String>| v.clone().filter(|s| !s.trim().is_empty());
     let input = match present(&form.recovery_code) {
@@ -141,30 +158,44 @@ async fn submit(
             form,
             retry_after,
             attempt: Some(AuthAttempt::SecondFactorFailed { user }),
-        } => locked_second_factor(&state, &tenant, &loc, form, flow_id, user, retry_after),
+        } => locked_second_factor(
+            &state,
+            &tenant,
+            &loc,
+            &nav,
+            form,
+            flow_id,
+            user,
+            retry_after,
+        ),
         outcome => {
             let token = seal_factor_token(state.kek(), tenant_id, flow_id, user).ok();
             let extras = Extras {
                 factor_token: token.clone(),
                 ..Extras::default()
             };
-            drive_response(&state, &tenant, &loc, outcome, &extras, token)
+            drive_response(&state, &tenant, &loc, &nav, outcome, &extras, token)
         }
     }
 }
 
 /// The second-factor form answering a lock (429, `Retry-After`), still carrying its token.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "threads the request's locale, links and binding"
+)]
 fn locked_second_factor(
     state: &AppState,
     tenant: &ResolvedTenant,
     loc: &Locale,
+    nav: &NavContext,
     form: FormDescription,
     flow: FlowId,
     user: UserId,
     retry_after: std::time::Duration,
 ) -> Response {
     let token = seal_factor_token(state.kek(), tenant.tenant.id, flow, user).ok();
-    locked_page(state, tenant, loc, form, retry_after, token)
+    locked_page(state, tenant, loc, nav, form, retry_after, token)
 }
 
 #[cfg(test)]

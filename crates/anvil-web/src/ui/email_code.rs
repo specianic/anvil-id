@@ -60,9 +60,10 @@ use axum_extra::extract::cookie::CookieJar;
 use super::flow_driver::{self, DriveOutcome, FlowBinding, Throttle};
 use super::login::{
     Extras, UiForm, UiQuery, bad_form, csrf_page, drive_response, factor_token, message_page,
-    outcome_response_with, rejected_form, rejection_page, restart_login, started_response_with,
+    outcome_response_with, rejected_form, rejection_page, restart_login_in, started_response_with,
     ui_base,
 };
+use super::nav::{NavContext, UiPage};
 use crate::client_ip::ClientIp;
 use crate::errors::{core_error_page_in, error_page_in};
 use crate::i18n::{Locale, RequestLocale, carry_ui_locales};
@@ -170,6 +171,7 @@ async fn request(
         return csrf_page(&state, Some(&tenant), &loc);
     };
     let tenant_id = tenant.tenant.id;
+    let nav = NavContext::from_flow(&state, &tenant, flow_id).await;
     let posted = form.email.clone().filter(|e| !e.trim().is_empty());
     // The address the send counts against: the posted one, (a new code) the token's, or (the
     // "Email me a code" button of a link confirmation that may not reveal the account) the
@@ -192,7 +194,7 @@ async fn request(
             .await
             {
                 Ok(Some(email)) => Some(send_ident(&email)),
-                Ok(None) => return restart_login(&state, &tenant, &loc).await,
+                Ok(None) => return restart_login_in(&state, &tenant, &loc, &nav).await,
                 Err(e) => return core_error_page_in(&state, Some(&tenant), &loc, &e),
             },
         },
@@ -218,7 +220,7 @@ async fn request(
         factor_token: token,
         ..Extras::default()
     };
-    drive_response(&state, &tenant, &loc, outcome, &extras, None)
+    drive_response(&state, &tenant, &loc, &nav, outcome, &extras, None)
 }
 
 /// `POST /ui/login/email-code/verify?flow=`: the code from the email (module docs). 404 unless
@@ -243,10 +245,11 @@ async fn verify(
         return csrf_page(&state, Some(&tenant), &loc);
     };
     let tenant_id = tenant.tenant.id;
+    let nav = NavContext::from_flow(&state, &tenant, flow_id).await;
     let posted_token = form.factor_token.clone().unwrap_or_default();
     let Some((subject, _)) = open_email_token(state.kek(), tenant_id, flow_id, &posted_token)
     else {
-        return restart_login(&state, &tenant, &loc).await;
+        return restart_login_in(&state, &tenant, &loc, &nav).await;
     };
     let input = FlowInput::EmailCode {
         code: form.code.clone().unwrap_or_default(),
@@ -272,7 +275,15 @@ async fn verify(
         factor_token: token,
         ..Extras::default()
     };
-    drive_response(&state, &tenant, &loc, outcome, &extras, Some(posted_token))
+    drive_response(
+        &state,
+        &tenant,
+        &loc,
+        &nav,
+        outcome,
+        &extras,
+        Some(posted_token),
+    )
 }
 
 /// `Cache-Control: no-store` and `Referrer-Policy: no-referrer` (the page URL carries the token).
@@ -305,7 +316,9 @@ async fn link_page(
     }
     let csrf = link_csrf(state.kek(), flow_id, &token);
     let mut page = PageContext::for_tenant(&state, &tenant, &loc, "title.magic_link");
-    page.links.login = Some(carry_ui_locales(&tenant.ui_url("/ui/login"), &loc));
+    // "Use another way": the sign-in of the flow's own request (none once it expired).
+    let nav = NavContext::from_flow(&state, &tenant, flow_id).await;
+    page.links.login = Some(nav.url(&tenant, &loc, UiPage::Login));
     let action = carry_ui_locales(
         &format!("{}/login/email-link?flow={flow_id}", ui_base(&tenant)),
         &loc,
@@ -356,6 +369,7 @@ async fn link_submit(
     if token.is_empty() || token.len() > 128 {
         return bad_form(&state, &tenant, &loc);
     }
+    let nav = NavContext::from_flow(&state, &tenant, flow_id).await;
     let binding = FlowBinding::Cookie { jar: &jar, csrf };
     let outcome =
         match flow_driver::email_link(&state, &tenant, &ctx, flow_id, &binding, &token).await {
@@ -364,7 +378,7 @@ async fn link_submit(
         };
     match outcome {
         EmailLinkOutcome::Done(outcome) => {
-            outcome_response_with(&state, &tenant, &loc, outcome, &Extras::default())
+            outcome_response_with(&state, &tenant, &loc, &nav, outcome, &Extras::default())
         }
         EmailLinkOutcome::Continue(started) => {
             let extras = Extras {
@@ -374,24 +388,31 @@ async fn link_submit(
                 totp: started.totp.as_ref(),
                 ..Extras::default()
             };
+            let next = NavContext::from_flow(&state, &tenant, started.flow_id).await;
             started_response_with(
                 &state,
                 &tenant,
                 &loc,
                 &started,
-                None,
+                &next,
                 StatusCode::OK,
                 &extras,
             )
         }
-        EmailLinkOutcome::OtherBrowser => rejected(&state, &tenant, &loc, OTHER_BROWSER),
-        EmailLinkOutcome::Rejected(key) => rejected(&state, &tenant, &loc, key),
+        EmailLinkOutcome::OtherBrowser => rejected(&state, &tenant, &loc, &nav, OTHER_BROWSER),
+        EmailLinkOutcome::Rejected(key) => rejected(&state, &tenant, &loc, &nav, key),
     }
 }
 
 /// A link that does not sign in: the message page with `key`, 400, nothing changed.
-fn rejected(state: &AppState, tenant: &ResolvedTenant, loc: &Locale, key: &str) -> Response {
-    let mut resp = message_page(state, tenant, loc, key, CookieJar::new());
+fn rejected(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    loc: &Locale,
+    nav: &NavContext,
+    key: &str,
+) -> Response {
+    let mut resp = message_page(state, tenant, loc, key, nav, CookieJar::new());
     *resp.status_mut() = StatusCode::BAD_REQUEST;
     resp.headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));

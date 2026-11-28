@@ -2,6 +2,11 @@
 //!
 //! When the tenant's registration mode is not `open`, the page shows the `registration.disabled`
 //! message and no flow is started (a POST to an existing flow is refused by the engine).
+//!
+//! A `request=` that is not a live request of this tenant answers the `flow_expired` page
+//! ([`super::login::stale_request_page`]) before any form. A registration that must confirm its
+//! address answers `registration.check_email` naming the address, and the emailed link carries
+//! the request so the verification page can continue to the app.
 
 use anvil_core::flow::engine::FlowInput;
 use anvil_core::model::{FlowKind, RegistrationMode};
@@ -14,8 +19,10 @@ use axum::routing::get;
 use axum_extra::extract::cookie::CookieJar;
 
 use super::login::{
-    UiForm, UiQuery, message_page, page_locale, rejected_form, start_page, submit_page,
+    UiForm, UiQuery, message_page, page_locale, rejected_form, stale_request_page, start_page,
+    submit_page,
 };
+use super::nav::{NavContext, StaleRequest};
 use crate::i18n::RequestLocale;
 use crate::request_context::AuditContext;
 use crate::state::AppState;
@@ -32,10 +39,11 @@ async fn show(
     headers: HeaderMap,
     Query(q): Query<UiQuery>,
 ) -> Response {
-    let request = match q.auth_request() {
-        Ok(r) => r,
-        Err(bad) => return bad.into_response(&state, Some(&tenant), &locale.0),
+    let nav = match NavContext::from_query(&state, &tenant, q.request.as_deref()).await {
+        Ok(nav) => nav,
+        Err(StaleRequest::Unknown) => return stale_request_page(&state, &tenant, &locale.0),
     };
+    let request = nav.request().map(|r| r.id);
     let loc = page_locale(&state, &tenant, locale, &headers, request).await;
     if tenant.tenant.settings.registration != RegistrationMode::Open {
         return message_page(
@@ -43,10 +51,11 @@ async fn show(
             &tenant,
             &loc,
             "registration.disabled",
+            &nav,
             CookieJar::new(),
         );
     }
-    start_page(&state, &tenant, &loc, FlowKind::Registration, request, None).await
+    start_page(&state, &tenant, &loc, FlowKind::Registration, &nav, None).await
 }
 
 async fn submit(

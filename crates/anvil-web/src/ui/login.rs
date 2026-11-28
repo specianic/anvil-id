@@ -100,8 +100,8 @@ use anvil_core::flow::login::{
     SSO_CHOICE_FORM_ID, UPSTREAM_LINK_FORM_ID,
 };
 use anvil_core::model::{
-    AuthRequestId, BrowserSession, CaptchaSettings, FlowId, FlowKind, RegistrationMode,
-    RequestContext, UserId, normalize_email,
+    AuthRequestId, BrowserSession, CaptchaSettings, FlowId, FlowKind, RequestContext, UserId,
+    normalize_email,
 };
 use anvil_core::policy::return_to::{ReturnTarget, parse_return_target};
 use anvil_core::ports::RelyingParty;
@@ -130,13 +130,14 @@ use super::flow_driver::{
     LoginMethod, PasskeyStep, Throttle, login_methods,
 };
 use super::mfa::seal_factor_token;
+use super::nav::{AccountSection, NavContext, StaleRequest, UiPage};
 use crate::adapters::captcha::captcha_csp;
 use crate::adapters::passkey::{WebauthnPasskeys, relying_party};
 use crate::client_ip::ClientIp;
 use crate::errors::{core_error_page_in, error_page_in};
 use crate::i18n::{Locale, RequestLocale, carry_ui_locales, locale_for_request};
 use crate::layers::ratelimit::{Surface, too_many_requests};
-use crate::render::{PageContext, PageLinks};
+use crate::render::PageContext;
 use crate::request_context::AuditContext;
 use crate::state::AppState;
 use crate::tenant::ResolvedTenant;
@@ -201,10 +202,11 @@ async fn show(
     jar: CookieJar,
     Query(q): Query<UiQuery>,
 ) -> Response {
-    let request = match q.auth_request() {
-        Ok(r) => r,
-        Err(resp) => return resp.into_response(&state, Some(&tenant), &locale.0),
+    let nav = match NavContext::from_query(&state, &tenant, q.request.as_deref()).await {
+        Ok(nav) => nav.with_return_to(q.return_target()),
+        Err(StaleRequest::Unknown) => return stale_request_page(&state, &tenant, &locale.0),
     };
+    let request = nav.request().map(|r| r.id);
     let loc = page_locale(&state, &tenant, locale, &headers, request).await;
     let current = match current_browser_session(&state, &tenant, &jar).await {
         Ok(s) => s,
@@ -270,10 +272,39 @@ async fn show(
         &tenant,
         &loc,
         &started,
-        request,
+        &nav,
         StatusCode::OK,
         &extras,
     )
+}
+
+/// The answer to a `GET` whose `request=` cannot be continued (unknown, expired, malformed or
+/// another tenant's; [`StaleRequest`] says which only as "unknown"): the `flow_expired` error
+/// page (400) with a way to start again at the plain sign-in page and no credential form. The
+/// id is never echoed into a link.
+pub(super) fn stale_request_page(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    loc: &Locale,
+) -> Response {
+    let mut page = PageContext::for_tenant(state, tenant, loc, "title.error");
+    page.links.login = Some(NavContext::none().url(tenant, loc, UiPage::Login));
+    let ctx = minijinja::context! {
+        page => page.into_value(),
+        status => StatusCode::BAD_REQUEST.as_u16(),
+        error_key => "flow_expired",
+        heading => state.renderer().text(loc, "nav.request_expired"),
+        detail => Value::from(()),
+    };
+    no_store(render_page(
+        state,
+        Some(tenant),
+        loc,
+        "error.html",
+        ctx,
+        StatusCode::BAD_REQUEST,
+        CookieJar::new(),
+    ))
 }
 
 /// The request's `login_hint`, normalised, if it is an email address (OIDC Core §3.1.2.1: a
@@ -361,6 +392,7 @@ async fn submit(
         identifier: identifier.clone(),
         password: form.password.clone().unwrap_or_default(),
     };
+    let nav = NavContext::from_flow(&state, &tenant, flow_id).await;
     let binding = FlowBinding::Cookie { jar: &jar, csrf };
     let outcome =
         flow_driver::submit(&state, &tenant, &ctx, flow_id, binding, throttle, input).await;
@@ -380,9 +412,9 @@ async fn submit(
             if let FlowOutcome::Render(form) = &outcome {
                 extras.upstream = identify_buttons(&state, &tenant, &loc, form).await;
             }
-            outcome_response_with(&state, &tenant, &loc, outcome, &extras)
+            outcome_response_with(&state, &tenant, &loc, &nav, outcome, &extras)
         }
-        other => sign_in_gate_page(&state, &tenant, &loc, other).await,
+        other => sign_in_gate_page(&state, &tenant, &loc, &nav, other).await,
     }
 }
 
@@ -393,6 +425,7 @@ async fn sign_in_gate_page(
     state: &AppState,
     tenant: &ResolvedTenant,
     loc: &Locale,
+    nav: &NavContext,
     outcome: DriveOutcome,
 ) -> Response {
     match outcome {
@@ -401,7 +434,7 @@ async fn sign_in_gate_page(
             if let FlowOutcome::Render(form) = &outcome {
                 extras.upstream = identify_buttons(state, tenant, loc, form).await;
             }
-            outcome_response_with(state, tenant, loc, outcome, &extras)
+            outcome_response_with(state, tenant, loc, nav, outcome, &extras)
         }
         DriveOutcome::Locked {
             form, retry_after, ..
@@ -410,7 +443,7 @@ async fn sign_in_gate_page(
                 upstream: identify_buttons(state, tenant, loc, &form).await,
                 ..Extras::default()
             };
-            locked_page_with(state, tenant, loc, form, retry_after, extras)
+            locked_page_with(state, tenant, loc, nav, form, retry_after, extras)
         }
         DriveOutcome::CaptchaRejected { form } => {
             // The widget goes with the password form only: the email-first form (routed
@@ -431,7 +464,7 @@ async fn sign_in_gate_page(
                 tenant,
                 loc,
                 &form,
-                None,
+                nav,
                 StatusCode::BAD_REQUEST,
                 CookieJar::new(),
                 &extras,
@@ -490,6 +523,7 @@ async fn identify(
         Some("change") => IdentifyInput::Change,
         _ => IdentifyInput::Email(form.identifier.clone().unwrap_or_default()),
     };
+    let nav = NavContext::from_flow(&state, &tenant, flow_id).await;
     let binding = FlowBinding::Cookie { jar: &jar, csrf };
     match flow_driver::identify(&state, &tenant, &ctx, flow_id, &binding, input, ip).await {
         Ok(Identified::Done { outcome, captcha }) => {
@@ -498,7 +532,7 @@ async fn identify(
                 extras.upstream = identify_buttons(&state, &tenant, &loc, f).await;
                 extras.captcha = tenant.tenant.settings.captcha.as_ref().filter(|_| captcha);
             }
-            outcome_response_with(&state, &tenant, &loc, *outcome, &extras)
+            outcome_response_with(&state, &tenant, &loc, &nav, *outcome, &extras)
         }
         Ok(Identified::StartIdp(idp)) => {
             let current = match current_browser_session(&state, &tenant, &jar).await {
@@ -525,7 +559,7 @@ async fn identify(
         }
         Err(DriveRejection::Binding) => csrf_page(&state, Some(&tenant), &loc),
         Err(DriveRejection::Failed(CoreError::InvalidRequest(_))) => {
-            restart_login(&state, &tenant, &loc).await
+            restart_login_in(&state, &tenant, &loc, &nav).await
         }
         Err(DriveRejection::Failed(e)) => core_error_page_in(&state, Some(&tenant), &loc, &e),
     }
@@ -602,7 +636,8 @@ async fn idp_redirect(
         }
         Err(CoreError::Forbidden) => csrf_page(state, Some(tenant), loc),
         Err(CoreError::InvalidRequest(_) | CoreError::NotFound | CoreError::FeatureDisabled(_)) => {
-            restart_login(state, tenant, loc).await
+            let nav = NavContext::from_flow(state, tenant, binding.flow_id).await;
+            restart_login_in(state, tenant, loc, &nav).await
         }
         Err(e) => core_error_page_in(state, Some(tenant), loc, &e),
     }
@@ -641,6 +676,7 @@ pub(super) fn locked_page(
     state: &AppState,
     tenant: &ResolvedTenant,
     loc: &Locale,
+    nav: &NavContext,
     form: FormDescription,
     retry_after: Duration,
     factor_token: Option<String>,
@@ -649,7 +685,7 @@ pub(super) fn locked_page(
         factor_token,
         ..Extras::default()
     };
-    locked_page_with(state, tenant, loc, form, retry_after, extras)
+    locked_page_with(state, tenant, loc, nav, form, retry_after, extras)
 }
 
 /// [`locked_page`] with sign-in page extras (the sign-in form's upstream buttons).
@@ -657,6 +693,7 @@ fn locked_page_with(
     state: &AppState,
     tenant: &ResolvedTenant,
     loc: &Locale,
+    nav: &NavContext,
     mut form: FormDescription,
     retry_after: Duration,
     extras: Extras<'_>,
@@ -667,7 +704,7 @@ fn locked_page_with(
         tenant,
         loc,
         &form,
-        None,
+        nav,
         StatusCode::TOO_MANY_REQUESTS,
         CookieJar::new(),
         &extras,
@@ -768,6 +805,7 @@ async fn passkey_submit(
     let input = FlowInput::PasskeyAssertion {
         response_json: form.response.clone().unwrap_or_default(),
     };
+    let nav = NavContext::from_flow(&state, &tenant, flow_id).await;
     let binding = FlowBinding::Cookie { jar: &jar, csrf };
     let outcome = flow_driver::submit(
         &state,
@@ -779,7 +817,7 @@ async fn passkey_submit(
         input,
     )
     .await;
-    sign_in_gate_page(&state, &tenant, &loc, outcome).await
+    sign_in_gate_page(&state, &tenant, &loc, &nav, outcome).await
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -942,6 +980,7 @@ async fn flow_passkey_finish(
     let (Some(flow_id), Some(csrf)) = (q.flow_id(), form.csrf_token.as_deref()) else {
         return csrf_page(state, Some(tenant), loc);
     };
+    let nav = NavContext::from_flow(state, tenant, flow_id).await;
     let binding = FlowBinding::Cookie { jar, csrf };
     let response = form.response.as_deref().unwrap_or_default();
     let result =
@@ -955,7 +994,7 @@ async fn flow_passkey_finish(
         factor_token: form.factor_token.clone().filter(|t| !t.is_empty()),
         ..Extras::default()
     };
-    outcome_response_with(state, tenant, loc, result.outcome, &extras)
+    outcome_response_with(state, tenant, loc, &nav, result.outcome, &extras)
 }
 
 fn no_store(mut resp: Response) -> Response {
@@ -1172,39 +1211,6 @@ pub(super) fn form_template(form_id: &str) -> (&'static str, &'static str) {
     }
 }
 
-/// Links between the tenant's self-service pages for a form. The registration link only exists
-/// when self-registration is open. `request` is carried along so the user can switch pages
-/// without losing the authorization request.
-pub(super) fn links_for(
-    tenant: &ResolvedTenant,
-    loc: &Locale,
-    form_id: &str,
-    request: Option<AuthRequestId>,
-) -> PageLinks {
-    let with_request = |path: &str| {
-        let url = match request {
-            Some(r) => tenant.ui_url(&format!("{path}?request={r}")),
-            None => tenant.ui_url(path),
-        };
-        carry_ui_locales(&url, loc)
-    };
-    match form_id {
-        "login" | IDENTIFY_FORM_ID | SSO_CHOICE_FORM_ID => PageLinks {
-            login: None,
-            registration: (tenant.tenant.settings.registration == RegistrationMode::Open)
-                .then(|| with_request("/ui/registration")),
-            recovery: Some(carry_ui_locales(&tenant.ui_url("/ui/recovery"), loc)),
-            ..PageLinks::default()
-        },
-        _ => PageLinks {
-            login: Some(with_request("/ui/login")),
-            registration: None,
-            recovery: None,
-            ..PageLinks::default()
-        },
-    }
-}
-
 /// Renders a form page with the given page context; the form is localized in `loc`.
 pub(super) fn render_form(
     state: &AppState,
@@ -1312,14 +1318,14 @@ pub(super) fn render_tenant_form_with(
     tenant: &ResolvedTenant,
     loc: &Locale,
     form: &FormDescription,
-    request: Option<AuthRequestId>,
+    nav: &NavContext,
     status: StatusCode,
     jar: CookieJar,
     extras: &Extras<'_>,
 ) -> Response {
     let (template, title) = form_template(&form.id);
     let mut page = PageContext::for_tenant(state, tenant, loc, title);
-    page.links = links_for(tenant, loc, &form.id, request);
+    page.links = nav.links(tenant, loc, &form.id);
     let base = ui_base(tenant);
     // The sign-in choices come from the one list of methods (`flow_driver::login_methods`).
     let methods = login_methods(form, tenant, &extras.upstream);
@@ -1440,7 +1446,7 @@ pub(super) fn render_tenant_form_with(
     // Link confirmation: the way out when the page cannot confirm (sign in another way, then
     // connect the provider from the account page).
     let account_linked = (form.id == UPSTREAM_LINK_FORM_ID)
-        .then(|| carry_ui_locales(&tenant.ui_url("/ui/account/linked"), loc));
+        .then(|| nav.url(tenant, loc, UiPage::Account(AccountSection::Linked)));
     form.action = carry_ui_locales(&form.action, loc);
     let ctx = minijinja::context! {
         page => page.into_value(),
@@ -1493,31 +1499,50 @@ fn message_heading(key: &str) -> &'static str {
     }
 }
 
-/// Message key of the page shown after a login that is not bound to an authorization request
-/// (there is no account page in release 0.1).
+/// Message key of the page shown after a login that is not bound to an authorization request.
+/// It is a page, not a redirect (a stable contract); its way forward is the account page and
+/// the sign-out form ([`NavContext::way_forward`]).
 pub(super) const SIGNED_IN: &str = "login.signed_in";
 
-/// Renders `message.html` (200) with a link to the tenant's sign-in page.
+/// Message key of the page after a registration that must confirm its address.
+const CHECK_EMAIL: &str = "registration.check_email";
+
+/// Renders `message.html` (200) with the way forward of `nav` ([`NavContext::way_forward`]):
+/// "Continue to <app>" while the flow's request is live, the account page and sign-out form
+/// after a sign-in, otherwise the tenant's sign-in page.
 pub(super) fn message_page(
     state: &AppState,
     tenant: &ResolvedTenant,
     loc: &Locale,
     key: &str,
+    nav: &NavContext,
     jar: CookieJar,
 ) -> Response {
-    let page = {
-        let mut page = PageContext::for_tenant(state, tenant, loc, message_heading(key));
-        if key != SIGNED_IN {
-            page.links.login = Some(carry_ui_locales(&tenant.ui_url("/ui/login"), loc));
-        }
-        page
-    };
+    message_page_with(state, tenant, loc, key, nav, None, jar)
+}
+
+/// [`message_page`] naming the address a confirmation email was sent to (`sent_to`: the
+/// address the user just typed in this browser, so nothing is revealed).
+fn message_page_with(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    loc: &Locale,
+    key: &str,
+    nav: &NavContext,
+    sent_to: Option<&str>,
+    jar: CookieJar,
+) -> Response {
+    let mut page = PageContext::for_tenant(state, tenant, loc, message_heading(key));
+    page.links = nav
+        .way_forward(state, tenant, loc, key == SIGNED_IN)
+        .into_links();
     let heading = page.title.clone();
     let ctx = minijinja::context! {
         page => page.into_value(),
         heading => heading,
         body_key => key,
         body => state.renderer().text(loc, key),
+        sent_to => sent_to,
     };
     match state.renderer().page("message.html", ctx) {
         Ok(html) => (StatusCode::OK, jar, html).into_response(),
@@ -1539,18 +1564,10 @@ fn started_response(
     tenant: &ResolvedTenant,
     loc: &Locale,
     started: &StartedFlow,
-    request: Option<AuthRequestId>,
+    nav: &NavContext,
     status: StatusCode,
 ) -> Response {
-    started_response_with(
-        state,
-        tenant,
-        loc,
-        started,
-        request,
-        status,
-        &Extras::default(),
-    )
+    started_response_with(state, tenant, loc, started, nav, status, &Extras::default())
 }
 
 /// [`started_response`] with sign-in page extras (step-up binding token, enrolment secret).
@@ -1559,7 +1576,7 @@ pub(super) fn started_response_with(
     tenant: &ResolvedTenant,
     loc: &Locale,
     started: &StartedFlow,
-    request: Option<AuthRequestId>,
+    nav: &NavContext,
     status: StatusCode,
     extras: &Extras<'_>,
 ) -> Response {
@@ -1568,7 +1585,7 @@ pub(super) fn started_response_with(
         tenant,
         loc,
         started,
-        request,
+        nav,
         status,
         extras,
         CookieJar::new(),
@@ -1585,7 +1602,7 @@ pub(super) fn started_response_in(
     tenant: &ResolvedTenant,
     loc: &Locale,
     started: &StartedFlow,
-    request: Option<AuthRequestId>,
+    nav: &NavContext,
     status: StatusCode,
     extras: &Extras<'_>,
     jar: CookieJar,
@@ -1595,50 +1612,57 @@ pub(super) fn started_response_in(
             .cookies()
             .flow_cookie(&tenant.tenant, started.cookie_token.expose_secret()),
     );
-    render_tenant_form_with(
-        state,
-        tenant,
-        loc,
-        &started.form,
-        request,
-        status,
-        jar,
-        extras,
-    )
+    render_tenant_form_with(state, tenant, loc, &started.form, nav, status, jar, extras)
 }
 
-/// `GET` of a self-service page: starts a flow of `kind` and renders its form.
+/// `GET` of a self-service page: starts a flow of `kind` for the live request of `nav` and
+/// renders its form.
 pub(super) async fn start_page(
     state: &AppState,
     tenant: &ResolvedTenant,
     loc: &Locale,
     kind: FlowKind,
-    request: Option<AuthRequestId>,
+    nav: &NavContext,
     token: Option<String>,
 ) -> Response {
+    let request = nav.request().map(|r| r.id);
     match flow_driver::start(state, tenant, kind, request, token).await {
-        Ok(started) => started_response(state, tenant, loc, &started, request, StatusCode::OK),
+        Ok(started) => started_response(state, tenant, loc, &started, nav, StatusCode::OK),
         Err(e) => core_error_page_in(state, Some(tenant), loc, &e),
     }
 }
 
-/// A new sign-in flow with the `flow.expired` message (400): the answer to a submission that
-/// cannot continue its flow (for example a second-factor POST without a valid binding token).
-pub(super) async fn restart_login(
+/// A new sign-in flow with the `flow.expired` message (400) for the live request of `nav` (the
+/// request of the flow that could not continue, so "Start over" keeps the app): the answer to a
+/// submission that cannot continue its flow (for example a second-factor POST without a valid
+/// binding token).
+pub(super) async fn restart_login_in(
     state: &AppState,
     tenant: &ResolvedTenant,
     loc: &Locale,
+    nav: &NavContext,
 ) -> Response {
-    match flow_driver::start(state, tenant, FlowKind::Login, None, None).await {
+    let request = nav.request().map(|r| r.id);
+    match flow_driver::start(state, tenant, FlowKind::Login, request, None).await {
         Ok(mut started) => {
             started
                 .form
                 .messages
                 .insert(0, FormMessage::error("flow.expired"));
-            started_response(state, tenant, loc, &started, None, StatusCode::BAD_REQUEST)
+            started_response(state, tenant, loc, &started, nav, StatusCode::BAD_REQUEST)
         }
         Err(e) => core_error_page_in(state, Some(tenant), loc, &e),
     }
+}
+
+/// [`restart_login_in`] without a flow context, for callers that have no flow to read the
+/// request from.
+pub(super) async fn restart_login(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    loc: &Locale,
+) -> Response {
+    restart_login_in(state, tenant, loc, &NavContext::none()).await
 }
 
 /// The caller's active session (from the session cookie), if any.
@@ -1681,10 +1705,26 @@ pub(super) async fn submit_page(
     let (Some(flow_id), Some(csrf)) = (query.flow_id(), form.csrf_token.as_deref()) else {
         return csrf_page(state, Some(tenant), loc);
     };
+    let nav = NavContext::from_flow(state, tenant, flow_id).await;
     let binding = FlowBinding::Cookie { jar, csrf };
     let outcome =
         flow_driver::submit(state, tenant, ctx, flow_id, binding, Throttle::None, input).await;
-    drive_response(state, tenant, loc, outcome, &Extras::default(), None)
+    // A registration that must confirm its address names the address it was sent to.
+    if let DriveOutcome::Flow {
+        outcome: FlowOutcome::Message { key: CHECK_EMAIL },
+        ..
+    } = &outcome
+        && let Some(email) = form
+            .email
+            .as_deref()
+            .map(str::trim)
+            .filter(|e| !e.is_empty())
+    {
+        let shown = normalize_email(email).unwrap_or_else(|_| email.to_owned());
+        let jar = CookieJar::new().add(state.cookies().clear_flow(&tenant.tenant));
+        return message_page_with(state, tenant, loc, CHECK_EMAIL, &nav, Some(&shown), jar);
+    }
+    drive_response(state, tenant, loc, &nav, outcome, &Extras::default(), None)
 }
 
 /// Encodes a [`DriveOutcome`] of a page that shows no sign-in extras of its own beyond
@@ -1694,17 +1734,18 @@ pub(super) fn drive_response(
     state: &AppState,
     tenant: &ResolvedTenant,
     loc: &Locale,
+    nav: &NavContext,
     outcome: DriveOutcome,
     extras: &Extras<'_>,
     locked_token: Option<String>,
 ) -> Response {
     match outcome {
         DriveOutcome::Flow { outcome, .. } => {
-            outcome_response_with(state, tenant, loc, outcome, extras)
+            outcome_response_with(state, tenant, loc, nav, outcome, extras)
         }
         DriveOutcome::Locked {
             form, retry_after, ..
-        } => locked_page(state, tenant, loc, form, retry_after, locked_token),
+        } => locked_page(state, tenant, loc, nav, form, retry_after, locked_token),
         DriveOutcome::Throttled { retry_after } => {
             too_many_requests(state, Some(tenant), Surface::Browser, retry_after)
         }
@@ -1713,7 +1754,7 @@ pub(super) fn drive_response(
             tenant,
             loc,
             &form,
-            None,
+            nav,
             StatusCode::BAD_REQUEST,
             CookieJar::new(),
             &Extras::default(),
@@ -1756,8 +1797,9 @@ pub(super) fn signed_in_response(
             page => page.into_value(),
             codes => codes,
             codes_text => codes_text,
-            continue_url => continue_url
-                .unwrap_or_else(|| carry_ui_locales(&tenant.ui_url("/ui/account/security"), loc)),
+            continue_url => continue_url.unwrap_or_else(|| {
+                NavContext::none().url(tenant, loc, UiPage::Account(AccountSection::Security))
+            }),
         };
         let mut resp = render_page(
             state,
@@ -1776,7 +1818,8 @@ pub(super) fn signed_in_response(
         Some(location) => {
             (StatusCode::SEE_OTHER, jar, [(header::LOCATION, location)]).into_response()
         }
-        None => message_page(state, tenant, loc, SIGNED_IN, jar),
+        // Without a continuation there is no live request: the way forward is the account.
+        None => message_page(state, tenant, loc, SIGNED_IN, &NavContext::none(), jar),
     }
 }
 
@@ -1786,6 +1829,7 @@ pub(super) fn outcome_response_with(
     state: &AppState,
     tenant: &ResolvedTenant,
     loc: &Locale,
+    nav: &NavContext,
     outcome: FlowOutcome,
     extras: &Extras<'_>,
 ) -> Response {
@@ -1796,7 +1840,7 @@ pub(super) fn outcome_response_with(
             tenant,
             loc,
             &form,
-            None,
+            nav,
             form_status(&form),
             CookieJar::new(),
             extras,
@@ -1812,7 +1856,7 @@ pub(super) fn outcome_response_with(
                 tenant,
                 loc,
                 &form,
-                None,
+                nav,
                 form_status(&form),
                 CookieJar::new(),
                 &extras,
@@ -1820,11 +1864,11 @@ pub(super) fn outcome_response_with(
         }
         FlowOutcome::Restarted(started) => {
             let status = form_status(&started.form);
-            started_response(state, tenant, loc, &started, None, status)
+            started_response(state, tenant, loc, &started, nav, status)
         }
         FlowOutcome::Message { key } => {
             let jar = CookieJar::new().add(cookies.clear_flow(&tenant.tenant));
-            message_page(state, tenant, loc, key, jar)
+            message_page(state, tenant, loc, key, nav, jar)
         }
         FlowOutcome::SignedIn {
             cookie,

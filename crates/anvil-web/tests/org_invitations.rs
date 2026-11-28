@@ -8,6 +8,7 @@
 
 mod admin_support;
 mod support;
+mod token_support;
 mod ui_helpers;
 mod upstream_flow;
 mod upstream_support;
@@ -1330,15 +1331,42 @@ async fn return_to_tampered_or_moved_sealed_value_is_ignored() {
 
 #[tokio::test]
 async fn return_to_ignored_with_authorization_request() {
-    const REQUEST: &str = "0192f0c4-7a1b-7c3d-8e9f-0123456789ab";
     let app = app().await;
+    // A live request (a stale id would stop at the `flow_expired` page, 07.1-01).
+    let request = {
+        use anvil_core::ports::Clock as _;
+        let tenant = app.default.as_ref().expect("installed").tenant.id;
+        let rp = token_support::register(
+            &app,
+            tenant,
+            token_support::web_input(anvil_core::model::ClientAuthMethod::ClientSecretBasic),
+        )
+        .await;
+        let id = anvil_core::model::AuthRequestId(uuid::Uuid::now_v7());
+        let now = app.clock().now();
+        app.storage()
+            .grants()
+            .create_authorization_request(
+                tenant,
+                &anvil_core::model::NewAuthorizationRequest {
+                    id,
+                    client_id: rp.id().to_owned(),
+                    params: token_support::params("openid", Some(token_support::CHALLENGE)),
+                    created_at: now,
+                    expires_at: now + time::Duration::minutes(15),
+                },
+            )
+            .await
+            .expect("request stored");
+        id.0.to_string()
+    };
     let tenant = default_tenant(&app);
     let org = create_org(&app, tenant.id, "globex").await;
     user(&app, &tenant, INVITED, true).await;
     let inv = invite(&app, &tenant, &org, INVITED, &[]).await;
     let encoded: String =
         url::form_urlencoded::byte_serialize(page_path(&inv.token).as_bytes()).collect();
-    let path = format!("/ui/login?request={REQUEST}&return_to={encoded}");
+    let path = format!("/ui/login?request={request}&return_to={encoded}");
     app.clear_cookies();
     let page = app.get(&path).await;
     assert_eq!(page.status, 200, "{}", page.text());
@@ -1353,7 +1381,7 @@ async fn return_to_ignored_with_authorization_request() {
     assert_eq!(resp.status, 303, "{}", resp.text());
     assert_eq!(
         location(&resp),
-        format!("{}/authorize/continue?request={REQUEST}", app.issuer(None))
+        format!("{}/authorize/continue?request={request}", app.issuer(None))
     );
 }
 

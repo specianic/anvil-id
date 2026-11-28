@@ -407,8 +407,38 @@ mod spans {
 
 const EMAIL: &str = "alice@example.com";
 const PASSWORD: &str = "correct horse battery";
-const REQUEST: &str = "0192f0c4-7a1b-7c3d-8e9f-0123456789ab";
 const PEER_IP: &str = "203.0.113.10";
+
+/// A live authorization request of the default tenant for a new test client (stored through the
+/// port): the sign-in pages only continue a request that exists (07.1-01; a stale id answers the
+/// `flow_expired` page).
+async fn live_request(app: &TestApp) -> String {
+    use anvil_core::ports::Clock as _;
+    let tenant = app.default.as_ref().expect("installed").tenant.id;
+    let rp = token_support::register(
+        app,
+        tenant,
+        token_support::web_input(anvil_core::model::ClientAuthMethod::ClientSecretBasic),
+    )
+    .await;
+    let id = anvil_core::model::AuthRequestId(uuid::Uuid::now_v7());
+    let now = app.clock().now();
+    app.storage()
+        .grants()
+        .create_authorization_request(
+            tenant,
+            &anvil_core::model::NewAuthorizationRequest {
+                id,
+                client_id: rp.id().to_owned(),
+                params: token_support::params("openid", Some(token_support::CHALLENGE)),
+                created_at: now,
+                expires_at: now + time::Duration::minutes(15),
+            },
+        )
+        .await
+        .expect("request stored");
+    id.0.to_string()
+}
 
 /// Label names and values the metrics may carry (bounded by construction).
 const LABEL_NAMES: &[&str] = &["route_class", "status_class", "outcome", "job", "grant"];
@@ -419,24 +449,25 @@ async fn metrics_labels_are_bounded_and_free_of_identifiers() {
     let app = TestApp::new().await;
     let acme = token_support::acme(&app).await;
     ui_helpers::register(&app, "", EMAIL, PASSWORD).await;
+    let request = live_request(&app).await;
 
     // A login page, a failed and a successful login.
     assert_eq!(
-        app.get(&format!("/ui/login?request={REQUEST}"))
+        app.get(&format!("/ui/login?request={request}"))
             .await
             .status,
         200
     );
     let failed = ui_helpers::submit_form(
         &app,
-        &format!("/ui/login?request={REQUEST}"),
+        &format!("/ui/login?request={request}"),
         &[("identifier", EMAIL), ("password", "not the password")],
     )
     .await;
     assert_ne!(failed.status, 303, "a wrong password does not sign in");
     let ok = ui_helpers::submit_form(
         &app,
-        &format!("/ui/login?request={REQUEST}"),
+        &format!("/ui/login?request={request}"),
         &[("identifier", EMAIL), ("password", PASSWORD)],
     )
     .await;

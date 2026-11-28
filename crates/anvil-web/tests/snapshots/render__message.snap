@@ -18,7 +18,6 @@ expression: html
 <h1 id="page-heading">Check your email</h1>
 
 <p class="anvil-lead" id="message-body" data-message-key="recovery.sent">If an account exists for that address, we have sent instructions.</p>
-
 <nav class="anvil-links" aria-label="Next steps">
 <a id="link-login" href="&#x2f;t&#x2f;acme&#x2f;ui&#x2f;login?flow=f1">Go to sign in</a>
 </nav>

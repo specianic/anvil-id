@@ -47,6 +47,12 @@ pub(crate) enum UiPage {
     Login,
     Registration,
     Recovery,
+    /// Reached through emailed links, which the core builds (`service::flow`); no page links
+    /// to it yet.
+    #[allow(
+        dead_code,
+        reason = "part of the complete flow page map; emailed links reach it"
+    )]
     Verification,
     Account(AccountSection),
     /// The end-session endpoint (`{issuer}/logout`), posted by the sign-out form. Without an

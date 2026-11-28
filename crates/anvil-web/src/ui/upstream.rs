@@ -48,17 +48,15 @@ use serde::{Deserialize, Serialize};
 
 use super::login::{
     Extras, UiQuery, bad_form, csrf_page, current_browser_session, factor_token, flow_of,
-    form_status, message_page, rejected_form, restart_login, signed_in_response,
+    form_status, message_page, rejected_form, restart_login_in, signed_in_response,
     started_response_in, tenant_relying_party, ui_base,
 };
+use super::nav::{AccountSection, NavContext, UiPage};
 use crate::errors::{core_error_page_in, error_page_in};
 use crate::i18n::{Locale, RequestLocale, carry_ui_locales};
 use crate::request_context::AuditContext;
 use crate::state::AppState;
 use crate::tenant::ResolvedTenant;
-
-/// Where linking from the account page returns to.
-const LINKED_PAGE: &str = "/ui/account/linked";
 
 /// Upstream start routes, behind the Fetch-Metadata layer.
 pub(super) fn routes() -> Router<AppState> {
@@ -267,7 +265,10 @@ async fn start(
             "not_found",
             "",
         ),
-        Err(CoreError::InvalidRequest(_)) => restart_login(&state, &tenant, &loc).await,
+        Err(CoreError::InvalidRequest(_)) => {
+            let nav = NavContext::from_flow(&state, &tenant, flow_id).await;
+            restart_login_in(&state, &tenant, &loc, &nav).await
+        }
         Err(e) => core_error_page_in(&state, Some(&tenant), &loc, &e),
     }
 }
@@ -433,10 +434,13 @@ pub(super) async fn outcome_page(
                 ..Extras::default()
             };
             let status = form_status(&started.form);
-            started_response_in(state, tenant, loc, &started, request, status, &extras, jar)
+            // The link confirmation's "Cancel" and sign-in links keep the app's request.
+            let nav = NavContext::from_request(state, tenant, request).await;
+            started_response_in(state, tenant, loc, &started, &nav, status, &extras, jar)
         }
         UpstreamOutcome::Linked => {
-            let location = carry_ui_locales(&tenant.ui_url(LINKED_PAGE), loc);
+            let location =
+                NavContext::none().url(tenant, loc, UiPage::Account(AccountSection::Linked));
             match HeaderValue::from_str(&location) {
                 Ok(location) => {
                     (StatusCode::SEE_OTHER, jar, [(header::LOCATION, location)]).into_response()
@@ -450,7 +454,8 @@ pub(super) async fn outcome_page(
             }
         }
         UpstreamOutcome::LinkFailed { key } => {
-            let mut resp = message_page(state, tenant, loc, key, jar);
+            // Linking from the account page: no authorization request to continue.
+            let mut resp = message_page(state, tenant, loc, key, &NavContext::none(), jar);
             *resp.status_mut() = StatusCode::BAD_REQUEST;
             resp
         }

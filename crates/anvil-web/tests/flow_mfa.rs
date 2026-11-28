@@ -8,6 +8,7 @@
 //! brute-force limits stay on and are tested in `security_bruteforce.rs`).
 
 mod support;
+mod token_support;
 mod ui_helpers;
 
 use anvil_cache::limiter::RateQuota;
@@ -25,7 +26,37 @@ use ui_helpers::*;
 
 const EMAIL: &str = "alice@example.com";
 const PASSWORD: &str = "correct horse battery";
-const REQUEST: &str = "0192f0c4-7a1b-7c3d-8e9f-0123456789ab";
+
+/// A live authorization request of the default tenant for a new test client (stored through the
+/// port): the sign-in pages only continue a request that exists (07.1-01; a stale id answers the
+/// `flow_expired` page).
+async fn live_request(app: &TestApp) -> String {
+    use anvil_core::ports::Clock as _;
+    let tenant = app.default.as_ref().expect("installed").tenant.id;
+    let rp = token_support::register(
+        app,
+        tenant,
+        token_support::web_input(anvil_core::model::ClientAuthMethod::ClientSecretBasic),
+    )
+    .await;
+    let id = anvil_core::model::AuthRequestId(uuid::Uuid::now_v7());
+    let now = app.clock().now();
+    app.storage()
+        .grants()
+        .create_authorization_request(
+            tenant,
+            &anvil_core::model::NewAuthorizationRequest {
+                id,
+                client_id: rp.id().to_owned(),
+                params: token_support::params("openid", Some(token_support::CHALLENGE)),
+                created_at: now,
+                expires_at: now + time::Duration::minutes(15),
+            },
+        )
+        .await
+        .expect("request stored");
+    id.0.to_string()
+}
 
 async fn app() -> TestApp {
     let app = TestApp::with(|c| c.rate_limits.auth = RateQuota::per_minute(6000, 1000)).await;
@@ -286,13 +317,14 @@ async fn recovery_code_signs_in_once_and_queues_the_notice() {
 async fn the_authorization_request_is_preserved_through_the_second_factor() {
     let app = app().await;
     enrol_totp(&app).await;
-    let page = password_step(&app, &format!("/ui/login?request={REQUEST}")).await;
+    let request = live_request(&app).await;
+    let page = password_step(&app, &format!("/ui/login?request={request}")).await;
     let code = current_code(&app).await;
     let resp = second_factor(&app, &page, &[("code", &code)]).await;
     assert_eq!(resp.status, 303, "{}", resp.text());
     assert_eq!(
         location(&resp),
-        format!("{}/authorize/continue?request={REQUEST}", app.issuer(None))
+        format!("{}/authorize/continue?request={request}", app.issuer(None))
     );
     assert!(session_cookie(&app).is_some());
 }
