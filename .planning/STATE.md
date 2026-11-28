@@ -6,14 +6,14 @@ current_phase: 05
 current_phase_name: release 0 4 operate it
 current_plan: 33
 status: verifying
-stopped_at: Completed 07.1-08-PLAN.md
-last_updated: "2026-11-28T04:26:49.002Z"
+stopped_at: Completed 07.1-07-PLAN.md
+last_updated: "2026-11-28T04:43:40.424Z"
 last_activity: 2026-11-28
 progress:
   total_phases: 8
   completed_phases: 3
   total_plans: 215
-  completed_plans: 195
+  completed_plans: 196
   percent: 91
 ---
 
@@ -230,6 +230,7 @@ done before 05-29 tags v0.4.0.
 | Phase 07.1 P06 | 90min | 3 tasks | 32 files |
 | Phase 07.1 P09 | 80min | 2 tasks | 20 files |
 | Phase 07.1 P08 | 50min | 3 tasks | 37 files |
+| Phase 07.1 P07 | 210min | 3 tasks | 40 files |
 
 ## Accumulated Context
 
@@ -546,6 +547,8 @@ Recent decisions affecting current work:
 - [Phase 07.1]: Enabling an upstream connection needs every field incl. secret (all OAuth/OIDC kinds) and, for generic OIDC, discovery through the SSRF-guarded UpstreamClient; sign-in lists only Connection::is_offerable
 - [Phase 07.1]: Error pages: one renderer (errors::error_page_nav), negotiated locale everywhere, dev-only detail, way forward for every key; Back to <app> only for static clients with absolute http(s) URLs
 - [Phase 07.1]: After setup, any unusable setup link GET answers 200 'Setup is already complete' + console link; POST and pre-setup GET stay 403
+- [Phase 07.1]: PRG: failed flow POSTs answer 303 + sealed flash; GET re-renders via derived CSRF (anvilid/ui-csrf/v1); locks/CAPTCHA stay direct
+- [Phase 07.1]: Reset token rides sealed in the flash (never in flow state); expired verification link offers sign-in (resend deferred)
 
 ### Roadmap Evolution
 
@@ -563,6 +566,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-28T04:26:48.999Z
-Stopped at: Completed 07.1-08-PLAN.md
+Last session: 2026-11-28T04:43:40.421Z
+Stopped at: Completed 07.1-07-PLAN.md
 Resume file: None
