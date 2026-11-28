@@ -42,6 +42,7 @@ use super::account_attributes::attributes_nav_or_page;
 use super::consent::{PageMessage, account_locale, localized};
 use super::format::{human, iso};
 use super::login::{UiQuery, csrf_page, rejected_form, rejection_is_too_large};
+use super::nav::{AccountSection, NavContext};
 use crate::adapters::passkey::{WebauthnPasskeys, relying_party};
 use crate::errors::core_error_page_in;
 use crate::i18n::{Locale, RequestLocale};
@@ -130,7 +131,7 @@ fn with_headers(mut resp: Response) -> Response {
 }
 
 fn to_login(tenant: &ResolvedTenant) -> Response {
-    let location = tenant.ui_url("/ui/login");
+    let location = NavContext::login_returning_to(tenant, AccountSection::Security);
     with_headers((StatusCode::SEE_OTHER, [(header::LOCATION, location)]).into_response())
 }
 
@@ -294,7 +295,7 @@ async fn render_overview(
         csrf_token => csrf,
         messages => minijinja::Value::from(minijinja::value::Serde(&messages)),
         recent_auth => overview.recent_auth,
-        login_url => tenant.ui_url("/ui/login"),
+        login_url => NavContext::login_returning_to(tenant, AccountSection::Security),
         passkeys => minijinja::Value::from(minijinja::value::Serde(&passkeys)),
         totp => minijinja::Value::from(minijinja::value::Serde(&totp)),
         recovery_codes_remaining => overview.recovery_codes_remaining,

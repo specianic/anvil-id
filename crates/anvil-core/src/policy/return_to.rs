@@ -1,34 +1,61 @@
 //! Where a sign-in may return to when it is not bound to an authorization request (ORG-02).
 //!
-//! Pure, no I/O. The login page accepts a `return_to` parameter, and the only page that sends
-//! one is the invitation page: a signed-out user who already has an account signs in and comes
-//! back to the invitation to accept it. [`parse_return_target`] is therefore an exact allowlist,
-//! not a general same-origin rule: the value must be the tenant-relative path `/ui/invitation`
-//! with exactly one `token` parameter of 1 to [`MAX_TOKEN_LEN`] base64url characters, and nothing
-//! else. A general "any relative path" rule is an open-redirect surface (scheme-relative `//host`,
+//! Pure, no I/O. The login page accepts a `return_to` parameter, sent by two kinds of page:
+//!
+//! * the invitation page: a signed-out user who already has an account signs in and comes back to
+//!   the invitation to accept it (ORG-02);
+//! * the account pages (07.1, U-H3): a signed-out visit to `/ui/account/security` signs in and
+//!   lands on that page, not on the generic signed-in page.
+//!
+//! [`parse_return_target`] is therefore an exact allowlist, not a general same-origin rule. The
+//! value must be either
+//!
+//! * the tenant-relative path `/ui/invitation` with exactly one `token` parameter of 1 to
+//!   [`MAX_TOKEN_LEN`] base64url characters, and nothing else; or
+//! * exactly one of [`ACCOUNT_PATHS`] (one per account page route), compared byte for byte after
+//!   checking there is no query and no fragment: no trailing slash, no case folding, no
+//!   percent-decoding, no dot segments.
+//!
+//! A general "any relative path" rule is an open-redirect surface (scheme-relative `//host`,
 //! backslashes, encoded slashes and dots, parser differences between servers and browsers) for no
-//! benefit while there is a single consumer.
+//! benefit while the consumers are this short list.
 //!
 //! Anything that does not match is ignored: the sign-in then ends on the normal signed-in page.
 //! The web layer prefixes the tenant's own UI origin (`{issuer}` + the path); a host or scheme is
 //! never taken from the request.
 //!
-//! The value carries the invitation token, a bearer value: the flow stores it only sealed with
-//! the KEK (`service::flow`), and [`ReturnTarget`]'s `Debug` output redacts it.
+//! An invitation target carries the invitation token, a bearer value: the flow stores every
+//! target only sealed with the KEK (`service::flow`), and [`ReturnTarget`]'s `Debug` output
+//! redacts the token (an account path carries no secret and is shown as is).
 
 use std::fmt;
 
 pub use crate::service::org_invitation::MAX_TOKEN_LEN;
 
-/// The one path a sign-in may return to.
+/// The invitation page a sign-in may return to (with its token).
 const INVITATION_PREFIX: &str = "/ui/invitation?token=";
 
-/// A validated return target: `/ui/invitation?token=<1..=MAX_TOKEN_LEN base64url characters>`.
+/// The account pages a sign-in may return to: exactly one per account page route
+/// (`anvil-web` `ui::account_*`), without query or fragment. A test in `anvil-web` keeps this list
+/// and the account navigation in step.
+pub const ACCOUNT_PATHS: [&str; 8] = [
+    "/ui/account/profile",
+    "/ui/account/email",
+    "/ui/account/password",
+    "/ui/account/security",
+    "/ui/account/sessions",
+    "/ui/account/apps",
+    "/ui/account/linked",
+    "/ui/account/attributes",
+];
+
+/// A validated return target: `/ui/invitation?token=<1..=MAX_TOKEN_LEN base64url characters>`
+/// or one of [`ACCOUNT_PATHS`].
 #[derive(Clone, PartialEq, Eq)]
 pub struct ReturnTarget(String);
 
 impl ReturnTarget {
-    /// The tenant-relative path with its query (`/ui/invitation?token=…`).
+    /// The tenant-relative path with its query (`/ui/invitation?token=…`, `/ui/account/…`).
     pub fn as_path(&self) -> &str {
         &self.0
     }
@@ -36,13 +63,21 @@ impl ReturnTarget {
 
 impl fmt::Debug for ReturnTarget {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // The token is a bearer value.
-        f.write_str("ReturnTarget(/ui/invitation?token=[redacted])")
+        if self.0.starts_with(INVITATION_PREFIX) {
+            // The token is a bearer value.
+            f.write_str("ReturnTarget(/ui/invitation?token=[redacted])")
+        } else {
+            // An allowlisted account path: no secret.
+            write!(f, "ReturnTarget({})", self.0)
+        }
     }
 }
 
 /// The return target `raw` names, if it is exactly an allowlisted one (module docs).
 pub fn parse_return_target(raw: &str) -> Option<ReturnTarget> {
+    if !raw.contains(['?', '#']) && ACCOUNT_PATHS.contains(&raw) {
+        return Some(ReturnTarget(raw.to_owned()));
+    }
     let token = raw.strip_prefix(INVITATION_PREFIX)?;
     let ok = !token.is_empty()
         && token.len() <= MAX_TOKEN_LEN
@@ -69,6 +104,14 @@ mod tests {
             let raw = format!("/ui/invitation?token={token}");
             let t = parse_return_target(&raw).expect("allowed");
             assert_eq!(t.as_path(), raw);
+        }
+    }
+
+    #[test]
+    fn accepts_exactly_the_account_paths() {
+        for path in ACCOUNT_PATHS {
+            let t = parse_return_target(path).expect(path);
+            assert_eq!(t.as_path(), path);
         }
     }
 
@@ -113,6 +156,53 @@ mod tests {
             "/ui/invitation;token=a",
             "javascript:alert(1)",
             long.as_str(),
+            // Account pages: exact paths only.
+            "/ui/account/",
+            "/ui/account/../x",
+            "/ui/account/../account/security",
+            "/ui/account/./security",
+            "/ui/account//security",
+            "/ui/account/securityx",
+            "/ui/account/security/",
+            "/ui/account/security/totp",
+            "/ui/account/security/passkey/options",
+            "/ui/account/email/confirm",
+            "/ui/account/sessions/revoke-others",
+            "/ui/account/settings",
+            "/ui/account%2Fsecurity",
+            "/ui%2Faccount%2Fsecurity",
+            "%2Fui%2Faccount%2Fsecurity",
+            "/ui/account/%2e%2e/security",
+            "/ui/account/%2E%2E/x",
+            "/ui/account/securit%79",
+            "//evil.example/ui/account/security",
+            "//evil.example",
+            "/\\evil.example/ui/account/security",
+            "\\ui\\account\\security",
+            "https://evil.example/ui/account/security",
+            "http://localhost/ui/account/security",
+            "https:/ui/account/security",
+            "/t/other/ui/account/security",
+            "/t/acme/ui/account/profile",
+            "ui/account/security",
+            "/UI/account/security",
+            "/ui/Account/security",
+            "/ui/account/Security",
+            "/ui/account/SECURITY",
+            " /ui/account/security",
+            "/ui/account/security ",
+            "/ui/account/security\r\nLocation: https://evil.example",
+            "/ui/account/security\r",
+            "/ui/account/security\n",
+            "/ui/account/security\t",
+            "/ui/account/security\0",
+            "/ui/account/security#frag",
+            "/ui/account/security#",
+            "/ui/account/security?",
+            "/ui/account/security?x=1",
+            "/ui/account/security?client_id=app",
+            "/ui/account/security;x=1",
+            "/ui/account/securité",
         ];
         for raw in rejected {
             assert_eq!(parse_return_target(raw), None, "{raw:?}");
@@ -125,5 +215,7 @@ mod tests {
         let shown = format!("{t:?}");
         assert!(!shown.contains("secret-token-value"), "{shown}");
         assert!(shown.contains("redacted"));
+        let account = parse_return_target("/ui/account/security").unwrap();
+        assert_eq!(format!("{account:?}"), "ReturnTarget(/ui/account/security)");
     }
 }

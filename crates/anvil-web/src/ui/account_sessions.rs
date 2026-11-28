@@ -33,6 +33,7 @@ use super::account_attributes::attributes_nav_or_page;
 use super::consent::{PageMessage, account_locale, localized};
 use super::format::{human, iso};
 use super::login::{UiQuery, csrf_page, rejected_form};
+use super::nav::{AccountSection, NavContext};
 use crate::errors::core_error_page_in;
 use crate::i18n::{Locale, RequestLocale};
 use crate::render::PageContext;
@@ -101,7 +102,7 @@ fn with_headers(mut resp: Response) -> Response {
 }
 
 fn to_login(tenant: &ResolvedTenant, jar: CookieJar) -> Response {
-    let location = tenant.ui_url("/ui/login");
+    let location = NavContext::login_returning_to(tenant, AccountSection::Sessions);
     with_headers((StatusCode::SEE_OTHER, jar, [(header::LOCATION, location)]).into_response())
 }
 

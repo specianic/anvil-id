@@ -37,6 +37,7 @@ use serde::{Deserialize, Serialize};
 use super::account_attributes::attributes_nav_or_page;
 use super::consent::{PageMessage, account_locale, localized};
 use super::login::{UiQuery, csrf_page, rejected_form};
+use super::nav::{AccountSection, NavContext};
 use crate::errors::core_error_page_in;
 use crate::i18n::{Locale, RequestLocale};
 use crate::render::PageContext;
@@ -118,8 +119,9 @@ fn no_store(mut resp: Response) -> Response {
     resp
 }
 
-fn to_login(tenant: &ResolvedTenant) -> Response {
-    let location = tenant.ui_url("/ui/login");
+/// 303 to sign-in, returning to the account page `section` afterwards.
+fn to_login(tenant: &ResolvedTenant, section: AccountSection) -> Response {
+    let location = NavContext::login_returning_to(tenant, section);
     no_store((StatusCode::SEE_OTHER, [(header::LOCATION, location)]).into_response())
 }
 
@@ -141,19 +143,21 @@ async fn session(
         .await
 }
 
-/// The session and its page locale for a GET (303 to sign-in without a session).
+/// The session and its page locale for a GET (303 to sign-in without a session, returning to
+/// `section`).
 async fn page_session(
     state: &AppState,
     tenant: &ResolvedTenant,
     locale: &RequestLocale,
     jar: &CookieJar,
+    section: AccountSection,
 ) -> Result<(BrowserSession, Locale), Box<Response>> {
     match session(state, tenant, jar).await {
         Ok(Some(s)) => {
             let loc = account_locale(state, tenant, locale, &s).await;
             Ok((s, loc))
         }
-        Ok(None) => Err(Box::new(to_login(tenant))),
+        Ok(None) => Err(Box::new(to_login(tenant, section))),
         Err(e) => Err(Box::new(core_error_page_in(
             state,
             Some(tenant),
@@ -172,8 +176,9 @@ async fn submission(
     jar: &CookieJar,
     query: &UiQuery,
     csrf: Option<String>,
+    section: AccountSection,
 ) -> Result<Submission, Box<Response>> {
-    let (session, loc) = page_session(state, tenant, locale, jar).await?;
+    let (session, loc) = page_session(state, tenant, locale, jar, section).await?;
     let (Some(flow_id), Some(csrf)) = (query.flow_id(), csrf.filter(|c| !c.is_empty())) else {
         return Err(Box::new(csrf_page(state, Some(tenant), &loc)));
     };
@@ -358,10 +363,11 @@ async fn profile_show(
     locale: RequestLocale,
     jar: CookieJar,
 ) -> Response {
-    let (session, loc) = match page_session(&state, &tenant, &locale, &jar).await {
-        Ok(s) => s,
-        Err(resp) => return *resp,
-    };
+    let (session, loc) =
+        match page_session(&state, &tenant, &locale, &jar, AccountSection::Profile).await {
+            Ok(s) => s,
+            Err(resp) => return *resp,
+        };
     let bound = match start_flow(&state, &tenant, &loc, &session).await {
         Ok(b) => b,
         Err(resp) => return *resp,
@@ -392,7 +398,17 @@ async fn profile_submit(
         Ok(Form(form)) => form,
         Err(e) => return rejected_form(&state, Some(&tenant), &locale.0, &e),
     };
-    let sub = match submission(&state, &tenant, &locale, &jar, &q, form.csrf_token.clone()).await {
+    let sub = match submission(
+        &state,
+        &tenant,
+        &locale,
+        &jar,
+        &q,
+        form.csrf_token.clone(),
+        AccountSection::Profile,
+    )
+    .await
+    {
         Ok(s) => s,
         Err(resp) => return *resp,
     };
@@ -490,7 +506,7 @@ async fn render_email(
         email => profile.email,
         email_verified => profile.email_verified,
         recent_auth => profile.recent_auth,
-        login_url => tenant.ui_url("/ui/login"),
+        login_url => NavContext::login_returning_to(tenant, AccountSection::Email),
     };
     render(
         state,
@@ -509,10 +525,11 @@ async fn email_show(
     locale: RequestLocale,
     jar: CookieJar,
 ) -> Response {
-    let (session, loc) = match page_session(&state, &tenant, &locale, &jar).await {
-        Ok(s) => s,
-        Err(resp) => return *resp,
-    };
+    let (session, loc) =
+        match page_session(&state, &tenant, &locale, &jar, AccountSection::Email).await {
+            Ok(s) => s,
+            Err(resp) => return *resp,
+        };
     let bound = match start_flow(&state, &tenant, &loc, &session).await {
         Ok(b) => b,
         Err(resp) => return *resp,
@@ -542,7 +559,17 @@ async fn email_submit(
         Ok(Form(form)) => form,
         Err(e) => return rejected_form(&state, Some(&tenant), &locale.0, &e),
     };
-    let sub = match submission(&state, &tenant, &locale, &jar, &q, form.csrf_token.clone()).await {
+    let sub = match submission(
+        &state,
+        &tenant,
+        &locale,
+        &jar,
+        &q,
+        form.csrf_token.clone(),
+        AccountSection::Email,
+    )
+    .await
+    {
         Ok(s) => s,
         Err(resp) => return *resp,
     };
@@ -746,7 +773,7 @@ async fn render_password(
         action => flow_url(tenant, PASSWORD, bound.flow_id),
         has_password => profile.has_password,
         recent_auth => profile.recent_auth,
-        login_url => tenant.ui_url("/ui/login"),
+        login_url => NavContext::login_returning_to(tenant, AccountSection::Password),
         revoke_others => revoke_others,
     };
     render(
@@ -766,10 +793,11 @@ async fn password_show(
     locale: RequestLocale,
     jar: CookieJar,
 ) -> Response {
-    let (session, loc) = match page_session(&state, &tenant, &locale, &jar).await {
-        Ok(s) => s,
-        Err(resp) => return *resp,
-    };
+    let (session, loc) =
+        match page_session(&state, &tenant, &locale, &jar, AccountSection::Password).await {
+            Ok(s) => s,
+            Err(resp) => return *resp,
+        };
     let bound = match start_flow(&state, &tenant, &loc, &session).await {
         Ok(b) => b,
         Err(resp) => return *resp,
@@ -801,7 +829,17 @@ async fn password_submit(
         Ok(Form(form)) => form,
         Err(e) => return rejected_form(&state, Some(&tenant), &locale.0, &e),
     };
-    let sub = match submission(&state, &tenant, &locale, &jar, &q, form.csrf_token.clone()).await {
+    let sub = match submission(
+        &state,
+        &tenant,
+        &locale,
+        &jar,
+        &q,
+        form.csrf_token.clone(),
+        AccountSection::Password,
+    )
+    .await
+    {
         Ok(s) => s,
         Err(resp) => return *resp,
     };

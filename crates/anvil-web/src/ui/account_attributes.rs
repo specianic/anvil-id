@@ -53,6 +53,7 @@ use serde_json::{Map, Value};
 
 use super::consent::{PageMessage, account_locale, current_session, localized, no_store};
 use super::login::{UiQuery, csrf_page, rejected_form};
+use super::nav::{AccountSection, NavContext};
 use crate::errors::core_error_page_in;
 use crate::i18n::{Locale, RequestLocale};
 use crate::render::PageContext;
@@ -422,7 +423,10 @@ fn to_login(tenant: &ResolvedTenant) -> Response {
     no_store(
         (
             StatusCode::SEE_OTHER,
-            [(header::LOCATION, tenant.ui_url("/ui/login"))],
+            [(
+                header::LOCATION,
+                NavContext::login_returning_to(tenant, AccountSection::Attributes),
+            )],
         )
             .into_response(),
     )

@@ -31,7 +31,7 @@ use anvil_core::flow::login::{IDENTIFY_FORM_ID, SSO_CHOICE_FORM_ID};
 use anvil_core::model::{
     AuthRequestId, Client, ClientSource, FlowId, RegistrationMode, SYSTEM_TENANT_SLUG,
 };
-use anvil_core::policy::return_to::ReturnTarget;
+use anvil_core::policy::return_to::{ReturnTarget, parse_return_target};
 
 use super::flow_driver;
 use crate::i18n::{Locale, carry_ui_locales};
@@ -72,12 +72,9 @@ pub(crate) enum UiPage {
     SignOut,
 }
 
-/// One variant per account page (`/ui/account/*`).
+/// One variant per account page (`/ui/account/*`). Each path is also an allowed sign-in
+/// `return_to` (`policy::return_to::ACCOUNT_PATHS`; a test keeps both in step).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(
-    dead_code,
-    reason = "the complete page map; the account pages switch to it section by section (07.1-12)"
-)]
 pub(crate) enum AccountSection {
     Profile,
     Email,
@@ -90,6 +87,20 @@ pub(crate) enum AccountSection {
 }
 
 impl AccountSection {
+    /// Every account page.
+    #[cfg(test)]
+    pub(crate) const ALL: [Self; 8] = [
+        Self::Profile,
+        Self::Email,
+        Self::Password,
+        Self::Security,
+        Self::Sessions,
+        Self::Apps,
+        Self::Linked,
+        Self::Attributes,
+    ];
+
+    /// The tenant-relative path of the page.
     fn path(self) -> &'static str {
         match self {
             Self::Profile => "/ui/account/profile",
@@ -286,6 +297,15 @@ impl NavContext {
             }),
             ..Self::none()
         }
+    }
+
+    /// The sign-in URL of a signed-out visit to the account page `section`: after signing in, the
+    /// user lands on that page (`return_to`, an allowlisted [`ReturnTarget`]; U-H3). Account pages
+    /// carry no `ui_locales` between them, so neither does this link.
+    pub(crate) fn login_returning_to(tenant: &ResolvedTenant, section: AccountSection) -> String {
+        Self::none()
+            .with_return_to(parse_return_target(section.path()))
+            .url(tenant, &Locale::fallback(), UiPage::Login)
     }
 
     /// Adds the login's allowlisted return target (used only without a request).
@@ -687,6 +707,32 @@ mod tests {
         assert_eq!(
             nav.url(&t, &en, UiPage::Login),
             format!("{ISSUER}/ui/login?request={REQ}")
+        );
+    }
+
+    #[test]
+    fn account_sign_in_returns_to_that_page() {
+        let t = tenant("acme", RegistrationMode::Open);
+        for section in AccountSection::ALL {
+            // The allowlist and the account page map stay in step.
+            assert!(
+                anvil_core::policy::return_to::ACCOUNT_PATHS.contains(&section.path()),
+                "{section:?}"
+            );
+            let encoded: String =
+                url::form_urlencoded::byte_serialize(section.path().as_bytes()).collect();
+            assert_eq!(
+                NavContext::login_returning_to(&t, section),
+                format!("{ISSUER}/ui/login?return_to={encoded}")
+            );
+        }
+        assert_eq!(
+            anvil_core::policy::return_to::ACCOUNT_PATHS.len(),
+            AccountSection::ALL.len()
+        );
+        assert_eq!(
+            NavContext::login_returning_to(&t, AccountSection::Security),
+            format!("{ISSUER}/ui/login?return_to=%2Fui%2Faccount%2Fsecurity")
         );
     }
 
