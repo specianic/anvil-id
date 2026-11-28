@@ -6,15 +6,15 @@ current_phase: 05
 current_phase_name: release 0 4 operate it
 current_plan: 33
 status: verifying
-stopped_at: Completed 07.1-10-PLAN.md
-last_updated: "2026-11-28T04:00:04.159Z"
+stopped_at: Completed 07.1-06-PLAN.md
+last_updated: "2026-11-28T04:16:24.720Z"
 last_activity: 2026-11-28
 progress:
   total_phases: 8
   completed_phases: 3
   total_plans: 215
-  completed_plans: 192
-  percent: 89
+  completed_plans: 193
+  percent: 90
 ---
 
 # Project State
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 **Status:** Phase complete — ready for verification
 **Last Activity:** 2026-11-28
 **Last Activity Description:** 06-26 phase gate complete (921-pair security map, 1.0 plaintext scans, `just doc`, legacy console redirects removed, anvilid 1.0.0-beta.1, 1.0 migrations pinned, every workflow incl. load, deploy and the macOS release dry run green on 9c40f61). Open: 04-33/v0.3.0 and 05-29/v0.4.0 (owner), then 06-27 (v1.0.0-beta.1)
-**Progress:** [█████████░] 89%
+**Progress:** [█████████░] 90%
 
 Phase 5 has 33 plans (05-01 through 05-33). Every plan except 05-29 (release v0.4.0 after owner sign-off) has a
 SUMMARY. Current Plan counts plans in execution order: 05-29 is the 33rd and last. Phase 4 still has one open plan, 04-33 (manual real-provider checklist, then tag v0.3.0); it must be
@@ -227,6 +227,7 @@ done before 05-29 tags v0.4.0.
 | Phase 07.1 P04 | 25min | 3 tasks | 53 files |
 | Phase 07.1 P01 | 120min | 3 tasks | 22 files |
 | Phase 07.1 P10 | 40min | 3 tasks | 18 files |
+| Phase 07.1 P06 | 90min | 3 tasks | 32 files |
 
 ## Accumulated Context
 
@@ -537,6 +538,9 @@ Recent decisions affecting current work:
 - [Phase 07.1]: 07.1-01: emailed recovery/verification links carry &request= (self_service_email_for_request); invitations and upstream JIT do not
 - [Phase 07.1]: Console forms track dirty state with lib/formState.ts (useFormState) and call useUnsavedChanges(isDirty && !pending); UnsavedChangesGuard renders outside the form
 - [Phase 07.1]: Org connections (OIDC and SAML) are created disabled from the console; org delete confirms with the typed org slug
+- [Phase 07.1]: 07.1-06: one client home URL rule (validate_client_home_uri): admin loopback http allowed, DCR https only, CIMD loopback http only in dev mode
+- [Phase 07.1]: 07.1-06: anvil-console of the system tenant cannot be deleted (409, guard by tenant id)
+- [Phase 07.1]: 07.1-06: admin recovery reuses self_service_email, 202 no body, user_recovery_sent; api_compat treats required inputs of new operations as additive
 
 ### Roadmap Evolution
 
@@ -554,6 +558,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-28T04:00:04.156Z
-Stopped at: Completed 07.1-10-PLAN.md
+Last session: 2026-11-28T04:16:24.717Z
+Stopped at: Completed 07.1-06-PLAN.md
 Resume file: None
