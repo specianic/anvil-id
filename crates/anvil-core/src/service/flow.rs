@@ -3,8 +3,10 @@
 //!
 //! # Binding
 //!
-//! Every flow is bound to two independent random tokens: the flow cookie and the CSRF token
-//! (hidden form field). The flow row stores only their SHA-256 hashes. Every submission must
+//! Every flow is bound to two tokens: the random flow cookie and the CSRF token (hidden form
+//! field), which is derived from the cookie with a KEK-derived key ([`flow_csrf`], purpose
+//! [`UI_CSRF_PURPOSE`]) so a `GET` holding the cookie can show the bound form again
+//! (Post/Redirect/Get). The flow row stores only their SHA-256 hashes. Every submission must
 //! present both; they are compared in constant time ([`check_binding`]). A mismatch is
 //! [`CoreError::Forbidden`]. Flows expire after [`FLOW_LIFETIME`] (15 minutes); submitting to an
 //! expired or unknown flow starts a fresh flow of the same kind that shows `flow.expired`
@@ -138,6 +140,7 @@ use std::sync::Arc;
 use anvil_jose::Kek;
 use anvil_jose::email_code::generate_email_code;
 use anvil_jose::encoding::{b64url, b64url_decode, ct_eq, random_token, secret_hash};
+use anvil_jose::hmac::hmac_sha256;
 use anvil_jose::otp::{TotpSecret, check_code};
 use anvil_jose::recovery_code::{normalize_recovery_code, recovery_code_hash};
 use secrecy::{ExposeSecret as _, SecretString};
@@ -504,6 +507,28 @@ pub fn binding_kind(flow: &Flow) -> FlowBindingKind {
         .unwrap_or_default()
 }
 
+/// Key-derivation purpose of the CSRF token of a cookie-bound flow ([`flow_csrf`]).
+pub const UI_CSRF_PURPOSE: &str = "anvilid/ui-csrf/v1";
+
+/// The CSRF token of the cookie-bound flow `flow` of `tenant` whose flow cookie is
+/// `cookie_token`: base64url(HMAC-SHA-256(KEK-derived key [`UI_CSRF_PURPOSE`], tenant id ‖ flow
+/// id ‖ cookie)). Only its hash is stored, as for a random token. It is computable only with the
+/// HttpOnly flow cookie and the KEK, so the binding is unchanged: a token derived for another
+/// cookie, flow or tenant never matches. A `GET` holding the cookie recomputes it to show the
+/// bound form again (Post/Redirect/Get, `FlowService::csrf_for`). The ids have fixed length (16
+/// bytes each), so the concatenation is unambiguous.
+pub fn flow_csrf(kek: &Kek, tenant: TenantId, flow: FlowId, cookie_token: &str) -> String {
+    let key = kek.derive_key(UI_CSRF_PURPOSE);
+    b64url(&hmac_sha256(
+        key.as_ref(),
+        &[
+            tenant.0.as_bytes(),
+            flow.0.as_bytes(),
+            cookie_token.as_bytes(),
+        ],
+    ))
+}
+
 /// Checks that a submission belongs to `flow`: unexpired, cookie-bound, with the flow cookie and
 /// the CSRF token whose hashes the flow stores. Both hashes are compared in constant time and
 /// both are always compared. A token-bound flow (headless native mode) is refused whatever the
@@ -690,6 +715,25 @@ pub fn bind_form(
     form.action = format!("{}/{}?flow={}", cx.ui_base, form.action, flow_id);
     form.csrf_token = csrf_token.to_owned();
     form
+}
+
+/// See [`FlowService::step_display`].
+#[derive(Debug, Default)]
+pub struct StepDisplay {
+    /// The user of the second-factor or enrolment step.
+    pub step_user: Option<UserId>,
+    /// The pending authenticator-app secret of the enrolment step.
+    pub totp: Option<TotpEnrolment>,
+    /// The email-code step.
+    pub email_code: Option<EmailCodeStep>,
+}
+
+/// The email-code step of a login: the normalised address the email was requested for and the
+/// rate-limit subject of its code (`flow::email_code::limit_subject`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmailCodeStep {
+    pub email: String,
+    pub subject: UserId,
 }
 
 /// Executes self-service flows.
@@ -1111,7 +1155,13 @@ impl FlowService {
         };
         let now = self.clock.now();
         let cookie = random_token();
-        let csrf = random_token();
+        // A cookie-bound flow's CSRF token is derived from the cookie ([`flow_csrf`]), so a
+        // `GET` holding the cookie can show the bound form again (Post/Redirect/Get). A
+        // token-bound flow stores the hash of a discarded random value (module docs).
+        let csrf = match binding {
+            FlowBindingKind::Cookie => flow_csrf(&self.kek, cx.tenant.id, id, &cookie),
+            FlowBindingKind::Token => random_token(),
+        };
         let form_csrf = match binding {
             FlowBindingKind::Cookie => csrf.as_str(),
             FlowBindingKind::Token => "",
@@ -1848,6 +1898,71 @@ impl FlowService {
         };
         let secret = open_pending_totp(&self.kek, flow, sealed)?;
         Ok(Some(enrolment(cx.tenant, &user, &secret)?))
+    }
+
+    /// The CSRF token of the cookie-bound flow `flow` of `tenant` for the flow cookie
+    /// `cookie_token` ([`flow_csrf`]): what a `GET` holding the cookie binds a re-shown form to.
+    /// The binding check is unchanged; a cookie of another flow yields a token that never
+    /// matches.
+    pub fn csrf_for(&self, tenant: TenantId, flow: FlowId, cookie_token: &str) -> String {
+        flow_csrf(&self.kek, tenant, flow, cookie_token)
+    }
+
+    /// Whether the emailed self-service link token `raw_token` of `kind` can still be used in
+    /// `tenant` (unconsumed, unexpired), hashed exactly as its consumption hashes it. Read only
+    /// (`UserRepo::peek_self_service_token`): opening a link never consumes it (mail scanners
+    /// fetch links). A malformed token (empty or too long) is not usable. For the "this link has
+    /// expired" page shown on `GET` before the user types anything.
+    pub async fn self_service_link_usable(
+        &self,
+        tenant: TenantId,
+        kind: SelfServiceKind,
+        raw_token: &str,
+    ) -> Result<bool, CoreError> {
+        let token = raw_token.trim();
+        if token.is_empty() || token.len() > crate::flow::verification::MAX_TOKEN_LEN {
+            return Ok(false);
+        }
+        let hash = SecretHash(secret_hash(token));
+        Ok(self
+            .storage
+            .users()
+            .peek_self_service_token(tenant, kind, &hash, self.clock.now())
+            .await?)
+    }
+
+    /// What a page needs to show the current step of a login again besides its form (a `GET`
+    /// after Post/Redirect/Get): the user of the second-factor or enrolment step (for its
+    /// binding token), the pending authenticator-app secret of the enrolment step (re-derived
+    /// from the sealed secret in the flow state, nothing is changed), and the address and
+    /// rate-limit subject of the email-code step. Every other step and kind: all `None`.
+    pub async fn step_display(
+        &self,
+        cx: &FlowContext<'_>,
+        flow: FlowId,
+        state: &FlowState,
+    ) -> Result<StepDisplay, CoreError> {
+        let FlowState::Login(s) = state else {
+            return Ok(StepDisplay::default());
+        };
+        let step_user = match s.step {
+            LoginStep::SecondFactor { user_id, .. } | LoginStep::Enroll { user_id } => {
+                Some(user_id)
+            }
+            _ => None,
+        };
+        let email_code = match (s.step, s.email_code.as_deref()) {
+            (LoginStep::EmailCode, Some(ec)) => Some(EmailCodeStep {
+                email: ec.email.clone(),
+                subject: email_code::limit_subject(&self.kek, cx.tenant.id, &ec.email, ec.user_id),
+            }),
+            _ => None,
+        };
+        Ok(StepDisplay {
+            step_user,
+            totp: self.pending_enrolment(cx, flow, state).await?,
+            email_code,
+        })
     }
 
     /// Starts a login flow. With an authorization request and a signed-in `current` session
@@ -4004,6 +4119,50 @@ mod tests {
         assert_eq!(
             password_login_result(Some(u), true, VALID, true).map(|x| x.id),
             Err(Failure::EmailNotVerified)
+        );
+    }
+
+    #[test]
+    fn flow_csrf_is_deterministic_and_bound_to_tenant_flow_and_cookie() {
+        let kek = Kek::generate();
+        let (tenant, flow) = (TenantId::new_v7(), FlowId::new_v7());
+        let csrf = flow_csrf(&kek, tenant, flow, "cookie");
+        assert_eq!(csrf, flow_csrf(&kek, tenant, flow, "cookie"));
+        assert_eq!(csrf.len(), 43, "base64url of 32 bytes");
+        for other in [
+            flow_csrf(&kek, TenantId::new_v7(), flow, "cookie"),
+            flow_csrf(&kek, tenant, FlowId::new_v7(), "cookie"),
+            flow_csrf(&kek, tenant, flow, "cookie2"),
+            flow_csrf(&kek, tenant, flow, ""),
+            flow_csrf(&Kek::generate(), tenant, flow, "cookie"),
+        ] {
+            assert_ne!(csrf, other);
+        }
+    }
+
+    #[test]
+    fn derived_csrf_verifies_only_with_its_own_cookie() {
+        let kek = Kek::generate();
+        let tenant = TenantId::new_v7();
+        let mut f = flow("cookie", "unused", NOW + FLOW_LIFETIME);
+        let csrf = flow_csrf(&kek, tenant, f.id, "cookie");
+        f.csrf_hash = SecretHash(secret_hash(&csrf));
+        assert_eq!(check_binding(&f, Some("cookie"), &csrf, NOW), Ok(()));
+        // Derived for another cookie, flow or tenant: refused.
+        for wrong in [
+            flow_csrf(&kek, tenant, f.id, "other"),
+            flow_csrf(&kek, tenant, FlowId::new_v7(), "cookie"),
+            flow_csrf(&kek, TenantId::new_v7(), f.id, "cookie"),
+        ] {
+            assert_eq!(
+                check_binding(&f, Some("cookie"), &wrong, NOW),
+                Err(BindingError::Forbidden)
+            );
+        }
+        // The right token without the cookie: refused.
+        assert_eq!(
+            check_binding(&f, None, &csrf, NOW),
+            Err(BindingError::Forbidden)
         );
     }
 

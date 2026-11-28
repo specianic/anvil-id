@@ -47,7 +47,7 @@ use anvil_core::ports::RelyingParty;
 use anvil_core::service::audit::AuditService;
 use anvil_core::service::flow::{
     AuthAttempt, EmailLinkOutcome, FlowContext, FlowOutcome, FlowProof, IdentifyOutcome, IdpStart,
-    LoginStart, StartedFlow, SubmitResult, bind_form,
+    LoginStart, StartedFlow, StepDisplay, SubmitResult, bind_form,
 };
 use axum_extra::extract::cookie::CookieJar;
 
@@ -1031,6 +1031,47 @@ pub(crate) async fn current_step(
     flow: FlowId,
     binding: &FlowBinding<'_>,
 ) -> Result<Option<(FormDescription, FlowMeta)>, DriveRejection> {
+    Ok(load_step(state, tenant, flow, binding)
+        .await?
+        .map(|(form, meta, _)| (form, meta)))
+}
+
+/// The current step of a bound, unexpired engine flow shown again by a page `GET` after a
+/// failed POST (Post/Redirect/Get, `ui::flash`): [`current_step`] plus what the page shows
+/// besides the form (`FlowService::step_display`: the step user for its binding token, the
+/// pending authenticator-app secret, the email-code step). Read only, like [`current_step`].
+pub(crate) async fn shown_step(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    flow: FlowId,
+    binding: &FlowBinding<'_>,
+) -> Result<Option<(FormDescription, FlowMeta, StepDisplay)>, DriveRejection> {
+    let Some((form, meta, flow_state)) = load_step(state, tenant, flow, binding).await? else {
+        return Ok(None);
+    };
+    let cx = Cx::without_rp(tenant);
+    let ctx = RequestContext::default();
+    let display = state
+        .ui_flow_service()
+        .step_display(&cx.flow(tenant, &ctx), flow, &flow_state)
+        .await
+        .map_err(DriveRejection::from_flow)?;
+    Ok(Some((form, meta, display)))
+}
+
+async fn load_step(
+    state: &AppState,
+    tenant: &ResolvedTenant,
+    flow: FlowId,
+    binding: &FlowBinding<'_>,
+) -> Result<
+    Option<(
+        FormDescription,
+        FlowMeta,
+        anvil_core::flow::engine::FlowState,
+    )>,
+    DriveRejection,
+> {
     use anvil_core::flow::engine::{FlowEnv, FlowState, current_form};
     use anvil_core::service::flow::{BindingError, email_code_enabled};
 
@@ -1082,6 +1123,7 @@ pub(crate) async fn current_step(
             expires_at: stored.expires_at,
             request: stored.auth_request_id,
         },
+        flow_state,
     )))
 }
 

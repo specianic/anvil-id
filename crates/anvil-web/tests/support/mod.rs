@@ -205,6 +205,18 @@ pub fn location(resp: &TestResponse) -> String {
         .to_owned()
 }
 
+/// Whether `resp` is the Post/Redirect/Get answer of a failed flow form POST: 303 with the
+/// one-shot flash cookie (`anvil_flash_*`).
+pub fn is_prg(resp: &TestResponse) -> bool {
+    resp.status == StatusCode::SEE_OTHER
+        && resp
+            .headers
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .any(|c| c.contains("anvil_flash_") && !c.contains("Max-Age=0"))
+}
+
 /// The response body as JSON.
 pub fn json(resp: &TestResponse) -> serde_json::Value {
     serde_json::from_slice(&resp.body)
@@ -509,6 +521,18 @@ impl TestApp {
                 .expect("request"),
         )
         .await
+    }
+
+    /// A same-origin form POST that follows a Post/Redirect/Get answer: when the POST answered
+    /// 303 with a flash cookie ([`is_prg`]), the `GET` of the flow page it redirects to (with
+    /// the jar, so the flash goes along); otherwise the POST's own response.
+    pub async fn post_form_follow(&self, path: &str, pairs: &[(&str, &str)]) -> TestResponse {
+        let resp = self.post_form(path, pairs).await;
+        if is_prg(&resp) {
+            self.follow(&resp).await
+        } else {
+            resp
+        }
     }
 
     /// Follows a redirect: GETs the `Location` (absolute URLs on the public origin become paths).

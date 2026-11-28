@@ -144,8 +144,45 @@ pub fn hidden_inputs(html: &str) -> Vec<(String, String)> {
 }
 
 /// Opens a form page and submits it like a browser: the CSRF token, the form's hidden inputs and
-/// `pairs` (a pair overrides a hidden input of the same name).
+/// `pairs` (a pair overrides a hidden input of the same name). A failed submission's
+/// Post/Redirect/Get answer is followed like a browser does ([`post_form_follow`]): the result is
+/// the `GET` of the flow page showing the error. [`submit_form_raw`] returns the POST's own
+/// answer.
 pub async fn submit_form<C: Client>(app: &C, path: &str, pairs: &[(&str, &str)]) -> TestResponse {
+    let resp = submit_form_raw(app, path, pairs).await;
+    follow_prg(app, resp).await
+}
+
+/// A form POST that follows a Post/Redirect/Get answer (303 with the flash cookie,
+/// [`crate::support::is_prg`]) with a `GET` of its `Location`, carrying the jar (flow and flash
+/// cookies) like a browser. Any other answer (a success redirect, a lock, an error page) is
+/// returned as it is.
+pub async fn post_form_follow<C: Client>(
+    app: &C,
+    path: &str,
+    pairs: &[(&str, &str)],
+) -> TestResponse {
+    let resp = app.post_form(path, pairs).await;
+    follow_prg(app, resp).await
+}
+
+/// [`post_form_follow`] for a response already received.
+pub async fn follow_prg<C: Client>(app: &C, resp: TestResponse) -> TestResponse {
+    if !crate::support::is_prg(&resp) {
+        return resp;
+    }
+    let location = crate::support::location(&resp);
+    let path = to_path(app, &location);
+    assert!(path.starts_with('/'), "PRG stays on the server: {location}");
+    app.get(&path).await
+}
+
+/// [`submit_form`] without following a Post/Redirect/Get answer.
+pub async fn submit_form_raw<C: Client>(
+    app: &C,
+    path: &str,
+    pairs: &[(&str, &str)],
+) -> TestResponse {
     let resp = app.get(path).await;
     assert_eq!(resp.status, 200, "GET {path}: {}", resp.text());
     let html = resp.html();
