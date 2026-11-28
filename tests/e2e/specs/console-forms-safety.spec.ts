@@ -119,7 +119,7 @@ test('console: slug fill, typed organization delete, unsaved-changes guards, att
     await openTenantPage(page, slug, 'attributes/new');
     await expect(page.getByRole('heading', { level: 1, name: 'New attribute' })).toBeVisible();
     await expect(page.getByTestId('attribute-form')).toBeVisible();
-    await expect(page.getByRole('heading', { level: 1, name: 'new' })).toHaveCount(0);
+    await expect(page.getByRole('heading', { level: 1, name: 'new', exact: true })).toHaveCount(0);
     await expectNoA11yViolations(page);
 
     await page.getByTestId('attribute-name').fill('employee_id');

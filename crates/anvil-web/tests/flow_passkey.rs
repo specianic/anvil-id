@@ -445,8 +445,12 @@ async fn passkey_signs_in_and_a_consumed_challenge_cannot_be_replayed() {
     let page = app.get("/ui/login").await;
     let (options, action, csrf) = passkey_form(&app, &page);
     challenge(&app, &options, &csrf).await;
-    let resp =
-        post_form_follow(&app, &action, &[("csrf_token", &csrf), ("response", &assertion)]).await;
+    let resp = post_form_follow(
+        &app,
+        &action,
+        &[("csrf_token", &csrf), ("response", &assertion)],
+    )
+    .await;
     assert_eq!(resp.status, 400);
     assert!(session_cookie(&app).is_none());
 }

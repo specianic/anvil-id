@@ -114,7 +114,7 @@ pub fn problem_json(err: &CoreError) -> Response {
 /// [`crate::i18n::RequestLocale`], [`crate::i18n::locale_of`] or the authorization request's
 /// `ui_locales`). `error_key` selects the fixed sentence (themes/default/README.md); `detail` is
 /// optional technical text (empty = none), shown in development mode only. The way forward is the
-/// signed-out one ([`NavContext::none`]); callers that know more use [`error_page_nav`]. The page
+/// signed-out one (`NavContext::none`); callers that know more use `error_page_nav`. The page
 /// never redirects.
 pub fn error_page_in(
     state: &AppState,

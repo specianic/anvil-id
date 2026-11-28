@@ -5,7 +5,7 @@
 //! self-service token and enqueues the `invitation` email in the same transaction as the user.
 //!
 //! [`UserService::send_recovery`] sends an existing user the self-service password-reset email
-//! through the one recovery email path ([`crate::service::flow::self_service_email`]: `Recovery`
+//! through the one recovery email path (`flow::self_service_email`: `Recovery`
 //! token, one hour, the user's current address), audited as `user_recovery_sent`.
 //!
 //! Every mutating [`UserService`] method takes the acting administrator and the request context
@@ -380,7 +380,7 @@ impl UserService {
     }
 
     /// Sends the user a password-reset email: the same `Recovery` token and `recovery` email as
-    /// self-service recovery ([`self_service_email`]: one hour, link
+    /// self-service recovery (`self_service_email`: one hour, link
     /// `{issuer}/ui/recovery?token=…`, sealed payload), to the user's current address, token and
     /// email stored in one transaction. `issuer` is the tenant's issuer. The token is never
     /// returned. An unknown user (or one of another tenant) is `NotFound`; a blocked user is

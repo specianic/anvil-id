@@ -572,7 +572,11 @@ async fn telemetry_carries_no_personal_data_secrets_or_client_ips() {
     wrong.push(("identifier".into(), USER_EMAIL.into()));
     wrong.push(("password".into(), WRONG_PASSWORD.into()));
     let resp = b.post_form(&action, &wrong).await;
-    assert_eq!(resp.status, 400, "wrong password: {}", resp.body);
+    // Post/Redirect/Get (rc.4): the failed post redirects to the sign-in page, which shows the
+    // error once.
+    assert_eq!(resp.status, 303, "wrong password: {}", resp.body);
+    let (resp, done) = follow(&mut b, resp, rp).await;
+    assert!(done.is_none(), "a wrong password stays on the sign-in page");
     let (action, mut fields) = form(&resp.body, "login");
     fields.push(("identifier".into(), USER_EMAIL.into()));
     fields.push(("password".into(), USER_PASSWORD.into()));
