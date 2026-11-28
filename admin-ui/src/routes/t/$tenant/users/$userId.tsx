@@ -1,9 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
+import { Ban, CircleCheck, KeyRound, MailCheck, Pencil, ShieldOff } from "lucide-react";
 import { type FormEvent, type KeyboardEvent, type ReactNode, useRef, useState } from "react";
 import { ApiError, type UserView, api, unwrap } from "@/api/client";
+import { useAuth } from "@/auth/AuthProvider";
 import { SYSTEM_TENANT, useTenant } from "@/lib/tenant";
 import type { components } from "@/api/schema";
+import { ADMINISTRATOR_ROLE } from "@/components/AddAdministrator";
+import { DangerZone } from "@/components/DangerZone";
+import { UserForm, type UserFormValues, NEW_USER, NoSmtpWarning, useSmtpAvailable } from "@/components/UserForm";
 import {
   type AttributeDefinition,
   AttributeValueInput,
@@ -13,7 +18,7 @@ import {
   toApiJson,
   valueToText,
 } from "@/components/AttributeForm";
-import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { ConfirmDialog, Modal } from "@/components/ConfirmDialog";
 import { ProblemAlert } from "@/components/ProblemAlert";
 import { type RoleDto, RoleProblem } from "@/components/RoleForm";
 import { type FieldErrors, SelectField, StatusMessage } from "@/components/form";
@@ -100,6 +105,278 @@ function UserDetails({ user }: { user: UserView }) {
           )}
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+type Confirm = "block" | "mfa" | null;
+
+/** Summary of removed second factors, e.g. "an authenticator app and 2 passkeys". */
+function removedSummary(removed: CredentialView[]): string {
+  const totp = removed.filter((c) => c.kind === "totp").length;
+  const passkeys = removed.filter((c) => c.kind === "webauthn").length;
+  const parts = [
+    totp ? (totp === 1 ? "the authenticator app (with its recovery codes)" : `${totp} authenticator apps`) : "",
+    passkeys ? (passkeys === 1 ? "1 passkey" : `${passkeys} passkeys`) : "",
+  ].filter(Boolean);
+  return parts.join(" and ");
+}
+
+/**
+ * Account actions of the user page (C-H1): edit email/username, mark the email verified,
+ * block/unblock, send a password reset, reset MFA and delete. Each goes through the existing admin
+ * API and shows the server's refusal (e.g. the last-administrator guard) inline.
+ */
+function UserAccountActions({ user }: { user: UserView }) {
+  const tenant = useTenant();
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const smtpAvailable = useSmtpAvailable(tenant);
+  const [editing, setEditing] = useState(false);
+  const [confirm, setConfirm] = useState<Confirm>(null);
+  const [status, setStatus] = useState<string | null>(null);
+  const userKey = ["user", tenant, user.id];
+
+  const afterChange = async (saved?: UserView) => {
+    if (saved) queryClient.setQueryData(userKey, saved);
+    await queryClient.invalidateQueries({ queryKey: ["users", tenant] });
+  };
+
+  const update = useMutation({
+    mutationFn: async (args: { body: components["schemas"]["UpdateUser"]; message: string }) => {
+      const saved = unwrap(
+        await api.PATCH("/api/admin/v1/tenants/{slug}/users/{user_id}", {
+          params: { path: { slug: tenant, user_id: user.id } },
+          body: args.body,
+        }),
+      );
+      return { saved, message: args.message };
+    },
+    onMutate: () => setStatus(null),
+    onSuccess: async ({ saved, message }) => {
+      setEditing(false);
+      setConfirm(null);
+      setStatus(message);
+      await afterChange(saved);
+    },
+  });
+
+  const edit = (values: UserFormValues) => {
+    const body: components["schemas"]["UpdateUser"] = {};
+    if (values.email !== user.email) {
+      body.email = values.email;
+      // A new address is not verified until the user proves it (or an admin marks it).
+      body.email_verified = false;
+    }
+    if (values.username !== (user.username ?? "")) body.username = values.username || null;
+    if (Object.keys(body).length === 0) {
+      setEditing(false);
+      return;
+    }
+    update.mutate({ body, message: "Account saved." });
+  };
+
+  const recovery = useMutation({
+    mutationFn: async () => {
+      await api.POST("/api/admin/v1/tenants/{slug}/users/{user_id}/recovery", {
+        params: { path: { slug: tenant, user_id: user.id } },
+      });
+    },
+    onMutate: () => setStatus(null),
+    onSuccess: () => setStatus(`Reset email sent to ${user.email}.`),
+  });
+
+  // Reset MFA: remove every TOTP and passkey credential (TOTP removal also drops the recovery codes).
+  const resetMfa = useMutation({
+    mutationFn: async () => {
+      const credentials = unwrap(
+        await api.GET("/api/admin/v1/tenants/{slug}/users/{user_id}/credentials", {
+          params: { path: { slug: tenant, user_id: user.id } },
+        }),
+      ).items.filter((c) => c.kind !== "password");
+      const removed: CredentialView[] = [];
+      try {
+        for (const c of credentials) {
+          await api.DELETE("/api/admin/v1/tenants/{slug}/users/{user_id}/credentials/{credential_id}", {
+            params: { path: { slug: tenant, user_id: user.id, credential_id: c.id } },
+          });
+          removed.push(c);
+        }
+      } finally {
+        await queryClient.invalidateQueries({ queryKey: ["user-credentials", tenant, user.id] });
+      }
+      return removed;
+    },
+    onMutate: () => setStatus(null),
+    onSuccess: (removed) => {
+      setConfirm(null);
+      setStatus(
+        removed.length === 0
+          ? "The user has no authenticator app or passkey; nothing was removed."
+          : `MFA reset: removed ${removedSummary(removed)}. The user can enroll again at the next sign-in.`,
+      );
+    },
+  });
+
+  const remove = useMutation({
+    mutationFn: async () => {
+      await api.DELETE("/api/admin/v1/tenants/{slug}/users/{user_id}", {
+        params: { path: { slug: tenant, user_id: user.id } },
+      });
+    },
+    onSuccess: async () => {
+      queryClient.removeQueries({ queryKey: userKey });
+      await queryClient.invalidateQueries({ queryKey: ["users", tenant] });
+      await navigate({ to: "/t/$tenant/users", params: { tenant } });
+    },
+  });
+
+  const blocked = user.status === "blocked";
+  const actionError = (update.error && !editing && confirm === null ? update.error : null) ?? recovery.error;
+
+  return (
+    <div className="space-y-4">
+      <Card data-testid="user-account-actions">
+        <CardHeader>
+          <CardTitle>
+            <h2>Account actions</h2>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <StatusMessage message={status} />
+          {actionError ? <RoleProblem error={actionError} /> : null}
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" size="sm" onClick={() => setEditing(true)} data-testid="user-edit">
+              <Pencil aria-hidden="true" />
+              Edit
+            </Button>
+            {!user.email_verified && (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={update.isPending}
+                onClick={() => update.mutate({ body: { email_verified: true }, message: "Email marked as verified." })}
+                data-testid="user-mark-verified"
+              >
+                <MailCheck aria-hidden="true" />
+                Mark email verified
+              </Button>
+            )}
+            {blocked ? (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={update.isPending}
+                onClick={() => update.mutate({ body: { status: "active" }, message: "User unblocked. They can sign in again." })}
+                data-testid="user-unblock"
+              >
+                <CircleCheck aria-hidden="true" />
+                Unblock
+              </Button>
+            ) : (
+              <Button variant="outline" size="sm" onClick={() => setConfirm("block")} data-testid="user-block">
+                <Ban aria-hidden="true" />
+                Block
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={recovery.isPending}
+              onClick={() => recovery.mutate()}
+              data-testid="user-send-reset"
+            >
+              <KeyRound aria-hidden="true" />
+              {recovery.isPending ? "Sending…" : "Send password reset"}
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setConfirm("mfa")} data-testid="user-reset-mfa">
+              <ShieldOff aria-hidden="true" />
+              Reset MFA
+            </Button>
+          </div>
+          {smtpAvailable === false && <NoSmtpWarning action="Sending a password reset" />}
+          <p className="text-muted-foreground text-xs">
+            The password reset email links to the tenant's recovery page and is valid for one hour. Blocked users get no
+            reset email.
+          </p>
+        </CardContent>
+      </Card>
+
+      <DangerZone
+        title="Delete this user"
+        description="Deletes the user with their credentials, sessions, role assignments and organization memberships. Their tokens stop working. This cannot be undone."
+        confirmText={user.email}
+        actionLabel="Delete user"
+        onConfirm={() => remove.mutate()}
+        pending={remove.isPending}
+        error={remove.error}
+      />
+
+      <Modal
+        open={editing}
+        onClose={() => {
+          setEditing(false);
+          update.reset();
+        }}
+        title="Edit account"
+      >
+        <UserForm
+          mode="edit"
+          initial={{ ...NEW_USER, email: user.email, username: user.username ?? "" }}
+          pending={update.isPending}
+          error={editing ? update.error : null}
+          onSubmit={edit}
+        />
+        <div className="flex justify-end">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => {
+              setEditing(false);
+              update.reset();
+            }}
+            disabled={update.isPending}
+          >
+            Cancel
+          </Button>
+        </div>
+      </Modal>
+
+      <ConfirmDialog
+        open={confirm === "block"}
+        title="Block this user?"
+        description={
+          <p>
+            {user.email} can no longer sign in or get new tokens until you unblock the account. Nothing else changes.
+          </p>
+        }
+        confirmLabel="Block user"
+        onConfirm={() => update.mutate({ body: { status: "blocked" }, message: "User blocked. They can no longer sign in." })}
+        onCancel={() => {
+          update.reset();
+          setConfirm(null);
+        }}
+        pending={update.isPending}
+        error={confirm === "block" ? update.error : null}
+      />
+      <ConfirmDialog
+        open={confirm === "mfa"}
+        title="Reset MFA?"
+        description={
+          <p>
+            Removes the user's authenticator app (with its recovery codes) and every passkey. Their password stays. If
+            the tenant requires MFA, they enroll again at the next sign-in.
+          </p>
+        }
+        confirmLabel="Reset MFA"
+        onConfirm={() => resetMfa.mutate()}
+        onCancel={() => {
+          resetMfa.reset();
+          setConfirm(null);
+        }}
+        pending={resetMfa.isPending}
+        error={resetMfa.error}
+      />
     </div>
   );
 }
@@ -411,6 +688,7 @@ function UserCredentials({ userId }: { userId: string }) {
 function UserRoles({ userId }: { userId: string }) {
   const tenant = useTenant();
   const queryClient = useQueryClient();
+  const { user: admin } = useAuth();
   const [selected, setSelected] = useState("");
   const [target, setTarget] = useState<RoleDto | null>(null);
   const [status, setStatus] = useState<string | null>(null);
@@ -463,6 +741,9 @@ function UserRoles({ userId }: { userId: string }) {
     },
   });
 
+  // Removing your own administrator role in the system tenant locks you out of the console.
+  const removingOwnAdmin = tenant === SYSTEM_TENANT && userId === admin.profile.sub && target?.name === ADMINISTRATOR_ROLE;
+
   if (held.isError) return <ProblemAlert error={held.error} />;
   const items = held.data?.items ?? [];
   const available = (all.data?.items ?? []).filter((r) => !items.some((h) => h.id === r.id));
@@ -476,26 +757,33 @@ function UserRoles({ userId }: { userId: string }) {
     <div className="space-y-3">
       <StatusMessage message={status} />
       {assign.error ? <RoleProblem error={assign.error} /> : null}
-      <form onSubmit={submit} className="flex flex-wrap items-end gap-2" aria-label="Assign role">
-        <div className="min-w-56">
-          <SelectField
-            label="Role"
-            value={selected}
-            onChange={(e) => setSelected(e.target.value)}
-            options={[
-              { value: "", label: available.length ? "Choose a role" : "No other roles" },
-              ...available.map((r) => ({ value: r.name, label: r.name })),
-            ]}
-            data-testid="assign-role-select"
-          />
-        </div>
-        <Button type="submit" disabled={!selected || assign.isPending} data-testid="assign-role">
-          {assign.isPending ? "Assigning…" : "Assign role"}
-        </Button>
-        <Link to="/t/$tenant/roles" params={{ tenant }} className="text-sm underline underline-offset-4">
-          Manage roles
-        </Link>
-      </form>
+      {available.length > 0 ? (
+        <form onSubmit={submit} className="flex flex-wrap items-end gap-2" aria-label="Assign role">
+          <div className="min-w-56">
+            <SelectField
+              label="Role"
+              value={selected}
+              onChange={(e) => setSelected(e.target.value)}
+              options={[{ value: "", label: "Choose a role" }, ...available.map((r) => ({ value: r.name, label: r.name }))]}
+              data-testid="assign-role-select"
+            />
+          </div>
+          <Button type="submit" disabled={!selected || assign.isPending} data-testid="assign-role">
+            {assign.isPending ? "Assigning…" : "Assign role"}
+          </Button>
+          <Link to="/t/$tenant/roles" params={{ tenant }} className="text-sm underline underline-offset-4">
+            Manage roles
+          </Link>
+        </form>
+      ) : all.isSuccess && held.isSuccess ? (
+        // C-L5: no empty select when there is nothing to assign.
+        <p className="text-muted-foreground text-sm" data-testid="no-assignable-roles">
+          {all.data.items.length === 0 ? "This tenant has no roles yet. " : "The user holds every role of this tenant. "}
+          <Link to="/t/$tenant/roles" params={{ tenant }} className="text-link underline underline-offset-4">
+            Manage roles
+          </Link>
+        </p>
+      ) : null}
       {all.isError ? <ProblemAlert error={all.error} /> : null}
       <div className="rounded-md border">
         <Table aria-busy={held.isFetching}>
@@ -550,14 +838,26 @@ function UserRoles({ userId }: { userId: string }) {
       </div>
       <ConfirmDialog
         open={target !== null}
-        title="Remove role?"
+        title={removingOwnAdmin ? "Remove your own administrator role?" : "Remove role?"}
         description={
           <div className="space-y-3">
+            {removingOwnAdmin ? (
+              <div className="space-y-2" data-testid="own-admin-warning">
+                <p>
+                  You are signed in to this console with this role. Once it is removed, your next sign-in loses access to
+                  the console unless another of your roles grants admin scopes.
+                </p>
+                <p>
+                  At least one active user must keep a role granting <code>admin:write</code>: if you are the last one, the
+                  server refuses. Add another administrator first (Users, Add administrator).
+                </p>
+              </div>
+            ) : null}
             <p>{`Tokens issued from now on no longer carry ${target?.name ?? "the role"}.`}</p>
             {unassign.error ? <RoleProblem error={unassign.error} /> : null}
           </div>
         }
-        confirmLabel="Remove role"
+        confirmLabel={removingOwnAdmin ? "Remove my administrator role" : "Remove role"}
         onConfirm={() => target && unassign.mutate(target)}
         onCancel={() => {
           unassign.reset();
@@ -863,6 +1163,7 @@ function UserPage() {
               <div className="space-y-4">
                 <UserDetails user={query.data} />
                 <UserOrganizations userId={userId} />
+                <UserAccountActions user={query.data} />
               </div>
             )}
             {tab === "sessions" && <UserSessions userId={userId} />}
